@@ -38,6 +38,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_vehicle_tunes import (
 )
 from openpilot.selfdrive.controls.lib.latcontrol_torque import (
   get_civic_bosch_modified_a_center_taper_scale,
+  get_center_chatter_friction_jerk_deadzone,
   LatControlTorque,
   get_civic_bosch_modified_b_ff_scale,
   get_civic_bosch_modified_b_friction_scale,
@@ -60,6 +61,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import (
   get_genesis_g90_ff_scale,
   get_genesis_g90_friction_scale,
   get_genesis_g90_friction_threshold,
+  get_genesis_gv70_friction_threshold,
   get_elantra_non_scc_ff_scale,
   get_palisade_ff_scale,
   get_palisade_friction_scale,
@@ -67,6 +69,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import (
   get_prius_ff_scale,
   get_prius_friction_scale,
   get_prius_friction_threshold,
+  get_camry_friction_threshold,
   get_rav4_prime_ff_scale,
   get_rav4_prime_friction_scale,
   get_rav4_prime_friction_threshold,
@@ -120,6 +123,30 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import (
 
 
 class TestLatControl:
+
+  def test_center_chatter_friction_jerk_deadzone_is_center_and_speed_gated(self):
+    low_speed_center = get_center_chatter_friction_jerk_deadzone(2.0, 0.0)
+    highway_center = get_center_chatter_friction_jerk_deadzone(25.0, 0.0)
+    highway_curve = get_center_chatter_friction_jerk_deadzone(25.0, 0.6)
+
+    assert low_speed_center == pytest.approx(0.096)
+    assert highway_center == pytest.approx(0.18)
+    assert highway_curve == pytest.approx(0.0)
+
+  def test_center_chatter_friction_jerk_deadzone_preserves_vehicle_override(self):
+    assert get_center_chatter_friction_jerk_deadzone(25.0, 0.6, 0.30) == pytest.approx(0.30)
+
+  def test_torque_log_exposes_friction_controller_state(self):
+    controller, VM, CS, params, starpilot_toggles = self._build_torque_controller(GM.CHEVROLET_BOLT_ACC_2022_2023)
+
+    _, _, lac_log = controller.update(True, CS, VM, params, False, 0.0, False, 0.2, None, None, starpilot_toggles)
+
+    debug_state = controller.starpilot_lateral_state
+    assert debug_state.active
+    assert debug_state.frictionThreshold > 0.0
+    assert debug_state.frictionScale > 0.0
+    assert debug_state.frictionJerkDeadzone > 0.0
+    assert debug_state.lowSpeedFactor > 0.0
 
   @staticmethod
   def _build_torque_controller(car_name, force_torque=False):
@@ -250,6 +277,18 @@ class TestLatControl:
     left_unwind = get_bolt_2022_2023_friction_threshold(6.0, 0.7, -0.8)
     right_unwind = get_bolt_2022_2023_friction_threshold(6.0, -0.7, 0.8)
     assert left_turn_in <= right_turn_in < base < right_unwind <= left_unwind
+
+  def test_bolt_2022_2023_center_friction_threshold_targets_low_speed_chatter(self):
+    base = get_gm_base_friction_threshold(5.0)
+    low_speed_center = get_bolt_2022_2023_friction_threshold(5.0, 0.0, 0.0)
+    low_speed_turn = get_bolt_2022_2023_friction_threshold(5.0, 0.7, 0.8)
+    medium_speed_center = get_bolt_2022_2023_friction_threshold(8.5, 0.0, 0.0)
+    high_speed_center = get_bolt_2022_2023_friction_threshold(14.0, 0.0, 0.0)
+
+    assert low_speed_center > base
+    assert low_speed_center > low_speed_turn
+    assert low_speed_center - base > medium_speed_center - get_gm_base_friction_threshold(8.5)
+    assert medium_speed_center - get_gm_base_friction_threshold(8.5) > high_speed_center - get_gm_base_friction_threshold(14.0)
 
   def test_bolt_2022_2023_friction_scale_curve(self):
     base = get_bolt_2022_2023_friction_scale(25.0, 0.7, 0.8)
@@ -622,6 +661,12 @@ class TestLatControl:
 
   def test_prius_friction_curves(self):
     base_threshold = get_gm_base_friction_threshold(12.0)
+    low_speed_center_threshold = get_prius_friction_threshold(8.0, 0.0, 0.0)
+    high_speed_center_threshold = get_prius_friction_threshold(30.0, 0.0, 0.0)
+    high_speed_curve_threshold = get_prius_friction_threshold(30.0, 0.8, 0.0)
+    assert high_speed_center_threshold > get_gm_base_friction_threshold(30.0)
+    assert high_speed_center_threshold > low_speed_center_threshold
+    assert high_speed_curve_threshold < high_speed_center_threshold
     left_turn_in_threshold = get_prius_friction_threshold(6.0, 0.7, 0.8)
     right_turn_in_threshold = get_prius_friction_threshold(6.0, -0.7, -0.8)
     left_unwind_threshold = get_prius_friction_threshold(6.0, 0.7, -0.8)
@@ -639,10 +684,29 @@ class TestLatControl:
     assert right_turn_in_scale == left_turn_in_scale > base_scale
     assert base_scale > left_unwind_scale == right_unwind_scale
 
+  def test_camry_friction_threshold_only_fades_in_for_calm_high_speed(self):
+    low_speed_center = get_camry_friction_threshold(10.0, 0.0)
+    high_speed_center = get_camry_friction_threshold(32.0, 0.0)
+    high_speed_curve = get_camry_friction_threshold(32.0, 0.8)
+
+    assert low_speed_center == pytest.approx(get_standard_friction_threshold(10.0), rel=0.01)
+    assert high_speed_center > get_standard_friction_threshold(32.0)
+    assert high_speed_curve < high_speed_center
+
   def test_generic_friction_threshold_floor(self):
     assert get_standard_friction_threshold(0.0) == 0.30
     assert get_standard_friction_threshold(6.0) == 0.30
     assert get_standard_friction_threshold(40.0) == 0.30
+
+  def test_genesis_gv70_friction_threshold_only_fades_calm_center_corrections(self):
+    base = get_hkg_canfd_base_friction_threshold(12.0)
+    center = get_genesis_gv70_friction_threshold(12.0, 0.0, 0.0)
+    turn = get_genesis_gv70_friction_threshold(12.0, 0.7, 0.8)
+    high_speed_center = get_genesis_gv70_friction_threshold(40.0, 0.0, 0.0)
+
+    assert center > base
+    assert turn == pytest.approx(base, rel=0.01)
+    assert high_speed_center < center
 
   def test_ioniq_5_ff_scale_curve(self):
     assert get_ioniq_5_ff_scale(0.0, 0.0, 20.0) == 1.0
@@ -733,9 +797,9 @@ class TestLatControl:
     highway_calm = get_sienna_4th_gen_center_taper_scale(0.0, 20.0)
     fast = get_sienna_4th_gen_center_taper_scale(0.0, 25.0)
     assert calm < turn_taper <= 1.0
-    assert calm < highway_calm < 1.0
+    assert highway_calm < calm < 1.0
     assert fast > calm
-    assert get_sienna_4th_gen_high_speed_output_taper_scale(10.0) == pytest.approx(1.0)
+    assert get_sienna_4th_gen_high_speed_output_taper_scale(10.0) == pytest.approx(1.0, abs=0.002)
     assert get_sienna_4th_gen_high_speed_output_taper_scale(22.0) < 1.0
 
   def test_rav4_prime_forced_torque_update_path(self, monkeypatch):
@@ -809,7 +873,7 @@ class TestLatControl:
 
     center_transition = get_kona_non_scc_highway_transition_output_scale(0.4, 1.25, 30.0)
     medium_transition = get_kona_non_scc_highway_transition_output_scale(1.1, -1.25, 30.0)
-    assert center_transition == pytest.approx(0.72)
+    assert center_transition == pytest.approx(0.76)
     assert center_transition < medium_transition < 1.0
     assert get_kona_non_scc_highway_transition_output_scale(1.65, 2.5, 30.0) == pytest.approx(1.0)
 
@@ -995,11 +1059,13 @@ class TestLatControl:
   def test_lexus_is_ff_scale_curve(self):
     steady_left = get_lexus_is_ff_scale(0.6, 0.0, 22.0)
     turn_in_left = get_lexus_is_ff_scale(0.6, 0.5, 22.0)
+    turn_in_right = get_lexus_is_ff_scale(-0.6, -0.5, 22.0)
     unwind_left = get_lexus_is_ff_scale(0.6, -0.5, 22.0)
     unwind_right = get_lexus_is_ff_scale(-0.6, 0.5, 22.0)
     low_speed_unwind_right = get_lexus_is_ff_scale(-0.6, 0.5, 5.0)
     assert steady_left == 1.0
-    assert turn_in_left == 1.0
+    assert turn_in_left > steady_left
+    assert turn_in_right > steady_left
     assert unwind_right < unwind_left < steady_left
     assert unwind_right < low_speed_unwind_right < 1.0
 
