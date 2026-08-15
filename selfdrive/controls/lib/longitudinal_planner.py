@@ -20,6 +20,10 @@ from openpilot.selfdrive.controls.lib.lead_follow_policy import apply as apply_f
 from openpilot.selfdrive.controls.lib.lead_follow_policy import is_nonurgent_duplicate_vision_follow
 from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import (
   get_far_follow_output_slew_rates,
+  get_follow_prebrake_min_headway,
+  get_force_stop_handoff_distance,
+  is_gm_silverado_early_follow_lead,
+  is_toyota_rav4_tss2_post_departure_tune,
   get_toyota_sienna_post_departure_restop_cap,
   get_untracked_slow_lead_decel_scale,
 )
@@ -55,6 +59,7 @@ ALLOW_THROTTLE_ENABLE_THRESHOLD = ALLOW_THROTTLE_THRESHOLD + ALLOW_THROTTLE_HYST
 ALLOW_THROTTLE_DISABLE_THRESHOLD = ALLOW_THROTTLE_THRESHOLD - ALLOW_THROTTLE_HYSTERESIS
 ALLOW_THROTTLE_TRANSITION_CONFIRM_TIME = 0.25
 MIN_ALLOW_THROTTLE_SPEED = 5.0
+FORCE_DECEL_MIN_ACCEL = -0.05
 MODEL_LAUNCH_DISARM_SPEED = 2.0
 MODEL_LAUNCH_COMMIT_TIME = 3.5
 MODEL_LAUNCH_MOVING_SPEED = 1.2
@@ -62,6 +67,8 @@ MODEL_LAUNCH_MAX_ACCEL = 1.5
 RAW_LEAD_SAFETY_MIN_CLOSING_SPEED = 0.5
 RAW_LEAD_SAFETY_TTC = 7.0
 RAW_LEAD_SAFETY_DISTANCE = 40.0
+RAW_RADAR_STOPPED_LEAD_MAX_SPEED = 1.0
+RAW_RADAR_STOPPED_LEAD_MAX_DISTANCE = 120.0
 RAW_LEAD_LOW_SPEED_HOLD_MAX_EGO_SPEED = 4.5
 RAW_LEAD_LOW_SPEED_HOLD_MAX_LEAD_SPEED = 3.5
 RAW_LEAD_LOW_SPEED_HOLD_MAX_DISTANCE = 10.0
@@ -83,7 +90,7 @@ LEAD_DEPART_RELEASE_HOLD_TIME = 1.5
 LEAD_DEPART_RELEASE_HOLD_CONFIRM_TIME = 0.15
 STANDSTILL_STOPPED_LEAD_GUARD_MAX_EGO_SPEED = 0.5
 STANDSTILL_STOPPED_LEAD_GUARD_MAX_LEAD_SPEED = 0.45
-STANDSTILL_STOPPED_LEAD_GUARD_MAX_LEAD_DELTA = 0.35
+STANDSTILL_STOPPED_LEAD_GUARD_MAX_LEAD_DELTA = 0.50
 STANDSTILL_STOPPED_LEAD_GUARD_MIN_MODEL_PROB = 0.95
 STANDSTILL_STOPPED_LEAD_GUARD_MAX_LATERAL_OFFSET = 1.75
 STANDSTILL_STOPPED_LEAD_GUARD_MIN_DISTANCE = 3.0
@@ -1811,6 +1818,11 @@ class LongitudinalPlanner:
       return False
 
     dynamic_distance = max(RAW_LEAD_SAFETY_DISTANCE, 3.0 * float(v_ego))
+    if bool(getattr(lead, "radar", False)) and lead_speed <= RAW_RADAR_STOPPED_LEAD_MAX_SPEED:
+      dynamic_distance = max(
+        dynamic_distance,
+        min(RAW_RADAR_STOPPED_LEAD_MAX_DISTANCE, 5.0 * float(v_ego)),
+      )
     ttc = d_rel / max(closing_speed, 0.1) if closing_speed > 0.1 else float("inf")
     return d_rel < dynamic_distance and (ttc < RAW_LEAD_SAFETY_TTC or lead_braking)
 
@@ -1961,9 +1973,13 @@ class LongitudinalPlanner:
     self.lead_one = sm['radarState'].leadOne
     self.lead_two = sm['radarState'].leadTwo
     raw_close_lead_control = any(self.raw_close_lead_needs_control(lead, scene_v_ego) for lead in (self.lead_one, self.lead_two))
+    early_truck_follow = (
+      not experimental_mode and
+      any(is_gm_silverado_early_follow_lead(self.CP, lead, scene_v_ego) for lead in (self.lead_one, self.lead_two))
+    )
     # StarPilot trackingLead is debounce/model-length based. Keep a raw close-lead
     # safety path so ACC/chill does not ignore a visible lead during that debounce.
-    lead_control_active = tracking_lead or raw_close_lead_control
+    lead_control_active = tracking_lead or raw_close_lead_control or early_truck_follow
     lead_one_active = bool(self.lead_one.status and lead_control_active)
     effective_t_follow = self.get_dynamic_t_follow(sm['starpilotPlan'].tFollow, self.lead_one if lead_one_active else None, v_ego)
 
@@ -2162,7 +2178,8 @@ class LongitudinalPlanner:
     # the line parks us short. Below that the existing v_cruise=0 path finishes the stop,
     # since forcingStopLength is decaying to zero and the obstacle would land behind us.
     force_stop_x = None
-    if sm['starpilotPlan'].forcingStop and sm['starpilotPlan'].forcingStopLength > STOP_DISTANCE:
+    force_stop_handoff_m = get_force_stop_handoff_distance(self.CP.carFingerprint)
+    if sm['starpilotPlan'].forcingStop and sm['starpilotPlan'].forcingStopLength > force_stop_handoff_m:
       force_stop_x = float(sm['starpilotPlan'].forcingStopLength) + STOP_DISTANCE
 
     self.mpc.update(sm['radarState'], v_cruise, x, v, a, j,
@@ -2170,7 +2187,8 @@ class LongitudinalPlanner:
                     personality=personality, tracking_lead=lead_control_active,
                     optional_far_lead_comfort=True,
                     smooth_duplicate_vision=nonurgent_duplicate_vision_follow and not panic_bypass,
-                    stop_x=force_stop_x)
+                    stop_x=force_stop_x,
+                    silverado_early_follow=early_truck_follow)
 
     self.a_desired_trajectory_full = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
@@ -2199,7 +2217,7 @@ class LongitudinalPlanner:
     if lead_one_active:
       rel_v = max(0.0, v_ego - self.lead_one.vLead)
       # dynamic time headway adds a small buffer when uncertainty is elevated
-      base_th = max(1.6, effective_t_follow)
+      base_th = get_follow_prebrake_min_headway(self.CP, effective_t_follow)
       th = base_th + 0.6 * max(0.0, uncertainty - 0.42)
       desired_gap = th * v_ego
       if (self.lead_dist_f is not None and self.lead_dist_f < desired_gap and rel_v > 0.5):
@@ -2642,6 +2660,12 @@ class LongitudinalPlanner:
     post_departure_active = self.post_departure_follow_settle_active(
       policy_lead, scene_v_ego, effective_t_follow,
     )
+    # The RAV4's post-departure path used to bypass the ordinary follow cap for
+    # the entire settle latch. When a slow lead changed lanes, that let the
+    # cruise branch request full acceleration before the next lead was stable.
+    # Keep the normal catch-up cap on this car; urgent braking remains outside
+    # this comfort policy and is still allowed through unchanged.
+    post_departure_bypass = post_departure_active and not is_toyota_rav4_tss2_post_departure_tune(self.CP)
     follow_result = apply_follow_policy(
       self.lead_one,
       self.lead_two,
@@ -2652,7 +2676,7 @@ class LongitudinalPlanner:
       previous_target=prev_output_a_target,
       raw_target=output_a_target,
       tracking=tracking_lead,
-      post_departure=post_departure_active,
+      post_departure=post_departure_bypass,
       blocked=bool(output_should_stop or vision_low_speed_stop_active or close_lead_caps),
       panic_bypass=panic_bypass,
     )
@@ -2820,6 +2844,12 @@ class LongitudinalPlanner:
       output_a_target = float(min(max(output_a_target, lc_merge_floor), output_accel_max))
       self.a_desired = max(self.a_desired, min(lc_merge_floor, output_accel_max))
 
+    # Force-decel is the driver-monitoring no-response path. Keep a small
+    # braking floor until the vehicle is actually stopped; normal MPC tapering
+    # can otherwise leave it creeping indefinitely at the maneuver-test cutoff.
+    if force_slow_decel and scene_v_ego > 0.1:
+      output_a_target = min(output_a_target, FORCE_DECEL_MIN_ACCEL)
+
     self.output_a_target = output_a_target
     self.output_should_stop = bool(output_should_stop or vision_low_speed_stop_active)
 
@@ -2837,7 +2867,10 @@ class LongitudinalPlanner:
     longitudinalPlan.accels = self.a_desired_trajectory.tolist()
     longitudinalPlan.jerks = self.j_desired_trajectory.tolist()
 
-    longitudinalPlan.hasLead = sm['radarState'].leadOne.status
+    # LongControl needs to know about whichever lead MPC is following. Using
+    # leadOne only leaves the stop-release guard blind when source=lead1.
+    selected_lead = sm['radarState'].leadTwo if self.mpc.source == "lead1" else sm['radarState'].leadOne
+    longitudinalPlan.hasLead = bool(selected_lead.status)
     longitudinalPlan.longitudinalPlanSource = self.mpc.source
     longitudinalPlan.fcw = self.fcw
 

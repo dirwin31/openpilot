@@ -6,14 +6,16 @@ from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 
 from openpilot.starpilot.common.starpilot_variables import CITY_SPEED_LIMIT, CRUISING_SPEED
-from openpilot.starpilot.controls.lib.curve_speed_controller import CurveSpeedController
+from openpilot.starpilot.controls.lib.curve_speed_controller import CurveSpeedController, is_manual_speed_control
 from openpilot.starpilot.controls.lib.speed_limit_controller import SpeedLimitController
+from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import get_force_stop_handoff_distance
 
 CSC_MIN_SPEED = CITY_SPEED_LIMIT * CV.MPH_TO_MS
 CSC_CURVE_RELEASE_HOLD_TIME = 0.75
 OVERRIDE_FORCE_STOP_TIMER = 10
 STANDSTILL_FORCE_STOP_CLEAR_TIME = 0.75
 STANDSTILL_FORCE_STOP_LIGHT_HOLD_TIME = 5.0
+FORCE_STOP_LIGHT_CLEAR_TIME = 0.5
 SLC_LEAD_DROP_RELAXATION_MIN_SPEED = 20.0 * CV.MPH_TO_MS
 SLC_LEAD_DROP_RELAXATION_MIN_DISTANCE = 30.0
 SLC_LEAD_DROP_RELAXATION_MIN_HEADWAY = 1.2
@@ -45,7 +47,9 @@ ACTIVATION_M = 100.0      # m — CEM/model path activates when model_length < t
 ACTIVATION_HYSTERESIS_M = 8.0  # m — release margin; absorbs model_length jitter at the gate
 LEAD_VETO_M = 75.0        # m — lead proximity that vetoes Force Stop (kept off ACTIVATION_M
                           # so raising activation can't silently widen the veto)
-MPC_HANDOFF_M = 6.0       # m — below this, command 0 and let MPC finish the stop
+LEAD_VETO_M_OVERRIDES = {
+  "HYUNDAI_ELANTRA_2021": 90.0,
+}
 FORCE_STOP_APPROACH_DECEL = 0.65  # m/s^2 — speed ceiling before commit. LOWER = more early
                           # braking; don't go under FORCE_STOP_MODEL_APPROACH_DECEL
 ADAS_MAX_MS = 17.88       # 40 mph — cross-street ADAS guard
@@ -70,13 +74,22 @@ OFFSET_FT_MIN = -20
 OFFSET_FT_MAX = 20
 
 
-def get_active_slc_control_target(speed_limit_controller, set_speed_limit, slc_target, slc_offset, overridden_speed, v_ego_diff):
+def get_lead_veto_distance(car_params):
+  fingerprint = str(getattr(car_params, "carFingerprint", ""))
+  return LEAD_VETO_M_OVERRIDES.get(fingerprint, LEAD_VETO_M)
+
+
+def get_active_slc_control_target(speed_limit_controller, set_speed_limit, slc_target, slc_offset, overridden_speed,
+                                  v_ego_diff, allow_lower_override=False):
   # `SetSpeedLimit` only controls engage-time set-speed initialization. Ongoing
   # SLC speed matching must remain active whenever Speed Limit Controller is on.
   if not speed_limit_controller:
     return 0.0
 
-  base_target = max(float(overridden_speed), float(slc_target) + float(slc_offset))
+  if allow_lower_override and overridden_speed > 0:
+    base_target = float(overridden_speed)
+  else:
+    base_target = max(float(overridden_speed), float(slc_target) + float(slc_offset))
   if base_target <= 0.0:
     return 0.0
 
@@ -154,6 +167,8 @@ class StarPilotVCruise:
     self.standstill_force_stop_clear_since = 0.0
     self.standstill_force_stop_started_at = None
     self.standstill_force_stop_reason = None
+    self.force_stop_from_light = False
+    self.force_stop_light_clear_since = None
     self.controls_enabled_previously = False
     # Kinematic distance estimator. Same attribute also published as
     # starpilotPlan.forcingStopLength, so the existing reader keeps working.
@@ -302,6 +317,9 @@ class StarPilotVCruise:
       self._applied_slc_control_target = 0.0
 
     long_control_active = sm["carControl"].longActive
+    force_stop_handoff_m = get_force_stop_handoff_distance(
+      getattr(starpilot_toggles, "car_model", "")
+    )
 
     raw_stop_seen = bool(
       self.starpilot_planner.starpilot_cem.stop_light_detected
@@ -329,8 +347,13 @@ class StarPilotVCruise:
     # waiting for the tracking_lead filter (~1s ramp). Without this, Force Stop can latch
     # during the filter's settling window and stay committed for the whole stop.
     lead = self.starpilot_planner.lead_one
+    try:
+      car_params = sm["carParams"]
+    except (KeyError, IndexError, TypeError, AttributeError):
+      car_params = None
+    lead_veto_m = get_lead_veto_distance(car_params)
     lead_present = (bool(getattr(lead, "status", False))
-                    and float(getattr(lead, "dRel", float("inf"))) < LEAD_VETO_M
+                    and float(getattr(lead, "dRel", float("inf"))) < lead_veto_m
                     and float(getattr(lead, "vLead", float("inf"))) < v_ego + 2.0)
     curved_approach_scene = (
       abs(float(getattr(self.starpilot_planner, "road_curvature", 0.0))) >= FORCE_STOP_CURVE_VETO_MAX_ROAD_CURVATURE
@@ -375,6 +398,13 @@ class StarPilotVCruise:
                  and not lead_present)
 
     force_stop_active = cem_path or dash_path
+
+    if cem_path:
+      self.force_stop_from_light = True
+      self.force_stop_light_clear_since = None
+    elif not self.forcing_stop:
+      self.force_stop_from_light = False
+      self.force_stop_light_clear_since = None
 
     # Latch on first dash frame so the CEM pin can fire and we don't release on
     # transient dashboard dropouts. Cleared in the no-force-stop branch below.
@@ -446,6 +476,26 @@ class StarPilotVCruise:
     force_stop_enabled |= self.forcing_stop and not sm["carState"].standstill
     force_stop_enabled |= self.standstill_force_stop_hold
 
+    light_stop_cleared = (
+      self.forcing_stop and
+      self.force_stop_from_light and
+      not sm["carState"].standstill and
+      not stop_light_detected and
+      not raw_model_stopped and
+      not dash_active
+    )
+    if light_stop_cleared:
+      if self.force_stop_light_clear_since is None:
+        self.force_stop_light_clear_since = now
+      elif self._elapsed_seconds(now, self.force_stop_light_clear_since) >= FORCE_STOP_LIGHT_CLEAR_TIME:
+        self.forcing_stop = False
+        self.force_stop_from_light = False
+        self.force_stop_light_clear_since = None
+        self.force_stop_timer = 0.0
+        force_stop_enabled = False
+    else:
+      self.force_stop_light_clear_since = None
+
     if self.forcing_stop and standstill and not force_stop_enabled and self.standstill_force_stop_reason != "sign":
       self.override_force_stop_timer = OVERRIDE_FORCE_STOP_TIMER
 
@@ -475,8 +525,10 @@ class StarPilotVCruise:
 
     # FrogsGoMoo's Curve Speed Controller
     following_lead = bool(getattr(self.starpilot_planner.starpilot_following, "following_lead", False))
+    manual_speed_control = is_manual_speed_control(sm)
     csc_available = (
       long_control_active and
+      not manual_speed_control and
       v_ego > CRUISING_SPEED and
       starpilot_toggles.curve_speed_controller and
       (not getattr(starpilot_toggles, "csc_no_lead", False) or not following_lead)
@@ -564,11 +616,11 @@ class StarPilotVCruise:
         # Kinematic profile with user offset. Positive offset shifts the perceived
         # line further down the road -> car rolls further before commanding 0.
         effective_d = self.tracked_model_length + offset_m
-        if effective_d <= MPC_HANDOFF_M:
+        if effective_d <= force_stop_handoff_m:
           v_target = 0.0
         else:
           approach_decel = FORCE_STOP_DASH_APPROACH_DECEL if dash_active else FORCE_STOP_MODEL_APPROACH_DECEL
-          v_target = math.sqrt(2.0 * approach_decel * (effective_d - MPC_HANDOFF_M))
+          v_target = math.sqrt(2.0 * approach_decel * (effective_d - force_stop_handoff_m))
 
         v_cruise = min(v_target, v_cruise)
 
@@ -590,6 +642,8 @@ class StarPilotVCruise:
         self.slc_offset,
         self.slc.overridden_speed,
         v_ego_diff,
+        allow_lower_override=(getattr(starpilot_toggles, "redneck_cruise", False) and
+                              getattr(starpilot_toggles, "speed_limit_controller_override_set_speed", False)),
       )
       slc_control_target = get_slc_lead_drop_relaxed_target(
         slc_control_target,
@@ -623,8 +677,8 @@ class StarPilotVCruise:
         if adjacent_stop_d is not None:
           approach_d = min(approach_d, adjacent_stop_d)
         approach_d += offset_m
-        if approach_d > MPC_HANDOFF_M:
-          targets.append(math.sqrt(2.0 * FORCE_STOP_APPROACH_DECEL * (approach_d - MPC_HANDOFF_M)))
+        if approach_d > force_stop_handoff_m:
+          targets.append(math.sqrt(2.0 * FORCE_STOP_APPROACH_DECEL * (approach_d - force_stop_handoff_m)))
 
       v_cruise = min(targets)
 

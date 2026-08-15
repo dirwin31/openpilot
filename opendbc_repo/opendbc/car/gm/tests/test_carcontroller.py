@@ -363,6 +363,8 @@ def test_live_camera_path_does_not_send_pt_keepalive():
 def test_acc_2cd_replacement_only_used_with_live_camera_path():
   assert should_send_acc_2cd(SimpleNamespace(
     carFingerprint=CAR.CHEVROLET_TRAILBLAZER, networkLocation=CarParams.NetworkLocation.fwdCamera, flags=0))
+  assert should_send_acc_2cd(SimpleNamespace(
+    carFingerprint=CAR.CHEVROLET_SILVERADO, networkLocation=CarParams.NetworkLocation.fwdCamera, flags=0))
   assert not should_send_acc_2cd(SimpleNamespace(
     carFingerprint=CAR.CHEVROLET_TRAILBLAZER, networkLocation=CarParams.NetworkLocation.fwdCamera, flags=GMFlags.NO_CAMERA.value))
   assert not should_send_acc_2cd(SimpleNamespace(
@@ -871,9 +873,9 @@ def test_shape_truck_positive_accel_keeps_more_highway_follow_authority():
 
 
 def test_smooth_truck_follow_accel_slews_small_highway_commands():
-  shaped = smooth_truck_follow_accel(0.20, -0.20, 30.0, True, True, False)
+  shaped = smooth_truck_follow_accel(0.50, 0.0, 30.0, True, True, False)
 
-  assert shaped == pytest.approx(-0.14)
+  assert shaped == pytest.approx(0.06)
 
 
 def test_smooth_truck_follow_accel_does_not_delay_safety_requests():

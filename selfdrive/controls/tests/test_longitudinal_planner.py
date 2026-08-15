@@ -18,7 +18,12 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner, get_coast_accel, get_vehicle_min_accel, should_publish_planner_fcw
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, soften_far_radar_lead_accel, should_trigger_planner_fcw
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
-from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import get_toyota_sienna_post_departure_restop_cap
+from openpilot.selfdrive.controls.lib.longitudinal_vehicle_tunes import (
+  get_follow_prebrake_min_headway,
+  get_toyota_sienna_post_departure_restop_cap,
+  is_gm_silverado_early_follow_lead,
+  is_toyota_rav4_tss2_post_departure_tune,
+)
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 from openpilot.selfdrive.modeld import modeld
 
@@ -462,6 +467,84 @@ def test_acc_mode_matches_no_lead_baseline_for_far_vision_only_lead_without_trac
   assert planner_far_vision.mode == "acc"
   assert not planner_far_vision.raw_close_lead_needs_control(sm_far_vision["radarState"].leadOne, v_ego)
   np.testing.assert_allclose(far_vision_outputs, no_lead_outputs, atol=1e-6)
+
+
+def test_gm_silverado_admits_credible_far_vision_lead_for_acc_follow():
+  CP = SimpleNamespace(brand="gm", carFingerprint=GM_CAR.CHEVROLET_SILVERADO)
+  lead = make_lead(status=True, d_rel=80.0, v_lead=30.0, model_prob=0.90, y_rel=0.2)
+
+  assert is_gm_silverado_early_follow_lead(CP, lead, 30.0)
+
+
+@pytest.mark.parametrize("fingerprint", [GM_CAR.CHEVROLET_BOLT_ACC_2022_2023_PEDAL, CAR.HONDA_CIVIC])
+def test_gm_silverado_early_follow_does_not_apply_to_other_vehicles(fingerprint):
+  brand = "gm" if fingerprint == GM_CAR.CHEVROLET_BOLT_ACC_2022_2023_PEDAL else "honda"
+  CP = SimpleNamespace(brand=brand, carFingerprint=fingerprint)
+  lead = make_lead(status=True, d_rel=80.0, v_lead=30.0, model_prob=0.99)
+
+  assert not is_gm_silverado_early_follow_lead(CP, lead, 30.0)
+
+
+@pytest.mark.parametrize("kwargs", [
+  {"radar": True},
+  {"model_prob": 0.80},
+  {"y_rel": 1.3},
+  {"d_rel": 131.0},
+])
+def test_gm_silverado_early_follow_requires_a_credible_centered_vision_lead(kwargs):
+  CP = SimpleNamespace(brand="gm", carFingerprint=GM_CAR.CHEVROLET_SILVERADO)
+  lead_kwargs = {"d_rel": 80.0, "v_lead": 30.0, "model_prob": 0.90}
+  lead_kwargs.update(kwargs)
+  lead = make_lead(status=True, **lead_kwargs)
+
+  assert not is_gm_silverado_early_follow_lead(CP, lead, 30.0)
+
+
+def test_silverado_prebrake_floor_is_vehicle_specific():
+  silverado = SimpleNamespace(brand="gm", carFingerprint=GM_CAR.CHEVROLET_SILVERADO)
+  honda = SimpleNamespace(brand="honda", carFingerprint=CAR.HONDA_CIVIC)
+
+  assert get_follow_prebrake_min_headway(silverado, 1.0) == pytest.approx(1.25)
+  assert get_follow_prebrake_min_headway(honda, 1.0) == pytest.approx(1.6)
+
+
+def test_silverado_vision_follow_hold_survives_nonurgent_far_lead_crossover():
+  v_ego = 32.0
+  t_follow = 1.0
+  CP = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC)
+  planner = LongitudinalPlanner(CP, init_v=v_ego)
+  lead_one = make_lead(status=True, d_rel=70.0, v_lead=31.2, a_lead=-0.02, radar=False, model_prob=1.0, y_rel=0.1)
+  lead_two = make_lead(status=False)
+
+  assert planner.mpc.get_vision_follow_cruise_hold(
+    "lead0", lead_one, lead_two, 101.0, 200.0, 100.0, v_ego, t_follow, True,
+  ) is None
+  assert planner.mpc.get_vision_follow_cruise_hold(
+    "lead0", lead_one, lead_two, 101.0, 200.0, 100.0, v_ego, t_follow, True,
+    early_follow=True,
+  ) == "lead0"
+
+
+@pytest.mark.parametrize("model_version", ["v11", "v12", "v13", "v14", "v15"])
+def test_acc_mode_uses_far_near_stopped_radar_lead_before_tracking(model_version):
+  v_ego = 24.6
+
+  CP = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC)
+  planner = LongitudinalPlanner(CP, init_v=v_ego)
+  sm = make_sm(
+    v_ego,
+    desired_accel=0.0,
+    min_accel=-1.0,
+    experimental_mode=False,
+    tracking_lead=False,
+    lead_one=make_lead(status=True, d_rel=116.0, v_lead=0.0, a_lead=-0.2, radar=True, model_prob=0.85),
+  )
+  sm["starpilotPlan"].vCruise = v_ego + 6.0
+
+  planner.update(sm, make_toggles(model_version))
+
+  assert planner.raw_close_lead_needs_control(sm["radarState"].leadOne, v_ego)
+  assert planner.output_a_target < -0.1
 
 
 def test_cruise_accel_cap_does_not_manufacture_braking_after_set_speed_drop_with_lead():
@@ -2030,6 +2113,30 @@ def test_standstill_stopped_lead_guard_does_not_block_radar_depart_at_longer_gap
 
 
 @pytest.mark.parametrize("model_version", ["v11", "v12", "v13", "v14", "v15"])
+def test_standstill_stopped_lead_guard_holds_marginal_creep_release(model_version):
+  CP = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC)
+  planner = LongitudinalPlanner(CP, init_v=0.0)
+
+  sm = make_sm(
+    0.0,
+    desired_accel=0.8,
+    min_accel=-0.5,
+    experimental_mode=False,
+    tracking_lead=True,
+    lead_one=make_lead(status=True, d_rel=4.2, v_lead=0.38, a_lead=0.31, radar=True, model_prob=1.0),
+  )
+  sm["carState"].standstill = True
+  sm["controlsState"].longControlState = LongCtrlState.stopping
+  sm["starpilotPlan"].vCruise = 10.0
+  sm["modelV2"].action.shouldStop = False
+
+  planner.update(sm, make_toggles(model_version))
+
+  assert planner.output_should_stop
+  assert planner.output_a_target <= 0.0
+
+
+@pytest.mark.parametrize("model_version", ["v11", "v12", "v13", "v14", "v15"])
 def test_standstill_stopped_lead_guard_blocks_false_release_during_creep_frame(model_version):
   CP = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC)
   planner = LongitudinalPlanner(CP, init_v=0.2)
@@ -2626,6 +2733,51 @@ def test_publish_force_stop_handoff_sets_should_stop_when_vcruise_zero():
   planner.publish(sm, pm)
 
   assert pm.sent["longitudinalPlan"].longitudinalPlan.shouldStop
+
+
+def test_publish_has_lead_includes_second_mpc_lead():
+  class FakePM:
+    def __init__(self):
+      self.sent = {}
+
+    def send(self, name, msg):
+      self.sent[name] = msg
+
+  class FakeSM(dict):
+    def all_checks(self, service_list=None):
+      return True
+
+    logMonoTime = {"modelV2": int(1e9)}
+
+  CP = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC)
+  planner = LongitudinalPlanner(CP, init_v=5.0)
+  planner.output_a_target = 0.0
+  planner.output_should_stop = False
+  planner.v_desired_trajectory = np.zeros(CONTROL_N)
+  planner.a_desired_trajectory = np.zeros(CONTROL_N)
+  planner.j_desired_trajectory = np.zeros(CONTROL_N)
+  planner.fcw = False
+  planner.mpc.source = "lead1"
+  planner.mpc.solve_time = 0.0
+
+  sm = FakeSM(make_sm(5.0, desired_accel=0.0, min_accel=-1.0, experimental_mode=False))
+  sm["radarState"].leadOne = make_lead(status=False)
+  sm["radarState"].leadTwo = make_lead(status=True, d_rel=8.0, v_lead=4.0, radar=True)
+  pm = FakePM()
+
+  planner.publish(sm, pm)
+
+  assert pm.sent["longitudinalPlan"].longitudinalPlan.hasLead
+
+
+def test_rav4_tss2_variants_use_the_car_specific_post_departure_tune():
+  rav4_2019_cp = ToyotaCarInterface.get_non_essential_params(TOYOTA_CAR.TOYOTA_RAV4_TSS2)
+  rav4_2023_cp = ToyotaCarInterface.get_non_essential_params(TOYOTA_CAR.TOYOTA_RAV4_TSS2_2023)
+  other_cp = ToyotaCarInterface.get_non_essential_params(TOYOTA_CAR.TOYOTA_RAV4_TSS2_2022)
+
+  assert is_toyota_rav4_tss2_post_departure_tune(rav4_2019_cp)
+  assert is_toyota_rav4_tss2_post_departure_tune(rav4_2023_cp)
+  assert not is_toyota_rav4_tss2_post_departure_tune(other_cp)
 
 
 @pytest.mark.parametrize("model_version", ["v11", "v12", "v13", "v14", "v15"])

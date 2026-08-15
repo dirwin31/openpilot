@@ -156,7 +156,7 @@
       {
         "key": "NudgelessLaneChange",
         "label": "Automatic Lane Changes",
-        "description": "When the turn signal is on, openpilot will automatically change lanes. No steering-wheel nudge required!",
+        "description": "When the turn signal is on, openpilot will automatically change lanes. If a vehicle is detected in the blind spot, the lane change waits until it is clear. No steering-wheel nudge required!",
         "data_type": "bool",
         "ui_type": "toggle",
         "parent_key": "LaneChanges",
@@ -689,6 +689,15 @@
         "settings_tier": "simple"
       },
       {
+        "key": "CEOpenRoad",
+        "label": "Open Road",
+        "description": "Keep Experimental Mode active on an open road after reaching the set speed when no lead vehicle is detected. This can help the model anticipate braking sooner.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "parent_key": "ConditionalExperimental",
+        "settings_tier": "simple"
+      },
+      {
         "key": "CESlowerLead",
         "label": "Slower Lead",
         "description": "Switch to \"Experimental Mode\" when a slower lead vehicle is detected ahead.",
@@ -714,6 +723,7 @@
         "ui_type": "numeric",
         "min": 0.0,
         "max": 9.0,
+        "step": 0.1,
         "parent_key": "ConditionalExperimental",
         "settings_tier": "simple"
       },
@@ -2481,6 +2491,14 @@
         "ui_type": "toggle",
         "parent_key": "AdvancedCustomUI",
         "settings_tier": "simple"
+      },
+      {
+        "key": "DisableWideRoad",
+        "label": "Disable Wide Road Camera",
+        "description": "Only enable this if the wide camera is broken or for development!\n\nDisabling the wide camera may degrade driving performance and cause instability.\n\nRequires a reboot to take effect.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "settings_tier": "advanced"
       }
     ]
   },
@@ -2606,21 +2624,11 @@
         "settings_tier": "simple"
       },
       {
-        "key": "CustomAlerts",
-        "label": "StarPilot Alerts",
-        "description": "Optional StarPilot alerts that highlight driving events in a more noticeable way.",
-        "data_type": "bool",
-        "ui_type": "toggle",
-        "is_parent_toggle": true,
-        "settings_tier": "simple"
-      },
-      {
         "key": "GoatScream",
         "label": "Goat Scream",
         "description": "Play the infamous \"Goat Scream\" when the steering controller reaches its limit. Based on the \"Turn Exceeds Steering Limit\" event.",
         "data_type": "bool",
         "ui_type": "toggle",
-        "parent_key": "CustomAlerts",
         "settings_tier": "simple"
       },
       {
@@ -2629,7 +2637,6 @@
         "description": "Play the infamous \"Goat Scream\" for full-screen critical alerts that require immediate takeover.\n\nExamples include: \"TAKE CONTROL IMMEDIATELY\" and \"Stock AEB: Risk of Collision\".",
         "data_type": "bool",
         "ui_type": "toggle",
-        "parent_key": "CustomAlerts",
         "settings_tier": "simple"
       },
       {
@@ -2638,7 +2645,6 @@
         "description": "Play an alert when the model predicts a red light has turned green.\n\nDisclaimer: openpilot does not explicitly detect traffic lights. This alert is based on end-to-end model predictions from camera input and may trigger even when the light has not changed.",
         "data_type": "bool",
         "ui_type": "toggle",
-        "parent_key": "CustomAlerts",
         "settings_tier": "simple"
       },
       {
@@ -2647,7 +2653,6 @@
         "description": "Play an alert when the lead vehicle departs from a stop.",
         "data_type": "bool",
         "ui_type": "toggle",
-        "parent_key": "CustomAlerts",
         "settings_tier": "simple"
       },
       {
@@ -2656,7 +2661,6 @@
         "description": "Play a louder alert if a vehicle is in the blind spot when attempting to change lanes. Based on the \"Car Detected in Blindspot\" event.",
         "data_type": "bool",
         "ui_type": "toggle",
-        "parent_key": "CustomAlerts",
         "settings_tier": "simple"
       },
       {
@@ -2665,7 +2669,6 @@
         "description": "Play the loud blind spot alert while lateral control is off or paused. Useful when steering pauses on turn signal, since the lane-change state machine is inactive then.",
         "data_type": "bool",
         "ui_type": "toggle",
-        "parent_key": "CustomAlerts",
         "settings_tier": "simple"
       },
       {
@@ -2674,7 +2677,6 @@
         "description": "Play an alert when the posted speed limit changes.",
         "data_type": "bool",
         "ui_type": "toggle",
-        "parent_key": "CustomAlerts",
         "settings_tier": "simple"
       }
     ]
@@ -3798,12 +3800,13 @@
       },
       {
         "key": "DeviceShutdown",
-        "label": "Device Shutdown Timer",
-        "description": "Keep the device on for the set amount of time after a drive before it shuts down automatically.",
+        "label": "Device Shutdown Timer (Hours)",
+        "description": "How many hours the device stays on after a drive before it shuts down automatically.",
         "data_type": "int",
         "ui_type": "numeric",
-        "min": 0.0,
-        "max": 33.0,
+        "min": 1.0,
+        "max": 30.0,
+        "step": 1.0,
         "parent_key": "DeviceManagement",
         "settings_tier": "simple"
       },
@@ -4067,6 +4070,28 @@
         "settings_tier": "simple"
       },
       {
+        "key": "AlphaLongitudinalEnabled",
+        "label": "openpilot Longitudinal Control (Alpha)",
+        "description": "Enable openpilot longitudinal control for vehicles that support it. This replaces the vehicle's stock ACC and may disable automatic emergency braking. Changing this setting restarts the driving stack.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "parent_key": "GalaxyDeveloperMode",
+        "requires_offroad": true,
+        "confirm_message": "Enable openpilot Longitudinal Control? This is an alpha feature, replaces the vehicle's stock ACC, and may disable automatic emergency braking.",
+        "settings_tier": "advanced"
+      },
+      {
+        "key": "ForceOffroad",
+        "label": "Force Offroad",
+        "description": "Temporarily switch the device to the offroad state for remote updates when the vehicle is parked. This control is only available while the vehicle reports Park.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "parent_key": "GalaxyDeveloperMode",
+        "requires_parked": true,
+        "confirm_message": "Force the device offroad? Only use this while the vehicle is in Park.",
+        "settings_tier": "advanced"
+      },
+      {
         "key": "RedneckCruise",
         "label": "Redneck Cruise",
         "description": "On supported Hyundai stock-cruise cars, use RES/SET button presses to match the cluster set speed to StarPilot's target.",
@@ -4074,14 +4099,6 @@
         "ui_type": "toggle",
         "parent_key": "GalaxyDeveloperMode",
         "settings_tier": "advanced"
-      },
-      {
-        "key": "UseOldUI",
-        "label": "Use Old UI",
-        "description": "Use the old Qt UI instead of the default raylib UI on tici/tizi devices. This setting has no effect on C4/mici devices.",
-        "data_type": "bool",
-        "ui_type": "toggle",
-        "settings_tier": "simple"
       },
       {
         "key": "CameraOffset",

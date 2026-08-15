@@ -29,7 +29,7 @@ class CarInterface(CarInterfaceBase):
       ret.enableBsm = 0x25c in fingerprint[0]
       ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.subaruPreglobal)]
     else:
-      bsm_bus = CanBus.camera if ret.flags & SubaruFlags.D_PLATFORM else CanBus.main
+      bsm_bus = CanBus.main
       ret.enableBsm = 0x228 in fingerprint[bsm_bus]
       ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.subaru)]
       if ret.flags & SubaruFlags.GLOBAL_GEN2:
@@ -38,6 +38,10 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs[0].safetyParam |= SubaruSafetyFlags.LKAS_ANGLE.value
       if ret.flags & SubaruFlags.D_PLATFORM:
         ret.safetyConfigs[0].safetyParam |= SubaruSafetyFlags.D_PLATFORM.value
+      if ret.flags & SubaruFlags.D_PLATFORM_CAMERA:
+        ret.safetyConfigs[0].safetyParam |= SubaruSafetyFlags.D_PLATFORM_CAMERA.value
+      if candidate in (CAR.SUBARU_LEGACY_2025, CAR.SUBARU_ASCENT_2023):
+        ret.safetyConfigs[0].safetyParam |= SubaruSafetyFlags.FIXED_ANGLE_LIMITS.value
 
     ret.steerLimitTimer = 0.4
     ret.steerActuatorDelay = 0.1
