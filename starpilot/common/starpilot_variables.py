@@ -64,6 +64,18 @@ NON_DRIVING_GEARS = [GearShifter.neutral, GearShifter.park, GearShifter.reverse,
 # Temporary fallback until the weather-compatible API is hosted locally.
 STARPILOT_API = os.getenv("STARPILOT_API", "https://frogpilot.com/api")
 
+
+def _lkas_allowed_for_aol(car_make, cp_flags, fpcp_safety_configs) -> bool:
+  hyundai_has_lda_button = (
+    car_make == "hyundai" and
+    len(fpcp_safety_configs) > 0 and
+    bool(fpcp_safety_configs[-1].safetyParam & HyundaiStarPilotSafetyFlags.HAS_LDA_BUTTON.value)
+  )
+  hyundai_can_use_lkas_for_aol = car_make == "hyundai" and (
+    bool(cp_flags & HyundaiFlags.CANFD) or hyundai_has_lda_button
+  )
+  return hyundai_can_use_lkas_for_aol or car_make == "honda"
+
 LEGACY_CARMODEL_MIGRATIONS = {
   "CHEVROLET_BOLT_CC_2019_2021": "CHEVROLET_BOLT_CC_2018_2021",
 }
@@ -330,6 +342,9 @@ def get_starpilot_toggles(sm=messaging.SubMaster(["starpilotPlan"]), *, read_per
     # Controller selection happens before the first live StarPilot broadcast. Do
     # not let a cached CarParams/controller type hide the persisted user request.
     toggles.force_torque_controller = get_starpilot_toggles._params.get_bool("ForceTorqueController")
+    # Controller selection happens before the first live StarPilot broadcast.
+    # Realtime callers use the serialized value to avoid blocking reads.
+    toggles.rivian_angle_control = get_starpilot_toggles._params.get_bool("RivianAngleControl")
   return toggles
 
 @cache
@@ -563,6 +578,7 @@ class StarPilotVariables:
     toggle = self.starpilot_toggles
     # CarParams uses this value to select the matching Panda safety configuration.
     toggle.tesla_cooperative_steering = self.params.get_bool("TeslaCoopSteering")
+    toggle.rivian_angle_control = self.params.get_bool("RivianAngleControl")
 
     fallback_platform = GM_CAR.CHEVROLET_BOLT_ACC_2022_2023 if HARDWARE.get_device_type() == "pc" else MOCK.MOCK
 
@@ -607,15 +623,10 @@ class StarPilotVariables:
     latAccelFactor = CP.lateralTuning.torque.latAccelFactor
     if not math.isfinite(latAccelFactor):
       latAccelFactor = 0.0
-    hyundai_has_lda_button = (
-      toggle.car_make == "hyundai" and
-      len(FPCP.safetyConfigs) > 0 and
-      bool(FPCP.safetyConfigs[-1].safetyParam & HyundaiStarPilotSafetyFlags.HAS_LDA_BUTTON.value)
+    toggle.lkas_allowed_for_aol = _lkas_allowed_for_aol(
+      toggle.car_make, CP.flags, FPCP.safetyConfigs,
     )
-    hyundai_can_use_lkas_for_aol = toggle.car_make == "hyundai" and (
-      bool(CP.flags & HyundaiFlags.CANFD) or hyundai_has_lda_button
-    )
-    toggle.lkas_allowed_for_aol = hyundai_can_use_lkas_for_aol or toggle.car_make == "honda"
+    hyundai_can_use_lkas_for_aol = toggle.car_make == "hyundai" and toggle.lkas_allowed_for_aol
     longitudinalActuatorDelay = CP.longitudinalActuatorDelay
     toggle.openpilot_longitudinal = CP.openpilotLongitudinalControl and not toggle.disable_openpilot_long
     if not toggle.redneck_cruise_available or (toggle.openpilot_longitudinal and FPCP.pcmCruiseSpeed):
@@ -637,12 +648,6 @@ class StarPilotVariables:
     toggle.stoppingDecelRate = CP.stoppingDecelRate
     toggle.vEgoStarting = CP.vEgoStarting
     toggle.vEgoStopping = CP.vEgoStopping
-    if toggle.openpilot_longitudinal and toggle.car_make == "toyota":
-      # Preserve StarPilot's established Toyota stop-state behavior without
-      # coupling it to the removed FrogsGoMoo controller experiment.
-      toggle.stoppingDecelRate = 0.01
-      toggle.vEgoStarting = 0.1
-      toggle.vEgoStopping = 0.5
 
     # Keep stock tuning params synchronized for all device UIs.
     self._migrate_steer_delay_mode(steerActuatorDelay)
@@ -1421,6 +1426,7 @@ class StarPilotVariables:
       "TeslaCoopSteering",
       condition=toggle.car_make == "tesla" and toggle.car_model == TESLA_CAR.TESLA_MODEL_3,
     )
+    toggle.rivian_angle_control = self.get_value("RivianAngleControl", condition=toggle.car_make == "rivian")
 
     toggle.tethering_config = self.get_value("TetheringEnabled", cast=float)
 

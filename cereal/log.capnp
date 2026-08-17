@@ -130,8 +130,13 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     userBookmark @95;
     excessiveActuation @96;
     audioFeedback @97;
+    bigModelLoading @100;
+    bigModelFailed @102;
 
     soundsUnavailableDEPRECATED @47;
+    stockLkasDEPRECATED @98;
+    lateralManeuverDEPRECATED @99;
+    bigModelReadyDEPRECATED @101;
   }
 }
 
@@ -729,6 +734,19 @@ struct PeripheralState {
     cdp @2;
     dcp @3;
   }
+}
+
+struct ChestnutState {
+  tempC @0 :Float32;
+  memoryTempC @1 :Float32;
+  powerDrawW @2 :Float32;
+  powerLimitW @3 :Float32;
+  gpuUsagePercent @4 :UInt8;
+  gpuClockMhz @5 :UInt16;
+  fanSpeedRpm @6 :UInt16;
+  pcieLtssm @7 :UInt8;
+  supplyVoltage @8 :UInt16;  # mV
+  supplyCurrent @9 :Int16;  # mA
 }
 
 struct RadarState @0x9a185389d6fdd05f {
@@ -2687,6 +2705,7 @@ struct Event {
     procLog @33 :ProcLog;
     clocks @35 :Clocks;
     deviceState @6 :DeviceState;
+    chestnutState @152 :ChestnutState;
     logMessage @18 :Text;
     errorLogMessage @85 :Text;
 

@@ -12,6 +12,15 @@ def test_legacy_volt_stock_acc_models_share_sng_and_auto_hold_scope():
   }
 
 
+def test_tss2_toyota_keeps_main_aol_button_path():
+  assert spv._lkas_allowed_for_aol("toyota", 0, []) is False
+
+
+def test_hyundai_and_honda_keep_lkas_aol_button_path():
+  assert spv._lkas_allowed_for_aol("honda", 0, []) is True
+  assert spv._lkas_allowed_for_aol("hyundai", spv.HyundaiFlags.CANFD, []) is True
+
+
 def test_jeep_brake_hold_scope_is_grand_cherokee_only():
   assert {str(car) for car in spv.CHRYSLER_JEEPS} == {
     "JEEP_GRAND_CHEROKEE",
@@ -62,6 +71,19 @@ def test_get_starpilot_toggles_realtime_path_does_not_read_persisted_force_param
   assert toggles.force_offroad is False
   assert toggles.force_onroad is True
   assert toggles.force_torque_controller is False
+
+
+def test_get_starpilot_toggles_uses_live_rivian_angle_request(monkeypatch):
+  params = SimpleNamespace(get_bool=lambda key: key == "RivianAngleControl")
+  monkeypatch.setattr(spv.get_starpilot_toggles, "_params", params, raising=False)
+
+  payload = '{"rivian_angle_control": false}'
+  toggles = spv.get_starpilot_toggles(
+    {"starpilotPlan": SimpleNamespace(starpilotToggles=payload)},
+    read_persisted_force_params=True,
+  )
+
+  assert toggles.rivian_angle_control is True
 
 
 class _FakeParams:

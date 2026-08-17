@@ -1,3 +1,5 @@
+import { galaxyPath } from "/assets/js/utils.js"
+
 const STORAGE_KEY = "starpilot.sentry.last-event"
 const POLL_INTERVAL_MS = 5000
 const SERVICE_WORKER_PATH = "/service-worker.js"
@@ -85,24 +87,26 @@ async function readJsonResponse(response) {
 
 export async function enableSentryPush() {
   if (typeof Notification === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
-    return { ok: false, message: "This browser does not support Chrome Web Push." }
+    return { ok: false, message: "This browser does not support Web Push notifications." }
   }
   if (!window.isSecureContext) {
-    return { ok: false, message: "Chrome notifications require Galaxy over HTTPS." }
+    return { ok: false, message: "Browser notifications require Galaxy over HTTPS." }
   }
 
   const permission = await requestSentryNotificationPermission()
   if (permission !== "granted") {
-    return { ok: false, message: "Chrome notification permission was not granted." }
+    return { ok: false, message: "Browser notification permission was not granted." }
   }
 
-  const configResponse = await fetch("/api/sentry/push/config", { cache: "no-store" })
+  const configResponse = await fetch(galaxyPath("/api/sentry/push/config"), { cache: "no-store" })
   const config = await readJsonResponse(configResponse)
   if (!configResponse.ok || !config.enabled || !config.publicKey) {
     return { ok: false, message: config.error || "Galaxy Web Push is unavailable." }
   }
 
-  await navigator.serviceWorker.register(SERVICE_WORKER_PATH, { scope: "/" })
+  const serviceWorkerPath = galaxyPath(SERVICE_WORKER_PATH)
+  const serviceWorkerScope = galaxyPath("/")
+  await navigator.serviceWorker.register(serviceWorkerPath, { scope: serviceWorkerScope })
   const registration = await navigator.serviceWorker.ready
   let subscription = await registration.pushManager.getSubscription()
   if (!subscription) {
@@ -112,20 +116,20 @@ export async function enableSentryPush() {
     })
   }
 
-  const response = await fetch("/api/sentry/push/subscribe", {
+  const response = await fetch(galaxyPath("/api/sentry/push/subscribe"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(subscriptionPayload(subscription)),
   })
   const payload = await readJsonResponse(response)
   if (!response.ok) return { ok: false, message: payload.error || "Galaxy could not save this browser." }
-  return { ok: true, message: "Chrome notifications enabled for this browser." }
+  return { ok: true, message: "Browser notifications enabled for this device." }
 }
 
-export async function sendSentryTestPush() {
-  const response = await fetch("/api/sentry/push/test", { method: "POST" })
+export async function sendSentryTestNotification() {
+  const response = await fetch(galaxyPath("/api/sentry/test-notification"), { method: "POST" })
   const payload = await readJsonResponse(response)
-  if (!response.ok) throw new Error(payload.error || "Galaxy could not send the test push.")
+  if (!response.ok) throw new Error(payload.error || "Galaxy could not send the test notification.")
   return payload
 }
 

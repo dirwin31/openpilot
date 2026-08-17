@@ -7,6 +7,7 @@ import math
 import numbers
 import os
 import sys
+import sysconfig
 import tarfile
 
 from io import BytesIO
@@ -48,7 +49,13 @@ from openpilot.system.version import get_build_metadata
 from openpilot.tools.longitudinal_maneuvers.capabilities import get_longitudinal_maneuver_support
 from panda import Panda
 
-from openpilot.starpilot.assets.model_manager import canonical_model_key, is_builtin_model_key, model_key_aliases
+from openpilot.starpilot.assets.model_manager import (
+  canonical_model_key,
+  external_gpu_available,
+  is_builtin_model_key,
+  model_key_aliases,
+  model_uses_external_gpu,
+)
 from openpilot.starpilot.assets.theme_manager import HOLIDAY_THEME_PATH, THEME_COMPONENT_PARAMS
 from openpilot.starpilot.common.accel_profile import (
   CUSTOM_ACCEL_PROFILE_INITIALIZED_KEY,
@@ -92,6 +99,8 @@ from openpilot.starpilot.system.the_galaxy import flm_workspace, utilities
 from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interrupted_update, public_recovery_status, recover_interrupted_update
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+# Keep Galaxy independent of opendbc's generated car bindings while matching RivianFlags.ANGLE_HARNESS.
+RIVIAN_ANGLE_HARNESS_FLAG = 1 << 0
 
 GITLAB_API = "https://gitlab.com/api/v4"
 GITLAB_SUBMISSIONS_PROJECT_ID = "71992109"
@@ -100,15 +109,38 @@ LEGACY_LATERAL_METHOD_API_PREFIX = "/api/" + "".join(("f", "t", "m"))
 VASM_CONFIGURATION_KEYS = {"VASMEnabled", "VASMConfidenceThreshold", "VASMSmoothSeconds", "VASMAnnotationConfig"}
 PIP_PREVIEW_CONFIGURATION_KEYS = {"PIPPreviewEnabled", "PIPPreviewMask", "PIPPreviewShowOnBlinker", "PIPPreviewShowOnBSM"}
 MODEL_SMOOTHING_KEYS = {"LatSmoothSeconds", "LongSmoothSeconds"}
+SENTRY_NUMERIC_PARAM_BOUNDS = {
+  "SentryModeSensitivity": (0.005, 1.0, 0.005),
+  "SentryModeWarningTime": (0.1, 10.0, 0.1),
+}
 
 GALAXY_DEPS_PATH = "/data/galaxy_deps"
 LEGACY_GALAXY_DEPS_PATH = "/data/" + "".join(chr(code) for code in (112, 111, 110, 100)) + "_deps"
 GALAXY_DEPS_PATHS = (GALAXY_DEPS_PATH, LEGACY_GALAXY_DEPS_PATH)
-for deps_path in GALAXY_DEPS_PATHS:
+
+
+def _galaxy_runtime_dependency_paths() -> tuple[str, ...]:
+  """Return existing dependency locations used by Galaxy on-device and in builds."""
+  repo_root = REPO_THIRD_PARTY_PATH.parent.parent
+  candidates = [
+    sysconfig.get_paths().get("purelib", ""),
+    "/usr/local/venv/lib/python3.12/site-packages",
+  ]
+
+  for venv_name in (".venv", ".venv-linux-arm64"):
+    venv_path = repo_root / venv_name / "lib"
+    if venv_path.is_dir():
+      candidates.extend(str(path) for path in venv_path.glob("python*/site-packages"))
+
+  return tuple(dict.fromkeys(path for path in candidates if path and os.path.isdir(path)))
+
+
+REPO_THIRD_PARTY_PATH = Path(__file__).resolve().parents[2] / "third_party"
+GALAXY_RUNTIME_DEPENDENCY_PATHS = _galaxy_runtime_dependency_paths()
+for deps_path in GALAXY_DEPS_PATHS + GALAXY_RUNTIME_DEPENDENCY_PATHS:
   if os.path.isdir(deps_path) and deps_path not in sys.path:
     sys.path.insert(0, deps_path)
 
-REPO_THIRD_PARTY_PATH = Path(__file__).resolve().parents[2] / "third_party"
 if REPO_THIRD_PARTY_PATH.is_dir() and str(REPO_THIRD_PARTY_PATH) not in sys.path:
   sys.path.insert(0, str(REPO_THIRD_PARTY_PATH))
 
@@ -525,16 +557,20 @@ def _normalize_sentry_event(payload) -> dict | None:
 
   event_id = str(payload.get("eventId") or "").strip()
   kind = str(payload.get("kind") or "").strip().lower()
-  if not event_id or kind not in {"warning", "alarm"}:
+  if not event_id or kind not in {"warning", "alarm", "power_off"}:
     return None
 
-  return {
+  event = {
     "eventId": event_id[:96],
     "kind": kind,
     "detectedAt": str(payload.get("detectedAt") or ""),
     "message": str(payload.get("message") or "Movement detected while parked.")[:500],
     "imagePaths": _safe_sentry_image_paths(payload.get("imagePaths")),
   }
+  reason = str(payload.get("reason") or "").strip()
+  if reason:
+    event["reason"] = reason[:96]
+  return event
 
 
 def _sentry_image_path(event_id: str, filename: str) -> Path | None:
@@ -582,6 +618,39 @@ def _capture_sentry_test_images(event_id: str) -> list[str]:
     return []
 
   directory = _sentry_event_roots()[0] / event_id
+  directory.mkdir(parents=True, exist_ok=True)
+  paths = []
+  if rear is not None:
+    path = directory / "wide.jpg"
+    jpeg_write(str(path), rear)
+    paths.append(str(path))
+  if front is not None:
+    path = directory / "driver.jpg"
+    jpeg_write(str(path), front)
+    paths.append(str(path))
+  return paths
+
+
+_SENTRY_LIVE_CAPTURE_LOCK = threading.Lock()
+_SENTRY_LIVE_EVENT_ID = "live"
+
+
+def _capture_sentry_live_images() -> list[str]:
+  from openpilot.system.camerad.snapshot import jpeg_write, snapshot
+
+  params.put_bool("SentryModeCapture", True)
+  try:
+    rear, front = snapshot(allow_existing=True, include_front=True)
+  except Exception:
+    cloudlog.exception("Galaxy: live Sentry snapshot failed")
+    return []
+  finally:
+    params.put_bool("SentryModeCapture", False)
+
+  if rear is None and front is None:
+    return []
+
+  directory = _sentry_event_roots()[0] / _SENTRY_LIVE_EVENT_ID
   directory.mkdir(parents=True, exist_ok=True)
   paths = []
   if rear is not None:
@@ -682,9 +751,45 @@ def _sentry_push_subscription_count() -> int:
     return len(_load_sentry_push_subscriptions())
 
 
+def _sentry_public_base_url() -> str:
+  configured_url = os.getenv("STARPILOT_GALAXY_PUBLIC_URL", "").strip().rstrip("/")
+  if configured_url:
+    return configured_url
+
+  slug = _read_galaxy_text(_get_galaxy_dir() / "glxyslug")
+  return f"https://galaxy.firestar.link/{slug}" if slug else ""
+
+
+def _sentry_external_image_urls(event: dict) -> list[str]:
+  base_url = _sentry_public_base_url()
+  if not base_url:
+    return []
+
+  public_event = _public_sentry_event(event)
+  return [f"{base_url}{image_url}" for image_url in public_event["imageUrls"]]
+
+
+def _sentry_notification_channels() -> dict[str, bool]:
+  return {
+    "webPush": _sentry_push_subscription_count() > 0,
+    "webhook": bool((params.get("SentryModeWebhook", encoding="utf-8") or "").strip()),
+    "ntfy": bool((params.get("SentryModeNtfyUrl", encoding="utf-8") or "").strip()),
+  }
+
+
+def _sentry_test_notification_event() -> dict:
+  return {
+    "eventId": f"notification-test-{int(time.time())}-{secrets.token_hex(4)}",
+    "kind": "warning",
+    "detectedAt": datetime.now(timezone.utc).isoformat(),
+    "message": "This is a test StarPilot Sentry notification.",
+    "imagePaths": [],
+  }
+
+
 def _dispatch_sentry_push(event: dict) -> None:
   try:
-    from pywebpush import webpush
+    from openpilot.starpilot.system.the_galaxy.web_push import webpush
 
     vapid = _get_sentry_vapid()
   except Exception:
@@ -698,6 +803,9 @@ def _dispatch_sentry_push(event: dict) -> None:
     "eventId": event_id,
     "url": f"/sentry?event={quote(event_id, safe='')}",
   }
+  image_urls = _sentry_external_image_urls(event)
+  if image_urls:
+    payload["image"] = image_urls[0]
 
   with _SENTRY_PUSH_LOCK:
     subscriptions = _load_sentry_push_subscriptions()
@@ -757,10 +865,14 @@ def _dispatch_sentry_event(event: dict) -> None:
   ntfy_url = (params.get("SentryModeNtfyUrl", encoding="utf-8") or "").strip()
   if ntfy_url:
     try:
+      image_urls = _sentry_external_image_urls(event)
+      headers = {"Title": "StarPilot Sentry Mode", "Priority": "urgent", "Tags": "warning,car"}
+      if image_urls:
+        headers["Attach"] = image_urls[0]
       response = requests.post(
         ntfy_url,
         data=message.encode("utf-8"),
-        headers={"Title": "StarPilot Sentry Mode", "Priority": "urgent", "Tags": "warning,car"},
+        headers=headers,
         timeout=10,
       )
       response.raise_for_status()
@@ -868,6 +980,7 @@ _STATS_RESPONSE_CACHE = {
   "updated_at": 0.0,
   "payload": None,
 }
+_STATS_RESPONSE_LOCK = threading.Lock()
 
 try:
   FOOTAGE_PATHS = [
@@ -2695,6 +2808,7 @@ def _get_favorite_slot_options():
           "label": str(param_data.get("label") or key),
           "description": str(param_data.get("description") or ""),
           "section": section_name,
+          "requiresCapability": str(param_data.get("requires_capability") or ""),
         })
   except Exception:
     options = []
@@ -2702,6 +2816,15 @@ def _get_favorite_slot_options():
   options.sort(key=lambda option: (str(option.get("label") or option.get("key") or "").casefold(), str(option.get("key") or "").casefold()))
   _favorite_slot_options = options
   return _favorite_slot_options
+
+def _get_available_favorite_slot_options():
+  capabilities = {
+    "HasRivianAngleHarness": _get_has_rivian_angle_harness(),
+  }
+  return [
+    option for option in _get_favorite_slot_options()
+    if not option.get("requiresCapability") or capabilities.get(option["requiresCapability"], False)
+  ]
 
 def _favorite_slot_values(options):
   return {
@@ -3488,6 +3611,17 @@ def _get_alpha_longitudinal_available():
   try:
     with car.CarParams.from_bytes(cp_bytes) as cp:
       return bool(getattr(cp, "alphaLongitudinalAvailable", False))
+  except Exception:
+    return False
+
+def _get_has_rivian_angle_harness():
+  cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
+  if not cp_bytes:
+    return False
+
+  try:
+    with car.CarParams.from_bytes(cp_bytes) as cp:
+      return cp.brand == "rivian" and bool(int(getattr(cp, "flags", 0)) & RIVIAN_ANGLE_HARNESS_FLAG)
   except Exception:
     return False
 
@@ -4310,6 +4444,7 @@ def setup(app):
     if request.path in {
       "/assets/components/router.js",
       "/assets/components/sentry_notifications.js",
+      "/assets/js/utils.js",
       "/assets/components/home/home.js",
       "/assets/components/home/home.css",
       "/assets/components/tools/device_settings.js",
@@ -4628,7 +4763,7 @@ def setup(app):
 
   @app.route("/api/favorites/slots", methods=["GET", "PUT"])
   def favorite_slots():
-    options = _get_favorite_slot_options()
+    options = _get_available_favorite_slot_options()
     option_by_key = {option["key"]: option for option in options}
     eligible_keys = set(option_by_key)
 
@@ -4678,7 +4813,7 @@ def setup(app):
 
   @app.route("/api/favorites/values", methods=["GET"])
   def favorite_values():
-    options = _get_favorite_slot_options()
+    options = _get_available_favorite_slot_options()
     eligible_keys = {option["key"] for option in options}
     slots = normalize_favorite_slots(params.get(FAVORITE_SLOTS_PARAM), params=params, eligible_keys=eligible_keys)
     return jsonify({"values": _configured_favorite_slot_values(slots)}), 200
@@ -4709,7 +4844,7 @@ def setup(app):
         if not isinstance(raw_slots, list):
           return jsonify({"error": "Favorite slots must be configured with the Favorites editor."}), 400
 
-        options = _get_favorite_slot_options()
+        options = _get_available_favorite_slot_options()
         option_by_key = {option["key"]: option for option in options}
         eligible_keys = set(option_by_key)
         slots = normalize_favorite_slots(raw_slots, params=params, eligible_keys=eligible_keys)
@@ -4753,6 +4888,17 @@ def setup(app):
       allowed_keys, _ = _get_param_type_info()
       if key not in allowed_keys:
         return jsonify({"error": f"Parameter '{key}' is not editable."}), 403
+
+      if key in SENTRY_NUMERIC_PARAM_BOUNDS:
+        minimum, maximum, step = SENTRY_NUMERIC_PARAM_BOUNDS[key]
+        try:
+          numeric = float(data["value"])
+        except (TypeError, ValueError):
+          return jsonify({"error": f"{key} must be numeric."}), 400
+        if not math.isfinite(numeric) or numeric < minimum or numeric > maximum:
+          return jsonify({"error": f"{key} must be between {minimum} and {maximum}."}), 400
+        numeric = round(round(numeric / step) * step, 3)
+        str_val = str(numeric)
 
       if key == "AlphaLongitudinalEnabled":
         if not _get_alpha_longitudinal_available():
@@ -5008,6 +5154,8 @@ def setup(app):
         selected_model = canonical_model_key(str_val.strip())
         if not selected_model:
           return jsonify({"error": "Driving model cannot be empty."}), 400
+        if model_uses_external_gpu(selected_model) and not external_gpu_available():
+          return jsonify({"error": "This model requires a detected external GPU."}), 409
 
         params.put("Model", selected_model)
         params.put("DrivingModel", selected_model)
@@ -5070,6 +5218,8 @@ def setup(app):
       update_starpilot_toggles()
 
       response = {"message": f"Parameter '{key}' updated successfully."}
+      if key == "RivianAngleControl":
+        response["message"] = "Rivian steering mode updated. The safe channel handoff is in progress."
       updated = {}
       if key in PANDA_FIRMWARE_TOGGLE_KEYS:
         threading.Thread(target=_flash_panda_then_reboot, daemon=True).start()
@@ -5149,6 +5299,7 @@ def setup(app):
     result["HasRadar"] = _get_has_radar()
     result["VehicleParked"] = _get_vehicle_parked()
     result["AlphaLongitudinalAvailable"] = _get_alpha_longitudinal_available()
+    result["HasRivianAngleHarness"] = _get_has_rivian_angle_harness()
 
     return jsonify(_sanitize_json_value(result)), 200
 
@@ -5376,6 +5527,8 @@ def setup(app):
 
     if model["installed"]:
       return jsonify({"message": f"\"{model['label']}\" is already installed."}), 200
+    if model["requiresGpu"] and not model["gpuAvailable"]:
+      return jsonify({"error": "This model requires a detected external GPU."}), 409
 
     params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
     params_memory.remove(MODEL_DOWNLOAD_ALL_PARAM)
@@ -5392,7 +5545,7 @@ def setup(app):
     if params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM) or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or ""):
       return jsonify({"error": "A model download is already in progress."}), 409
 
-    missing_models = [model for model in get_model_catalog() if not model["installed"]]
+    missing_models = [model for model in get_model_catalog() if not model["installed"] and (not model["requiresGpu"] or model["gpuAvailable"])]
     if not missing_models:
       return jsonify({"message": "All models are already installed."}), 200
 
@@ -5684,6 +5837,7 @@ def setup(app):
     except Exception:
       on_disk_files = set()
 
+    external_gpu_present = external_gpu_available()
     models_by_key = {}
     for i, key in enumerate(available):
       canonical_key = canonical_model_key(key)
@@ -5695,6 +5849,8 @@ def setup(app):
       artifact_format = artifact_formats[i] if i < len(artifact_formats) else ""
       model_series = series[i] if i < len(series) and series[i] else "Custom Series"
       released = released_dates[i] if i < len(released_dates) else ""
+      requires_external_gpu = model_uses_external_gpu(canonical_key)
+      gpu_available = not requires_external_gpu or external_gpu_present
 
       existing = models_by_key.get(canonical_key)
       if existing is None:
@@ -5704,6 +5860,8 @@ def setup(app):
           "series": model_series,
           "version": model_version,
           "artifactFormat": artifact_format,
+          "requiresGpu": requires_external_gpu,
+          "gpuAvailable": gpu_available,
           "released": released,
           "builtin": is_builtin_model_key(canonical_key),
           "communityFavorite": canonical_key in community_favorites,
@@ -5724,6 +5882,8 @@ def setup(app):
       existing["builtin"] = existing["builtin"] or is_builtin_model_key(canonical_key)
       existing["communityFavorite"] = existing["communityFavorite"] or canonical_key in community_favorites
       existing["userFavorite"] = existing["userFavorite"] or canonical_key in user_favorites
+      existing["requiresGpu"] = existing["requiresGpu"] or requires_external_gpu
+      existing["gpuAvailable"] = not existing["requiresGpu"] or external_gpu_present
 
     default_key = _default_model_key()
     default_entry = models_by_key.setdefault(default_key, {
@@ -5732,6 +5892,8 @@ def setup(app):
       "series": "Custom Series",
       "version": _default_model_version(),
       "artifactFormat": "tinygrad_single_v1",
+      "requiresGpu": False,
+      "gpuAvailable": True,
       "released": "",
       "builtin": True,
       "communityFavorite": default_key in community_favorites,
@@ -6174,8 +6336,7 @@ def setup(app):
 
     return jsonify({"message": "Speed limit processing started.", "status": "Calculating..."}), 202
 
-  @app.route("/api/stats", methods=["GET"])
-  def get_stats():
+  def _get_stats_locked():
     cache_now = time.monotonic()
     cached_payload = _STATS_RESPONSE_CACHE.get("payload")
     if cached_payload is not None and cache_now - _STATS_RESPONSE_CACHE.get("updated_at", 0.0) < STATS_RESPONSE_CACHE_SECONDS:
@@ -6218,6 +6379,18 @@ def setup(app):
       "payload": payload,
     })
     return payload
+
+  @app.route("/api/stats", methods=["GET"])
+  def get_stats():
+    cache_now = time.monotonic()
+    cached_payload = _STATS_RESPONSE_CACHE.get("payload")
+    if cached_payload is not None and cache_now - _STATS_RESPONSE_CACHE.get("updated_at", 0.0) < STATS_RESPONSE_CACHE_SECONDS:
+      return cached_payload
+
+    # Flask serves requests concurrently. Serialize cache misses so a slow
+    # storage scan cannot be multiplied by repeated homepage polling.
+    with _STATS_RESPONSE_LOCK:
+      return _get_stats_locked()
 
   @app.route("/api/stats/ignore_drive", methods=["POST"])
   def ignore_drive_stats():
@@ -6902,16 +7075,33 @@ def setup(app):
   @app.route("/api/sentry/push/test", methods=["POST"])
   def sentry_push_test():
     if _sentry_push_subscription_count() == 0:
-      return jsonify({"error": "Enable Chrome notifications first."}), 409
+      return jsonify({"error": "Enable browser notifications first."}), 409
 
-    event = {
-      "eventId": f"push-test-{int(time.time())}-{secrets.token_hex(4)}",
-      "kind": "warning",
-      "detectedAt": datetime.now(timezone.utc).isoformat(),
-      "message": "This is a test StarPilot Sentry push notification.",
-    }
+    event = _sentry_test_notification_event()
     threading.Thread(target=_dispatch_sentry_push, args=(event,), name="galaxy-sentry-push-test", daemon=True).start()
     return jsonify({"accepted": True, "eventId": event["eventId"]}), 202
+
+  @app.route("/api/sentry/test-notification", methods=["POST"])
+  def sentry_test_notification():
+    channels = _sentry_notification_channels()
+    if not any(channels.values()):
+      return jsonify({
+        "error": "Configure browser notifications, ntfy, or a webhook before sending a test notification.",
+        "channels": channels,
+      }), 409
+
+    event = _sentry_test_notification_event()
+    threading.Thread(
+      target=_dispatch_sentry_event,
+      args=(event,),
+      name="galaxy-sentry-notification-test",
+      daemon=True,
+    ).start()
+    return jsonify({
+      "accepted": True,
+      "eventId": event["eventId"],
+      "channels": channels,
+    }), 202
 
   @app.route("/api/sentry/status", methods=["GET"])
   def sentry_status():
@@ -6932,12 +7122,59 @@ def setup(app):
       "lastEvent": _public_sentry_event(last_event) if isinstance(last_event, dict) else {},
     })
 
+  @app.route("/api/sentry/events/<event_id>", methods=["DELETE"])
+  def delete_sentry_event(event_id):
+    if not params.get_bool("IsOffroad"):
+      return jsonify({"error": "Sentry events can only be deleted while parked."}), 409
+    if not event_id or event_id in {".", ".."} or Path(event_id).name != event_id:
+      return jsonify({"error": "Invalid Sentry event ID."}), 400
+
+    deleted_storage = False
+    for root in _sentry_event_roots():
+      directory = (root / event_id).resolve()
+      if root not in directory.parents or not directory.is_dir():
+        continue
+      shutil.rmtree(directory)
+      deleted_storage = True
+
+    raw_event = params.get("SentryModeLastEvent", encoding="utf-8") or "{}"
+    try:
+      current_event = raw_event if isinstance(raw_event, dict) else json.loads(raw_event)
+    except (TypeError, ValueError, json.JSONDecodeError):
+      current_event = {}
+
+    cleared_latest = isinstance(current_event, dict) and str(current_event.get("eventId") or "") == event_id
+    if cleared_latest:
+      params.remove("SentryModeLastEvent")
+
+    if not deleted_storage and not cleared_latest:
+      return jsonify({"error": "Sentry event not found."}), 404
+
+    return jsonify({"deleted": True, "eventId": event_id})
+
   @app.route("/api/sentry/images/<event_id>/<filename>", methods=["GET"])
   def sentry_image(event_id, filename):
     image_path = _sentry_image_path(event_id, filename)
     if image_path is None:
       return jsonify({"error": "Sentry image not found."}), 404
     return send_file(image_path, mimetype="image/jpeg", max_age=0)
+
+  @app.route("/api/sentry/live", methods=["GET"])
+  def sentry_live():
+    if not params.get_bool("IsOffroad"):
+      return jsonify({"error": "Live Sentry view is only available while parked."}), 409
+
+    with _SENTRY_LIVE_CAPTURE_LOCK:
+      image_paths = _capture_sentry_live_images()
+    if not image_paths:
+      return jsonify({"error": "Unable to capture the Sentry cameras."}), 503
+
+    captured_at = datetime.now(timezone.utc).isoformat()
+    event = _public_sentry_event({
+      "eventId": _SENTRY_LIVE_EVENT_ID,
+      "imagePaths": image_paths,
+    })
+    return jsonify({"capturedAt": captured_at, "imageUrls": event["imageUrls"]})
 
   @app.route("/api/sentry/test", methods=["POST"])
   def sentry_test():
@@ -6973,7 +7210,10 @@ def setup(app):
       return jsonify({"error": "Invalid sentry event."}), 400
 
     params.put("SentryModeLastEvent", json.dumps(event, separators=(",", ":")))
-    threading.Thread(target=_dispatch_sentry_event, args=(event,), name="galaxy-sentry-notify", daemon=True).start()
+    if request.args.get("blocking") == "1":
+      _dispatch_sentry_event(event)
+    else:
+      threading.Thread(target=_dispatch_sentry_event, args=(event,), name="galaxy-sentry-notify", daemon=True).start()
     return jsonify({"accepted": True, "eventId": event["eventId"]}), 202
 
   # ── Galaxy pairing (mirrors settings.cc L262-282) ──────────────────

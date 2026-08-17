@@ -19,6 +19,7 @@ from opendbc.car.hyundai.carcontroller import CarController, Ioniq6LongitudinalT
                                              should_use_ev6_gt_line_stop_direct_tracking, \
                                              should_track_stop_accel_directly_for_car, \
                                              preserve_stock_canfd_lfa_status, \
+                                             preserve_stock_canfd_lkas_status, \
                                              suppress_redundant_gv70_brake_cancel
 from opendbc.car.hyundai.carstate import CarState, decode_canfd_camera_lead, decode_ioniq_6_blindspot_radar_state, \
                                              get_canfd_cruise_available
@@ -125,15 +126,16 @@ def get_test_toggles() -> SimpleNamespace:
 
 
 class TestHyundaiFingerprint:
-  def test_carnival_2024_uses_clean_canfd_lfa_status(self):
-    assert not preserve_stock_canfd_lfa_status(CAR.KIA_CARNIVAL_4TH_GEN)
-    assert preserve_stock_canfd_lfa_status(CAR.KIA_CARNIVAL_2025)
-    assert preserve_stock_canfd_lfa_status(CAR.KIA_CARNIVAL_HEV_4TH_GEN)
+  @pytest.mark.parametrize("candidate", (CAR.KIA_CARNIVAL_4TH_GEN, CAR.KIA_CARNIVAL_2025, CAR.KIA_CARNIVAL_HEV_4TH_GEN))
+  def test_carnival_uses_clean_canfd_lfa_status(self, candidate):
+    assert not preserve_stock_canfd_lfa_status(candidate)
+    assert not preserve_stock_canfd_lkas_status(candidate)
     assert preserve_stock_canfd_lfa_status(CAR.HYUNDAI_IONIQ_6)
+    assert preserve_stock_canfd_lkas_status(CAR.HYUNDAI_IONIQ_6)
 
     CP = CarParams.new_message()
-    CP.carFingerprint = CAR.KIA_CARNIVAL_4TH_GEN
-    CP.flags = int(HyundaiFlags.CANFD | HyundaiFlags.RADAR_SCC)
+    CP.carFingerprint = candidate
+    CP.flags = int(HyundaiFlags.CANFD | (HyundaiFlags.RADAR_SCC if candidate == CAR.KIA_CARNIVAL_4TH_GEN else HyundaiFlags.CCNC))
     CP.openpilotLongitudinalControl = True
     packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
     can_bus = CanBus(CP)
@@ -154,6 +156,56 @@ class TestHyundaiFingerprint:
 
     active_cluster_msg = hyundaicanfd.create_lfahda_cluster(packer, can_bus, True, None, lfa_icon=2)
     assert active_cluster_msg[1] == bytes.fromhex("cdfb0180000001000000000000000000")
+
+  @pytest.mark.parametrize("candidate", (CAR.KIA_CARNIVAL_2025, CAR.KIA_CARNIVAL_HEV_4TH_GEN))
+  def test_carnival_hda2_clears_stock_lkas_warning_status(self, candidate):
+    CP = CarParams.new_message()
+    CP.carFingerprint = candidate
+    CP.flags = int(HyundaiFlags.CANFD | HyundaiFlags.CCNC | HyundaiFlags.CANFD_LKA_STEERING |
+                   HyundaiFlags.CANFD_LKA_STEERING_ALT)
+    CP.openpilotLongitudinalControl = False
+
+    controller = CarController(DBC[CP.carFingerprint], CP)
+    controller.frame = 1
+    can_bus = CanBus(CP)
+    parser = CANParser(DBC[CP.carFingerprint][Bus.pt], [("LKAS_ALT", 0)], can_bus.ACAN)
+    stock_lkas = {
+      "CHECKSUM": 1234,
+      "COUNTER": 42,
+      "LKA_MODE": 0,
+      "LKA_AVAILABLE": 0,
+      "LKA_WARNING": 0,
+      "LKA_ICON": 0,
+      "FCA_SYSWARN": 1,
+      "TORQUE_REQUEST": 0,
+      "STEER_REQ": 0,
+      "LFA_BUTTON": 0,
+      "LKA_ASSIST": 1,
+      "STEER_MODE": 2,
+      "NEW_SIGNAL_2": 3,
+      "HAS_LANE_SAFETY": 0,
+      "DAMP_FACTOR": 100,
+    }
+    cc = SimpleNamespace(enabled=False, latActive=True,
+                         actuators=SimpleNamespace(longControlState=LongCtrlState.off),
+                         leftBlinker=False, rightBlinker=False,
+                         hudControl=SimpleNamespace())
+    cs = SimpleNamespace(stock_lfa_msg=None, stock_lkas_msg=stock_lkas,
+                         out=SimpleNamespace(standstill=False, steeringAngleDeg=0.0,
+                                             gearShifter=structs.CarState.GearShifter.drive))
+
+    msgs = controller.create_canfd_msgs(0, True, 123, 0.0, 0.0, 0.0, False,
+                                        cc.hudControl, cs, cc, get_test_toggles(), lka_icon=2, lfa_icon=2)
+    lkas_msgs = [msg for msg in msgs if msg[0] == 0x110]
+    assert len(lkas_msgs) == 1
+
+    parser.update([(1, lkas_msgs)])
+    assert parser.can_valid
+    assert parser.vl["LKAS_ALT"]["FCA_SYSWARN"] == 0
+    assert parser.vl["LKAS_ALT"]["LKA_ASSIST"] == 0
+    assert parser.vl["LKAS_ALT"]["DAMP_FACTOR"] == 100
+    assert parser.vl["LKAS_ALT"]["TORQUE_REQUEST"] == 123
+    assert parser.vl["LKAS_ALT"]["STEER_REQ"] == 1
 
   def test_canfd_torque_bsm_parser_registers_rear_blindspots(self):
     CP = CarParams.new_message()
@@ -451,13 +503,14 @@ class TestHyundaiFingerprint:
     assert CP.flags & HyundaiFlags.HYBRID
     assert CP.safetyConfigs[-1].safetyParam & HyundaiSafetyFlags.HYBRID_GAS
 
-  def test_carnival_2025_hda2_detects_alternate_buttons(self):
+  @pytest.mark.parametrize("candidate", (CAR.KIA_CARNIVAL_2025, CAR.KIA_CARNIVAL_HEV_4TH_GEN))
+  def test_carnival_hda2_detects_alternate_buttons(self, candidate):
     fingerprint = gen_empty_fingerprint()
     CAN = CanBus(None, fingerprint)
     fingerprint[CAN.CAM] = {0x110: 32}
     fingerprint[1] = {0x1aa: 16}
 
-    carnival_cp = CarInterface.get_params(CAR.KIA_CARNIVAL_2025, fingerprint, [], False, False, False, None)
+    carnival_cp = CarInterface.get_params(candidate, fingerprint, [], False, False, False, None)
     assert carnival_cp.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT
     assert carnival_cp.flags & HyundaiFlags.CANFD_ALT_BUTTONS
     assert carnival_cp.safetyConfigs[-1].safetyParam & HyundaiSafetyFlags.CANFD_ALT_BUTTONS
