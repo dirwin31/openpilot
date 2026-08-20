@@ -2209,6 +2209,7 @@ def _normalize_persistent_routes(raw_routes):
     date = str(entry.get("date", "")).strip()
     if not name or not date or not _dashboard_time_is_valid(date):
       continue
+    counted_model = entry.get("modelUsageCounted", "")
     routes[name] = {
       "date": date,
       "endDate": str(entry.get("endDate", "")).strip(),
@@ -2227,6 +2228,7 @@ def _normalize_persistent_routes(raw_routes):
       "attentionKnown": bool(entry.get("attentionKnown", True)),
       "analysisComplete": bool(entry.get("analysisComplete", False)),
       "analysisVersion": max(0, _safe_int(entry.get("analysisVersion", 0), 0)),
+      "modelUsageCounted": canonical_model_key(counted_model if isinstance(counted_model, str) else entry.get("modelKey", "") if counted_model else ""),
     }
   return routes
 
@@ -2252,6 +2254,10 @@ def _load_dashboard_persistent_stats(params_obj):
   data["personalRecords"] = personal_records if isinstance(personal_records, dict) else {}
   model_usage = data.get("modelUsage", {})
   data["modelUsage"] = model_usage if isinstance(model_usage, dict) else {}
+  if data["modelUsage"] and not any(entry["modelUsageCounted"] for entry in data["routes"].values()):
+    for route_name, entry in data["routes"].items():
+      if route_name not in data["ignoredRoutes"] and entry.get("analysisComplete"):
+        entry["modelUsageCounted"] = canonical_model_key(entry.get("modelKey", "")) or _model_usage_key(entry.get("model", ""))
   return data
 
 
@@ -2443,12 +2449,25 @@ def _recalculate_persistent_stats(stats, reset_personal_records=False):
     for route_name, entry in ordered_routes
     if route_name not in ignored_routes
   ]
-  model_usage = {}
+  previous_usage = stats.get("modelUsage", {})
+  model_usage = dict(previous_usage if isinstance(previous_usage, dict) else {})
+
+  for route_name, entry in ordered_routes:
+    counted_key = canonical_model_key(entry.get("modelUsageCounted", ""))
+    model_name = _clean_model_label(entry.get("model", ""))
+    model_key = canonical_model_key(entry.get("modelKey", "")) or _model_usage_key(model_name)
+    should_count = route_name not in ignored_routes and _dashboard_time_is_valid(entry.get("date", "")) and bool(entry.get("analysisComplete", False))
+    if counted_key and (not should_count or counted_key != model_key):
+      usage = model_usage.get(counted_key, {})
+      usage["drives"] = max(0, _safe_int(usage.get("drives", 0), 0) - 1)
+      if not usage["drives"]:
+        model_usage.pop(counted_key, None)
+      entry["modelUsageCounted"] = ""
 
   for _, entry in included_ordered_routes:
     if not _dashboard_time_is_valid(entry.get("date", "")):
       continue
-    if not bool(entry.get("analysisComplete", False)):
+    if not bool(entry.get("analysisComplete", False)) or entry.get("modelUsageCounted"):
       continue
     model_name = _clean_model_label(entry.get("model", ""))
     model_key = canonical_model_key(entry.get("modelKey", "")) or _model_usage_key(model_name)
@@ -2459,10 +2478,11 @@ def _recalculate_persistent_stats(stats, reset_personal_records=False):
         "drives": 0,
         "lastUsed": "",
       })
-      usage["drives"] += 1
-      usage["lastUsed"] = entry.get("date", "") or usage["lastUsed"]
+      usage["drives"] = _safe_int(usage.get("drives", 0), 0) + 1
+      usage["lastUsed"] = entry.get("date", "") or usage.get("lastUsed", "")
       if model_name:
         usage["name"] = model_name
+      entry["modelUsageCounted"] = model_key
 
   previous_attention = stats.get("attentionRecords", {}) if isinstance(stats.get("attentionRecords", {}), dict) else {}
   current_records = _build_personal_records_raw(included_routes)
@@ -2576,6 +2596,7 @@ def _update_dashboard_persistent_stats(params_obj, drives, wall_now):
       next_entry["analysisVersion"] = DASHBOARD_ROUTE_ANALYSIS_VERSION
     existing_entry = routes.get(route_name)
     if isinstance(existing_entry, dict):
+      next_entry["modelUsageCounted"] = str(existing_entry.get("modelUsageCounted", "") or "")
       replace_filesystem_time = _filesystem_route_time_changed(existing_entry, next_entry)
       existing_distance = max(0.0, _safe_float(existing_entry.get("distanceMeters", 0.0), 0.0))
       next_distance = max(0.0, _safe_float(next_entry.get("distanceMeters", 0.0), 0.0))
