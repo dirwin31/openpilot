@@ -739,6 +739,13 @@ def test_persistent_personal_records_and_model_usage_survive_empty_routes():
   assert restored_records["longestUndistractedDrive"]["value"] == "0.5 hours"
   assert restored_records["cleanDriveStreak"]["value"] == "3 drives"
 
+  utilities.clear_dashboard_route_history(params)
+  next_drive = {**drives[0], "name": "route-4", "date": "2026-06-18T08:00:00", "model": "Vega"}
+  updated = utilities._update_dashboard_persistent_stats(params, [next_drive], wall_now=3000)
+  repeated = utilities._update_dashboard_persistent_stats(params, [next_drive], wall_now=4000)
+  assert {key: value["drives"] for key, value in updated["modelUsage"].items()} == {"orion": 3, "vega": 1}
+  assert repeated["modelUsage"]["vega"]["drives"] == 1
+
 
 def test_model_usage_ignores_pending_route_shells():
   params = FakeParams({"AvailableModels": "orion,vega", "AvailableModelNames": "Orion,Vega"})
@@ -976,16 +983,20 @@ def test_persistent_loader_accepts_decoded_param_dict():
           "distanceMeters": 1000,
           "duration": 60,
           "model": "Orion",
+          "modelKey": "orion",
           "attentionKnown": False,
+          "analysisComplete": True,
         },
       },
+      "modelUsage": {"orion": {"key": "orion", "name": "Orion", "drives": 1}},
     },
   })
 
-  stats = utilities._load_dashboard_persistent_stats(params)
+  stats = utilities._update_dashboard_persistent_stats(params, [], wall_now=1000)
 
   assert stats["routes"]["route-1"]["distanceMeters"] == 1000
   assert stats["routes"]["route-1"]["attentionKnown"] is False
+  assert stats["modelUsage"]["orion"]["drives"] == 1
 
 
 def test_dashboard_persistent_stats_fallback_to_file_when_param_put_fails(tmp_path, monkeypatch):
@@ -1242,8 +1253,10 @@ def test_reanalysis_replaces_the_shell_model_and_recalculates_usage():
           "attentionKnown": True,
           "analysisComplete": True,
           "analysisVersion": utilities.DASHBOARD_ROUTE_ANALYSIS_VERSION - 1,
+          "modelUsageCounted": "pop-model-v2",
         },
       },
+      "modelUsage": {"pop-model-v2": {"key": "pop-model-v2", "name": "Pop Model V2", "drives": 1}},
     },
   })
   analyzed_drive = {
