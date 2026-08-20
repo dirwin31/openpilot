@@ -1039,6 +1039,222 @@ def test_apply_and_revert_trial_profile_round_trip(tmp_path):
   assert fake_params_cls._memory_store["StarPilotTogglesUpdated"] is True
 
 
+def test_fine_tune_active_trial_can_reverse_flm_direction_and_still_revert(tmp_path):
+  module, fake_params_cls = _load_flm_workspace_module(tmp_path)
+  workspace = module.ensure_flm_workspace()
+  report_id = "report-fine-tune"
+  profile_id = f"{report_id}:cleanup_pass:recommended"
+  profile = {
+    "id": profile_id,
+    "reportId": report_id,
+    "label": "Recommended",
+    "pathKey": "cleanup_pass",
+    "pathLabel": "Cleanup Pass",
+    "genericParams": {
+      "AdvancedLateralTune": True,
+      "SteerLatAccel": 1.9,
+    },
+    "flmOverrides": {
+      "schemaVersion": 1,
+      "baseFrictionThresholds": {
+        "hkg_canfd": {
+          "speedKnots": [0.0, 5.0, 10.0, 15.0, 25.0],
+          "values": [0.40, 0.41, 0.42, 0.43, 0.44],
+        },
+      },
+      "vehicleKnobs": {
+        "hyundai_ioniq_6.turn_in_boost_left": 1.72,
+      },
+    },
+  }
+  (workspace["profiles"] / f"{report_id}.json").write_text(json.dumps([profile]), encoding="utf-8")
+  fake_params_cls._store = {
+    "AdvancedLateralTune": False,
+    "SteerLatAccel": 1.5,
+    "FLMActiveProfileId": "",
+    "FLMActiveOverrides": {
+      "schemaVersion": 1,
+      "baseFrictionThresholds": {},
+      "vehicleKnobs": {"hyundai_ioniq_6.unwind_taper_left": 0.55},
+    },
+    "FLMTrialApplied": False,
+  }
+
+  module.apply_trial_profile(report_id, profile_id)
+  result = module.fine_tune_active_trial({
+    "genericParams": {"SteerLatAccel": 1.8},
+    "flmOverrides": {
+      "baseFrictionThresholds": {
+        "hkg_canfd": {"values": [0.39, 0.40, 0.41, 0.42, 0.43]},
+      },
+      "vehicleKnobs": {
+        "hyundai_ioniq_6.turn_in_boost_left": 1.50,
+      },
+    },
+  })
+
+  assert "original pre-FLM baseline" in result["message"]
+  assert fake_params_cls._store["SteerLatAccel"] == pytest.approx(1.8)
+  assert fake_params_cls._store["FLMActiveOverrides"]["vehicleKnobs"]["hyundai_ioniq_6.turn_in_boost_left"] == pytest.approx(1.5)
+  assert fake_params_cls._store["FLMActiveOverrides"]["vehicleKnobs"]["hyundai_ioniq_6.unwind_taper_left"] == pytest.approx(0.55)
+  assert fake_params_cls._store["FLMActiveOverrides"]["baseFrictionThresholds"]["hkg_canfd"]["values"] == pytest.approx([0.39, 0.40, 0.41, 0.42, 0.43])
+  assert fake_params_cls._store["FLMActiveProfileId"].startswith("fine-tuned:")
+
+  active_snapshot = json.loads((workspace["snapshots"] / "active.json").read_text(encoding="utf-8"))
+  assert active_snapshot["manualFineTune"] is True
+  assert active_snapshot["sourceProfileId"] == profile_id
+  assert active_snapshot["profileLabel"] == "Recommended (Fine-tuned)"
+  assert active_snapshot["params"]["SteerLatAccel"] == pytest.approx(1.5)
+  assert active_snapshot["appliedVehicleKnobs"]["hyundai_ioniq_6.turn_in_boost_left"] == pytest.approx(1.5)
+
+  active_trial = result["workspace"]["activeTrial"]
+  turn_in_control = next(control for control in active_trial["fineTuneControls"]["vehicleKnobs"] if control["symbol"].endswith("turn_in_boost_left"))
+  assert turn_in_control["value"] == pytest.approx(1.5)
+  assert turn_in_control["min"] == pytest.approx(0.4)
+  assert turn_in_control["max"] == pytest.approx(2.8)
+
+  module.revert_trial_profile()
+  assert fake_params_cls._store["AdvancedLateralTune"] is False
+  assert fake_params_cls._store["SteerLatAccel"] == pytest.approx(1.5)
+  assert fake_params_cls._store["FLMTrialApplied"] is False
+  assert fake_params_cls._store["FLMActiveOverrides"]["vehicleKnobs"] == {"hyundai_ioniq_6.unwind_taper_left": pytest.approx(0.55)}
+
+
+@pytest.mark.parametrize("adjustments, expected_error", [
+  ({"genericParams": {"SteerLatAccel": 8.0}}, "between 0.5 and 5"),
+  ({"flmOverrides": {"vehicleKnobs": {"hyundai_ioniq_6.turn_in_boost_left": 0.1}}}, "between 0.4 and 2.8"),
+  ({"flmOverrides": {"vehicleKnobs": {"hyundai_ioniq_6.ff_gain_left": 0.2}}}, "not an adjustable vehicle knob"),
+])
+def test_fine_tune_active_trial_rejects_unsafe_or_inactive_values(tmp_path, adjustments, expected_error):
+  module, fake_params_cls = _load_flm_workspace_module(tmp_path)
+  workspace = module.ensure_flm_workspace()
+  report_id = "report-fine-tune-validation"
+  profile_id = f"{report_id}:recommended"
+  profile = {
+    "id": profile_id,
+    "label": "Recommended",
+    "genericParams": {"AdvancedLateralTune": True, "SteerLatAccel": 1.9},
+    "flmOverrides": {
+      "vehicleKnobs": {"hyundai_ioniq_6.turn_in_boost_left": 1.72},
+    },
+  }
+  (workspace["profiles"] / f"{report_id}.json").write_text(json.dumps([profile]), encoding="utf-8")
+  fake_params_cls._store = {
+    "AdvancedLateralTune": False,
+    "SteerLatAccel": 1.5,
+    "FLMActiveProfileId": "",
+    "FLMActiveOverrides": {},
+    "FLMTrialApplied": False,
+  }
+  module.apply_trial_profile(report_id, profile_id)
+
+  with pytest.raises(ValueError, match=expected_error):
+    module.fine_tune_active_trial(adjustments)
+
+  assert fake_params_cls._store["SteerLatAccel"] == pytest.approx(1.9)
+  assert fake_params_cls._store["FLMActiveOverrides"]["vehicleKnobs"]["hyundai_ioniq_6.turn_in_boost_left"] == pytest.approx(1.72)
+
+
+def _apply_simple_fine_tune_trial(module, fake_params_cls, report_id, *, write_report=False):
+  workspace = module.ensure_flm_workspace()
+  profile_id = f"{report_id}:recommended"
+  profile = {
+    "id": profile_id,
+    "label": "Recommended",
+    "genericParams": {"AdvancedLateralTune": True, "SteerLatAccel": 1.9},
+    "flmOverrides": {"vehicleKnobs": {"hyundai_ioniq_6.turn_in_boost_left": 1.72}},
+  }
+  (workspace["profiles"] / f"{report_id}.json").write_text(json.dumps([profile]), encoding="utf-8")
+  baseline = {
+    "AdvancedLateralTune": False,
+    "SteerLatAccel": 1.5,
+    "FLMActiveProfileId": "",
+    "FLMActiveOverrides": {},
+    "FLMTrialApplied": False,
+  }
+  if write_report:
+    (workspace["reports"] / f"{report_id}.json").write_text(
+      json.dumps({"reportId": report_id, "createdAt": 100.0, "currentParams": dict(baseline)}),
+      encoding="utf-8",
+    )
+  fake_params_cls._store = dict(baseline)
+  module.apply_trial_profile(report_id, profile_id)
+  return workspace, profile_id
+
+
+def test_fine_tune_back_to_baseline_keeps_the_value_adjustable(tmp_path):
+  module, fake_params_cls = _load_flm_workspace_module(tmp_path)
+  _apply_simple_fine_tune_trial(module, fake_params_cls, "report-back-to-baseline")
+
+  # Trimming an applied value back onto its baseline must not drop it out of the trial, or the
+  # control disappears from the UI and the user can never move it again.
+  result = module.fine_tune_active_trial({"genericParams": {"SteerLatAccel": 1.5}})
+
+  active_trial = result["workspace"]["activeTrial"]
+  assert active_trial["appliedGenericParams"]["SteerLatAccel"] == pytest.approx(1.5)
+  generic_control = next(
+    control for control in active_trial["fineTuneControls"]["genericParams"]
+    if control["key"] == "SteerLatAccel"
+  )
+  assert generic_control["value"] == pytest.approx(1.5)
+
+  # Still adjustable afterwards, in both directions.
+  moved = module.fine_tune_active_trial({"genericParams": {"SteerLatAccel": 2.1}})
+  assert fake_params_cls._store["SteerLatAccel"] == pytest.approx(2.1)
+  assert moved["workspace"]["activeTrial"]["appliedGenericParams"]["SteerLatAccel"] == pytest.approx(2.1)
+
+
+def test_fine_tune_re_anchors_the_rollback_baseline(tmp_path):
+  module, fake_params_cls = _load_flm_workspace_module(tmp_path)
+  workspace, _ = _apply_simple_fine_tune_trial(module, fake_params_cls, "report-anchor", write_report=True)
+
+  # Strip every rollback tier except report recovery, which cannot resolve a "fine-tuned:" id.
+  for path in workspace["snapshots"].glob("*.json"):
+    if path.name != "active.json":
+      path.unlink()
+  active_snapshot = json.loads((workspace["snapshots"] / "active.json").read_text(encoding="utf-8"))
+  active_snapshot.pop("params", None)
+  (workspace["snapshots"] / "active.json").write_text(json.dumps(active_snapshot), encoding="utf-8")
+  fake_params_cls._store.pop("FLMTrialBaseline", None)
+
+  module.fine_tune_active_trial({"genericParams": {"SteerLatAccel": 1.8}})
+
+  # The fine-tuned snapshot must carry the resolved baseline itself.
+  rewritten = json.loads((workspace["snapshots"] / "active.json").read_text(encoding="utf-8"))
+  assert rewritten["params"]["SteerLatAccel"] == pytest.approx(1.5)
+  assert rewritten["params"]["FLMTrialApplied"] is False
+  assert module.list_workspace()["activeTrial"]["rollbackAvailable"] is True
+
+  module.revert_trial_profile()
+  assert fake_params_cls._store["SteerLatAccel"] == pytest.approx(1.5)
+  assert fake_params_cls._store["AdvancedLateralTune"] is False
+  assert fake_params_cls._store["FLMTrialApplied"] is False
+
+
+def test_repeated_fine_tunes_reuse_one_snapshot_and_one_label_suffix(tmp_path):
+  module, fake_params_cls = _load_flm_workspace_module(tmp_path)
+  workspace, _ = _apply_simple_fine_tune_trial(module, fake_params_cls, "report-repeat")
+
+  def fine_tuned_snapshots():
+    return sorted(path.name for path in workspace["snapshots"].glob("fine-tuned*.json"))
+
+  first = module.fine_tune_active_trial({"genericParams": {"SteerLatAccel": 1.8}})
+  first_profile_id = fake_params_cls._store["FLMActiveProfileId"]
+  assert first["workspace"]["activeTrial"]["profileLabel"] == "Recommended (Fine-tuned)"
+  assert len(fine_tuned_snapshots()) == 1
+
+  for value in (1.7, 1.6, 2.0):
+    latest = module.fine_tune_active_trial({"genericParams": {"SteerLatAccel": value}})
+
+  assert fake_params_cls._store["FLMActiveProfileId"] == first_profile_id
+  assert latest["workspace"]["activeTrial"]["profileLabel"] == "Recommended (Fine-tuned)"
+  assert len(fine_tuned_snapshots()) == 1
+
+  module.revert_trial_profile()
+  assert fake_params_cls._store["SteerLatAccel"] == pytest.approx(1.5)
+  assert fake_params_cls._store["FLMTrialApplied"] is False
+
+
 def test_repeated_trial_revisions_revert_to_original_baseline(tmp_path):
   module, fake_params_cls = _load_flm_workspace_module(tmp_path)
   workspace = module.ensure_flm_workspace()

@@ -93,6 +93,14 @@ GENERIC_PARAM_METADATA = {
   "SteerRatio": {"min": 5.0, "max": 25.0, "precision": 0.001, "deltaType": "absolute", "safeLiveTrial": True},
 }
 
+FLM_FRICTION_TUNE_METADATA = {
+  "min": 0.05,
+  "max": 1.5,
+  "precision": 0.001,
+  "deltaType": "absolute",
+  "safeLiveTrial": True,
+}
+
 FLM_REFERENCE_MODEL = {
   "version": 1,
   "families": {
@@ -1228,6 +1236,21 @@ def _round_to_precision(value: float, precision: float) -> float:
     return float(value)
   steps = round(float(value) / precision)
   return round(steps * precision, 6)
+
+
+def _validated_fine_tune_value(value: Any, metadata: dict[str, Any], label: str) -> float:
+  try:
+    numeric = float(value)
+  except (TypeError, ValueError):
+    raise ValueError(f"{label} must be a number.") from None
+  if not math.isfinite(numeric):
+    raise ValueError(f"{label} must be a finite number.")
+
+  minimum = float(metadata["min"])
+  maximum = float(metadata["max"])
+  if numeric < minimum or numeric > maximum:
+    raise ValueError(f"{label} must be between {minimum:g} and {maximum:g}.")
+  return _round_to_precision(numeric, float(metadata["precision"]))
 
 
 def _current_vehicle_knob_value(symbol: str, current: dict[str, Any]) -> float | None:
@@ -2852,6 +2875,15 @@ def list_workspace() -> dict[str, Any]:
           "appliedVehicleKnobs": saved_overrides.get("vehicleKnobs", {}),
         }
   active_snapshot = _active_trial_display_state(paths, raw_active_snapshot)
+  if params.get_bool("FLMTrialApplied") and isinstance(active_snapshot, dict):
+    applied_generic, applied_overrides = _active_trial_adjustments(paths, params, raw_active_snapshot)
+    active_snapshot = {
+      **active_snapshot,
+      "appliedGenericParams": applied_generic,
+      "appliedFrictionThresholds": applied_overrides.get("baseFrictionThresholds", {}),
+      "appliedVehicleKnobs": applied_overrides.get("vehicleKnobs", {}),
+      "fineTuneControls": _fine_tune_controls(applied_generic, applied_overrides),
+    }
   active_tune_id = str(active_snapshot.get("savedTuneId", "") or "") if isinstance(active_snapshot, dict) else ""
   current_car = _current_car_identity(params)
   return {
@@ -3105,10 +3137,9 @@ def _active_trial_adjustments(paths: dict[str, Path], params: Params,
   for key in FLM_ADVANCED_LATERAL_PARAM_KEYS:
     if key not in current_state:
       continue
-    if key in baseline_params:
-      if current_state[key] != baseline_params[key]:
-        generic_params[key] = current_state[key]
-    elif key in display_generic:
+    # Membership in the trial wins over "currently equals baseline" so a value that gets
+    # fine-tuned back to its baseline stays part of the trial and stays adjustable.
+    if key in display_generic or current_state[key] != baseline_params.get(key, current_state[key]):
       generic_params[key] = current_state[key]
 
   current_overrides = normalize_flm_overrides(current_state.get("FLMActiveOverrides", {}))
@@ -3134,6 +3165,183 @@ def _active_trial_adjustments(paths: dict[str, Path], params: Params,
     "baseFrictionThresholds": friction_thresholds,
     "vehicleKnobs": vehicle_knobs,
   })
+
+
+def _fine_tune_controls(generic_params: dict[str, Any], flm_overrides: dict[str, Any]) -> dict[str, Any]:
+  generic_controls = []
+  for key, value in sorted(generic_params.items()):
+    metadata = GENERIC_PARAM_METADATA.get(key)
+    if metadata is None or isinstance(value, bool):
+      continue
+    generic_controls.append({
+      "key": key,
+      "value": float(value),
+      **metadata,
+    })
+
+  supported_knobs = get_flm_supported_vehicle_knobs()
+  vehicle_controls = []
+  for symbol, value in sorted(flm_overrides.get("vehicleKnobs", {}).items()):
+    metadata = supported_knobs.get(symbol)
+    if metadata is None:
+      continue
+    vehicle_controls.append({
+      "symbol": symbol,
+      "value": float(value),
+      "min": float(metadata["min"]),
+      "max": float(metadata["max"]),
+      "precision": float(metadata["precision"]),
+      "deltaType": metadata.get("deltaType", "absolute"),
+      "safeLiveTrial": bool(metadata.get("safeLiveTrial", False)),
+    })
+
+  friction_controls = []
+  for family, payload in sorted(flm_overrides.get("baseFrictionThresholds", {}).items()):
+    values = payload.get("values", []) if isinstance(payload, dict) else []
+    if len(values) != len(FLM_FRICTION_SPEED_KNOTS):
+      continue
+    friction_controls.append({
+      "family": family,
+      "speedKnots": list(FLM_FRICTION_SPEED_KNOTS),
+      "values": [float(value) for value in values],
+      **FLM_FRICTION_TUNE_METADATA,
+    })
+
+  return {
+    "genericParams": generic_controls,
+    "vehicleKnobs": vehicle_controls,
+    "frictionThresholds": friction_controls,
+  }
+
+
+def fine_tune_active_trial(adjustments: dict[str, Any]) -> dict[str, Any]:
+  paths = ensure_flm_workspace()
+  params = Params(return_defaults=True)
+  if not params.get_bool("FLMTrialApplied"):
+    raise RuntimeError("Apply an FLM trial before fine-tuning it.")
+  if not isinstance(adjustments, dict):
+    raise ValueError("Fine-tune adjustments must be an object.")
+
+  active_snapshot = _read_json(paths["snapshots"] / "active.json", {})
+  if not isinstance(active_snapshot, dict) or not active_snapshot:
+    raise RuntimeError("The active FLM trial snapshot is unavailable.")
+  current_profile_id = params.get("FLMActiveProfileId", encoding="utf-8") or ""
+  baseline_snapshot = _find_revert_snapshot(paths, active_snapshot, current_profile_id, params)
+  if baseline_snapshot is None or not isinstance(baseline_snapshot.get("params"), dict):
+    raise RuntimeError("The active FLM trial has no recoverable rollback baseline. Keep the current tune as the new baseline before editing it.")
+  baseline_params = baseline_snapshot["params"]
+
+  generic_updates = adjustments.get("genericParams", {})
+  override_updates = adjustments.get("flmOverrides", {})
+  if not isinstance(generic_updates, dict) or not isinstance(override_updates, dict):
+    raise ValueError("genericParams and flmOverrides must be objects.")
+  vehicle_updates = override_updates.get("vehicleKnobs", {})
+  friction_updates = override_updates.get("baseFrictionThresholds", {})
+  if not isinstance(vehicle_updates, dict) or not isinstance(friction_updates, dict):
+    raise ValueError("FLM vehicle-knob and friction-threshold adjustments must be objects.")
+
+  current_generic, applied_overrides = _active_trial_adjustments(paths, params, active_snapshot)
+  current_state = _snapshot_current_trial_state(params)
+  current_overrides = normalize_flm_overrides(current_state.get("FLMActiveOverrides", {}))
+  normalized_generic_updates = {}
+  for key, value in generic_updates.items():
+    metadata = GENERIC_PARAM_METADATA.get(key)
+    if metadata is None or key not in current_generic:
+      raise ValueError(f"{key} is not an adjustable numeric value in the active FLM trial.")
+    normalized_generic_updates[key] = _validated_fine_tune_value(value, metadata, key)
+
+  supported_knobs = get_flm_supported_vehicle_knobs()
+  normalized_vehicle_updates = {}
+  for symbol, value in vehicle_updates.items():
+    metadata = supported_knobs.get(symbol)
+    if metadata is None or symbol not in applied_overrides.get("vehicleKnobs", {}):
+      raise ValueError(f"{symbol} is not an adjustable vehicle knob in the active FLM trial.")
+    normalized_vehicle_updates[symbol] = _validated_fine_tune_value(value, metadata, symbol)
+
+  normalized_friction_updates = {}
+  for family, payload in friction_updates.items():
+    if family not in applied_overrides.get("baseFrictionThresholds", {}):
+      raise ValueError(f"{family} is not an adjustable friction curve in the active FLM trial.")
+    values = payload.get("values", []) if isinstance(payload, dict) else payload
+    if not isinstance(values, (list, tuple)) or len(values) != len(FLM_FRICTION_SPEED_KNOTS):
+      raise ValueError(f"{family} must provide {len(FLM_FRICTION_SPEED_KNOTS)} friction values.")
+    normalized_friction_updates[family] = {
+      "speedKnots": list(FLM_FRICTION_SPEED_KNOTS),
+      "values": [
+        _validated_fine_tune_value(value, FLM_FRICTION_TUNE_METADATA, f"{family} at {FLM_FRICTION_SPEED_KNOTS[idx]:g} m/s")
+        for idx, value in enumerate(values)
+      ],
+    }
+
+  if not normalized_generic_updates and not normalized_vehicle_updates and not normalized_friction_updates:
+    raise ValueError("No active FLM values were provided to fine-tune.")
+
+  updated_overrides = {
+    "schemaVersion": 1,
+    "baseFrictionThresholds": {
+      **current_overrides.get("baseFrictionThresholds", {}),
+      **normalized_friction_updates,
+    },
+    "vehicleKnobs": {
+      **current_overrides.get("vehicleKnobs", {}),
+      **normalized_vehicle_updates,
+    },
+  }
+  updated_overrides = normalize_flm_overrides(updated_overrides)
+
+  display_state = _active_trial_display_state(paths, active_snapshot) or active_snapshot
+  already_fine_tuned = bool(active_snapshot.get("manualFineTune", False)) and not current_profile_id.startswith("saved:")
+  source_profile_id = str(active_snapshot.get("sourceProfileId") or current_profile_id or active_snapshot.get("profileId") or "")
+  profile_id = str(active_snapshot.get("profileId", "") or "") if already_fine_tuned else f"fine-tuned:{time.time_ns()}"
+  profile_label = str(display_state.get("profileLabel", "FLM") or "FLM")
+  if not already_fine_tuned:
+    profile_label = f"{profile_label} (Fine-tuned)"
+
+  applied_generic = dict(current_generic)
+  applied_generic.update(normalized_generic_updates)
+  applied_friction = dict(applied_overrides.get("baseFrictionThresholds", {}))
+  applied_friction.update(normalized_friction_updates)
+  applied_vehicle = dict(applied_overrides.get("vehicleKnobs", {}))
+  applied_vehicle.update(normalized_vehicle_updates)
+  now = time.time()
+  session_started_at = float(
+    active_snapshot.get("sessionStartedAt", active_snapshot.get("capturedAt", baseline_snapshot.get("capturedAt", now))) or now
+  )
+  updated_snapshot = {
+    **active_snapshot,
+    "profileId": profile_id,
+    "profileLabel": profile_label,
+    "sourceProfileId": source_profile_id,
+    "manualFineTune": True,
+    "savedTuneId": "",
+    "capturedAt": session_started_at,
+    "sessionStartedAt": session_started_at,
+    "updatedAt": now,
+    "revisionCount": int(display_state.get("revisionCount", 0) or 0) + 1,
+    # Re-anchor the resolved baseline the way apply_trial_profile/apply_saved_tune do. The new
+    # "fine-tuned:" profile id is not parseable by _recover_report_baseline, so this snapshot has
+    # to carry the rollback data itself rather than rely on report recovery.
+    "params": baseline_params,
+    "appliedGenericParams": applied_generic,
+    "appliedFrictionThresholds": applied_friction,
+    "appliedVehicleKnobs": applied_vehicle,
+  }
+  _write_json(paths["snapshots"] / "active.json", updated_snapshot)
+  # Deterministic name so repeated edits of the same trial overwrite instead of accumulating.
+  _write_json(paths["snapshots"] / f"{profile_id.replace(':', '_')}.json", updated_snapshot)
+  _persist_trial_baseline(params, updated_snapshot)
+
+  bundle = dict(normalized_generic_updates)
+  bundle.update({
+    "FLMActiveProfileId": profile_id,
+    "FLMActiveOverrides": updated_overrides,
+    "FLMTrialApplied": True,
+  })
+  _apply_param_bundle(params, bundle)
+  return {
+    "message": "Applied the fine-tuned FLM values. Revert Trial still restores the original pre-FLM baseline.",
+    "workspace": list_workspace(),
+  }
 
 
 def _active_trial_car_fingerprint(paths: dict[str, Path], active_snapshot: dict[str, Any]) -> str:
@@ -3196,6 +3404,8 @@ def save_active_trial_as_tune(name: str) -> dict[str, Any]:
     "savedTuneId": tune_id,
     "profileLabel": tune["name"],
     "carFingerprint": car_fingerprint,
+    "sourceProfileId": f"saved:{tune_id}",
+    "manualFineTune": False,
     "updatedAt": now,
   })
   _write_json(paths["snapshots"] / "active.json", active_snapshot)

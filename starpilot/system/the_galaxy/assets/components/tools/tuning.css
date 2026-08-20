@@ -217,6 +217,48 @@
   font-weight: var(--font-weight-demi-bold);
 }
 
+.flmFineTune {
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: var(--border-radius-sm);
+  padding: var(--padding-base);
+}
+
+.flmFineTune h5 {
+  margin-bottom: var(--margin-xs);
+}
+
+.flmFineTuneGrid {
+  display: grid;
+  gap: var(--gap-sm);
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+}
+
+.flmFineTuneControl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+  min-width: 0;
+}
+
+.flmFineTuneControl > span {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-demi-bold);
+  overflow-wrap: anywhere;
+}
+
+.flmFineTuneControl input {
+  background: var(--input-bg);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--border-radius-sm);
+  color: var(--text-color);
+  padding: var(--padding-xs) var(--padding-sm);
+  width: 100%;
+}
+
+.flmFineTuneControl small {
+  color: var(--text-muted);
+}
+
 .flmDeltaBox {
   background: rgba(255, 255, 255, 0.03);
   border-radius: var(--border-radius-sm);

@@ -22,6 +22,12 @@ const state = reactive({
   feedbackAccepted: [],
   feedbackIgnored: [],
   feedbackNotes: "",
+  fineTuneDraft: {
+    genericParams: {},
+    vehicleKnobs: {},
+    baseFrictionThresholds: {},
+  },
+  fineTuneSourceKey: "",
 })
 
 let routesAbortController = null
@@ -214,6 +220,7 @@ async function fetchWorkspace() {
     const payload = await response.json()
     if (!response.ok) throw new Error(payload.error || "Failed to load tuning workspace.")
     state.workspace = payload
+    syncFineTuneDraft(payload.activeTrial)
     state.status = payload.status || {}
   } catch (error) {
     state.error = error?.message || "Failed to load tuning workspace."
@@ -284,6 +291,7 @@ async function fetchStatus() {
         reports: payload.reports || state.workspace.reports,
         savedTunes: payload.savedTunes || state.workspace.savedTunes,
       }
+      syncFineTuneDraft(payload.activeTrial)
     }
     const reportId = state.status.reportId
     if (reportId && state.report?.reportId !== reportId) {
@@ -423,6 +431,136 @@ async function applyProfile(profileId) {
   }
 }
 
+function fineTuneControls(trial = state.workspace?.activeTrial) {
+  return trial?.fineTuneControls || {
+    genericParams: [],
+    vehicleKnobs: [],
+    frictionThresholds: [],
+  }
+}
+
+function fineTuneTrialKey(trial) {
+  if (!trial) return ""
+  const controls = fineTuneControls(trial)
+  // Key on the applied values, not updatedAt, so metadata-only refreshes (a saved-tune rename,
+  // a routine status poll) keep in-progress edits while a real value change still resets them.
+  const signature = [
+    ...(controls.genericParams || []).map((control) => `${control.key}=${control.value}`),
+    ...(controls.vehicleKnobs || []).map((control) => `${control.symbol}=${control.value}`),
+    ...(controls.frictionThresholds || []).map((control) => `${control.family}=${(control.values || []).join(",")}`),
+  ].join("|")
+  return `${trial.profileId || ""}:${signature}`
+}
+
+function syncFineTuneDraft(trial, force = false) {
+  const sourceKey = fineTuneTrialKey(trial)
+  if (!force && sourceKey === state.fineTuneSourceKey) return
+  const controls = fineTuneControls(trial)
+  state.fineTuneDraft = {
+    genericParams: Object.fromEntries((controls.genericParams || []).map((control) => [control.key, control.value])),
+    vehicleKnobs: Object.fromEntries((controls.vehicleKnobs || []).map((control) => [control.symbol, control.value])),
+    baseFrictionThresholds: Object.fromEntries(
+      (controls.frictionThresholds || []).map((control) => [control.family, [...(control.values || [])]])
+    ),
+  }
+  state.fineTuneSourceKey = sourceKey
+}
+
+function setFineTuneDraft(group, key, value, index = null) {
+  if (index === null) {
+    state.fineTuneDraft = {
+      ...state.fineTuneDraft,
+      [group]: {
+        ...(state.fineTuneDraft[group] || {}),
+        [key]: value,
+      },
+    }
+    return
+  }
+
+  const values = [...(state.fineTuneDraft[group]?.[key] || [])]
+  values[index] = value
+  state.fineTuneDraft = {
+    ...state.fineTuneDraft,
+    [group]: {
+      ...(state.fineTuneDraft[group] || {}),
+      [key]: values,
+    },
+  }
+}
+
+function validFineTuneValue(value, control) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) && numeric >= Number(control.min) && numeric <= Number(control.max)
+}
+
+function fineTuneDraftStatus() {
+  const controls = fineTuneControls()
+  let dirty = false
+  let valid = true
+
+  for (const control of controls.genericParams || []) {
+    const value = state.fineTuneDraft.genericParams?.[control.key]
+    valid = valid && validFineTuneValue(value, control)
+    dirty = dirty || Math.abs(Number(value) - Number(control.value)) >= Number(control.precision) / 2
+  }
+  for (const control of controls.vehicleKnobs || []) {
+    const value = state.fineTuneDraft.vehicleKnobs?.[control.symbol]
+    valid = valid && validFineTuneValue(value, control)
+    dirty = dirty || Math.abs(Number(value) - Number(control.value)) >= Number(control.precision) / 2
+  }
+  for (const control of controls.frictionThresholds || []) {
+    const values = state.fineTuneDraft.baseFrictionThresholds?.[control.family] || []
+    if (values.length !== (control.values || []).length) valid = false
+    for (let index = 0; index < (control.values || []).length; index += 1) {
+      valid = valid && validFineTuneValue(values[index], control)
+      dirty = dirty || Math.abs(Number(values[index]) - Number(control.values[index])) >= Number(control.precision) / 2
+    }
+  }
+  return { dirty, valid }
+}
+
+async function applyFineTune() {
+  if (state.runningAction || !state.workspace?.activeTrial) return
+  const status = fineTuneDraftStatus()
+  if (!status.valid || !status.dirty) return
+
+  state.runningAction = true
+  try {
+    const response = await fetch("/api/flm/trials/fine-tune", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        genericParams: Object.fromEntries(
+          Object.entries(state.fineTuneDraft.genericParams || {}).map(([key, value]) => [key, Number(value)])
+        ),
+        flmOverrides: {
+          vehicleKnobs: Object.fromEntries(
+            Object.entries(state.fineTuneDraft.vehicleKnobs || {}).map(([key, value]) => [key, Number(value)])
+          ),
+          baseFrictionThresholds: Object.fromEntries(
+            Object.entries(state.fineTuneDraft.baseFrictionThresholds || {}).map(([family, values]) => [
+              family,
+              { values: values.map((value) => Number(value)) },
+            ])
+          ),
+        },
+      }),
+    })
+    const payload = await response.json()
+    if (!response.ok) throw new Error(payload.error || "Failed to apply the fine-tuned values.")
+    state.error = ""
+    state.workspace = payload.workspace || state.workspace
+    syncFineTuneDraft(state.workspace?.activeTrial, true)
+    showSnackbar(payload.message || "Fine-tuned FLM values applied.")
+  } catch (error) {
+    state.error = error?.message || "Failed to apply the fine-tuned values."
+    showSnackbar(state.error, "error")
+  } finally {
+    state.runningAction = false
+  }
+}
+
 async function saveCurrentTune() {
   if (state.runningAction || !state.workspace?.activeTrial) return
   const defaultName = state.workspace.activeTrial.profileLabel || state.workspace.currentCarFingerprint || "Saved Tune"
@@ -440,6 +578,7 @@ async function saveCurrentTune() {
     if (!response.ok) throw new Error(payload.error || "Failed to save the active tune.")
     state.error = ""
     state.workspace = payload.workspace || state.workspace
+    syncFineTuneDraft(state.workspace?.activeTrial, true)
     showSnackbar(payload.message || "Saved the active tune.")
   } catch (error) {
     state.error = error?.message || "Failed to save the active tune."
@@ -458,6 +597,7 @@ async function applySavedTune(tuneId) {
     if (!response.ok) throw new Error(payload.error || "Failed to apply saved tune.")
     state.error = ""
     state.workspace = payload.workspace || state.workspace
+    syncFineTuneDraft(state.workspace?.activeTrial, true)
     showSnackbar(payload.message || "Saved tune applied.")
   } catch (error) {
     state.error = error?.message || "Failed to apply saved tune."
@@ -598,6 +738,7 @@ async function acceptCurrentAsBaseline() {
     if (!response.ok) throw new Error(payload.error || "Failed to keep the current tune.")
     state.error = ""
     state.workspace = payload.workspace || state.workspace
+    syncFineTuneDraft(state.workspace?.activeTrial, true)
     showSnackbar(payload.message || "Current tune kept as the new baseline.")
   } catch (error) {
     state.error = error?.message || "Failed to keep the current tune."
@@ -703,26 +844,114 @@ function primaryPath() {
   return paths.find((path) => path.key === selectedPathKey) || paths.find((path) => path.isPrimary) || paths[0] || null
 }
 
-function allReportProfiles() {
-  const pathProfiles = reportPaths().flatMap((path) => path.profiles || [])
-  return pathProfiles.length ? pathProfiles : (state.report?.profiles || [])
-}
-
 function activeTrialProfile() {
   const activeTrial = state.workspace?.activeTrial
   if (!activeTrial) return null
-  if (activeTrial.reportId === state.report?.reportId) {
-    const reportProfile = allReportProfiles().find((profile) => profile.id === activeTrial.profileId)
-    if (reportProfile) return reportProfile
-  }
   return {
     id: activeTrial.profileId,
+    label: activeTrial.profileLabel || "FLM",
+    pathLabel: activeTrial.pathLabel || "",
     genericParams: activeTrial.appliedGenericParams || {},
     flmOverrides: {
       baseFrictionThresholds: activeTrial.appliedFrictionThresholds || {},
       vehicleKnobs: activeTrial.appliedVehicleKnobs || {},
     },
   }
+}
+
+function renderFineTuneInput(control, value, onInput, label) {
+  return html`
+    <label class="flmFineTuneControl">
+      <span title="${label}">${label}</span>
+      <input
+        type="number"
+        inputmode="decimal"
+        min="${control.min}"
+        max="${control.max}"
+        step="${control.precision}"
+        value="${value}"
+        @input="${onInput}" />
+      <small>${Number(control.min).toFixed(3)} to ${Number(control.max).toFixed(3)} / step ${Number(control.precision).toFixed(3)}</small>
+    </label>
+  `
+}
+
+function renderFineTuneControls() {
+  const trial = state.workspace?.activeTrial
+  const controls = fineTuneControls(trial)
+  const hasControls = (controls.genericParams || []).length
+    || (controls.vehicleKnobs || []).length
+    || (controls.frictionThresholds || []).length
+  if (!trial || !hasControls) return ""
+  // Editing needs a recoverable rollback baseline, same as Revert Trial. Without one the
+  // backend rejects the PATCH, so offer "Keep Current as Baseline" instead of a dead button.
+  if (trial.rollbackAvailable === false) return ""
+
+  return html`
+    <div class="flmCardSubsection flmFineTune">
+      <div class="flmCardHeader">
+        <div>
+          <h4>Fine-tune Active Trial</h4>
+          <p class="longManeuverMuted">
+            Trim FLM's applied values in either direction. Inputs are bounded to each parameter's supported range, and Revert Trial still restores the original pre-FLM baseline.
+          </p>
+        </div>
+        <div class="flmFeedbackButtons">
+          <button
+            class="longManeuverButton"
+            disabled="${() => state.runningAction || !fineTuneDraftStatus().dirty}"
+            @click="${() => syncFineTuneDraft(state.workspace?.activeTrial, true)}">
+            Reset Edits
+          </button>
+          <button
+            class="longManeuverButton"
+            disabled="${() => {
+              const status = fineTuneDraftStatus()
+              return state.runningAction || !status.dirty || !status.valid
+            }}"
+            @click="${applyFineTune}">
+            Apply Fine Tune
+          </button>
+        </div>
+      </div>
+
+      ${(controls.genericParams || []).length ? html`
+        <h5>Generic Params</h5>
+        <div class="flmFineTuneGrid">
+          ${(controls.genericParams || []).map((control) => renderFineTuneInput(
+            control,
+            () => state.fineTuneDraft.genericParams?.[control.key],
+            (event) => setFineTuneDraft("genericParams", control.key, event.target.value),
+            control.key,
+          ))}
+        </div>
+      ` : ""}
+
+      ${(controls.vehicleKnobs || []).length ? html`
+        <h5>Vehicle Knobs</h5>
+        <div class="flmFineTuneGrid">
+          ${(controls.vehicleKnobs || []).map((control) => renderFineTuneInput(
+            control,
+            () => state.fineTuneDraft.vehicleKnobs?.[control.symbol],
+            (event) => setFineTuneDraft("vehicleKnobs", control.symbol, event.target.value),
+            control.symbol,
+          ))}
+        </div>
+      ` : ""}
+
+      ${(controls.frictionThresholds || []).map((control) => html`
+        <h5>${control.family} Friction Threshold</h5>
+        <div class="flmFineTuneGrid">
+          ${(control.values || []).map((_, index) => renderFineTuneInput(
+            control,
+            () => state.fineTuneDraft.baseFrictionThresholds?.[control.family]?.[index],
+            (event) => setFineTuneDraft("baseFrictionThresholds", control.family, event.target.value, index),
+            `${control.speedKnots?.[index] ?? index} m/s`,
+          ))}
+        </div>
+      `)}
+    </div>
+  `
 }
 
 function mergedFlmOverrides() {
@@ -1197,6 +1426,8 @@ export function Tuning() {
             The original rollback data is unavailable. Keep the current tune as the new baseline before applying another trial.
           </p>
         ` : ""}
+
+        ${() => renderFineTuneControls()}
 
         ${() => state.status?.currentSegment ? html`
           <div class="longManeuverCurrent">

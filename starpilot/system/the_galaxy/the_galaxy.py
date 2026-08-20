@@ -6740,6 +6740,19 @@ def setup(app):
 
     return jsonify(result), 200
 
+  @app.route(f"{LEGACY_LATERAL_METHOD_API_PREFIX}/trials/fine-tune", methods=["PATCH"])
+  @app.route("/api/flm/trials/fine-tune", methods=["PATCH"])
+  def fine_tune_flm_trial():
+    data = request.get_json(silent=True) or {}
+    try:
+      result = flm_workspace.fine_tune_active_trial(data)
+    except ValueError as error:
+      return jsonify({"error": str(error)}), 400
+    except RuntimeError as error:
+      return jsonify({"error": str(error)}), 409
+
+    return jsonify(result), 200
+
   @app.route(f"{LEGACY_LATERAL_METHOD_API_PREFIX}/trials/revert", methods=["POST"])
   @app.route("/api/flm/trials/revert", methods=["POST"])
   def revert_flm_trial():
