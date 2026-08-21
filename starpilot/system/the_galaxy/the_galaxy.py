@@ -3795,6 +3795,17 @@ def _get_has_rivian_angle_harness():
   except Exception:
     return False
 
+def _get_has_honda_cluster_render_car():
+  cp_bytes = _safe_params_get_live_raw("CarParamsPersistent")
+  if not cp_bytes:
+    return False
+
+  try:
+    with car.CarParams.from_bytes(cp_bytes) as cp:
+      return cp.brand == "honda" and cp.carFingerprint == "HONDA_CIVIC_2022"
+  except Exception:
+    return False
+
 def _get_hardware_snapshot_items():
   starpilot_toggles = _get_starpilot_toggles_snapshot()
 
@@ -5483,6 +5494,7 @@ def setup(app):
     result["VehicleParked"] = _get_vehicle_parked()
     result["AlphaLongitudinalAvailable"] = _get_alpha_longitudinal_available()
     result["HasRivianAngleHarness"] = _get_has_rivian_angle_harness()
+    result["HasHondaClusterRenderCar"] = _get_has_honda_cluster_render_car()
 
     return jsonify(_sanitize_json_value(result)), 200
 

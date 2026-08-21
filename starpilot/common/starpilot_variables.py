@@ -17,6 +17,7 @@ from opendbc.car import gen_empty_fingerprint
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.chrysler.values import JEEPS as CHRYSLER_JEEPS
 from opendbc.car.gm.values import CAR as GM_CAR, EV_CAR as GM_EV_CAR, GMFlags
+from opendbc.car.honda.values import CAR as HONDA_CAR
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR, EV_CAR as HYUNDAI_EV_CAR, HyundaiFlags, HyundaiStarPilotSafetyFlags
 from opendbc.car.interfaces import TORQUE_SUBSTITUTE_PATH, CarInterfaceBase, GearShifter
 from opendbc.car.mock.values import CAR as MOCK
@@ -1494,6 +1495,10 @@ class StarPilotVariables:
       condition=toggle.car_make == "tesla" and toggle.car_model == TESLA_CAR.TESLA_MODEL_3,
     )
     toggle.rivian_angle_control = self.get_value("RivianAngleControl", condition=toggle.car_make == "rivian")
+    toggle.honda_cluster_rendering = self.get_value(
+      "HondaClusterRendering",
+      condition=toggle.car_make == "honda" and toggle.car_model == HONDA_CAR.HONDA_CIVIC_2022,
+    )
 
     toggle.tethering_config = self.get_value("TetheringEnabled", cast=float)
 

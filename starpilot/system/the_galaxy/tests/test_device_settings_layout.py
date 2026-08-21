@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 from pathlib import Path
@@ -6,6 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[4]
 LAYOUT_PATH = REPO_ROOT / "starpilot/common/assets/device_settings_layout.json"
 PARAM_KEYS_PATH = REPO_ROOT / "common/params_keys.h"
+GALAXY_PATH = REPO_ROOT / "starpilot/system/the_galaxy/the_galaxy.py"
 
 
 def _layout():
@@ -285,6 +287,51 @@ def test_rivian_angle_control_is_harness_gated():
   assert setting["requires_capability"] == "HasRivianAngleHarness"
   assert "reboot" not in setting["description"].lower()
   assert _declared_default("RivianAngleControl") == "0"
+
+
+def _reported_capabilities():
+  tree = ast.parse(GALAXY_PATH.read_text(encoding="utf-8"))
+  return {
+    node.targets[0].slice.value
+    for node in ast.walk(tree)
+    if isinstance(node, ast.Assign)
+    and len(node.targets) == 1
+    and isinstance(node.targets[0], ast.Subscript)
+    and isinstance(node.targets[0].value, ast.Name)
+    and node.targets[0].value.id == "result"
+    and isinstance(node.targets[0].slice, ast.Constant)
+    and isinstance(node.targets[0].slice.value, str)
+  }
+
+
+def test_every_requires_capability_is_reported_by_the_params_endpoint():
+  declared = {
+    param["requires_capability"]
+    for section in _layout()
+    for param in section.get("params", [])
+    if param.get("requires_capability")
+  }
+
+  reported = _reported_capabilities()
+
+  assert declared <= reported, f"capability gates never reported by /api/params: {sorted(declared - reported)}"
+
+
+def test_honda_cluster_rendering_is_galaxy_only_and_car_gated():
+  sections = _params_by_section(_layout())
+  setting = sections["Vehicle"]["HondaClusterRendering"]
+
+  assert setting["ui_type"] == "toggle"
+  assert setting["data_type"] == "bool"
+  assert setting["requires_capability"] == "HasHondaClusterRenderCar"
+  assert setting["settings_tier"] == "simple"
+  assert _declared_default("HondaClusterRendering") == "0"
+
+  # Deliberately not a favorite
+  assert "favorite_eligible" not in setting
+
+  on_device = REPO_ROOT / "selfdrive/ui/layouts/settings/starpilot/vehicle.py"
+  assert "HondaClusterRendering" not in on_device.read_text(encoding="utf-8")
 
 
 def test_vasm_is_default_off_and_configured_only_in_galaxy():
