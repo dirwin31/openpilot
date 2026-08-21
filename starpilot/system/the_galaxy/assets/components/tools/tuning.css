@@ -191,7 +191,16 @@
   margin-top: var(--margin-sm);
 }
 
-.flmTuneComparisonTable > div {
+.flmTuneComparisonTable.hasFineTune {
+  grid-template-columns: minmax(11rem, 1.35fr) minmax(6rem, 0.8fr) auto minmax(6rem, 0.8fr) auto minmax(11rem, 1.2fr);
+}
+
+.flmTuneComparisonScroller {
+  overflow-x: auto;
+}
+
+.flmTuneComparisonTable > *,
+.flmFineTuneTable > * {
   min-width: 0;
   overflow-wrap: anywhere;
   padding: var(--padding-xs) 0;
@@ -227,36 +236,65 @@
   margin-bottom: var(--margin-xs);
 }
 
-.flmFineTuneGrid {
+.flmFineTuneTable {
+  align-items: center;
   display: grid;
-  gap: var(--gap-sm);
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: var(--gap-xs) var(--gap-sm);
+  grid-template-columns: minmax(11rem, 1.35fr) minmax(7rem, 0.8fr) auto minmax(11rem, 1.2fr);
+  margin-top: var(--margin-sm);
 }
 
-.flmFineTuneControl {
+.flmFineTuneGroup {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-demi-bold);
+  grid-column: 1 / -1;
+  margin-top: var(--margin-xs);
+}
+
+.flmFineTuneEditor,
+.flmFineTuneCurveEditor {
   display: flex;
   flex-direction: column;
   gap: var(--gap-xs);
   min-width: 0;
 }
 
-.flmFineTuneControl > span {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-demi-bold);
-  overflow-wrap: anywhere;
+.flmFineTuneCurveInputs {
+  display: grid;
+  gap: var(--gap-xs);
+  grid-template-columns: repeat(auto-fit, minmax(4.75rem, 1fr));
 }
 
-.flmFineTuneControl input {
+.flmFineTuneCurveControl {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.flmFineTuneCurveControl span {
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.flmFineTuneEditor input,
+.flmFineTuneCurveControl input {
   background: var(--input-bg);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--border-radius-sm);
+  box-sizing: border-box;
   color: var(--text-color);
   padding: var(--padding-xs) var(--padding-sm);
   width: 100%;
 }
 
-.flmFineTuneControl small {
+.flmFineTuneEditor small,
+.flmFineTuneCurveEditor small {
   color: var(--text-muted);
+  font-size: var(--font-size-xs);
 }
 
 .flmDeltaBox {
@@ -435,6 +473,17 @@
   .flmTuneComparisonTable {
     font-size: var(--font-size-sm);
     grid-template-columns: minmax(8rem, 1.3fr) minmax(5rem, 1fr) auto minmax(5rem, 1fr);
+  }
+
+  .flmTuneComparisonTable.hasFineTune {
+    grid-template-columns: minmax(8rem, 1.2fr) minmax(5rem, 0.8fr) auto minmax(5rem, 0.8fr) auto minmax(10rem, 1fr);
+    min-width: 48rem;
+  }
+
+  .flmFineTuneTable {
+    font-size: var(--font-size-sm);
+    grid-template-columns: minmax(8rem, 1.2fr) minmax(6rem, 0.8fr) auto minmax(10rem, 1fr);
+    min-width: 36rem;
   }
 
   .flmWorkspaceRow {

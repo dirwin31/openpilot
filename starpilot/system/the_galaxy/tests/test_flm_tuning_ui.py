@@ -45,6 +45,27 @@ def test_fine_tune_draft_key_tracks_applied_values_not_timestamps():
 def test_fine_tune_styles_are_defined_for_the_rendered_classes():
   source = _tuning_js()
   styles = TUNING_CSS_PATH.read_text(encoding="utf-8")
-  for class_name in ("flmFineTune", "flmFineTuneGrid", "flmFineTuneControl"):
+  for class_name in ("flmFineTune", "flmFineTuneTable", "flmFineTuneEditor", "flmTuneComparisonScroller"):
     assert f'class="{class_name}"' in source or f'flmCardSubsection {class_name}"' in source
     assert f".{class_name}" in styles
+
+
+def test_fine_tune_is_the_third_value_column_in_the_stock_comparison():
+  source = _tuning_js()
+  start = source.index("function renderTuneComparison()")
+  body = source[start:source.index("\nconst ", start + 1)]
+
+  stock_header = body.index(">Stock</div>")
+  current_header = body.index('"Current FLM"', stock_header)
+  fine_tune_header = body.index(">Fine Tune</div>")
+  assert stock_header < current_header < fine_tune_header
+  assert "fineTuneReportMatchesTrial()" in body
+  assert "renderFineTuneComparisonEditor(editors.get(row.key))" in body
+
+
+def test_fine_tune_keeps_a_vertical_fallback_without_its_source_report():
+  source = _tuning_js()
+  body = _fine_tune_render_body(source)
+  assert "if (fineTuneReportMatchesTrial(trial)) return" in body
+  assert 'class="flmFineTuneTable"' in body
+  assert body.index(">Current FLM</div>") < body.index(">Fine Tune</div>")

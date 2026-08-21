@@ -859,20 +859,94 @@ function activeTrialProfile() {
   }
 }
 
+const FINE_TUNE_GENERIC_LABELS = {
+  SteerLatAccel: "Lat accel",
+  SteerFriction: "Friction",
+  UseAutoSteerDelay: "Auto steer delay",
+  SteerDelay: "Steer delay",
+  SteerRatio: "Steer ratio",
+  SteerKP: "KP",
+}
+
 function renderFineTuneInput(control, value, onInput, label) {
   return html`
-    <label class="flmFineTuneControl">
-      <span title="${label}">${label}</span>
+    <label class="flmFineTuneEditor">
       <input
         type="number"
         inputmode="decimal"
+        aria-label="Fine tune ${label}"
+        title="Fine tune ${label}"
         min="${control.min}"
         max="${control.max}"
         step="${control.precision}"
         value="${value}"
         @input="${onInput}" />
-      <small>${Number(control.min).toFixed(3)} to ${Number(control.max).toFixed(3)} / step ${Number(control.precision).toFixed(3)}</small>
+      <small>${Number(control.min).toFixed(3)}–${Number(control.max).toFixed(3)} · step ${Number(control.precision).toFixed(3)}</small>
     </label>
+  `
+}
+
+function fineTuneRows(controls = fineTuneControls()) {
+  return [
+    ...(controls.genericParams || []).map((control) => ({
+      group: "Generic Params",
+      key: control.key,
+      label: FINE_TUNE_GENERIC_LABELS[control.key] || control.key,
+      codeLabel: control.key,
+      current: control.value,
+      control,
+      value: () => state.fineTuneDraft.genericParams?.[control.key],
+      onInput: (event) => setFineTuneDraft("genericParams", control.key, event.target.value),
+    })),
+    ...(controls.vehicleKnobs || []).map((control) => ({
+      group: "Vehicle Knobs",
+      key: control.symbol,
+      label: control.symbol.split(".").slice(1).join(".") || control.symbol,
+      codeLabel: control.symbol,
+      current: control.value,
+      control,
+      value: () => state.fineTuneDraft.vehicleKnobs?.[control.symbol],
+      onInput: (event) => setFineTuneDraft("vehicleKnobs", control.symbol, event.target.value),
+    })),
+    ...(controls.frictionThresholds || []).flatMap((control) => (
+      (control.values || []).map((current, index) => ({
+        group: `${control.family} Friction Threshold`,
+        key: `friction-threshold-${control.family}-${index}`,
+        label: `${control.speedKnots?.[index] ?? index} m/s`,
+        codeLabel: `${control.family} friction threshold at ${control.speedKnots?.[index] ?? index} m/s`,
+        current,
+        control,
+        value: () => state.fineTuneDraft.baseFrictionThresholds?.[control.family]?.[index],
+        onInput: (event) => setFineTuneDraft("baseFrictionThresholds", control.family, event.target.value, index),
+      }))
+    )),
+  ]
+}
+
+function fineTuneReportMatchesTrial(trial = state.workspace?.activeTrial) {
+  const trialReportId = trial?.reportId || trial?.sourceReportId
+  return !!(state.report?.reportId && trialReportId && state.report.reportId === trialReportId)
+}
+
+function renderFineTuneActions() {
+  return html`
+    <div class="flmFeedbackButtons">
+      <button
+        class="longManeuverButton"
+        disabled="${() => state.runningAction || !fineTuneDraftStatus().dirty}"
+        @click="${() => syncFineTuneDraft(state.workspace?.activeTrial, true)}">
+        Reset Edits
+      </button>
+      <button
+        class="longManeuverButton"
+        disabled="${() => {
+          const status = fineTuneDraftStatus()
+          return state.runningAction || !status.dirty || !status.valid
+        }}"
+        @click="${applyFineTune}">
+        Apply Fine Tune
+      </button>
+    </div>
   `
 }
 
@@ -886,6 +960,12 @@ function renderFineTuneControls() {
   // Editing needs a recoverable rollback baseline, same as Revert Trial. Without one the
   // backend rejects the PATCH, so offer "Keep Current as Baseline" instead of a dead button.
   if (trial.rollbackAvailable === false) return ""
+  // A matching report puts these inputs directly beside Stock and Current FLM. Keep this
+  // always-rendered fallback for saved tunes and deleted/unavailable source reports.
+  if (fineTuneReportMatchesTrial(trial)) return ""
+
+  const rows = fineTuneRows(controls)
+  const groups = [...new Set(rows.map((row) => row.group))]
 
   return html`
     <div class="flmCardSubsection flmFineTune">
@@ -893,63 +973,28 @@ function renderFineTuneControls() {
         <div>
           <h4>Fine-tune Active Trial</h4>
           <p class="longManeuverMuted">
-            Trim FLM's applied values in either direction. Inputs are bounded to each parameter's supported range, and Revert Trial still restores the original pre-FLM baseline.
+            The source report is unavailable, so compare the applied FLM value with your proposed fine tune here. Revert Trial still restores the original pre-FLM baseline.
           </p>
         </div>
-        <div class="flmFeedbackButtons">
-          <button
-            class="longManeuverButton"
-            disabled="${() => state.runningAction || !fineTuneDraftStatus().dirty}"
-            @click="${() => syncFineTuneDraft(state.workspace?.activeTrial, true)}">
-            Reset Edits
-          </button>
-          <button
-            class="longManeuverButton"
-            disabled="${() => {
-              const status = fineTuneDraftStatus()
-              return state.runningAction || !status.dirty || !status.valid
-            }}"
-            @click="${applyFineTune}">
-            Apply Fine Tune
-          </button>
+        ${renderFineTuneActions()}
+      </div>
+      <div class="flmTuneComparisonScroller">
+        <div class="flmFineTuneTable">
+          <div class="flmTuneComparisonHeader">Parameter</div>
+          <div class="flmTuneComparisonHeader">Current FLM</div>
+          <div class="flmTuneComparisonArrow"></div>
+          <div class="flmTuneComparisonHeader">Fine Tune</div>
+          ${groups.map((group) => html`
+            <div class="flmFineTuneGroup">${group}</div>
+            ${rows.filter((row) => row.group === group).map((row) => html`
+              <div class="flmTuneComparisonLabel" title="${row.codeLabel}">${row.label}</div>
+              <div>${formatTuneComparisonValue(row.current)}</div>
+              <div class="flmTuneComparisonArrow">&gt;</div>
+              ${renderFineTuneInput(row.control, row.value, row.onInput, row.codeLabel)}
+            `)}
+          `)}
         </div>
       </div>
-
-      ${(controls.genericParams || []).length ? html`
-        <h5>Generic Params</h5>
-        <div class="flmFineTuneGrid">
-          ${(controls.genericParams || []).map((control) => renderFineTuneInput(
-            control,
-            () => state.fineTuneDraft.genericParams?.[control.key],
-            (event) => setFineTuneDraft("genericParams", control.key, event.target.value),
-            control.key,
-          ))}
-        </div>
-      ` : ""}
-
-      ${(controls.vehicleKnobs || []).length ? html`
-        <h5>Vehicle Knobs</h5>
-        <div class="flmFineTuneGrid">
-          ${(controls.vehicleKnobs || []).map((control) => renderFineTuneInput(
-            control,
-            () => state.fineTuneDraft.vehicleKnobs?.[control.symbol],
-            (event) => setFineTuneDraft("vehicleKnobs", control.symbol, event.target.value),
-            control.symbol,
-          ))}
-        </div>
-      ` : ""}
-
-      ${(controls.frictionThresholds || []).map((control) => html`
-        <h5>${control.family} Friction Threshold</h5>
-        <div class="flmFineTuneGrid">
-          ${(control.values || []).map((_, index) => renderFineTuneInput(
-            control,
-            () => state.fineTuneDraft.baseFrictionThresholds?.[control.family]?.[index],
-            (event) => setFineTuneDraft("baseFrictionThresholds", control.family, event.target.value, index),
-            `${control.speedKnots?.[index] ?? index} m/s`,
-          ))}
-        </div>
-      `)}
     </div>
   `
 }
@@ -1034,16 +1079,76 @@ function comparisonValueChanged(row) {
   return Math.abs(Number(row.stock) - Number(row.current)) > 0.0005
 }
 
+function fineTuneComparisonEditors(controls = fineTuneControls()) {
+  const editors = new Map()
+  for (const control of controls.genericParams || []) {
+    editors.set(control.key, {
+      control,
+      label: control.key,
+      value: () => state.fineTuneDraft.genericParams?.[control.key],
+      onInput: (event) => setFineTuneDraft("genericParams", control.key, event.target.value),
+    })
+  }
+  for (const control of controls.vehicleKnobs || []) {
+    editors.set(control.symbol, {
+      control,
+      label: control.symbol,
+      value: () => state.fineTuneDraft.vehicleKnobs?.[control.symbol],
+      onInput: (event) => setFineTuneDraft("vehicleKnobs", control.symbol, event.target.value),
+    })
+  }
+  for (const control of controls.frictionThresholds || []) {
+    editors.set(`friction-threshold-${control.family}`, { control, curve: true })
+  }
+  return editors
+}
+
+function renderFineTuneComparisonEditor(editor) {
+  if (!editor) return html`<span class="longManeuverMuted">—</span>`
+  if (!editor.curve) {
+    return renderFineTuneInput(editor.control, editor.value, editor.onInput, editor.label)
+  }
+
+  const control = editor.control
+  return html`
+    <div class="flmFineTuneCurveEditor">
+      <div class="flmFineTuneCurveInputs">
+        ${(control.values || []).map((_, index) => html`
+          <label class="flmFineTuneCurveControl">
+            <span>${control.speedKnots?.[index] ?? index} m/s</span>
+            <input
+              type="number"
+              inputmode="decimal"
+              aria-label="Fine tune ${control.family} friction at ${control.speedKnots?.[index] ?? index} m/s"
+              min="${control.min}"
+              max="${control.max}"
+              step="${control.precision}"
+              value="${() => state.fineTuneDraft.baseFrictionThresholds?.[control.family]?.[index]}"
+              @input="${(event) => setFineTuneDraft("baseFrictionThresholds", control.family, event.target.value, index)}" />
+          </label>
+        `)}
+      </div>
+      <small>${Number(control.min).toFixed(3)}–${Number(control.max).toFixed(3)} · step ${Number(control.precision).toFixed(3)}</small>
+    </div>
+  `
+}
+
 function renderTuneComparison() {
   const rows = tuneComparisonRows()
   if (!rows.length) return ""
   const profile = activeTrialProfile()
   const angleControl = state.report?.car?.controlPath === "angle"
+  const editors = fineTuneComparisonEditors()
+  const fineTuneEnabled = fineTuneReportMatchesTrial()
+    && state.workspace?.activeTrial?.rollbackAvailable !== false
+    && editors.size > 0
   return html`
     <div class="flmCardSubsection flmTuneComparison">
       <div class="flmCardHeader">
         <div>
-          <h4>${angleControl ? "Applicable Angle Settings" : "Stock vs Current FLM"}</h4>
+          <h4>${angleControl
+            ? fineTuneEnabled ? "Applicable Angle Settings & Fine Tune" : "Applicable Angle Settings"
+            : fineTuneEnabled ? "Stock vs Current FLM vs Fine Tune" : "Stock vs Current FLM"}</h4>
           <p class="longManeuverMuted">
             ${angleControl
               ? "Current applicable values captured when this route was analyzed."
@@ -1051,22 +1156,36 @@ function renderTuneComparison() {
                 ? `Includes active trial: ${profile.pathLabel || "FLM"} / ${profile.label}`
                 : "Current values captured when this route was analyzed."}
           </p>
+          ${fineTuneEnabled ? html`
+            <p class="longManeuverMuted">Edit the third value column, then apply all changed rows together. Revert Trial still restores the original pre-FLM baseline.</p>
+          ` : ""}
           ${angleControl ? html`
             <p class="longManeuverMuted">Torque-only lateral acceleration, friction, and KP values do not apply to this angle-control car.</p>
           ` : ""}
         </div>
+        ${fineTuneEnabled ? renderFineTuneActions() : ""}
       </div>
-      <div class="flmTuneComparisonTable">
-        <div class="flmTuneComparisonHeader">Parameter</div>
-        <div class="flmTuneComparisonHeader">Stock</div>
-        <div class="flmTuneComparisonArrow"></div>
-        <div class="flmTuneComparisonHeader">${angleControl ? "Current" : "FLM"}</div>
-        ${rows.map((row) => html`
-          <div class="flmTuneComparisonLabel" title="${row.codeLabel || row.key}">${row.label}</div>
-          <div>${formatTuneComparisonValue(row.stock)}</div>
-          <div class="flmTuneComparisonArrow">&gt;</div>
-          <div class="${comparisonValueChanged(row) ? "flmTuneComparisonChanged" : ""}">${formatTuneComparisonValue(row.current)}</div>
-        `)}
+      <div class="flmTuneComparisonScroller">
+        <div class="flmTuneComparisonTable${fineTuneEnabled ? " hasFineTune" : ""}">
+          <div class="flmTuneComparisonHeader">Parameter</div>
+          <div class="flmTuneComparisonHeader">Stock</div>
+          <div class="flmTuneComparisonArrow"></div>
+          <div class="flmTuneComparisonHeader">${angleControl ? "Current" : "Current FLM"}</div>
+          ${fineTuneEnabled ? html`
+            <div class="flmTuneComparisonArrow"></div>
+            <div class="flmTuneComparisonHeader">Fine Tune</div>
+          ` : ""}
+          ${rows.map((row) => html`
+            <div class="flmTuneComparisonLabel" title="${row.codeLabel || row.key}">${row.label}</div>
+            <div>${formatTuneComparisonValue(row.stock)}</div>
+            <div class="flmTuneComparisonArrow">&gt;</div>
+            <div class="${comparisonValueChanged(row) ? "flmTuneComparisonChanged" : ""}">${formatTuneComparisonValue(row.current)}</div>
+            ${fineTuneEnabled ? html`
+              <div class="flmTuneComparisonArrow">&gt;</div>
+              ${renderFineTuneComparisonEditor(editors.get(row.key))}
+            ` : ""}
+          `)}
+        </div>
       </div>
     </div>
   `
