@@ -20,6 +20,16 @@ class CarInterface(CarInterfaceBase):
   CarController = CarController
   RadarInterface = RadarInterface
 
+  @classmethod
+  def get_params(cls, candidate, fingerprint, car_fw, alpha_long, is_release, docs, starpilot_toggles):
+    ret = super().get_params(candidate, fingerprint, car_fw, alpha_long, is_release, docs, starpilot_toggles)
+    # Fail closed: this flag widens the panda TX allowlist, so callers that do not
+    # supply StarPilot toggles (get_non_essential_params passes None) must not enable it.
+    cluster_rendering = bool(getattr(starpilot_toggles, "honda_cluster_rendering", False))
+    if candidate == CAR.HONDA_CIVIC_2022 and cluster_rendering:
+      ret.safetyConfigs[-1].safetyParam |= HondaSafetyFlags.CIVIC_CLUSTER_RENDER.value
+    return ret
+
   @staticmethod
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
     if CP.carFingerprint in HONDA_BOSCH:

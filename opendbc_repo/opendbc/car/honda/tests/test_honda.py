@@ -1,5 +1,6 @@
 import re
 from types import SimpleNamespace
+import numpy as np
 import pytest
 
 from opendbc.car import Bus, structs
@@ -22,7 +23,8 @@ HONDA_FW_VERSION_RE = rb"[A-Z0-9]{5}-[A-Z0-9]{3}(-|,)[A-Z0-9]{4}(\x00){2}$"
 
 
 def get_test_toggles() -> SimpleNamespace:
-  return SimpleNamespace(always_on_lateral_lkas=False, force_torque_controller=False, nnff=False, nnff_lite=False)
+  return SimpleNamespace(always_on_lateral_lkas=False, force_torque_controller=False, nnff=False, nnff_lite=False,
+                         honda_cluster_rendering=True)
 
 
 class TestHondaFingerprint:
@@ -205,6 +207,88 @@ class TestHondaFingerprint:
     assert Bus.radar not in DBC[crv_cp.carFingerprint]
     assert accord_cp.safetyConfigs[-1].safetyParam & HondaSafetyFlags.BOSCH_CANFD_MVL
     assert not crv_cp.safetyConfigs[-1].safetyParam & HondaSafetyFlags.BOSCH_CANFD_MVL
+
+  def test_cluster_render_safety_flag_is_civic_2022_only(self):
+    toggles = get_test_toggles()
+    civic = CarInterface.get_params(CAR.HONDA_CIVIC_2022, gen_empty_fingerprint(), [], True, False, False, toggles)
+    hrv = CarInterface.get_params(CAR.HONDA_HRV_3G, gen_empty_fingerprint(), [], True, False, False, toggles)
+    civic_fpcp = CarInterface.get_starpilot_params(CAR.HONDA_CIVIC_2022, gen_empty_fingerprint(), [], civic, toggles)
+    civic_interface = CarInterface(civic, civic_fpcp)
+
+    assert civic.safetyConfigs[-1].safetyParam & HondaSafetyFlags.CIVIC_CLUSTER_RENDER
+    assert not hrv.safetyConfigs[-1].safetyParam & HondaSafetyFlags.CIVIC_CLUSTER_RENDER
+    assert civic_interface.CS.hud_object_tracker is not None
+    assert "HUD_OBJECTS" in civic_interface.can_parsers[Bus.cam].vl
+    hud_state = civic_interface.can_parsers[Bus.cam].message_states[0x6CD5557]
+    assert hud_state.ignore_alive
+    assert hud_state.ignore_counter
+    assert hud_state.ignore_checksum
+    assert civic_interface.CC.accepts_model_input
+
+  def test_cluster_render_kill_switch_returns_to_stock_path(self):
+    toggles = get_test_toggles()
+    toggles.honda_cluster_rendering = False
+    civic = CarInterface.get_params(CAR.HONDA_CIVIC_2022, gen_empty_fingerprint(), [], True, False, False, toggles)
+    civic_fpcp = CarInterface.get_starpilot_params(CAR.HONDA_CIVIC_2022, gen_empty_fingerprint(), [], civic, toggles)
+    civic_interface = CarInterface(civic, civic_fpcp)
+
+    assert not civic.safetyConfigs[-1].safetyParam & HondaSafetyFlags.CIVIC_CLUSTER_RENDER
+    assert civic_interface.CS.hud_object_tracker is None
+    assert "HUD_OBJECTS" not in civic_interface.can_parsers[Bus.cam].vl
+    assert not civic_interface.CC.accepts_model_input
+
+  def test_cluster_render_defaults_off_without_starpilot_toggles(self):
+    # get_non_essential_params passes starpilot_toggles=None; a missing toggle must not
+    # widen panda's TX allowlist behind the user's back
+    civic = CarInterface.get_params(CAR.HONDA_CIVIC_2022, gen_empty_fingerprint(), [], True, False, False, None)
+    bare = CarInterface.get_params(CAR.HONDA_CIVIC_2022, gen_empty_fingerprint(), [], True, False, False, SimpleNamespace())
+
+    assert not civic.safetyConfigs[-1].safetyParam & HondaSafetyFlags.CIVIC_CLUSTER_RENDER
+    assert not bare.safetyConfigs[-1].safetyParam & HondaSafetyFlags.CIVIC_CLUSTER_RENDER
+    assert not CarInterface.get_non_essential_params(CAR.HONDA_CIVIC_2022).safetyConfigs[-1].safetyParam \
+      & HondaSafetyFlags.CIVIC_CLUSTER_RENDER
+
+  def test_cluster_render_controller_output_is_civic_2022_only(self):
+    toggles = get_test_toggles()
+
+    def render_addresses(candidate):
+      CP = CarInterface.get_params(candidate, gen_empty_fingerprint(), [], True, False, False, toggles)
+      controller = CarController(DBC[CP.carFingerprint], CP)
+      controller.frame = 2
+
+      x = list(np.linspace(0.0, 110.0, 33))
+
+      def lane_line(y):
+        return SimpleNamespace(x=x, y=[y] * len(x))
+
+      lead = SimpleNamespace(prob=0.9, x=[35.0], y=[0.0], v=[20.0])
+      controller.model = SimpleNamespace(
+        laneLines=[lane_line(-3.3), lane_line(-1.65), lane_line(1.65), lane_line(3.3)],
+        laneLineProbs=[0.0, 1.0, 1.0, 0.0],
+        leadsV3=[lead],
+        velocity=SimpleNamespace(x=[25.0]),
+      )
+
+      CC = structs.CarControl.new_message()
+      CC.enabled = True
+      CC.longActive = True
+      CC.latActive = False
+      CC.actuators.accel = 0.0
+      CC.actuators.torque = 0.0
+      CC.actuators.longControlState = structs.CarControl.Actuators.LongControlState.pid
+      CS = SimpleNamespace(
+        out=SimpleNamespace(vEgo=25.0, aEgo=0.0, steeringPressed=False, gasPressed=False, brakePressed=False),
+        v_cruise_factor=1.0,
+        hud_object_tracker=None,
+      )
+      _, messages = controller.update(CC.as_reader(), CS, 2_000_000_000, toggles)
+      return {message[0] for message in messages}
+
+    civic_addresses = render_addresses(CAR.HONDA_CIVIC_2022)
+    hrv_addresses = render_addresses(CAR.HONDA_HRV_3G)
+
+    assert {0x6CD5554, 0x6CD5557}.issubset(civic_addresses)
+    assert not {0x6CD5554, 0x6CD5557} & hrv_addresses
 
   def test_nidec_pedal_detection_enables_interceptor_path(self):
     toggles = get_test_toggles()

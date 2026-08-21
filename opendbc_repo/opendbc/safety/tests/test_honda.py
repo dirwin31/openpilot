@@ -580,6 +580,20 @@ class TestHondaBoschRadarlessSafety(HondaPcmEnableBase, TestHondaBoschRadarlessS
     self.safety.init_tests()
 
 
+class TestHondaBoschRadarlessCivicClusterSafety(HondaPcmEnableBase, TestHondaBoschRadarlessSafetyBase):
+  """Civic-only cluster rendering with stock longitudinal control."""
+
+  TX_MSGS = [[0xE4, 0], [0x296, 2], [0x33D, 0], [0x6CD5554, 0], [0xF31AA54, 0], [0x6CD5557, 0]]
+  FWD_BLACKLISTED_ADDRS = {2: [0xE4, 0x33D, 0x6CD5554, 0xF31AA54, 0x6CD5557]}
+  RELAY_MALFUNCTION_ADDRS = {0: (0xE4, 0x33D, 0x6CD5554, 0xF31AA54, 0x6CD5557)}
+
+  def setUp(self):
+    super().setUp()
+    flags = HondaSafetyFlags.RADARLESS | HondaSafetyFlags.CIVIC_CLUSTER_RENDER
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hondaBosch, flags)
+    self.safety.init_tests()
+
+
 class TestHondaBoschRadarlessAltBrakeSafety(HondaPcmEnableBase, TestHondaBoschRadarlessSafetyBase, TestHondaBoschAltBrakeSafetyBase):
   """
     Covers the Honda Bosch Radarless safety mode with stock longitudinal and an alternate brake message
@@ -614,6 +628,20 @@ class TestHondaBoschRadarlessLongSafety(common.LongitudinalAccelSafetyTest, Hond
   # Longitudinal doesn't need to send buttons
   def test_spam_cancel_safety_check(self):
     pass
+
+
+class TestHondaBoschRadarlessCivicClusterLongSafety(TestHondaBoschRadarlessLongSafety):
+  """Civic-only cluster rendering with openpilot longitudinal control."""
+
+  TX_MSGS = [[0xE4, 0], [0x33D, 0], [0x1C8, 0], [0x30C, 0], [0x6CD5554, 0], [0xF31AA54, 0], [0x6CD5557, 0]]
+  FWD_BLACKLISTED_ADDRS = {2: [0xE4, 0x33D, 0x1C8, 0x30C, 0x6CD5554, 0xF31AA54, 0x6CD5557]}
+  RELAY_MALFUNCTION_ADDRS = {0: (0xE4, 0x1C8, 0x30C, 0x33D, 0x6CD5554, 0xF31AA54, 0x6CD5557)}
+
+  def setUp(self):
+    super().setUp()
+    flags = HondaSafetyFlags.RADARLESS | HondaSafetyFlags.BOSCH_LONG | HondaSafetyFlags.CIVIC_CLUSTER_RENDER
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hondaBosch, flags)
+    self.safety.init_tests()
 
 
 class TestHondaBoschCANFDSafetyBase(TestHondaBoschSafetyBase):

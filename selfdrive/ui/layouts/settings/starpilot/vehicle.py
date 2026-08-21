@@ -6,6 +6,7 @@ import time
 
 import pyray as rl
 
+from opendbc.car.honda.values import CAR as HONDA_CAR
 from openpilot.system.hardware import HARDWARE
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr, tr_noop
@@ -368,6 +369,14 @@ class VehicleSettingsManagerView(PanelManagerView):
         "subtitle": tr("Hold after ACC times out at a stop and resume when traffic moves."),
         "get_state": lambda: self._controller._params.get_bool("JeepBrakeHold"),
         "set_state": lambda s: self._controller._on_toggle("JeepBrakeHold"),
+      })
+
+    if (self._controller._params.get("CarModel") or "") == str(HONDA_CAR.HONDA_CIVIC_2022):
+      toggles.append({
+        "title": tr("openpilot Cluster Rendering"),
+        "subtitle": tr("Draw the predicted lane path and vehicles on the instrument cluster. Changes take effect on the next drive."),
+        "get_state": lambda: self._controller._params.get_bool("HondaClusterRendering"),
+        "set_state": lambda s: self._controller._on_toggle("HondaClusterRendering"),
       })
 
     if cs.isSubaru:

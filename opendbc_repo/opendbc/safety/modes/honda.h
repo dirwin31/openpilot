@@ -47,6 +47,7 @@ static bool honda_bosch_canfd = false;
 static bool honda_bosch_canfd_mvl = false;
 // Freshness of OP-authored SCM_BUTTONS toward camera on radarless/CANFD.
 static int honda_op_buttons_fresh = 0;
+static bool honda_civic_cluster_render = false;
 typedef enum {HONDA_NIDEC, HONDA_BOSCH} HondaHw;
 static HondaHw honda_hw = HONDA_NIDEC;
 
@@ -349,6 +350,7 @@ static safety_config honda_nidec_init(uint16_t param) {
   honda_bosch_radarless = false;
   honda_bosch_canfd = false;
   honda_bosch_canfd_mvl = false;
+  honda_civic_cluster_render = false;
   enable_gas_interceptor = GET_FLAG(param, HONDA_PARAM_GAS_INTERCEPTOR);
 
   safety_config ret;
@@ -411,6 +413,18 @@ static safety_config honda_bosch_init(uint16_t param) {
                                                   {0x30C, 0, 8, .check_relay = true}};  // Bosch radarless w/ gas and brakes
 
   // Keep generic CAN-FD safety unchanged for non-Accord Honda platforms.
+  // Extended instrument-cluster messages are only enabled when CarParams
+  // identifies the validated 2022+ Civic platform. Keep the generic radarless
+  // allowlists unchanged for HR-V, City, and future radarless Hondas.
+  static CanMsg HONDA_CIVIC_CLUSTER_TX_MSGS[] = {{0xE4, 0, 5, .check_relay = true}, {0x296, 2, 4, .check_relay = false},
+                                                 {0x33D, 0, 8, .check_relay = true}, {0x6CD5554, 0, 8, .check_relay = true},
+                                                 {0xF31AA54, 0, 8, .check_relay = true}, {0x6CD5557, 0, 8, .check_relay = true}};
+
+  static CanMsg HONDA_CIVIC_CLUSTER_LONG_TX_MSGS[] = {{0xE4, 0, 5, .check_relay = true}, {0x33D, 0, 8, .check_relay = true},
+                                                      {0x1C8, 0, 8, .check_relay = true}, {0x30C, 0, 8, .check_relay = true},
+                                                      {0x6CD5554, 0, 8, .check_relay = true}, {0xF31AA54, 0, 8, .check_relay = true},
+                                                      {0x6CD5557, 0, 8, .check_relay = true}};
+
   static CanMsg HONDA_CANFD_TX_MSGS[] = {{0xE4, 0, 5, .check_relay = true}, {0x296, 0, 4, .check_relay = false}, {0x33D, 0, 8, .check_relay = true}};
   static CanMsg HONDA_CANFD_LONG_TX_MSGS[] = {{0xE4, 0, 5, .check_relay = true}, {0x1DF, 0, 8, .check_relay = false}, {0x1EF, 0, 8, .check_relay = false},
                                               {0x30C, 0, 8, .check_relay = false}, {0x33D, 0, 8, .check_relay = true}, {0x39F, 0, 8, .check_relay = false},
@@ -430,6 +444,7 @@ static safety_config honda_bosch_init(uint16_t param) {
   const uint16_t HONDA_PARAM_RADARLESS = 8;
   const uint16_t HONDA_PARAM_BOSCH_CANFD = 16;
   const uint16_t HONDA_PARAM_BOSCH_CANFD_MVL = 64;
+  const uint16_t HONDA_PARAM_CIVIC_CLUSTER_RENDER = 128;
 
   // Bosch radarless has the powertrain bus on bus 0
   static RxCheck honda_bosch_pt0_rx_checks[] = {
@@ -457,6 +472,7 @@ static safety_config honda_bosch_init(uint16_t param) {
   honda_bosch_canfd = GET_FLAG(param, HONDA_PARAM_BOSCH_CANFD);
   honda_bosch_canfd_mvl = GET_FLAG(param, HONDA_PARAM_BOSCH_CANFD_MVL);
   honda_op_buttons_fresh = 0;
+  honda_civic_cluster_render = GET_FLAG(param, HONDA_PARAM_CIVIC_CLUSTER_RENDER);
   // Checking for alternate brake override from safety parameter
   honda_alt_brake_msg = GET_FLAG(param, HONDA_PARAM_ALT_BRAKE);
   enable_gas_interceptor = false;
@@ -483,7 +499,11 @@ static safety_config honda_bosch_init(uint16_t param) {
   }
 
   if (honda_bosch_radarless) {
-    if (honda_bosch_long) {
+    if (honda_civic_cluster_render && honda_bosch_long) {
+      SET_TX_MSGS(HONDA_CIVIC_CLUSTER_LONG_TX_MSGS, ret);
+    } else if (honda_civic_cluster_render) {
+      SET_TX_MSGS(HONDA_CIVIC_CLUSTER_TX_MSGS, ret);
+    } else if (honda_bosch_long) {
       SET_TX_MSGS(HONDA_RADARLESS_LONG_TX_MSGS, ret);
     } else {
       SET_TX_MSGS(HONDA_RADARLESS_TX_MSGS, ret);

@@ -143,9 +143,12 @@ class CarInterfaceBase(ABC):
     self.onroad_distance_button = False
     self.physical_distance_button = False
 
-  def apply(self, c: structs.CarControl, now_nanos: int | None = None, starpilot_toggles: SimpleNamespace = None) -> tuple[structs.CarControl.Actuators, list[CanData]]:
+  def apply(self, c: structs.CarControl, now_nanos: int | None = None, starpilot_toggles: SimpleNamespace = None,
+            model=None) -> tuple[structs.CarControl.Actuators, list[CanData]]:
     if now_nanos is None:
       now_nanos = int(time.monotonic() * 1e9)
+    if self.CC.accepts_model_input:
+      self.CC.model = model
     return self.CC.update(c, self.CS, now_nanos, starpilot_toggles)
 
   @staticmethod
@@ -525,6 +528,8 @@ class CarStateBase(ABC):
 
 
 class CarControllerBase(ABC):
+  accepts_model_input = False
+
   def __init__(self, dbc_names: dict[StrEnum, str], CP: structs.CarParams):
     self.CP = CP
     self.FPCP: custom.StarPilotCarParams | None = None

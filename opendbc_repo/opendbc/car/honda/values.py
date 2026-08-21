@@ -60,6 +60,7 @@ class HondaSafetyFlags(IntFlag):
   # Accord 11G MVL radar/camera handover messages. Keep the generic CAN-FD
   # safety profile unchanged for other Honda CAN-FD platforms (for example CR-V 6G).
   BOSCH_CANFD_MVL = 64
+  CIVIC_CLUSTER_RENDER = 128
 
 
 class HondaFlags(IntFlag):
@@ -547,6 +548,12 @@ HONDA_CAMERA_MESSAGE_CARS = {
   CAR.HONDA_HRV_3G,
   CAR.HONDA_INSIGHT,
 }
+
+
+def civic_cluster_rendering_enabled(CP: structs.CarParams) -> bool:
+  return CP.carFingerprint == CAR.HONDA_CIVIC_2022 and any(
+    config.safetyParam & HondaSafetyFlags.CIVIC_CLUSTER_RENDER for config in CP.safetyConfigs
+  )
 
 
 DBC = CAR.create_dbc_map()

@@ -1001,7 +1001,9 @@ class SafetyTest(SafetyTestBase):
   SCANNED_ADDRS = [*range(0x800),                      # Entire 11-bit CAN address space
                    *range(0x18DA00F1, 0x18DB00F1, 0x100),   # 29-bit UDS physical addressing
                    *range(0x18DB00F1, 0x18DC00F1, 0x100),   # 29-bit UDS functional addressing
-                   *range(0x3300, 0x3400)]                  # Honda
+                   *range(0x3300, 0x3400),                  # Honda
+                   *range(0x6CD5554, 0x6CD5558),            # Civic LANE_PATH and HUD_OBJECTS
+                   0xF31AA54]                               # Civic LKAS_HUD_2
   FWD_BLACKLISTED_ADDRS: dict[int, list[int]] = {}  # {bus: [addr]}
   FWD_BUS_LOOKUP: dict[int, int] = {0: 2, 2: 0}
 
@@ -1095,6 +1097,12 @@ class SafetyTest(SafetyTestBase):
               continue
             if attr.startswith('TestHyundaiCanfd') and current_test.startswith('TestHyundaiCanfd'):
               continue
+            honda_radarless_long = {'TestHondaBoschRadarlessLongSafety', 'TestHondaBoschRadarlessCivicClusterLongSafety'}
+            if {attr, current_test}.issubset(honda_radarless_long):
+              tx = list(filter(lambda m: m[0] != 0x1C8, tx))
+            honda_civic_cluster = {'TestHondaBoschRadarlessCivicClusterSafety', 'TestHondaBoschRadarlessCivicClusterLongSafety'}
+            if {attr, current_test}.issubset(honda_civic_cluster):
+              tx = list(filter(lambda m: m[0] not in [0x6CD5554, 0xF31AA54, 0x6CD5557], tx))
             if attr.startswith('TestRivian') and current_test.startswith('TestRivian'):
               continue
             if attr.startswith('TestHyundaiCanCanfdBlended') and current_test.startswith('TestHyundaiCanCanfdBlended'):

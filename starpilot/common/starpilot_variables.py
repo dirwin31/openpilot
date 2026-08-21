@@ -348,6 +348,9 @@ def get_starpilot_toggles(sm=messaging.SubMaster(["starpilotPlan"]), *, read_per
     # Controller selection happens before the first live StarPilot broadcast. Do
     # not let a cached CarParams/controller type hide the persisted user request.
     toggles.force_torque_controller = get_starpilot_toggles._params.get_bool("ForceTorqueController")
+    # Honda cluster rendering changes both the controller inputs and Panda's
+    # startup safety allowlist, so CarParams must use the persisted value.
+    toggles.honda_cluster_rendering = get_starpilot_toggles._params.get_bool("HondaClusterRendering")
     # Controller selection happens before the first live StarPilot broadcast.
     # Realtime callers use the serialized value to avoid blocking reads.
     toggles.rivian_angle_control = get_starpilot_toggles._params.get_bool("RivianAngleControl")
@@ -596,6 +599,7 @@ class StarPilotVariables:
     # CarParams uses this value to select the matching Panda safety configuration.
     toggle.tesla_cooperative_steering = self.params.get_bool("TeslaCoopSteering")
     toggle.rivian_angle_control = self.params.get_bool("RivianAngleControl")
+    toggle.honda_cluster_rendering = self.params.get_bool("HondaClusterRendering")
 
     fallback_platform = GM_CAR.CHEVROLET_BOLT_ACC_2022_2023 if HARDWARE.get_device_type() == "pc" else MOCK.MOCK
 

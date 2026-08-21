@@ -222,6 +222,8 @@ class Car:
     starpilot_services = ['starpilotOnroadEvents', 'starpilotPlan', 'starpilotSelfdriveState', 'liveCalibration', 'selfdriveState']
     if self.CP.brand == "rivian":
       starpilot_services.append('liveParameters')
+    if self.CI.CC.accepts_model_input:
+      starpilot_services.append('modelV2')
     self.sm = self.sm.extend(starpilot_services)
     self.pm = self.pm.extend(['starpilotCarState'])
 
@@ -398,7 +400,10 @@ class Car:
         live_params = self.sm['liveParameters']
         self.CI.CC.update_live_params(live_params.roll, live_params.angleOffsetDeg,
                                       live_params.stiffnessFactor, live_params.steerRatio)
-      self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, self.starpilot_toggles)
+      model = None
+      if 'modelV2' in self.sm.services and self.sm.seen['modelV2'] and self.sm.valid['modelV2'] and self.sm.alive['modelV2']:
+        model = self.sm['modelV2']
+      self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, self.starpilot_toggles, model)
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 
       self.CC_prev = CC

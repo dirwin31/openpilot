@@ -97,6 +97,19 @@ def test_get_starpilot_toggles_uses_live_rivian_angle_request(monkeypatch):
   assert toggles.rivian_angle_control is True
 
 
+def test_get_starpilot_toggles_uses_persisted_honda_cluster_request(monkeypatch):
+  params = SimpleNamespace(get_bool=lambda key: key == "HondaClusterRendering")
+  monkeypatch.setattr(spv.get_starpilot_toggles, "_params", params, raising=False)
+
+  payload = '{"honda_cluster_rendering": false}'
+  toggles = spv.get_starpilot_toggles(
+    {"starpilotPlan": SimpleNamespace(starpilotToggles=payload)},
+    read_persisted_force_params=True,
+  )
+
+  assert toggles.honda_cluster_rendering is True
+
+
 class _FakeParams:
   def __init__(self, floats=None, ints=None, bools=None):
     self.floats = dict(floats or {})

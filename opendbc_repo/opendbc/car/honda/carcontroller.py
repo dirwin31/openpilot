@@ -3,7 +3,7 @@ import numpy as np
 
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, create_gas_interceptor_command, rate_limit, make_tester_present_msg, structs
-from opendbc.car.honda import hondacan
+from opendbc.car.honda import hondacan, hud_objects, lane_path
 from opendbc.car.honda.values import (
   CAR,
   CruiseButtons,
@@ -15,6 +15,7 @@ from opendbc.car.honda.values import (
   HONDA_NIDEC_ALT_PCM_ACCEL,
   CarControllerParams,
   HondaFlags,
+  civic_cluster_rendering_enabled,
 )
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.common.pid import PIDController
@@ -212,6 +213,13 @@ class CarController(CarControllerBase):
     self.param_store = Params()
     self.CAN = hondacan.CanBus(CP)
     self.tja_control = CP.carFingerprint in HONDA_BOSCH_TJA_CONTROL
+    self.cluster_render = civic_cluster_rendering_enabled(CP)
+    self.accepts_model_input = self.cluster_render
+    if self.cluster_render:
+      self.model = None
+      self.hud_object_author = hud_objects.HudObjectAuthor()
+      self.lane_path_fitter = lane_path.LanePathFitter()
+      self.dash_lane = lane_path.DashLane([lane_path.OFFSET_UNAVAILABLE] * lane_path.NUM_PTS, 0.0, False, False)
 
     # MVL CAN-FD ownership state. These do not affect non-CANFD vehicles.
     self.radar_disable_counter = 0
@@ -578,6 +586,32 @@ class CarController(CarControllerBase):
       can_sends.append(hondacan.spam_buttons_command(
         self.packer, self.CAN, CS.cruise_buttons, self.CP.carFingerprint,
         cruise_setting=cruise_setting, ambient_light=CS.scm_ambient_light, bus=self.CAN.camera,
+      ))
+
+    # The opted-in 2022+ Civic cluster accepts a multiplexed lane path and
+    # vehicle list. Messages are sent at 50 Hz, while each logical path point
+    # is refreshed at 5 Hz across the four mux banks.
+    if self.cluster_render and self.frame % 2 == 0:
+      lead = hud_objects.lead_from_model(self.model, CS.out.vEgo)
+      lead_distance = lead.dRel if lead.status else 0.0
+      self.dash_lane = self.lane_path_fitter.update(self.model, CS.out.vEgo, lead_distance, now_nanos)
+      mux = lane_path.MUX_CYCLE[(self.frame // 2) % len(lane_path.MUX_CYCLE)]
+      can_sends.append(lane_path.create_lane_path(self.packer, self.CAN.lkas, self.dash_lane.offsets, mux))
+
+      tracks = CS.hud_object_tracker.snapshot(now_nanos) if CS.hud_object_tracker is not None else None
+      if self.CP.openpilotLongitudinalControl:
+        can_sends.append(self.hud_object_author.create(self.packer, self.CAN.lkas, lead, tracks, mux, now_nanos * 1e-9))
+      else:
+        can_sends.append(hud_objects.forward_hud_object(self.packer, self.CAN.lkas, mux, tracks))
+
+    if self.cluster_render and self.frame % 20 == 0:
+      # self.dash_lane aliases the fitter's cached path, so derive lane_cross locally
+      # instead of writing it back into that shared object.
+      dash_lane = self.dash_lane
+      lane_cross = lane_path.lane_cross_from_departures(hud_control.leftLaneDepart, hud_control.rightLaneDepart)
+      can_sends.append(lane_path.create_lkas_hud_2(
+        self.packer, self.CAN.lkas, (self.frame // 20 - 1) % 4,
+        dash_lane.reach, lane_cross, dash_lane.left_line, dash_lane.right_line,
       ))
 
     if self.frame > 0 and self.frame % 6000 == 0:

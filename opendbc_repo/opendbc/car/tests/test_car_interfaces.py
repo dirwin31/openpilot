@@ -73,6 +73,7 @@ def get_test_starpilot_toggles() -> SimpleNamespace:
     cluster_offset=1.0,
     disable_openpilot_long=False,
     force_fingerprint=False,
+    honda_cluster_rendering=True,
     lock_doors=False,
     sng_hack=False,
     subaru_sng=False,

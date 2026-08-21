@@ -5,10 +5,12 @@ from cereal import custom
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
+from opendbc.car.honda import hud_objects
 from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.values import CAR, DBC, STEER_THRESHOLD, HONDA_BOSCH, HONDA_BOSCH_ALT_RADAR, HONDA_BOSCH_CANFD, \
                                                  HONDA_NIDEC_ALT_SCM_MESSAGES, HONDA_BOSCH_RADARLESS, HONDA_BOSCH_TJA_CONTROL, \
-                                                 HondaFlags, CruiseButtons, CruiseSettings, GearShifter, CarControllerParams, HondaStarPilotFlags
+                                                 HondaFlags, CruiseButtons, CruiseSettings, GearShifter, CarControllerParams, HondaStarPilotFlags, \
+                                                 civic_cluster_rendering_enabled
 from opendbc.car.interfaces import CarStateBase
 
 TransmissionType = structs.CarParams.TransmissionType
@@ -87,6 +89,9 @@ class CarState(CarStateBase):
     self.camera_steer_seen = False
     self.canfd_frames = 0
     self.canfd_relay_open = False
+
+    # Only the opted-in 2022+ Civic port authors the cluster's multiplexed vehicle list.
+    self.hud_object_tracker = hud_objects.HudObjectTracker() if civic_cluster_rendering_enabled(CP) else None
 
   def update(self, can_parsers, starpilot_toggles) -> structs.CarState:
     cp = can_parsers[Bus.pt]
@@ -332,6 +337,9 @@ class CarState(CarStateBase):
       self.radar_5hz_tick = False
       self.radar_50hz_tick = False
 
+    if self.hud_object_tracker is not None:
+      self.hud_object_tracker.update(cp_cam)
+
     if self.CP.enableBsm:
       # BSM messages are on B-CAN, requires a panda forwarding B-CAN messages to CAN 0
       # more info here: https://github.com/commaai/openpilot/pull/1867
@@ -358,14 +366,23 @@ class CarState(CarStateBase):
       # Both deliberately go silent during the handover, so skip alive/timeout checks.
       pt_messages += [("ACC_CONTROL", float("nan")), ("STEERING_CONTROL", float("nan"))]
 
+    cluster_render = civic_cluster_rendering_enabled(CP)
+    cam_messages = [("HUD_OBJECTS", 0)] if cluster_render else []
     pt_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, CanBus(CP).pt)
     if CP.enableGasInterceptorDEPRECATED:
       pt_parser.message_states[0x201].ignore_checksum = True
       pt_parser.message_states[0x201].ignore_counter = True
 
+    cam_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, CanBus(CP).camera)
+    if cluster_render:
+      # HUD_OBJECTS is reverse-engineered and optional input. A bad inferred
+      # checksum/counter must never invalidate the otherwise-empty camera bus.
+      cam_parser.message_states[0x6CD5557].ignore_checksum = True
+      cam_parser.message_states[0x6CD5557].ignore_counter = True
+
     parsers = {
       Bus.pt: pt_parser,
-      Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).camera),
+      Bus.cam: cam_parser,
     }
     if CP.enableBsm:
       parsers[Bus.body] = CANParser(DBC[CP.carFingerprint][Bus.body], [], CanBus(CP).radar)
