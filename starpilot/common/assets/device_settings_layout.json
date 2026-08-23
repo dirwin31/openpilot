@@ -3119,7 +3119,7 @@
       {
         "key": "HondaClusterRendering",
         "label": "openpilot Cluster Rendering",
-        "description": "Draw openpilot's predicted lane path and detected vehicles on the instrument cluster. Takes effect on the next drive.",
+        "description": "Draw openpilot's driving trajectory, measured lane width, and followed lead on the instrument cluster, with automatic fallback to Honda's original scene. Takes effect on the next drive.",
         "data_type": "bool",
         "ui_type": "toggle",
         "requires_capability": "HasHondaClusterRenderCar",

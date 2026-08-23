@@ -218,11 +218,13 @@ class TestHondaFingerprint:
     assert civic.safetyConfigs[-1].safetyParam & HondaSafetyFlags.CIVIC_CLUSTER_RENDER
     assert not hrv.safetyConfigs[-1].safetyParam & HondaSafetyFlags.CIVIC_CLUSTER_RENDER
     assert civic_interface.CS.hud_object_tracker is not None
-    assert "HUD_OBJECTS" in civic_interface.can_parsers[Bus.cam].vl
-    hud_state = civic_interface.can_parsers[Bus.cam].message_states[0x6CD5557]
-    assert hud_state.ignore_alive
-    assert hud_state.ignore_counter
-    assert hud_state.ignore_checksum
+    assert civic_interface.CS.stock_lane_tracker is not None
+    assert {"HUD_OBJECTS", "LANE_PATH", "LKAS_HUD_2"} <= civic_interface.can_parsers[Bus.cam].vl.keys()
+    for address in (0x6CD5557, 0x6CD5554, 0xF31AA54):
+      state = civic_interface.can_parsers[Bus.cam].message_states[address]
+      assert state.ignore_alive
+      assert state.ignore_counter
+      assert state.ignore_checksum
     assert civic_interface.CC.accepts_model_input
 
   def test_cluster_render_kill_switch_returns_to_stock_path(self):
@@ -234,7 +236,8 @@ class TestHondaFingerprint:
 
     assert not civic.safetyConfigs[-1].safetyParam & HondaSafetyFlags.CIVIC_CLUSTER_RENDER
     assert civic_interface.CS.hud_object_tracker is None
-    assert "HUD_OBJECTS" not in civic_interface.can_parsers[Bus.cam].vl
+    assert civic_interface.CS.stock_lane_tracker is None
+    assert not {"HUD_OBJECTS", "LANE_PATH", "LKAS_HUD_2"} & civic_interface.can_parsers[Bus.cam].vl.keys()
     assert not civic_interface.CC.accepts_model_input
 
   def test_cluster_render_defaults_off_without_starpilot_toggles(self):
@@ -261,12 +264,10 @@ class TestHondaFingerprint:
       def lane_line(y):
         return SimpleNamespace(x=x, y=[y] * len(x))
 
-      lead = SimpleNamespace(prob=0.9, x=[35.0], y=[0.0], v=[20.0])
       controller.model = SimpleNamespace(
+        position=SimpleNamespace(x=x, y=[0.0] * len(x)),
         laneLines=[lane_line(-3.3), lane_line(-1.65), lane_line(1.65), lane_line(3.3)],
         laneLineProbs=[0.0, 1.0, 1.0, 0.0],
-        leadsV3=[lead],
-        velocity=SimpleNamespace(x=[25.0]),
       )
 
       CC = structs.CarControl.new_message()
@@ -280,6 +281,7 @@ class TestHondaFingerprint:
         out=SimpleNamespace(vEgo=25.0, aEgo=0.0, steeringPressed=False, gasPressed=False, brakePressed=False),
         v_cruise_factor=1.0,
         hud_object_tracker=None,
+        stock_lane_tracker=None,
       )
       _, messages = controller.update(CC.as_reader(), CS, 2_000_000_000, toggles)
       return {message[0] for message in messages}

@@ -1,19 +1,21 @@
-"""Track and render vehicle objects on the 2022+ Civic instrument cluster.
-
-Adapted from mvl-boston/opendbc's sp-honda-dev-202608 branch and limited to
-the Bosch radarless protocol used by ``CAR.HONDA_CIVIC_2022``.
-"""
+"""Track, merge, and render vehicles on the 2022+ Civic cluster."""
 
 import math
 from dataclasses import dataclass, replace
 
 from opendbc.can.parser import CANParser
-from opendbc.car.honda import lane_path
 
 
 NUM_SLOTS = 10
-LONG_DIST_CAP_M = 195.0
 TRACK_TIMEOUT_NANOS = 500_000_000
+RADAR_TO_CAMERA = 1.52  # mirrors selfdrive/controls/radard.py; undoes the shift radard applies to dRel
+MATCH_LONGITUDINAL_M = 5.0
+MATCH_LATERAL_M = 1.5
+LONG_DIST_CAP_M = 195.0
+LONG_DIST_MAX_M = 194.0
+LONG_DIST_STOCK_MAX_M = 196.9
+LAT_DIST_MIN_M = -204.8
+LAT_DIST_MAX_M = 204.7
 
 
 @dataclass
@@ -40,10 +42,12 @@ class HudObjectTracker:
 
   def update(self, cp_cam: CANParser) -> None:
     values = cp_cam.vl_all["HUD_OBJECTS"]
+    if not values["MUX"]:
+      return
     last_nanos = int(cp_cam.ts_nanos["HUD_OBJECTS"]["MUX"])
     signals = ("MUX", "OBJECT_ID", "LONG_DIST", "LAT_DIST", "IS_LEAD_CAR", "CAR_TYPE", "ROTATION")
-    for mux, object_id, d_rel, y_rel, is_lead, car_type, rotation in zip(
-        *(values[signal] for signal in signals), strict=True):
+    rows = list(zip(*(values[signal] for signal in signals), strict=True))
+    for mux, object_id, d_rel, y_rel, is_lead, car_type, rotation in rows:
       slot = (int(mux) - 1) % 16
       if 0 <= slot < NUM_SLOTS:
         valid = object_id != 0 and d_rel < LONG_DIST_CAP_M
@@ -64,14 +68,11 @@ INACTIVE = {
   "IS_LEAD_CAR": 0,
   "CAR_TYPE": -1,
   "ROTATION": -128,
-  "LONG_DIST": 196.9,
-  "LAT_DIST": 204.7,
+  "LONG_DIST": LONG_DIST_STOCK_MAX_M,
+  "LAT_DIST": LAT_DIST_MAX_M,
 }
 
 CAR_TYPE_CAR = 7
-LONG_DIST_MAX_M = 194.0
-LAT_DIST_LIM_M = 204.7
-LAT_SCALE = 0.35
 ROT_BAND_M = 1.5
 ROT_MAX = 6
 
@@ -84,10 +85,6 @@ DREL_SMOOTH_TAU = 0.6
 YREL_SMOOTH_TAU = 0.5
 FF_VREL_MIN = 0.5
 DREL_RESID_CLAMP = 1.5
-
-LEAD_PROB_ON = 0.5
-LEAD_PROB_OFF = 0.35
-LEAD_HOLD_S = 0.6
 
 
 class LeadObjectId:
@@ -149,35 +146,48 @@ def lead_rotation(lateral_left_m: float) -> int:
 
 @dataclass
 class ModelLead:
+  """A lead from radard, shifted into the camera frame HUD_OBJECTS uses."""
   status: bool
   dRel: float
   yRel: float
   vRel: float
-  prob: float = 0.0
 
 
-def lead_from_model(model, v_ego):
-  if model is None or len(model.leadsV3) == 0 or len(model.leadsV3[0].x) == 0:
-    return ModelLead(False, 0.0, 0.0, 0.0)
+def no_lead() -> ModelLead:
+  return ModelLead(False, 0.0, 0.0, 0.0)
 
-  lead = model.leadsV3[0]
-  model_v_ego = float(v_ego)
-  try:
-    candidate_v_ego = float(model.velocity.x[0])
-    if math.isfinite(candidate_v_ego):
-      model_v_ego = candidate_v_ego
-  except (AttributeError, IndexError, TypeError, ValueError):
-    pass
 
-  # modelV2 lateral is +right; Honda's HUD_OBJECTS lateral is +left.
-  #
-  # dRel is modelV2's camera-frame distance, deliberately NOT converted to openpilot's
-  # radar-frame dRel (radard.py subtracts RADAR_TO_CAMERA). HUD_OBJECTS is a camera-authored
-  # message and slots 1-9 forward the camera's own camera-frame distances unchanged, so the
-  # lead must stay in the same frame or it renders 1.5 m nearer than an equidistant camera
-  # track. LAT_SCALE and curve_boost() upstream were also tuned against this unshifted dRel.
-  return ModelLead(bool(lead.prob >= LEAD_PROB_ON), float(lead.x[0]), -float(lead.y[0]),
-                   float(lead.v[0]) - model_v_ego, float(lead.prob))
+def _lead_from_radar(lead) -> tuple[bool, ModelLead]:
+  status = bool(lead.status)
+  d_rel = float(lead.dRel) + RADAR_TO_CAMERA
+  y_rel = float(lead.yRel)
+  v_rel = float(lead.vRel)
+  finite = all(math.isfinite(value) for value in (d_rel, y_rel, v_rel))
+  if status and not finite:
+    return False, no_lead()
+  return True, ModelLead(status, d_rel if status else 0.0, y_rel if status else 0.0, v_rel if status else 0.0)
+
+
+def select_openpilot_leads(radar_state, longitudinal_plan) -> tuple[bool, ModelLead, ModelLead]:
+  """Return whether the inputs are usable, the lead we are following, and the other one."""
+  unavailable = no_lead()
+  if radar_state is None or longitudinal_plan is None:
+    return False, unavailable, unavailable
+  lead_one_valid, lead_one = _lead_from_radar(radar_state.leadOne)
+  lead_two_valid, lead_two = _lead_from_radar(radar_state.leadTwo)
+  source = str(longitudinal_plan.longitudinalPlanSource)
+  if any(radar_state.radarErrors.to_dict().values()):
+    return False, unavailable, unavailable
+  if not lead_one_valid or not lead_two_valid:
+    return False, unavailable, unavailable
+
+  if source == "lead0":
+    return True, lead_one, lead_two
+  if source == "lead1":
+    return True, lead_two, lead_one
+  if source in ("cruise", "e2e"):
+    return True, unavailable, unavailable
+  return False, unavailable, unavailable
 
 
 def create_hud_object(packer, bus, mux, track):
@@ -185,20 +195,21 @@ def create_hud_object(packer, bus, mux, track):
   if track is None:
     values.update(INACTIVE)
   else:
+    stock = track.get("stock", False)
+    d_rel = track["d_rel"] if stock else min(max(track["d_rel"], 0.0), LONG_DIST_MAX_M)
+    y_rel = track["y_rel"] if stock else min(max(track["y_rel"], LAT_DIST_MIN_M), LAT_DIST_MAX_M)
     values.update({
       "OBJECT_ID": int(track["object_id"]),
       "IS_LEAD_CAR": int(track["is_lead_car"]),
       "CAR_TYPE": int(track["car_type"]),
       "ROTATION": int(track["rotation"]),
-      "LONG_DIST": min(max(track["d_rel"], 0.0), LONG_DIST_MAX_M),
-      "LAT_DIST": min(max(track["y_rel"], -LAT_DIST_LIM_M), LAT_DIST_LIM_M),
+      "LONG_DIST": d_rel,
+      "LAT_DIST": y_rel,
     })
   return packer.make_can_msg("HUD_OBJECTS", bus, values)
 
 
-def _stock_track(stock: 'HudObject | None', is_lead_car: bool | None = None):
-  """HudObject -> the dict create_hud_object() packs, or None for an inactive slot.
-  is_lead_car overrides the camera's flag (the author owns slot 0's lead marker)."""
+def _stock_track(stock: HudObject | None, is_lead_car: bool | None = None):
   if stock is None or not stock.valid:
     return None
   return {
@@ -208,6 +219,7 @@ def _stock_track(stock: 'HudObject | None', is_lead_car: bool | None = None):
     "is_lead_car": stock.is_lead_car if is_lead_car is None else is_lead_car,
     "car_type": stock.car_type,
     "rotation": stock.rotation,
+    "stock": True,
   }
 
 
@@ -221,75 +233,113 @@ def forward_hud_object(packer, bus, mux, tracks):
 
 
 class HudObjectAuthor:
-  """Replace the camera lead with openpilot's lead and retain adjacent cars."""
+  """Blend openpilot's leads into the full list of cars Honda's camera reports."""
 
   def __init__(self):
-    self._track_id = LeadObjectId()
-    self._smoother = LeadSmoother()
-    self._lead_id = 0
-    self._previous_op_id = 0
-    self._lead_on = False
-    self._lead_hold: ModelLead | None = None
-    self._lead_seen_time = -1e9
+    self._track_ids = [LeadObjectId(), LeadObjectId()]
+    self._smoothers = [LeadSmoother(), LeadSmoother()]
+    self._display_ids = [0, 0]
+    self._previous_op_ids = [0, 0]
 
-  def _gate_lead(self, lead: ModelLead, now: float) -> ModelLead:
-    threshold = LEAD_PROB_OFF if self._lead_on else LEAD_PROB_ON
-    if lead.prob >= threshold:
-      self._lead_on = True
-      self._lead_hold = lead
-      self._lead_seen_time = now
-      return lead if lead.status else ModelLead(True, lead.dRel, lead.yRel, lead.vRel, lead.prob)
-    if self._lead_on and self._lead_hold is not None and now - self._lead_seen_time < LEAD_HOLD_S:
-      held = self._lead_hold
-      return ModelLead(True, held.dRel + held.vRel * (now - self._lead_seen_time), held.yRel, held.vRel, held.prob)
-    self._lead_on = False
-    self._lead_hold = None
-    return ModelLead(False, 0.0, 0.0, 0.0)
+  @staticmethod
+  def _match(lead: ModelLead, tracks, excluded: set[int]) -> HudObject | None:
+    if not lead.status:
+      return None
+    candidates = [track for track in tracks or () if track.valid and track.slot not in excluded and
+                  abs(track.d_rel - lead.dRel) <= MATCH_LONGITUDINAL_M and
+                  abs(track.y_rel - lead.yRel) <= MATCH_LATERAL_M]
+    if not candidates:
+      return None
+    return min(candidates, key=lambda track: abs(track.d_rel - lead.dRel) + abs(track.y_rel - lead.yRel))
 
-  def _lead_object_id(self, status, op_id, stock_lead_id, in_use):
-    if not status:
-      self._lead_id = 0
-    elif stock_lead_id is not None:
-      self._lead_id = stock_lead_id
-    elif self._lead_id == 0 or op_id != self._previous_op_id or self._lead_id in in_use:
-      next_id = self._lead_id % MAX_OBJECT_ID + 1
-      while next_id in in_use:
-        next_id = next_id % MAX_OBJECT_ID + 1
-      self._lead_id = next_id
-    self._previous_op_id = op_id
-    return self._lead_id
+  def _object_id(self, index: int, lead: ModelLead, matched: HudObject | None, now: float, in_use: set[int]) -> int:
+    op_id = self._track_ids[index].update(lead.status, lead.dRel, lead.vRel, now)
+    if not lead.status:
+      self._display_ids[index] = 0
+    elif matched is not None:
+      self._display_ids[index] = matched.object_id
+    elif (self._display_ids[index] == 0 or op_id != self._previous_op_ids[index] or
+          self._display_ids[index] in in_use):
+      candidate = self._display_ids[index] % MAX_OBJECT_ID + 1
+      while candidate in in_use:
+        candidate = candidate % MAX_OBJECT_ID + 1
+      self._display_ids[index] = candidate
+    self._previous_op_ids[index] = op_id
+    return self._display_ids[index]
 
-  def create(self, packer, bus, lead, tracks, mux: int, now: float):
-    lead = self._gate_lead(lead, now)
-    op_id = self._track_id.update(lead.status, lead.dRel, lead.vRel, now)
+  def _lead_track(self, index: int, lead: ModelLead, matched: HudObject | None,
+                  is_lead_car: bool, now: float, in_use: set[int]):
+    if not lead.status:
+      self._track_ids[index].update(False, 0.0, 0.0, now)
+      return None
+    object_id = self._object_id(index, lead, matched, now, in_use)
+    d_rel, y_rel = self._smoothers[index].update(lead.dRel, lead.yRel, lead.vRel, object_id, now)
+    in_use.add(object_id)
+    return {
+      "d_rel": d_rel,
+      "y_rel": y_rel,
+      "object_id": object_id,
+      "is_lead_car": is_lead_car,
+      "car_type": matched.car_type if matched is not None else CAR_TYPE_CAR,
+      "rotation": matched.rotation if matched is not None else lead_rotation(y_rel),
+    }
 
-    stock_lead = None
-    in_use = set()
+  @staticmethod
+  def _first_free(slots) -> int | None:
+    return next((slot for slot in range(1, NUM_SLOTS) if slots[slot] is None), None)
+
+  def compose(self, controlling: ModelLead, secondary: ModelLead, tracks, now: float):
+    valid_tracks = []
+    seen_honda_ids: set[int] = set()
     for track in tracks or ():
-      if not track.valid:
+      if track.valid and track.object_id not in seen_honda_ids:
+        valid_tracks.append(track)
+        seen_honda_ids.add(track.object_id)
+    controlling_match = self._match(controlling, valid_tracks, set())
+    excluded = {controlling_match.slot} if controlling_match is not None else set()
+    secondary_match = self._match(secondary, valid_tracks, excluded)
+    matched_slots = {track.slot for track in (controlling_match, secondary_match) if track is not None}
+
+    slots = [None] * NUM_SLOTS
+    in_use = {track.object_id for track in valid_tracks}
+
+    slots[0] = self._lead_track(0, controlling, controlling_match, True, now, in_use)
+
+    relocate: list[dict] = []
+    for track in valid_tracks:
+      if track.slot in matched_slots:
         continue
-      if track.is_lead_car:
-        stock_lead = track
-      elif track.slot != 0:
-        in_use.add(track.object_id)
+      # openpilot owns the highlighted car while it is controlling speed. Under
+      # cruise and e2e, Honda's cars still show but nothing is highlighted.
+      rendered = _stock_track(track, is_lead_car=False)
+      # Each track owns its own slot, so the only one that can already be taken is
+      # slot 0 - the lead we are following - and Honda's own lead then has to move.
+      if slots[track.slot] is None:
+        slots[track.slot] = rendered
+      else:
+        relocate.append(rendered)
 
-    stock_lead_id = stock_lead.object_id if stock_lead is not None else None
-    lead_id = self._lead_object_id(lead.status, op_id, stock_lead_id, in_use)
-    lateral_scale = LAT_SCALE * lane_path.curve_boost(lead.dRel)
-    d_rel, y_rel = self._smoother.update(lead.dRel, lateral_scale * lead.yRel, lead.vRel, lead_id, now)
+    secondary_render = self._lead_track(1, secondary, secondary_match, False, now, in_use)
+    if secondary_render is not None and secondary_match is not None:
+      if slots[secondary_match.slot] is None:
+        slots[secondary_match.slot] = secondary_render
+      else:
+        relocate.insert(0, secondary_render)
 
-    slot = (mux - 1) % 16
-    if slot == 0 and lead.status:
-      track = {
-        "d_rel": d_rel,
-        "y_rel": y_rel,
-        "object_id": lead_id,
-        "is_lead_car": 1,
-        "car_type": stock_lead.car_type if stock_lead is not None else CAR_TYPE_CAR,
-        "rotation": stock_lead.rotation if stock_lead is not None else lead_rotation(y_rel / lateral_scale),
-      }
-    else:
-      stock = _slot_track(tracks, slot)
-      # the camera's own lead is dropped from its slot; slot 0 carries openpilot's instead
-      track = _stock_track(stock, is_lead_car=0) if stock is not None and not stock.is_lead_car else None
-    return create_hud_object(packer, bus, mux, track)
+    # Honda's cars get first claim on the free slots; an unmatched second lead
+    # only takes what is left over.
+    for rendered in relocate:
+      free = self._first_free(slots)
+      if free is None:
+        break
+      slots[free] = rendered
+
+    if secondary_render is not None and secondary_match is None:
+      free = self._first_free(slots)
+      if free is not None:
+        slots[free] = secondary_render
+    return slots
+
+  def create(self, packer, bus, controlling, tracks, mux: int, now: float, secondary=None):
+    slots = self.compose(controlling, secondary or no_lead(), tracks, now)
+    return create_hud_object(packer, bus, mux, slots[(mux - 1) % 16])

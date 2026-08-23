@@ -219,7 +219,7 @@ class CarController(CarControllerBase):
       self.model = None
       self.hud_object_author = hud_objects.HudObjectAuthor()
       self.lane_path_fitter = lane_path.LanePathFitter()
-      self.dash_lane = lane_path.DashLane([lane_path.OFFSET_UNAVAILABLE] * lane_path.NUM_PTS, 0.0, False, False)
+      self.dash_lane = lane_path.blank_lane()
 
     # MVL CAN-FD ownership state. These do not affect non-CANFD vehicles.
     self.radar_disable_counter = 0
@@ -592,26 +592,29 @@ class CarController(CarControllerBase):
     # vehicle list. Messages are sent at 50 Hz, while each logical path point
     # is refreshed at 5 Hz across the four mux banks.
     if self.cluster_render and self.frame % 2 == 0:
-      lead = hud_objects.lead_from_model(self.model, CS.out.vEgo)
-      lead_distance = lead.dRel if lead.status else 0.0
-      self.dash_lane = self.lane_path_fitter.update(self.model, CS.out.vEgo, lead_distance, now_nanos)
+      stock_lane = CS.stock_lane_tracker.snapshot(now_nanos) if CS.stock_lane_tracker is not None else None
+      self.dash_lane = self.lane_path_fitter.update(
+        self.model, CS.out.vEgo, now_nanos=now_nanos,
+        curvature=float(actuators.curvature), lat_active=bool(CC.latActive), stock_lane=stock_lane,
+        left_departure=bool(hud_control.leftLaneDepart), right_departure=bool(hud_control.rightLaneDepart),
+      )
       mux = lane_path.MUX_CYCLE[(self.frame // 2) % len(lane_path.MUX_CYCLE)]
       can_sends.append(lane_path.create_lane_path(self.packer, self.CAN.lkas, self.dash_lane.offsets, mux))
 
       tracks = CS.hud_object_tracker.snapshot(now_nanos) if CS.hud_object_tracker is not None else None
-      if self.CP.openpilotLongitudinalControl:
-        can_sends.append(self.hud_object_author.create(self.packer, self.CAN.lkas, lead, tracks, mux, now_nanos * 1e-9))
+      lead_inputs_valid, controlling_lead, secondary_lead = hud_objects.select_openpilot_leads(
+        getattr(CS, "radar_state", None), getattr(CS, "longitudinal_plan", None),
+      )
+      if CC.longActive and lead_inputs_valid:
+        can_sends.append(self.hud_object_author.create(
+          self.packer, self.CAN.lkas, controlling_lead, tracks, mux, now_nanos * 1e-9, secondary_lead,
+        ))
       else:
         can_sends.append(hud_objects.forward_hud_object(self.packer, self.CAN.lkas, mux, tracks))
 
     if self.cluster_render and self.frame % 20 == 0:
-      # self.dash_lane aliases the fitter's cached path, so derive lane_cross locally
-      # instead of writing it back into that shared object.
-      dash_lane = self.dash_lane
-      lane_cross = lane_path.lane_cross_from_departures(hud_control.leftLaneDepart, hud_control.rightLaneDepart)
       can_sends.append(lane_path.create_lkas_hud_2(
-        self.packer, self.CAN.lkas, (self.frame // 20 - 1) % 4,
-        dash_lane.reach, lane_cross, dash_lane.left_line, dash_lane.right_line,
+        self.packer, self.CAN.lkas, (self.frame // 20 - 1) % 4, self.dash_lane,
       ))
 
     if self.frame > 0 and self.frame % 6000 == 0:

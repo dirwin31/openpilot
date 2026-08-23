@@ -5,7 +5,7 @@ from cereal import custom
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.honda import hud_objects
+from opendbc.car.honda import hud_objects, lane_path
 from opendbc.car.honda.hondacan import CanBus
 from opendbc.car.honda.values import CAR, DBC, STEER_THRESHOLD, HONDA_BOSCH, HONDA_BOSCH_ALT_RADAR, HONDA_BOSCH_CANFD, \
                                                  HONDA_NIDEC_ALT_SCM_MESSAGES, HONDA_BOSCH_RADARLESS, HONDA_BOSCH_TJA_CONTROL, \
@@ -90,8 +90,9 @@ class CarState(CarStateBase):
     self.canfd_frames = 0
     self.canfd_relay_open = False
 
-    # Only the opted-in 2022+ Civic port authors the cluster's multiplexed vehicle list.
+    # Only the 2022+ Civic draws the cluster scene, and only if the user opts in.
     self.hud_object_tracker = hud_objects.HudObjectTracker() if civic_cluster_rendering_enabled(CP) else None
+    self.stock_lane_tracker = lane_path.StockLaneTracker() if civic_cluster_rendering_enabled(CP) else None
 
   def update(self, can_parsers, starpilot_toggles) -> structs.CarState:
     cp = can_parsers[Bus.pt]
@@ -339,6 +340,8 @@ class CarState(CarStateBase):
 
     if self.hud_object_tracker is not None:
       self.hud_object_tracker.update(cp_cam)
+    if self.stock_lane_tracker is not None:
+      self.stock_lane_tracker.update(cp_cam)
 
     if self.CP.enableBsm:
       # BSM messages are on B-CAN, requires a panda forwarding B-CAN messages to CAN 0
@@ -367,7 +370,7 @@ class CarState(CarStateBase):
       pt_messages += [("ACC_CONTROL", float("nan")), ("STEERING_CONTROL", float("nan"))]
 
     cluster_render = civic_cluster_rendering_enabled(CP)
-    cam_messages = [("HUD_OBJECTS", 0)] if cluster_render else []
+    cam_messages = [("HUD_OBJECTS", 0), ("LANE_PATH", 0), ("LKAS_HUD_2", 0)] if cluster_render else []
     pt_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, CanBus(CP).pt)
     if CP.enableGasInterceptorDEPRECATED:
       pt_parser.message_states[0x201].ignore_checksum = True
@@ -375,10 +378,11 @@ class CarState(CarStateBase):
 
     cam_parser = CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, CanBus(CP).camera)
     if cluster_render:
-      # HUD_OBJECTS is reverse-engineered and optional input. A bad inferred
-      # checksum/counter must never invalidate the otherwise-empty camera bus.
-      cam_parser.message_states[0x6CD5557].ignore_checksum = True
-      cam_parser.message_states[0x6CD5557].ignore_counter = True
+      # These stock messages are reverse engineered and optional. A wrong guess at
+      # their checksum or counter must never invalidate the whole camera parser.
+      for address in (0x6CD5557, 0x6CD5554, 0xF31AA54):
+        cam_parser.message_states[address].ignore_checksum = True
+        cam_parser.message_states[address].ignore_counter = True
 
     parsers = {
       Bus.pt: pt_parser,

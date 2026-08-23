@@ -427,6 +427,8 @@ class Car:
     self.CI.CS.openpilot_lead_visible = lead_visible
     self.CI.CS.openpilot_lead_distance = lead_distance
     self.CI.CS.openpilot_lead_rel_speed = lead_rel_speed
+    self.CI.CS.radar_state = self.sm['radarState'] if self.sm.all_checks(['radarState']) else None
+    self.CI.CS.longitudinal_plan = self.sm['longitudinalPlan'] if self.sm.all_checks(['longitudinalPlan']) else None
 
   def _update_redneck_cruise(self, CS: car.CarState, CC: car.CarControl) -> None:
     if self.redneck_cruise is None:
