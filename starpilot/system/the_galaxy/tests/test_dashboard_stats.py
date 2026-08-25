@@ -676,6 +676,52 @@ def test_top_models_are_ranked_from_persisted_usage_not_favorites():
   assert favorites[2]["userFavorite"] is True
 
 
+def test_favorite_models_overflow_folds_ranks_beyond_top_three():
+  params = FakeParams({
+    "AvailableModels": "orion,vega,atlas,nova,lyra",
+    "AvailableModelNames": "Orion,Vega,Atlas,Nova,Lyra",
+    "AvailableModelSeries": "City,Highway,Experimental,Custom,Custom",
+  })
+  persistent = {
+    "modelUsage": {
+      "orion": {"name": "Orion", "drives": 3},
+      "vega": {"name": "Vega", "drives": 1},
+      "atlas": {"name": "Atlas", "drives": 9},
+      "nova": {"name": "Nova", "drives": 4},
+      "lyra": {"name": "Lyra", "drives": 2},
+    },
+  }
+
+  favorites = utilities._build_favorite_models(params, persistent)
+  overflow = utilities._build_favorite_models_overflow(params, persistent)
+
+  # Top three unchanged, ranked by drives desc
+  assert [model["name"] for model in favorites] == ["Atlas", "Nova", "Orion"]
+
+  # Ranks 4+ (Lyra=2, Vega=1) are folded into the overflow summary
+  assert overflow["models"] == 2
+  assert overflow["drives"] == 3
+  assert overflow["weight"] == 3
+  assert [item["name"] for item in overflow["items"]] == ["Lyra", "Vega"]
+  assert [item["drives"] for item in overflow["items"]] == [2, 1]
+
+
+def test_favorite_models_overflow_is_none_with_three_or_fewer_models():
+  params = FakeParams({
+    "AvailableModels": "orion,vega,atlas",
+    "AvailableModelNames": "Orion,Vega,Atlas",
+  })
+  persistent = {
+    "modelUsage": {
+      "orion": {"name": "Orion", "drives": 3},
+      "vega": {"name": "Vega", "drives": 1},
+      "atlas": {"name": "Atlas", "drives": 9},
+    },
+  }
+
+  assert utilities._build_favorite_models_overflow(params, persistent) is None
+
+
 def test_persistent_personal_records_and_model_usage_survive_empty_routes():
   params = FakeParams({"AvailableModels": "orion", "AvailableModelNames": "Orion", "CommunityFavorites": "orion"})
   drives = [

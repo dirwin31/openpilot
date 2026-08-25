@@ -577,6 +577,57 @@
   width: 0.7rem;
 }
 
+.dashboard-model-other {
+  cursor: pointer;
+  position: relative;
+}
+
+.dashboard-model-popup {
+  background: var(--card-bg);
+  border: var(--border-width-thin) var(--border-style-base) var(--sidebar-border-color);
+  border-radius: var(--border-radius-md);
+  bottom: calc(100% + 0.4rem);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: none;
+  left: 0;
+  max-height: 220px;
+  min-width: 220px;
+  overflow-y: auto;
+  padding: 0.5rem 0.65rem;
+  position: absolute;
+  z-index: var(--z-tooltip);
+}
+
+.dashboard-model-other:hover .dashboard-model-popup,
+.dashboard-model-other:focus-within .dashboard-model-popup,
+.dashboard-model-other.is-open .dashboard-model-popup {
+  display: block;
+}
+
+.dashboard-model-popup ul {
+  display: grid;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dashboard-model-popup li {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.dashboard-model-popup-name {
+  color: var(--text-color);
+  overflow-wrap: anywhere;
+}
+
+.dashboard-model-popup-drives {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .dashboard-device-card {
   display: grid;
   gap: 1rem;

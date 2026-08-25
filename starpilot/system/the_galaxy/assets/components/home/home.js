@@ -10,6 +10,7 @@ const HOME_STATE = {
 };
 
 const FAVORITE_COLORS = ["#5ec8c8", "#8b6cc5", "#d4a060", "#e05577", "#6cc56e", "#8aa3ff"];
+const OTHER_COLOR = "#6b7280";
 const TOP_MODEL_LIMIT = 3;
 
 function withTimeout(promise, timeoutMs, label) {
@@ -161,6 +162,7 @@ function fallbackDashboard(data, unit) {
       segmentCounts: { standard: 0, highResolution: 0, alternate: 0 },
     },
     favoriteModels: [],
+    favoriteModelsOverflow: null,
   };
 }
 
@@ -357,16 +359,18 @@ function renderRecentDrives(drives) {
   `;
 }
 
-function favoriteChart(models) {
-  if (!Array.isArray(models) || models.length === 0) {
+function favoriteChart(models, overflow) {
+  const hasOverflow = overflow && numberValue(overflow.models) > 0;
+  if ((!Array.isArray(models) || models.length === 0) && !hasOverflow) {
     return {
       style: "background: conic-gradient(var(--dashboard-track) 0 100%)",
       rows: `<div class="dashboard-empty">No model usage recorded yet.</div>`,
     };
   }
 
-  const topModels = models.slice(0, TOP_MODEL_LIMIT);
-  const total = topModels.reduce((sum, model) => sum + Math.max(1, numberValue(model.weight)), 0);
+  const topModels = (Array.isArray(models) ? models : []).slice(0, TOP_MODEL_LIMIT);
+  const otherWeight = hasOverflow ? Math.max(1, numberValue(overflow.weight)) : 0;
+  const total = topModels.reduce((sum, model) => sum + Math.max(1, numberValue(model.weight)), 0) + otherWeight;
   let start = 0;
   const segments = topModels.map((model, index) => {
     const end = start + (Math.max(1, numberValue(model.weight)) / total) * 100;
@@ -374,8 +378,11 @@ function favoriteChart(models) {
     start = end;
     return segment;
   });
+  if (otherWeight > 0) {
+    segments.push(`${OTHER_COLOR} ${start}% 100%`);
+  }
 
-  const rows = topModels.map((model, index) => `
+  let rows = topModels.map((model, index) => `
     <div class="dashboard-model-row">
       <span class="dashboard-swatch" style="background:${FAVORITE_COLORS[index]}"></span>
       <div>
@@ -385,14 +392,44 @@ function favoriteChart(models) {
     </div>
   `).join("");
 
+  if (hasOverflow) {
+    rows += renderOtherModelsRow(overflow);
+  }
+
   return {
     style: `background: conic-gradient(${segments.join(", ")})`,
     rows,
   };
 }
 
-function renderFavoriteModels(models) {
-  const chart = favoriteChart(models);
+function renderOtherModelsRow(overflow) {
+  const count = numberValue(overflow.models);
+  const drives = numberValue(overflow.drives);
+  const items = Array.isArray(overflow.items) ? overflow.items : [];
+  const popupRows = items.map((item) => `
+    <li>
+      <span class="dashboard-model-popup-name">${escapeHtml(item.name)}</span>
+      <span class="dashboard-model-popup-drives">${formatInt(item.drives)} ${numberValue(item.drives) === 1 ? "drive" : "drives"}</span>
+    </li>
+  `).join("");
+
+  return `
+    <div class="dashboard-model-row dashboard-model-other" tabindex="0" role="button"
+         aria-label="Show ${formatInt(count)} more ${count === 1 ? "model" : "models"}">
+      <span class="dashboard-swatch" style="background:${OTHER_COLOR}"></span>
+      <div>
+        <strong>Other models</strong>
+        <small>${formatInt(count)} more ${count === 1 ? "model" : "models"} · ${formatInt(drives)} ${drives === 1 ? "drive" : "drives"}</small>
+      </div>
+      <div class="dashboard-model-popup" role="tooltip">
+        <ul>${popupRows}</ul>
+      </div>
+    </div>
+  `;
+}
+
+function renderFavoriteModels(models, overflow) {
+  const chart = favoriteChart(models, overflow);
   return `
     <section class="dashboard-card dashboard-models">
       <h2>Most used models</h2>
@@ -509,6 +546,17 @@ function bindDashboardActions() {
       }
     };
   });
+
+  document.querySelectorAll(".dashboard-model-other").forEach((row) => {
+    const toggle = (event) => {
+      event.preventDefault();
+      row.classList.toggle("is-open");
+    };
+    row.onclick = toggle;
+    row.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") toggle(event);
+    };
+  });
 }
 
 function renderDashboard(state) {
@@ -571,7 +619,7 @@ function renderDashboard(state) {
       ${renderRecentDrives(dashboard.recentDrives || [])}
 
       <div class="dashboard-two-column dashboard-model-storage">
-        ${renderFavoriteModels(dashboard.favoriteModels || [])}
+        ${renderFavoriteModels(dashboard.favoriteModels || [], dashboard.favoriteModelsOverflow || null)}
         ${renderStorage(dashboard.storage || {})}
       </div>
 

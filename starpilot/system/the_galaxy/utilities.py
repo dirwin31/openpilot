@@ -2759,7 +2759,7 @@ def _build_device_summary(params_obj):
   }
 
 
-def _build_favorite_models(params_obj, persistent_stats=None):
+def _favorite_models_sorted(params_obj, persistent_stats=None):
   lookup = _model_lookup(params_obj)
   user_favorites = {canonical_model_key(entry) for entry in _split_csv(_params_get_text(params_obj, "UserFavorites", ""))}
   listed_favorites = {canonical_model_key(entry) for entry in _split_csv(_params_get_text(params_obj, "CommunityFavorites", ""))}
@@ -2797,7 +2797,24 @@ def _build_favorite_models(params_obj, persistent_stats=None):
     -model["drives"],
     model["name"].lower(),
   ))
-  return top_models[:DASHBOARD_TOP_MODEL_LIMIT]
+  return top_models
+
+
+def _build_favorite_models(params_obj, persistent_stats=None):
+  return _favorite_models_sorted(params_obj, persistent_stats)[:DASHBOARD_TOP_MODEL_LIMIT]
+
+
+def _build_favorite_models_overflow(params_obj, persistent_stats=None):
+  rest = _favorite_models_sorted(params_obj, persistent_stats)[DASHBOARD_TOP_MODEL_LIMIT:]
+  if not rest:
+    return None
+  drives = sum(model["drives"] for model in rest)
+  return {
+    "models": len(rest),
+    "drives": drives,
+    "weight": drives,
+    "items": [{"name": model["name"], "drives": model["drives"]} for model in rest],
+  }
 
 
 def _dashboard_empty(is_metric, now, footage_paths, params_obj, persistent_stats=None):
@@ -2810,6 +2827,7 @@ def _dashboard_empty(is_metric, now, footage_paths, params_obj, persistent_stats
     "device": _build_device_summary(params_obj),
     "storage": _build_storage_summary(footage_paths),
     "favoriteModels": _build_favorite_models(params_obj, persistent_stats),
+    "favoriteModelsOverflow": _build_favorite_models_overflow(params_obj, persistent_stats),
   }
 
 
@@ -2879,6 +2897,7 @@ def get_dashboard_stats(footage_paths, params_obj=None, now=None):
       "device": _build_device_summary(params_obj),
       "storage": _build_storage_summary(footage_paths),
       "favoriteModels": _build_favorite_models(params_obj, persistent_stats),
+      "favoriteModelsOverflow": _build_favorite_models_overflow(params_obj, persistent_stats),
     }
   dashboard["analysis"] = analysis_status
 
