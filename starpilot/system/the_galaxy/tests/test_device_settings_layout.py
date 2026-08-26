@@ -127,6 +127,26 @@ def test_device_shutdown_uses_literal_hours():
   assert device_shutdown["step"] == 1
 
 
+def test_auto_upload_full_logs_toggle_is_default_off_and_galaxy_only():
+  toggle = _params_by_section(_layout())["Device & Data"]["AutoUploadFullLogsOnWifi"]
+
+  assert toggle["label"] == "Auto-Upload Full Logs on Wi-Fi"
+  assert toggle["description"] == (
+    "Upload full logs from new drives to comma Connect over unmetered Wi-Fi only. Existing logs, cellular, and hotspots are excluded. May use significant data."
+  )
+  assert toggle["picker_description"] == "Uploads full logs from new drives over unmetered Wi-Fi only."
+  assert toggle["data_type"] == "bool"
+  assert toggle["ui_type"] == "toggle"
+  assert toggle["parent_key"] == "DeviceManagement"
+  assert toggle["settings_tier"] == "simple"
+  assert _declared_default("AutoUploadFullLogsOnWifi") == "0"
+
+  on_device_source = (
+    REPO_ROOT / "selfdrive/ui/layouts/settings/starpilot/system_settings.py"
+  ).read_text(encoding="utf-8")
+  assert "AutoUploadFullLogsOnWifi" not in on_device_source
+
+
 def test_curve_speed_controller_no_lead_toggle_is_nested_under_csc():
   csc_no_lead = _params_by_section(_layout())["Longitudinal (Speed & Following)"]["CurveSpeedControllerNoLead"]
 

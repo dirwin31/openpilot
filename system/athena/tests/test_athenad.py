@@ -208,6 +208,18 @@ class TestAthenadMethods:
     assert resp['items'][0].get('id') is not None
     assert athenad.upload_queue.qsize() == 1
 
+  @pytest.mark.parametrize("auto_upload_full_logs", [False, True])
+  def test_requested_rlog_upload_is_unchanged(self, host, auto_upload_full_logs):
+    self.params.put_bool("AutoUploadFullLogsOnWifi", auto_upload_full_logs)
+    fn = self._create_file('route--0/rlog.zst')
+
+    resp = dispatcher["uploadFileToUrl"]("route--0/rlog.zst", f"{host}/rlog.zst", {})
+
+    assert resp['enqueued'] == 1
+    assert 'failed' not in resp
+    assert {"path": fn, "url": f"{host}/rlog.zst", "headers": {}}.items() <= resp['items'][0].items()
+    assert athenad.upload_queue.qsize() == 1
+
   def test_upload_file_to_url_duplicate(self, host):
     self._create_file('qlog.zst')
 

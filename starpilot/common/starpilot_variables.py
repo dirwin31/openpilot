@@ -232,6 +232,7 @@ def device_shutdown_seconds(hours):
   return bounded_hours * 60 * 60
 
 EXCLUDED_KEYS = {
+  "AutoUploadFullLogsOnWifiEnabledAt",
   "AvailableModelSeries",
   "AvailableModelArtifactFormats",
   "AvailableModelNames",

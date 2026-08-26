@@ -22,6 +22,11 @@ from openpilot.common.swaglog import cloudlog
 NetworkType = log.DeviceState.NetworkType
 UPLOAD_ATTR_NAME = 'user.upload'
 UPLOAD_ATTR_VALUE = b'1'
+# kept in sync with starpilot/system/the_galaxy/the_galaxy.py, which writes both keys when the toggle is flipped
+AUTO_UPLOAD_FULL_LOGS_PARAM = "AutoUploadFullLogsOnWifi"
+AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM = "AutoUploadFullLogsOnWifiEnabledAt"
+# logger.cc only writes rlog.zst; bare rlog covers routes recorded by older versions
+FULL_LOG_FILES = {"rlog", "rlog.zst"}
 
 MAX_UPLOAD_SIZES = {
   "qlog": 25*1e6,  # can't be too restrictive here since we use qlogs to find
@@ -90,6 +95,18 @@ class Uploader:
     self.immediate_folders = ["crash/", "boot/"]
     self.immediate_priority = {"qlog": 0, "qlog.zst": 0, "qcamera.ts": 1}
 
+  def auto_upload_full_logs_enabled_at(self) -> int:
+    if not self.params.get_bool(AUTO_UPLOAD_FULL_LOGS_PARAM):
+      if self.params.get_int(AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM) > 0:
+        self.params.remove(AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM)
+      return 0
+
+    enabled_at = self.params.get_int(AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM)
+    if enabled_at <= 0:
+      enabled_at = time.time_ns()
+      self.params.put_int(AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM, enabled_at)
+    return enabled_at
+
   def list_upload_files(self, metered: bool) -> Iterator[tuple[str, str, str]]:
     r = self.params.get("AthenadRecentlyViewedRoutes")
     requested_routes = [] if r is None else [route for route in r.split(",") if route]
@@ -130,7 +147,10 @@ class Uploader:
 
         yield name, key, fn
 
-  def next_file_to_upload(self, metered: bool) -> tuple[str, str, str] | None:
+  # metered: throttle non-essential uploads. Already relaxed by AlwaysAllowUploads, so it can be False on a paid connection.
+  # network_metered: the connection actually costs data (a tethered hotspot reports wifi + metered). AlwaysAllowUploads never clears it.
+  def next_file_to_upload(self, network_type: int, metered: bool, network_metered: bool) -> tuple[str, str, str] | None:
+    auto_upload_full_logs_enabled_at = self.auto_upload_full_logs_enabled_at()
     upload_files = list(self.list_upload_files(metered))
 
     for name, key, fn in upload_files:
@@ -140,6 +160,16 @@ class Uploader:
     for name, key, fn in upload_files:
       if name in self.immediate_priority:
         return name, key, fn
+
+    if auto_upload_full_logs_enabled_at and network_type == NetworkType.wifi and not network_metered:
+      for name, key, fn in upload_files:
+        if name not in FULL_LOG_FILES:
+          continue
+        try:
+          if os.stat(fn).st_mtime_ns >= auto_upload_full_logs_enabled_at:
+            return name, key, fn
+        except OSError:
+          continue
 
     return None
 
@@ -216,8 +246,8 @@ class Uploader:
     return success
 
 
-  def step(self, network_type: int, metered: bool) -> bool | None:
-    d = self.next_file_to_upload(metered)
+  def step(self, network_type: int, metered: bool, network_metered: bool) -> bool | None:
+    d = self.next_file_to_upload(network_type, metered, network_metered)
     if d is None:
       return None
 
@@ -256,13 +286,14 @@ def main(exit_event: threading.Event | None = None) -> None:
     sm.update(0)
     always_allow_uploads = params.get_bool("AlwaysAllowUploads")
     offroad = params.get_bool("IsOffroad")
-    network_type = sm['deviceState'].networkType if not force_wifi else NetworkType.wifi
+    network_type = sm['deviceState'].networkType.raw if not force_wifi else NetworkType.wifi
     if network_type == NetworkType.none:
       if allow_sleep:
         time.sleep(60 if offroad else 5)
       continue
 
-    success = uploader.step(sm['deviceState'].networkType.raw, sm['deviceState'].networkMetered and not always_allow_uploads)
+    network_metered = sm['deviceState'].networkMetered and not force_wifi
+    success = uploader.step(network_type, network_metered and not always_allow_uploads, network_metered)
     if success is None:
       backoff = 60 if offroad else 5
     elif success:

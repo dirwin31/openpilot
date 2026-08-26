@@ -95,8 +95,9 @@ def _params_client(monkeypatch, values, device_type):
     the_galaxy,
     "_get_param_type_info",
     lambda: (
-      {"AlphaLongitudinalEnabled", "ForceOffroad", "FordLateralMode"},
+      {"AlphaLongitudinalEnabled", "AutoUploadFullLogsOnWifi", "ForceOffroad", "FordLateralMode"},
       {
+        "AutoUploadFullLogsOnWifi": bool,
         "AlphaLongitudinalEnabled": bool,
         "ForceOffroad": bool,
         "FordLateralMode": int,
@@ -267,6 +268,29 @@ def test_ford_lateral_mode_is_editable_through_galaxy(monkeypatch):
   assert response.status_code == 200
   assert fake_params.values["FordLateralMode"] == "2"
   assert ("FordLateralMode", "2") in fake_params.writes
+
+
+def test_auto_upload_full_logs_toggle_records_a_new_drives_boundary(monkeypatch):
+  monkeypatch.setattr(the_galaxy.time, "time_ns", lambda: 123456789)
+  client, fake_params = _params_client(monkeypatch, {
+    "AutoUploadFullLogsOnWifi": False,
+  }, "tici")
+
+  response = client.put("/api/params", json={"key": "AutoUploadFullLogsOnWifi", "value": True})
+
+  assert response.status_code == 200
+  assert response.get_json()["updated"] == {"AutoUploadFullLogsOnWifi": True}
+  assert fake_params.writes == [
+    ("AutoUploadFullLogsOnWifiEnabledAt", 123456789),
+    ("AutoUploadFullLogsOnWifi", True),
+  ]
+
+  fake_params.writes.clear()
+  response = client.put("/api/params", json={"key": "AutoUploadFullLogsOnWifi", "value": False})
+
+  assert response.status_code == 200
+  assert fake_params.writes == [("AutoUploadFullLogsOnWifi", False)]
+  assert fake_params.removals == ["AutoUploadFullLogsOnWifiEnabledAt"]
 
 
 def test_favorite_slot_options_include_virtual_cruise_actions(monkeypatch):

@@ -4,10 +4,13 @@ import threading
 import logging
 import json
 from pathlib import Path
+import pytest
+
+from cereal import log
 from openpilot.system.hardware.hw import Paths
 
 from openpilot.common.swaglog import cloudlog
-from openpilot.system.loggerd.uploader import clear_locks, main, UPLOAD_ATTR_NAME, UPLOAD_ATTR_VALUE
+from openpilot.system.loggerd.uploader import AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM, Uploader, clear_locks, main, UPLOAD_ATTR_NAME, UPLOAD_ATTR_VALUE
 from openpilot.system.loggerd.xattr_cache import getxattr
 
 from openpilot.system.loggerd.tests.loggerd_tests_common import UploaderTestCase
@@ -187,3 +190,67 @@ class TestUploader(UploaderTestCase):
     for f_path in f_paths:
       lock_path = f_path.with_suffix(f_path.suffix + ".lock")
       assert not lock_path.is_file(), "File lock not cleared on startup"
+
+  def _step(self, uploader, network_type, network_metered):
+    # mirrors how main() derives step()'s arguments
+    metered = network_metered and not self.params.get_bool("AlwaysAllowUploads")
+    return uploader.step(network_type, metered, network_metered)
+
+  @pytest.mark.parametrize("log_name", ["rlog", "rlog.zst"])
+  @pytest.mark.parametrize(("enabled", "network_type", "network_metered", "expected_upload"), [
+    (False, log.DeviceState.NetworkType.wifi, False, False),
+    (True, log.DeviceState.NetworkType.wifi, False, True),
+    # a tethered hotspot reports wifi but costs cellular data
+    (True, log.DeviceState.NetworkType.wifi, True, False),
+    (True, log.DeviceState.NetworkType.cell4G, True, False),
+    (True, log.DeviceState.NetworkType.cell4G, False, False),
+    (True, log.DeviceState.NetworkType.none, False, False),
+  ])
+  def test_auto_upload_full_logs_requires_enabled_unmetered_wifi(self, log_name, enabled, network_type, network_metered, expected_upload):
+    if enabled:
+      self.params.put_int(AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM, time.time_ns())
+    self.params.put_bool("AutoUploadFullLogsOnWifi", enabled)
+    log_path = self.make_file_with_data(self.seg_dir, log_name)
+    uploader = Uploader("0000000000000000", Paths.log_root())
+
+    result = self._step(uploader, network_type, network_metered)
+
+    if expected_upload:
+      assert result is True
+      assert log_handler.upload_order == [f"{self.seg_dir}/rlog.zst"]
+      assert getxattr(log_path, UPLOAD_ATTR_NAME) == UPLOAD_ATTR_VALUE
+    else:
+      assert result is None
+      assert log_handler.upload_order == []
+      assert getxattr(log_path, UPLOAD_ATTR_NAME) != UPLOAD_ATTR_VALUE
+
+  # AlwaysAllowUploads clears the throttling flag, but must not open a paid connection to full logs
+  @pytest.mark.parametrize("network_type", [log.DeviceState.NetworkType.cell4G, log.DeviceState.NetworkType.wifi])
+  def test_always_allow_uploads_does_not_auto_upload_full_logs_on_metered(self, network_type):
+    self.params.put_int(AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM, time.time_ns())
+    self.params.put_bool("AutoUploadFullLogsOnWifi", True)
+    self.params.put_bool("AlwaysAllowUploads", True)
+    log_path = self.make_file_with_data(self.seg_dir, "rlog.zst")
+    uploader = Uploader("0000000000000000", Paths.log_root())
+
+    assert self._step(uploader, network_type, True) is None
+    assert getxattr(log_path, UPLOAD_ATTR_NAME) != UPLOAD_ATTR_VALUE
+
+  @pytest.mark.parametrize("log_name", ["rlog", "rlog.zst"])
+  def test_auto_upload_full_logs_only_includes_drives_after_enabling(self, log_name):
+    old_log_path = self.make_file_with_data(self.seg_dir, log_name)
+    self.params.put_bool("AutoUploadFullLogsOnWifi", True)
+    uploader = Uploader("0000000000000000", Paths.log_root())
+
+    assert self._step(uploader, log.DeviceState.NetworkType.wifi, False) is None
+    enabled_at = self.params.get_int(AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM)
+    assert enabled_at > old_log_path.stat().st_mtime_ns
+    assert getxattr(old_log_path, UPLOAD_ATTR_NAME) != UPLOAD_ATTR_VALUE
+
+    new_seg_dir = self.seg_format.format(self.seg_num + 1)
+    new_log_path = self.make_file_with_data(new_seg_dir, log_name)
+
+    assert self._step(uploader, log.DeviceState.NetworkType.wifi, False) is True
+    assert log_handler.upload_order == [f"{new_seg_dir}/rlog.zst"]
+    assert getxattr(old_log_path, UPLOAD_ATTR_NAME) != UPLOAD_ATTR_VALUE
+    assert getxattr(new_log_path, UPLOAD_ATTR_NAME) == UPLOAD_ATTR_VALUE

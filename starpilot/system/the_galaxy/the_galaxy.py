@@ -114,6 +114,9 @@ VASM_CONFIGURATION_KEYS = {"VASMEnabled", "VASMConfidenceThreshold", "VASMSmooth
 PIP_PREVIEW_CONFIGURATION_KEYS = {"PIPPreviewEnabled", "PIPPreviewMask", "PIPPreviewShowOnBlinker", "PIPPreviewShowOnBSM"}
 MODEL_SMOOTHING_KEYS = {"LatSmoothSeconds", "LongSmoothSeconds"}
 GALAXY_DEVELOPER_ONLY_KEYS = {"TurnSteeringLimitMuteSpeed"}
+# kept in sync with system/loggerd/uploader.py, which reads both keys; not imported to avoid pulling loggerd into the web server
+AUTO_UPLOAD_FULL_LOGS_PARAM = "AutoUploadFullLogsOnWifi"
+AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM = "AutoUploadFullLogsOnWifiEnabledAt"
 PULSE_GLIDE_BUTTON_KEYS = {
   "CancelButtonControl", "DistanceButtonControl",
   "LongCancelButtonControl", "LongDistanceButtonControl",
@@ -1114,6 +1117,22 @@ def _get_toggle_backup_keys():
     keys.add(key)
 
   return keys
+
+
+# Stamps the boundary the uploader compares log mtimes against, so enabling only picks up drives recorded from now on.
+# The uploader re-stamps and clears this itself, which covers param writes that don't come through here.
+def _set_auto_upload_full_logs_on_wifi(params_store, enabled):
+  if not bool(enabled):
+    params_store.put_bool(AUTO_UPLOAD_FULL_LOGS_PARAM, False)
+    params_store.remove(AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM)
+    return
+
+  if (
+    not params_store.get_bool(AUTO_UPLOAD_FULL_LOGS_PARAM)
+    or params_store.get_int(AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM) <= 0
+  ):
+    params_store.put_int(AUTO_UPLOAD_FULL_LOGS_ENABLED_AT_PARAM, time.time_ns())
+  params_store.put_bool(AUTO_UPLOAD_FULL_LOGS_PARAM, True)
 
 
 def _coerce_toggle_restore_value(key, value):
@@ -5073,6 +5092,15 @@ def setup(app):
       if key in GALAXY_DEVELOPER_ONLY_KEYS and not params.get_bool("GalaxyDeveloperMode"):
         return jsonify({"error": f"{key} is available only with Galaxy Developer Mode enabled."}), 403
 
+      if key == AUTO_UPLOAD_FULL_LOGS_PARAM:
+        enabled = str_val.strip() in ("1", "true", "True")
+        _set_auto_upload_full_logs_on_wifi(params, enabled)
+        update_starpilot_toggles()
+        return jsonify({
+          "message": f"Parameter '{key}' updated successfully.",
+          "updated": {key: enabled},
+        }), 200
+
       if key in SENTRY_NUMERIC_PARAM_BOUNDS:
         minimum, maximum = SENTRY_NUMERIC_PARAM_BOUNDS[key]
         try:
@@ -8499,7 +8527,11 @@ def setup(app):
         continue
 
       try:
-        _params_raw.put(mapped_key, _coerce_toggle_restore_value(mapped_key, value))
+        coerced_value = _coerce_toggle_restore_value(mapped_key, value)
+        if mapped_key == AUTO_UPLOAD_FULL_LOGS_PARAM:
+          _set_auto_upload_full_logs_on_wifi(_params_raw, coerced_value)
+        else:
+          _params_raw.put(mapped_key, coerced_value)
         restored_count += 1
       except (TypeError, ValueError, json.JSONDecodeError):
         skipped_count += 1
@@ -8527,7 +8559,10 @@ def setup(app):
 
       default_value = _params_raw.get_default_value(raw_key)
       if default_value is not None:
-        _params_raw.put(raw_key, default_value)
+        if key == AUTO_UPLOAD_FULL_LOGS_PARAM:
+          _set_auto_upload_full_logs_on_wifi(_params_raw, False)
+        else:
+          _params_raw.put(raw_key, default_value)
 
     update_starpilot_toggles()
     HARDWARE.reboot()

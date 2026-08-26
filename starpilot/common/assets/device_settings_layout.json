@@ -4378,6 +4378,16 @@
         "settings_tier": "simple"
       },
       {
+        "key": "AutoUploadFullLogsOnWifi",
+        "label": "Auto-Upload Full Logs on Wi-Fi",
+        "description": "Upload full logs from new drives to comma Connect over unmetered Wi-Fi only. Existing logs, cellular, and hotspots are excluded. May use significant data.",
+        "picker_description": "Uploads full logs from new drives over unmetered Wi-Fi only.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "parent_key": "DeviceManagement",
+        "settings_tier": "simple"
+      },
+      {
         "key": "LowVoltageShutdown",
         "label": "Low-Voltage Cutoff",
         "description": "While parked, if the battery voltage falls below the set level, the device shuts down to prevent excessive battery drain.",
