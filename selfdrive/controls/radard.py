@@ -79,12 +79,15 @@ class Track:
     self.rest_frames = 0
     self.seen_moving = False
 
-  def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: float):
+  def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: float,
+             yv_rel: float = float("nan"), object_class: str = "unknown"):
     # relative values, copy
     self.dRel = d_rel   # LONG_DIST
     self.yRel = y_rel   # -LAT_DIST
     self.vRel = v_rel   # REL_SPEED
     self.vLead = v_lead
+    self.vLat = float(yv_rel) if math.isfinite(yv_rel) else 0.0
+    self.objectClass = object_class
     self.measured = measured   # measured or estimate
 
     # computed velocity and accelerations
@@ -122,6 +125,7 @@ class Track:
       "dRel": float(self.dRel),
       "yRel": float(self.yRel),
       "vRel": float(self.vRel),
+      "vLat": float(self.vLat),
       "vLead": float(self.vLead),
       "vLeadK": float(self.vLeadK),
       "aLeadK": float(self.aLeadK),
@@ -131,6 +135,7 @@ class Track:
       "modelProb": model_prob,
       "radar": True,
       "radarTrackId": self.identifier,
+      "objectClass": self.objectClass,
     }
 
   def potential_adjacent_lead(self, left: bool, standstill: bool, model_data: capnp._DynamicStructReader):
@@ -254,6 +259,16 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_
   return None
 
 
+def _model_lead_v_lat(lead_msg: capnp._DynamicStructReader) -> float:
+  if len(lead_msg.t) < 2 or len(lead_msg.y) < 2:
+    return 0.0
+  dt = float(lead_msg.t[1] - lead_msg.t[0])
+  if dt <= 0.0:
+    return 0.0
+  v_lat = -float(lead_msg.y[1] - lead_msg.y[0]) / dt
+  return v_lat if math.isfinite(v_lat) else 0.0
+
+
 def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: float, model_v_ego: float, model_prob: float):
   prev_aLeadK = getattr(get_RadarState_from_vision, "prev_aLeadK", 0.0)
   blended_aLeadK = 0.8 * float(lead_msg.a[0]) + 0.2 * prev_aLeadK
@@ -262,6 +277,7 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
     "dRel": float(lead_msg.x[0] - RADAR_TO_CAMERA),
     "yRel": float(-lead_msg.y[0]),
     "vRel": float(lead_msg.v[0] - model_v_ego),
+    "vLat": _model_lead_v_lat(lead_msg),
     "vLead": float(v_ego + (lead_msg.v[0] - model_v_ego)),
     "vLeadK": float(v_ego + (lead_msg.v[0] - model_v_ego)),
     "aLeadK": blended_aLeadK,
@@ -271,6 +287,7 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
     "status": True,
     "radar": False,
     "radarTrackId": -1,
+    "objectClass": "unknown",
   }
 
 
@@ -292,6 +309,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
   lead_dict = {'status': False}
   if track is not None:
     lead_dict = track.get_RadarState(filtered_lead_prob)
+    lead_dict["vLat"] = _model_lead_v_lat(lead_msg)
   elif (track is None) and ready and (filtered_lead_prob > lead_detection_probability):
     lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego, filtered_lead_prob)
 
@@ -304,6 +322,8 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
       closest_track = min(low_speed_tracks, key=lambda c: c.dRel)
 
       # Only choose new track if it is actually closer than the previous one
+      # This may be a different object than the vision lead, so retain the
+      # radar track's own vLat instead of applying the model lead's heading.
       if (not lead_dict['status']) or (closest_track.dRel < lead_dict['dRel']):
         lead_dict = closest_track.get_RadarState()
 
@@ -346,7 +366,10 @@ def get_adjacent_stopped(tracks: dict[int, Track], model_data: capnp._DynamicStr
     'status': True,
     'dRel': float(furthest.dRel),
     'yRel': float(furthest.yRel),
+    'vRel': float(furthest.vRel),
+    'vLat': float(furthest.vLat),
     'radarTrackId': int(furthest.identifier),
+    'objectClass': furthest.objectClass,
   }
 
 
@@ -381,7 +404,10 @@ class RadarD:
       self.v_ego_hist.append(self.v_ego)
       self.last_v_ego_frame = sm.recv_frame['carState']
 
-    ar_pts = {pt.trackId: [pt.dRel, pt.yRel, pt.vRel, pt.measured] for pt in rr.points}
+    ar_pts = {
+      pt.trackId: [pt.dRel, pt.yRel, pt.vRel, pt.measured, pt.yvRel, str(pt.objectClass)]
+      for pt in rr.points
+    }
 
     # *** remove missing points from meta data ***
     for ids in list(self.tracks.keys()):
@@ -396,7 +422,7 @@ class RadarD:
       # create the track if it doesn't exist or it's a new track
       if ids not in self.tracks:
         self.tracks[ids] = Track(ids, v_lead, self.kalman_params)
-      self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead, rpt[3])
+      self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead, rpt[3], rpt[4], rpt[5])
 
     # *** publish radarState ***
     self.radar_state_valid = sm.all_checks()

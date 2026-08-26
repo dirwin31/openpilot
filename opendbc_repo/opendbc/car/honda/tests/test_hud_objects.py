@@ -7,8 +7,10 @@ from opendbc.car.honda import hud_objects
 from opendbc.car.honda.tests import FakePacker
 
 
-def radar_lead(status=True, d_rel=30.0, y_rel=0.0, v_rel=-2.0):
-  return SimpleNamespace(status=status, dRel=d_rel, yRel=y_rel, vRel=v_rel)
+def radar_lead(status=True, d_rel=30.0, y_rel=0.0, v_rel=-2.0, v_lat=0.0,
+               object_class="unknown", track_id=-1):
+  return SimpleNamespace(status=status, dRel=d_rel, yRel=y_rel, vRel=v_rel, vLat=v_lat,
+                         objectClass=object_class, radarTrackId=track_id)
 
 
 def radar_state(lead_one=None, lead_two=None):
@@ -21,14 +23,23 @@ def plan(source):
   return SimpleNamespace(longitudinalPlanSource=source)
 
 
+def starpilot_radar_state(left=None, right=None, stopped=None):
+  return SimpleNamespace(
+    leadLeft=left or radar_lead(False),
+    leadRight=right or radar_lead(False),
+    adjacentStopped=stopped or SimpleNamespace(status=False, dRel=0.0, yRel=0.0, radarTrackId=-1),
+  )
+
+
 def empty_tracks():
   return [hud_objects.HudObject(slot, 0, 0.0, 0.0, False, False)
           for slot in range(hud_objects.NUM_SLOTS)]
 
 
-def test_radar_lead_converts_only_longitudinal_frame():
-  valid, converted, _ = hud_objects.select_openpilot_leads(
-    radar_state(radar_lead(d_rel=35.0, y_rel=1.5, v_rel=-4.0)), plan("lead0"),
+def test_radar_lead_converts_only_longitudinal_frame_and_preserves_metadata():
+  valid, converted, _, _ = hud_objects.select_openpilot_leads(
+    radar_state(radar_lead(d_rel=35.0, y_rel=1.5, v_rel=-4.0, v_lat=1.2,
+                           object_class="truck", track_id=42)), plan("lead0"),
   )
 
   assert valid
@@ -36,6 +47,9 @@ def test_radar_lead_converts_only_longitudinal_frame():
   assert converted.dRel == pytest.approx(36.52)
   assert converted.yRel == 1.5
   assert converted.vRel == -4.0
+  assert converted.vLat == 1.2
+  assert converted.carType == hud_objects.CAR_TYPE_TRUCK
+  assert converted.radarTrackId == 42
 
 
 @pytest.mark.parametrize(("source", "controlling_distance", "secondary_distance"), [
@@ -44,7 +58,7 @@ def test_radar_lead_converts_only_longitudinal_frame():
 ])
 def test_planner_selects_controlling_and_other_filtered_lead(source, controlling_distance, secondary_distance):
   state = radar_state(radar_lead(d_rel=20.0), radar_lead(d_rel=40.0))
-  valid, controlling, secondary = hud_objects.select_openpilot_leads(state, plan(source))
+  valid, controlling, secondary, _ = hud_objects.select_openpilot_leads(state, plan(source))
 
   assert valid
   assert controlling.dRel == pytest.approx(controlling_distance)
@@ -53,13 +67,14 @@ def test_planner_selects_controlling_and_other_filtered_lead(source, controlling
 
 @pytest.mark.parametrize("source", ["cruise", "e2e"])
 def test_cruise_and_e2e_have_no_highlighted_or_secondary_vehicle(source):
-  valid, controlling, secondary = hud_objects.select_openpilot_leads(
+  valid, controlling, secondary, additional = hud_objects.select_openpilot_leads(
     radar_state(radar_lead(), radar_lead(d_rel=50.0)), plan(source),
   )
 
   assert valid
   assert not controlling.status
   assert not secondary.status
+  assert not additional
 
 
 def test_missing_or_unknown_inputs_request_complete_stock_passthrough():
@@ -72,6 +87,34 @@ def test_missing_or_unknown_inputs_request_complete_stock_passthrough():
   assert not hud_objects.select_openpilot_leads(
     SimpleNamespace(leadOne=radar_lead(), leadTwo=radar_lead(False), radarErrors=errors), plan("lead0"),
   )[0]
+
+
+@pytest.mark.parametrize(("v_lat", "v_rel", "v_ego", "expected"), [
+  (0.0, 0.0, 25.0, 0),
+  (2.0, 0.0, 20.0, -1),
+  (-2.0, 0.0, 20.0, 1),
+  (20.0, -30.0, 20.0, -6),
+])
+def test_lead_rotation_uses_velocity_heading(v_lat, v_rel, v_ego, expected):
+  assert hud_objects.lead_rotation_from_velocity(v_lat, v_rel, v_ego) == expected
+
+
+def test_selects_and_deduplicates_starpilot_adjacent_leads():
+  main = radar_lead(d_rel=20.0, track_id=11)
+  duplicate_left = radar_lead(d_rel=20.0, y_rel=3.0, track_id=11)
+  right = radar_lead(d_rel=35.0, y_rel=-3.2, object_class="motorcycle", track_id=12)
+  stopped = SimpleNamespace(status=True, dRel=50.0, yRel=3.4, radarTrackId=13, objectClass="truck")
+
+  valid, controlling, secondary, adjacent = hud_objects.select_openpilot_leads(
+    radar_state(main), plan("lead0"), starpilot_radar_state(duplicate_left, right, stopped), v_ego=15.0,
+  )
+
+  assert valid and controlling.status and not secondary.status
+  assert len(adjacent) == 3
+  assert not adjacent[0].status
+  assert adjacent[1].status and adjacent[1].carType == hud_objects.CAR_TYPE_MOTORCYCLE
+  assert adjacent[2].status and adjacent[2].vRel == -15.0
+  assert adjacent[2].carType == hud_objects.CAR_TYPE_TRUCK
 
 
 def test_camera_tracks_expire_after_half_second():
@@ -142,6 +185,24 @@ def test_unmatched_secondary_uses_first_free_nonlead_slot():
   assert slots[0]["is_lead_car"]
   assert slots[1]["object_id"] == 12
   assert slots[2] is not None and not slots[2]["is_lead_car"]
+
+
+def test_unmatched_adjacent_leads_fill_remaining_slots_with_distinct_icons_and_heading():
+  additional = [
+    hud_objects.ModelLead(True, 30.0, 3.1, 0.0, 0.0, hud_objects.CAR_TYPE_MOTORCYCLE, 20),
+    hud_objects.ModelLead(True, 45.0, -3.2, 0.0, 2.0, hud_objects.CAR_TYPE_TRUCK, 21),
+    hud_objects.ModelLead(True, 60.0, 3.3, -15.0, 0.0, hud_objects.CAR_TYPE_UNKNOWN, 22),
+  ]
+  slots = hud_objects.HudObjectAuthor().compose(
+    hud_objects.no_lead(), hud_objects.no_lead(), empty_tracks(), now=10.0,
+    additional=additional, v_ego=20.0,
+  )
+
+  assert slots[0] is None
+  rendered = [slot for slot in slots if slot is not None]
+  assert len(rendered) == 3
+  assert [slot["car_type"] for slot in rendered] == [6, -7, 0]
+  assert [slot["rotation"] for slot in rendered] == [0, -1, 0]
 
 
 def test_unmatched_honda_lead_is_retained_as_normal_vehicle():

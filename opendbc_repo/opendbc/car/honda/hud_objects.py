@@ -72,8 +72,11 @@ INACTIVE = {
   "LAT_DIST": LAT_DIST_MAX_M,
 }
 
+CAR_TYPE_TRUCK = -7
+CAR_TYPE_INACTIVE = -1
+CAR_TYPE_UNKNOWN = 0
+CAR_TYPE_MOTORCYCLE = 6
 CAR_TYPE_CAR = 7
-ROT_BAND_M = 1.5
 ROT_MAX = 6
 
 REID_GAP_M = 8.0
@@ -139,9 +142,13 @@ class LeadSmoother:
     return self._d_rel, self._y_rel
 
 
-def lead_rotation(lateral_left_m: float) -> int:
-  magnitude = min(round(abs(lateral_left_m) / ROT_BAND_M), ROT_MAX)
-  return -magnitude if lateral_left_m > 0 else magnitude
+def lead_rotation_from_velocity(v_lat: float, v_rel: float, v_ego: float) -> int:
+  """Encode relative heading in the cluster's five-degree rotation units."""
+  if not all(math.isfinite(value) for value in (v_lat, v_rel, v_ego)):
+    return 0
+  v_lead_long = max(v_ego + v_rel, 1.0)
+  yaw_rad = math.atan2(-v_lat, v_lead_long)
+  return min(max(round(math.degrees(yaw_rad) / 5.0), -ROT_MAX), ROT_MAX)
 
 
 @dataclass
@@ -151,43 +158,104 @@ class ModelLead:
   dRel: float
   yRel: float
   vRel: float
+  vLat: float = 0.0
+  carType: int = CAR_TYPE_UNKNOWN
+  radarTrackId: int = -1
 
 
 def no_lead() -> ModelLead:
-  return ModelLead(False, 0.0, 0.0, 0.0)
+  return ModelLead(False, 0.0, 0.0, 0.0, carType=CAR_TYPE_INACTIVE)
 
 
-def _lead_from_radar(lead) -> tuple[bool, ModelLead]:
+def _lead_car_type(lead) -> int:
+  value = getattr(lead, "carType", None)
+  if value is not None:
+    try:
+      encoded = int(value)
+    except (TypeError, ValueError):
+      encoded = None
+    if encoded in (CAR_TYPE_TRUCK, CAR_TYPE_UNKNOWN, CAR_TYPE_MOTORCYCLE, CAR_TYPE_CAR):
+      return encoded
+
+  object_class = str(getattr(lead, "objectClass", "unknown")).lower().rsplit(".", 1)[-1]
+  return {
+    "car": CAR_TYPE_CAR,
+    "motorcycle": CAR_TYPE_MOTORCYCLE,
+    "truck": CAR_TYPE_TRUCK,
+  }.get(object_class, CAR_TYPE_UNKNOWN)
+
+
+def _lead_from_radar(lead, default_v_rel: float = 0.0) -> tuple[bool, ModelLead]:
   status = bool(lead.status)
   d_rel = float(lead.dRel) + RADAR_TO_CAMERA
   y_rel = float(lead.yRel)
-  v_rel = float(lead.vRel)
+  v_rel = float(getattr(lead, "vRel", default_v_rel))
+  v_lat = float(getattr(lead, "vLat", 0.0))
+  if not math.isfinite(v_lat):
+    v_lat = 0.0
   finite = all(math.isfinite(value) for value in (d_rel, y_rel, v_rel))
   if status and not finite:
     return False, no_lead()
-  return True, ModelLead(status, d_rel if status else 0.0, y_rel if status else 0.0, v_rel if status else 0.0)
+  return True, ModelLead(
+    status,
+    d_rel if status else 0.0,
+    y_rel if status else 0.0,
+    v_rel if status else 0.0,
+    v_lat if status else 0.0,
+    _lead_car_type(lead) if status else CAR_TYPE_INACTIVE,
+    int(getattr(lead, "radarTrackId", -1)) if status else -1,
+  )
 
 
-def select_openpilot_leads(radar_state, longitudinal_plan) -> tuple[bool, ModelLead, ModelLead]:
-  """Return whether the inputs are usable, the lead we are following, and the other one."""
+def _same_lead(first: ModelLead, second: ModelLead) -> bool:
+  if not first.status or not second.status:
+    return False
+  if first.radarTrackId >= 0 and first.radarTrackId == second.radarTrackId:
+    return True
+  return abs(first.dRel - second.dRel) <= 2.0 and abs(first.yRel - second.yRel) <= 0.75
+
+
+def select_openpilot_leads(radar_state, longitudinal_plan, starpilot_radar_state=None,
+                           v_ego: float = 0.0) -> tuple[bool, ModelLead, ModelLead, list[ModelLead]]:
+  """Return input validity, the controlling lead, secondary lead, and adjacent-lane leads."""
   unavailable = no_lead()
   if radar_state is None or longitudinal_plan is None:
-    return False, unavailable, unavailable
+    return False, unavailable, unavailable, []
   lead_one_valid, lead_one = _lead_from_radar(radar_state.leadOne)
   lead_two_valid, lead_two = _lead_from_radar(radar_state.leadTwo)
   source = str(longitudinal_plan.longitudinalPlanSource)
   if any(radar_state.radarErrors.to_dict().values()):
-    return False, unavailable, unavailable
+    return False, unavailable, unavailable, []
   if not lead_one_valid or not lead_two_valid:
-    return False, unavailable, unavailable
+    return False, unavailable, unavailable, []
 
   if source == "lead0":
-    return True, lead_one, lead_two
-  if source == "lead1":
-    return True, lead_two, lead_one
-  if source in ("cruise", "e2e"):
-    return True, unavailable, unavailable
-  return False, unavailable, unavailable
+    controlling, secondary = lead_one, lead_two
+  elif source == "lead1":
+    controlling, secondary = lead_two, lead_one
+  elif source in ("cruise", "e2e"):
+    controlling, secondary = unavailable, unavailable
+  else:
+    return False, unavailable, unavailable, []
+
+  additional: list[ModelLead] = []
+  already_selected = [lead for lead in (controlling, secondary) if lead.status]
+  if starpilot_radar_state is not None:
+    for name in ("leadLeft", "leadRight", "adjacentStopped"):
+      lead = getattr(starpilot_radar_state, name, None)
+      if lead is None:
+        additional.append(unavailable)
+        continue
+      # The schema carries vRel, while this fallback also supports partial and
+      # synthetic AdjacentStopped publishers.
+      default_v_rel = -v_ego if name == "adjacentStopped" else 0.0
+      valid, converted = _lead_from_radar(lead, default_v_rel=default_v_rel)
+      if not valid or any(_same_lead(converted, selected) for selected in already_selected):
+        converted = unavailable
+      elif converted.status:
+        already_selected.append(converted)
+      additional.append(converted)
+  return True, controlling, secondary, additional
 
 
 def create_hud_object(packer, bus, mux, track):
@@ -236,10 +304,10 @@ class HudObjectAuthor:
   """Blend openpilot's leads into the full list of cars Honda's camera reports."""
 
   def __init__(self):
-    self._track_ids = [LeadObjectId(), LeadObjectId()]
-    self._smoothers = [LeadSmoother(), LeadSmoother()]
-    self._display_ids = [0, 0]
-    self._previous_op_ids = [0, 0]
+    self._track_ids = [LeadObjectId() for _ in range(NUM_SLOTS)]
+    self._smoothers = [LeadSmoother() for _ in range(NUM_SLOTS)]
+    self._display_ids = [0] * NUM_SLOTS
+    self._previous_op_ids = [0] * NUM_SLOTS
 
   @staticmethod
   def _match(lead: ModelLead, tracks, excluded: set[int]) -> HudObject | None:
@@ -268,7 +336,7 @@ class HudObjectAuthor:
     return self._display_ids[index]
 
   def _lead_track(self, index: int, lead: ModelLead, matched: HudObject | None,
-                  is_lead_car: bool, now: float, in_use: set[int]):
+                  is_lead_car: bool, now: float, in_use: set[int], v_ego: float):
     if not lead.status:
       self._track_ids[index].update(False, 0.0, 0.0, now)
       return None
@@ -280,15 +348,17 @@ class HudObjectAuthor:
       "y_rel": y_rel,
       "object_id": object_id,
       "is_lead_car": is_lead_car,
-      "car_type": matched.car_type if matched is not None else CAR_TYPE_CAR,
-      "rotation": matched.rotation if matched is not None else lead_rotation(y_rel),
+      "car_type": matched.car_type if matched is not None else lead.carType,
+      "rotation": matched.rotation if matched is not None else lead_rotation_from_velocity(lead.vLat, lead.vRel, v_ego),
     }
 
   @staticmethod
   def _first_free(slots) -> int | None:
+    # Mux slot zero is the cluster's conventional highlighted-lead position.
     return next((slot for slot in range(1, NUM_SLOTS) if slots[slot] is None), None)
 
-  def compose(self, controlling: ModelLead, secondary: ModelLead, tracks, now: float):
+  def compose(self, controlling: ModelLead, secondary: ModelLead, tracks, now: float,
+              additional=(), v_ego: float = 0.0):
     valid_tracks = []
     seen_honda_ids: set[int] = set()
     for track in tracks or ():
@@ -297,13 +367,20 @@ class HudObjectAuthor:
         seen_honda_ids.add(track.object_id)
     controlling_match = self._match(controlling, valid_tracks, set())
     excluded = {controlling_match.slot} if controlling_match is not None else set()
-    secondary_match = self._match(secondary, valid_tracks, excluded)
-    matched_slots = {track.slot for track in (controlling_match, secondary_match) if track is not None}
+    supplemental = [secondary, *(additional or ())][:NUM_SLOTS - 1]
+    supplemental.extend(no_lead() for _ in range(NUM_SLOTS - 1 - len(supplemental)))
+    supplemental_matches = []
+    for lead in supplemental:
+      matched = self._match(lead, valid_tracks, excluded)
+      supplemental_matches.append(matched)
+      if matched is not None:
+        excluded.add(matched.slot)
+    matched_slots = {track.slot for track in (controlling_match, *supplemental_matches) if track is not None}
 
     slots = [None] * NUM_SLOTS
     in_use = {track.object_id for track in valid_tracks}
 
-    slots[0] = self._lead_track(0, controlling, controlling_match, True, now, in_use)
+    slots[0] = self._lead_track(0, controlling, controlling_match, True, now, in_use, v_ego)
 
     relocate: list[dict] = []
     for track in valid_tracks:
@@ -319,27 +396,35 @@ class HudObjectAuthor:
       else:
         relocate.append(rendered)
 
-    secondary_render = self._lead_track(1, secondary, secondary_match, False, now, in_use)
-    if secondary_render is not None and secondary_match is not None:
-      if slots[secondary_match.slot] is None:
-        slots[secondary_match.slot] = secondary_render
+    unmatched_supplemental = []
+    for index, (lead, matched) in enumerate(zip(supplemental, supplemental_matches, strict=True), start=1):
+      rendered = self._lead_track(index, lead, matched, False, now, in_use, v_ego)
+      if rendered is None:
+        continue
+      if matched is not None:
+        if slots[matched.slot] is None:
+          slots[matched.slot] = rendered
+        else:
+          relocate.append(rendered)
       else:
-        relocate.insert(0, secondary_render)
+        unmatched_supplemental.append(rendered)
 
-    # Honda's cars get first claim on the free slots; an unmatched second lead
-    # only takes what is left over.
+    # Honda's cars and openpilot leads matched to them get first claim on free
+    # slots. Unmatched openpilot objects only take what remains.
     for rendered in relocate:
       free = self._first_free(slots)
       if free is None:
         break
       slots[free] = rendered
 
-    if secondary_render is not None and secondary_match is None:
+    for rendered in unmatched_supplemental:
       free = self._first_free(slots)
-      if free is not None:
-        slots[free] = secondary_render
+      if free is None:
+        break
+      slots[free] = rendered
     return slots
 
-  def create(self, packer, bus, controlling, tracks, mux: int, now: float, secondary=None):
-    slots = self.compose(controlling, secondary or no_lead(), tracks, now)
+  def create(self, packer, bus, controlling, tracks, mux: int, now: float, secondary=None,
+             additional=(), v_ego: float = 0.0):
+    slots = self.compose(controlling, secondary or no_lead(), tracks, now, additional, v_ego)
     return create_hud_object(packer, bus, mux, slots[(mux - 1) % 16])

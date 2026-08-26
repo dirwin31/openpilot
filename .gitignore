@@ -133,3 +133,5 @@ Pipfile
 !rednose_repo/rednose/helpers/ekf_sym_pyx.so
 !panda/board/obj/
 !panda/board/obj/**
+
+.claude/settings.local.json

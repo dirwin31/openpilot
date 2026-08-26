@@ -324,6 +324,16 @@ struct RadarData @0x888ad6581cf0aacb {
 
     # some radars flag measurements VS estimates
     measured @6 :Bool;
+
+    # Optional semantic classification. Sensors without a class report unknown.
+    objectClass @7 :ObjectClass;
+  }
+
+  enum ObjectClass {
+    unknown @0;
+    car @1;
+    motorcycle @2;
+    truck @3;
   }
 
   enum ErrorDEPRECATED {

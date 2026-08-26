@@ -219,7 +219,10 @@ class Car:
 
     self.starpilot_card = StarPilotCard(self.CP, self.FPCP)
 
-    starpilot_services = ['starpilotOnroadEvents', 'starpilotPlan', 'starpilotSelfdriveState', 'liveCalibration', 'selfdriveState']
+    starpilot_services = [
+      'starpilotOnroadEvents', 'starpilotPlan', 'starpilotRadarState', 'starpilotSelfdriveState',
+      'liveCalibration', 'selfdriveState',
+    ]
     if self.CP.brand == "rivian":
       starpilot_services.append('liveParameters')
     if self.CI.CC.accepts_model_input:
@@ -429,6 +432,9 @@ class Car:
     self.CI.CS.openpilot_lead_rel_speed = lead_rel_speed
     self.CI.CS.radar_state = self.sm['radarState'] if self.sm.all_checks(['radarState']) else None
     self.CI.CS.longitudinal_plan = self.sm['longitudinalPlan'] if self.sm.all_checks(['longitudinalPlan']) else None
+    self.CI.CS.starpilot_radar_state = (
+      self.sm['starpilotRadarState'] if self.sm.all_checks(['starpilotRadarState']) else None
+    )
 
   def _update_redneck_cruise(self, CS: car.CarState, CC: car.CarControl) -> None:
     if self.redneck_cruise is None:

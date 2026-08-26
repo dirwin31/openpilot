@@ -235,6 +235,9 @@ struct StarPilotRadarState @0xb86e6369214c01c8 {
     dRel @1 :Float32;
     yRel @2 :Float32;
     radarTrackId @3 :Int32 = -1;
+    vRel @4 :Float32;
+    vLat @5 :Float32;
+    objectClass @6 :Car.RadarData.ObjectClass;
   }
 
   struct LeadData {
@@ -253,6 +256,7 @@ struct StarPilotRadarState @0xb86e6369214c01c8 {
     modelProb @13 :Float32;
     radar @14 :Bool;
     radarTrackId @15 :Int32 = -1;
+    objectClass @16 :Car.RadarData.ObjectClass;
 
     aLeadDEPRECATED @5 :Float32;
   }

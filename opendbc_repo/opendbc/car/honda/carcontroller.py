@@ -602,12 +602,14 @@ class CarController(CarControllerBase):
       can_sends.append(lane_path.create_lane_path(self.packer, self.CAN.lkas, self.dash_lane.offsets, mux))
 
       tracks = CS.hud_object_tracker.snapshot(now_nanos) if CS.hud_object_tracker is not None else None
-      lead_inputs_valid, controlling_lead, secondary_lead = hud_objects.select_openpilot_leads(
+      lead_inputs_valid, controlling_lead, secondary_lead, adjacent_leads = hud_objects.select_openpilot_leads(
         getattr(CS, "radar_state", None), getattr(CS, "longitudinal_plan", None),
+        getattr(CS, "starpilot_radar_state", None), float(CS.out.vEgo),
       )
       if CC.longActive and lead_inputs_valid:
         can_sends.append(self.hud_object_author.create(
-          self.packer, self.CAN.lkas, controlling_lead, tracks, mux, now_nanos * 1e-9, secondary_lead,
+          self.packer, self.CAN.lkas, controlling_lead, tracks, mux, now_nanos * 1e-9,
+          secondary=secondary_lead, additional=adjacent_leads, v_ego=float(CS.out.vEgo),
         ))
       else:
         can_sends.append(hud_objects.forward_hud_object(self.packer, self.CAN.lkas, mux, tracks))
