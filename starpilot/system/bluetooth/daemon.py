@@ -43,6 +43,10 @@ class BluetoothController:
     self._scan_deadline = 0.0
     self._audio_test_deadline = 0.0
     self._sleep = sleep
+    # Companion service availability follows the saved phone now that the UI
+    # no longer exposes a separate enable switch.
+    if self._companion_addresses():
+      self.params.put_bool("BluetoothCompanionEnabled", True)
     self.params.remove("BluetoothAudioTestActive")
     self.params_memory.remove("TestAlert")
 
@@ -108,6 +112,19 @@ class BluetoothController:
       raise
     self._companion = companion
 
+  def _enable_companion(self) -> BlueZClient:
+    was_enabled = self.params.get_bool("BluetoothCompanionEnabled")
+    self.params.put_bool("BluetoothCompanionEnabled", True)
+    try:
+      client = self._client()
+      self._start_companion(client)
+      return client
+    except Exception:
+      if not was_enabled:
+        self._stop_companion()
+        self.params.put_bool("BluetoothCompanionEnabled", False)
+      raise
+
   def _stop_companion(self, require_pairing_closed: bool = False) -> None:
     pairing_active = self._companion_pairing_deadline > 0.0
     if self._bluez is not None and pairing_active:
@@ -152,11 +169,22 @@ class BluetoothController:
       if device is None:
         return False
       address = str(device["address"]).upper()
-      if address not in self._companion_addresses() and time.monotonic() >= self._companion_pairing_deadline:
+      known_companion = address in self._companion_addresses()
+      if not known_companion and time.monotonic() >= self._companion_pairing_deadline:
         return False
       if not device.get("trusted", False):
         self._bluez.set_device_property(device["address"], "Trusted", "b", True)
       self._remember_companion(address)
+      if not known_companion and self._companion_pairing_deadline:
+        try:
+          self._bluez.set_pairing_mode(False)
+        except Exception:
+          # Keep reporting the window until BlueZ confirms it is closed, but
+          # make maintenance retry promptly instead of waiting the full window.
+          self._companion_pairing_deadline = min(self._companion_pairing_deadline, time.monotonic() + 1.0)
+          cloudlog.exception("Unable to close Bluetooth companion pairing after authorization")
+        else:
+          self._companion_pairing_deadline = 0.0
       return True
 
   def _offroad(self) -> bool:
@@ -282,12 +310,7 @@ class BluetoothController:
         raise RuntimeError("Enable Bluetooth first")
       with self._lock:
         if enabled:
-          self.params.put_bool("BluetoothCompanionEnabled", True)
-          try:
-            self._start_companion(self._client())
-          except Exception:
-            self.params.put_bool("BluetoothCompanionEnabled", False)
-            raise
+          self._enable_companion()
         else:
           # Do not report the feature disabled while the adapter could still
           # accept new bonds. Maintenance will keep retrying an expired window.
@@ -297,10 +320,7 @@ class BluetoothController:
       if not self.params.get_bool("BluetoothEnabled"):
         raise RuntimeError("Enable Bluetooth first")
       with self._lock:
-        if not self.params.get_bool("BluetoothCompanionEnabled"):
-          raise RuntimeError("Enable phone app pairing first")
-        client = self._client()
-        self._start_companion(client)
+        client = self._enable_companion()
         client.set_pairing_mode(True)
         self._companion_pairing_deadline = time.monotonic() + COMPANION_PAIRING_DURATION
     elif command == "stop_companion_pairing":

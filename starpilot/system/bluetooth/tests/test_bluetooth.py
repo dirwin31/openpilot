@@ -357,7 +357,6 @@ def test_desktop_fake_bluetooth_is_stateful_and_interactive(monkeypatch, tmp_pat
   assert client.status().selected_audio == speaker.address
   assert client.test_audio(speaker.address) == 3.0
 
-  client.set_companion(True)
   client.start_companion_pairing()
   companion = client.status()
   assert companion.companion_enabled and companion.companion_pairing
@@ -606,11 +605,9 @@ def test_companion_pairing_window_and_bond_authorization():
     return companions[-1]
 
   controller = BluetoothController(params, lambda: client, FakeRadio(), companion_factory=companion_factory)
-  controller.handle({"command": "set_companion", "enabled": True})
+  controller.handle({"command": "start_companion_pairing"})
   assert params.get_bool("BluetoothCompanionEnabled")
   assert companions[0].started == "/org/bluez/hci0"
-
-  controller.handle({"command": "start_companion_pairing"})
   status = controller.status()
   assert status["companion_pairing"] and 115 <= status["companion_pairing_remaining"] <= 120
   assert client.actions[-1] == ("pairing_mode", True)
@@ -618,13 +615,46 @@ def test_companion_pairing_window_and_bond_authorization():
   assert companions[0].authorize("/org/bluez/hci0/dev_phone")
   assert params.get("BluetoothCompanionDevices") == '["00:11:22:33:44:55"]'
   assert ("property", "00:11:22:33:44:55", "Trusted", "b", True) in client.actions
-
-  controller._maintain_companion_pairing(controller._companion_pairing_deadline)
-  assert not controller.status()["companion_pairing"]
+  status = controller.status()
+  assert status["companion_enabled"]
+  assert status["companion_devices"] == ["00:11:22:33:44:55"]
+  assert not status["companion_pairing"]
   assert client.actions[-1] == ("pairing_mode", False)
 
   controller.handle({"command": "set_companion", "enabled": False})
   assert companions[0].closed and not params.get_bool("BluetoothCompanionEnabled")
+
+
+def test_saved_companion_reenables_service_when_daemon_starts():
+  params = FakeParams(
+    BluetoothCompanionEnabled=False,
+    BluetoothCompanionDevices='["00:11:22:33:44:55"]',
+  )
+
+  BluetoothController(params, lambda: FakeBlueZ(), FakeRadio())
+
+  assert params.get_bool("BluetoothCompanionEnabled")
+
+
+def test_known_companion_does_not_close_pairing_window_for_another_phone():
+  address = "00:11:22:33:44:55"
+  params = FakeParams(
+    IsOffroad=True,
+    BluetoothEnabled=True,
+    BluetoothCompanionEnabled=True,
+    BluetoothCompanionDevices=json.dumps([address]),
+  )
+  client = FakeBlueZ()
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
+
+  controller.handle({"command": "start_companion_pairing"})
+  assert companions[0].authorize("/org/bluez/hci0/dev_phone")
+  assert controller.status()["companion_pairing"]
+  assert client.actions[-1] == ("pairing_mode", True)
 
 
 @pytest.mark.parametrize("command_request,companion_enabled", [

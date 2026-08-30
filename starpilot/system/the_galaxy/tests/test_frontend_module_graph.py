@@ -23,6 +23,7 @@ def test_router_and_settings_cache_bust_is_consistent():
 
   assert "/assets/components/settings.js?v=router-cycle-fix-5" in router
   assert "/assets/components/router.js?v=router-cycle-fix-6" in index
+  assert "/assets/components/tools/bluetooth.js?v=bluetooth-live-15" in router
 
 
 def test_bluetooth_actions_use_reactive_disabled_bindings():
@@ -57,6 +58,9 @@ def test_bluetooth_actions_use_reactive_disabled_bindings():
   assert "const revisionAttribute" in source
   assert 'data-revision="${revision}"' in source
   assert 'bluetooth-live-15' in ROUTER_PATH.read_text(encoding="utf-8")
+  assert "state.enabled && !state.companionDevices.length" in source
+  assert "Enable Phone App" not in source
+  assert "Disable Phone App" not in source
 
 
 def test_controller_test_mode_has_explicit_start_and_stop():

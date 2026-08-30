@@ -5,6 +5,10 @@ import time
 from openpilot.starpilot.system.bluetooth import BluetoothClient, BluetoothStatus
 
 
+def companion_setup_visible(status: BluetoothStatus) -> bool:
+  return not status.companion_devices
+
+
 class BluetoothManager:
   def __init__(self):
     self._client = BluetoothClient(timeout=5.0)
