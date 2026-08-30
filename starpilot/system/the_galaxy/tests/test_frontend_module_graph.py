@@ -23,7 +23,7 @@ def test_router_and_settings_cache_bust_is_consistent():
 
   assert "/assets/components/settings.js?v=router-cycle-fix-4" in router
   assert "/assets/components/router.js?v=router-cycle-fix-4" in index
-  assert "/assets/components/tools/bluetooth.js?v=bluetooth-companion-3" in router
+  assert "/assets/components/tools/bluetooth.js?v=bluetooth-phone-connection-1" in router
 
 
 def test_bluetooth_actions_use_reactive_disabled_bindings():
@@ -44,8 +44,9 @@ def test_bluetooth_actions_use_reactive_disabled_bindings():
   assert "bi-trash3" in source
   assert "state.pairingAddress" in source
   assert "state.enabled && !state.companionDevices.length" in source
-  assert "Enable Phone App" not in source
-  assert "Disable Phone App" not in source
+  assert "state.operationError || state.statusError" in source
+  assert "<h3>Phone connection</h3>" in source
+  assert "open a Bluetooth LE utility" in source
 
 
 def test_controller_test_mode_has_explicit_start_and_stop():

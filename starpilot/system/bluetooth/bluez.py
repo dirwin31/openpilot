@@ -2,6 +2,7 @@ import threading
 import time
 import uuid
 
+from collections.abc import Callable
 from typing import Any
 
 from jeepney import DBusAddress, MatchRule, new_error, new_method_call, new_method_return
@@ -20,6 +21,11 @@ AGENT_MANAGER_IFACE = "org.bluez.AgentManager1"
 AGENT_IFACE = "org.bluez.Agent1"
 AGENT_PATH = "/link/firestar/starpilot/agent"
 DEVICE_STATE_TIMEOUT = 5.0
+# Agent requests that carry no user secret and can be accepted silently for a
+# trusted incoming bond. PIN/passkey entry still always prompts.
+AUTO_ACCEPTABLE_AGENT_METHODS = frozenset(
+  {"DisplayPinCode", "DisplayPasskey", "RequestConfirmation", "RequestAuthorization", "AuthorizeService"}
+)
 
 
 def unwrap_variant(value: Any) -> Any:
@@ -37,6 +43,19 @@ class PairingAgent:
     self._condition = threading.Condition()
     self._prompt: dict[str, Any] | None = None
     self._response: tuple[bool, str] | None = None
+    # Set by the controller: given a device path, decide whether an incoming bond
+    # should be accepted silently (e.g. a phone bonding during a companion pairing
+    # window the user explicitly opened) instead of surfacing a blocking prompt.
+    self.auto_accept_handler: Callable[[str], bool] | None = None
+
+  def should_auto_accept(self, device_path: str) -> bool:
+    handler = self.auto_accept_handler
+    if handler is None:
+      return False
+    try:
+      return bool(handler(device_path))
+    except Exception:
+      return False
 
   @property
   def prompt(self) -> dict[str, Any] | None:
@@ -119,6 +138,9 @@ class BlueZClient:
         response_signature = None
         response_body: tuple = ()
         device_path = str(message.body[0]) if message.body else ""
+        # A phone bonding during a companion pairing window is accepted silently:
+        # skip the display/confirmation prompt so nothing blocks the settings UI.
+        auto = member in AUTO_ACCEPTABLE_AGENT_METHODS and self.agent.should_auto_accept(device_path)
         if member == "Release":
           self.agent.clear()
         elif member == "RequestPinCode":
@@ -127,22 +149,26 @@ class BlueZClient:
             raise PermissionError
           response_signature, response_body = "s", (value,)
         elif member == "DisplayPinCode":
-          self.agent.display("display_pin", device_path, str(message.body[1]))
+          if not auto:
+            self.agent.display("display_pin", device_path, str(message.body[1]))
         elif member == "RequestPasskey":
           accepted, value = self.agent.request("passkey", device_path)
           if not accepted:
             raise PermissionError
           response_signature, response_body = "u", (int(value),)
         elif member == "DisplayPasskey":
-          self.agent.display("display_passkey", device_path, f"{int(message.body[1]):06d}")
+          if not auto:
+            self.agent.display("display_passkey", device_path, f"{int(message.body[1]):06d}")
         elif member == "RequestConfirmation":
-          accepted, _ = self.agent.request("confirmation", device_path, f"{int(message.body[1]):06d}")
-          if not accepted:
-            raise PermissionError
+          if not auto:
+            accepted, _ = self.agent.request("confirmation", device_path, f"{int(message.body[1]):06d}")
+            if not accepted:
+              raise PermissionError
         elif member in ("RequestAuthorization", "AuthorizeService"):
-          accepted, _ = self.agent.request("authorization", device_path)
-          if not accepted:
-            raise PermissionError
+          if not auto:
+            accepted, _ = self.agent.request("authorization", device_path)
+            if not accepted:
+              raise PermissionError
         elif member == "Cancel":
           self.agent.clear()
         else:

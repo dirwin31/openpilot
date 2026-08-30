@@ -203,6 +203,36 @@ def test_companion_setup_card_disappears_after_pairing():
   )
 
 
+def test_device_row_is_removed_when_forget_disappears_it_from_status(monkeypatch):
+  import openpilot.system.ui.widgets.bluetooth as bluetooth_module
+
+  class DeviceRowStub:
+    def __init__(self, address, on_select, on_forget):
+      self.address = address
+      self.on_select = on_select
+      self.on_forget = on_forget
+
+    def set_touch_valid_callback(self, _callback):
+      pass
+
+    def update(self, _state):
+      pass
+
+  monkeypatch.setattr(bluetooth_module, "BluetoothDeviceRow", DeviceRowStub)
+  paired = make_device(paired=True, trusted=True)
+  manager = FakeBluetoothManager(BluetoothStatus(enabled=True, offroad=True, devices=(paired,)))
+  ui = make_ui(manager)
+  ui._device_rows = {}
+  ui._scroll_panel = SimpleNamespace(is_touch_valid=lambda: True)
+
+  assert len(ui._sync_rows(manager.status)) == 1
+  assert ADDRESS in ui._device_rows
+
+  manager.status = BluetoothStatus(enabled=True, offroad=True)
+  assert ui._sync_rows(manager.status) == []
+  assert ui._device_rows == {}
+
+
 def test_pairing_dialog_callbacks_send_explicit_acceptance_or_rejection():
   manager = FakeBluetoothManager(BluetoothStatus())
   ui = make_ui(manager)
