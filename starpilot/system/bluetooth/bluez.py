@@ -28,6 +28,12 @@ AUTO_ACCEPTABLE_AGENT_METHODS = frozenset(
 )
 
 
+class BlueZError(RuntimeError):
+  def __init__(self, name: str, detail: str):
+    super().__init__(detail)
+    self.name = name
+
+
 def unwrap_variant(value: Any) -> Any:
   if isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], str):
     return unwrap_variant(value[1])
@@ -123,7 +129,7 @@ class BlueZClient:
     if reply.header.message_type == MessageType.error:
       error_name = reply.header.fields.get(HeaderFields.error_name, "org.bluez.Error.Failed")
       detail = reply.body[0] if reply.body else error_name
-      raise RuntimeError(str(detail))
+      raise BlueZError(str(error_name), str(detail))
     return reply.body
 
   def _register_agent(self) -> None:
@@ -268,8 +274,17 @@ class BlueZClient:
         raise error
 
   def start_discovery(self) -> None:
-    path, _ = self.adapter()
-    self._call(path, ADAPTER_IFACE, "StartDiscovery")
+    path, props = self.adapter()
+    if props.get("Discovering", False):
+      return
+    try:
+      self._call(path, ADAPTER_IFACE, "StartDiscovery")
+    except BlueZError as error:
+      # Multiple settings clients can request the same scan after observing the
+      # adapter idle. BlueZ's InProgress response means the desired state won
+      # that race, so treat it as an idempotent success.
+      if error.name != "org.bluez.Error.InProgress":
+        raise
 
   def stop_discovery(self) -> None:
     path, props = self.adapter()

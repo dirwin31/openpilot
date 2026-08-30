@@ -13,7 +13,7 @@ import pytest
 from jeepney import DBusAddress, new_method_call
 
 from openpilot.starpilot.system.bluetooth.audio import BluetoothAudioSink
-from openpilot.starpilot.system.bluetooth.bluez import BlueZClient, PairingAgent
+from openpilot.starpilot.system.bluetooth.bluez import BlueZClient, BlueZError, PairingAgent
 from openpilot.starpilot.system.bluetooth.companion import (
   ADVERTISEMENT_IFACE, COMPANION_ADVERTISEMENT_PATH, COMPANION_APP_PATH, COMPANION_COMMAND_PATH, COMPANION_PROTOCOL_VERSION,
   COMPANION_LIVE_PATH, COMPANION_LIVE_UUID, COMPANION_RESPONSE_PATH, COMPANION_SERVICE_PATH, COMPANION_SERVICE_UUID,
@@ -616,6 +616,35 @@ def test_bluez_disconnect_accepts_removed_device_as_disconnected():
   client._call = lambda *_args, **_kwargs: None
 
   client.disconnect("00:11:22:33:44:55")
+
+
+def test_bluez_start_discovery_is_idempotent_when_already_discovering():
+  client = object.__new__(BlueZClient)
+  client.adapter = lambda: ("/org/bluez/hci0", {"Discovering": True})
+  client._call = lambda *_args, **_kwargs: pytest.fail("StartDiscovery should not be repeated")
+
+  client.start_discovery()
+
+
+def test_bluez_start_discovery_accepts_in_progress_race():
+  client = object.__new__(BlueZClient)
+  client.adapter = lambda: ("/org/bluez/hci0", {"Discovering": False})
+  client._call = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+    BlueZError("org.bluez.Error.InProgress", "Operation already in progress"),
+  )
+
+  client.start_discovery()
+
+
+def test_bluez_start_discovery_preserves_other_errors():
+  client = object.__new__(BlueZClient)
+  client.adapter = lambda: ("/org/bluez/hci0", {"Discovering": False})
+  client._call = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+    BlueZError("org.bluez.Error.Failed", "Discovery failed"),
+  )
+
+  with pytest.raises(RuntimeError, match="Discovery failed"):
+    client.start_discovery()
 
 
 def test_disabled_status_does_not_start_radio_or_bluez():
