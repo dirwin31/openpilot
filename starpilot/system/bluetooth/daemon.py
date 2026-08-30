@@ -113,7 +113,12 @@ class BluetoothController:
     if self._companion is not None:
       return
     client.set_pairing_mode(False)
-    companion = self._companion_factory(client.router, client._call, self._authorize_companion, CompanionProtocol(self.params))
+    companion = self._companion_factory(
+      client.router,
+      client._call,
+      self._authorize_companion,
+      CompanionProtocol(self.params, params_memory=self.params_memory),
+    )
     try:
       adapter_path, _ = client.adapter()
       companion.start(adapter_path)

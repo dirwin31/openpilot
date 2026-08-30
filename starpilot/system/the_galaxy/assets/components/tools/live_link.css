@@ -1,0 +1,361 @@
+/* ――― Live Link (Galaxy Live over Bluetooth) ――― */
+.liveLinkPage {
+  max-width: var(--width-xxxl);
+  padding: var(--padding-base) var(--padding-lg) var(--padding-xxl);
+}
+
+.liveLinkHeader {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-base);
+  justify-content: space-between;
+  margin-bottom: var(--padding-lg);
+}
+
+.liveLinkTitle {
+  align-items: center;
+  display: flex;
+  gap: var(--gap-base);
+}
+
+.liveLinkTitle i {
+  color: var(--main-fg);
+  font-size: 1.6rem;
+}
+
+.liveLinkTitle h2 {
+  margin: 0;
+}
+
+.liveLinkTitle p {
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ――― Connection pill ――― */
+.liveConn {
+  align-items: center;
+  border-radius: 2rem;
+  display: inline-flex;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  gap: var(--gap-xs);
+  padding: 0.3rem 0.9rem;
+  text-transform: uppercase;
+}
+
+.liveConnDot {
+  border-radius: 50%;
+  height: 0.55rem;
+  width: 0.55rem;
+}
+
+.liveConnLive {
+  background-color: rgba(94, 200, 200, 0.15);
+  color: var(--success-fg);
+}
+
+.liveConnLive .liveConnDot {
+  background-color: var(--success-fg);
+  box-shadow: 0 0 0 4px rgba(94, 200, 200, 0.18);
+}
+
+.liveConnIdle {
+  background-color: rgba(140, 140, 140, 0.15);
+  color: var(--text-muted);
+}
+
+.liveConnIdle .liveConnDot {
+  background-color: var(--text-muted);
+}
+
+/* ――― Notices / errors ――― */
+.liveNotice {
+  align-items: flex-start;
+  background-color: var(--secondary-bg);
+  border-radius: var(--border-radius-lg);
+  display: flex;
+  gap: var(--gap-base);
+  margin-bottom: var(--padding-lg);
+  padding: var(--padding-lg);
+}
+
+.liveNotice i {
+  color: var(--main-fg);
+  font-size: 1.4rem;
+}
+
+.liveNotice h3 {
+  margin: 0 0 var(--gap-xs);
+}
+
+.liveNotice p {
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.liveError {
+  background-color: rgba(224, 85, 119, 0.15);
+  border-radius: var(--border-radius-lg);
+  color: var(--danger-fg);
+  margin-bottom: var(--padding-lg);
+  padding: var(--padding-base) var(--padding-lg);
+}
+
+/* ――― Connect card ――― */
+.liveConnectCard {
+  align-items: center;
+  background-color: var(--secondary-bg);
+  border-radius: var(--border-radius-lg);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-base);
+  padding: var(--padding-xxl) var(--padding-xl);
+  text-align: center;
+}
+
+.liveConnectCard i {
+  color: var(--main-fg);
+  font-size: 2.4rem;
+}
+
+.liveConnectCard h3 {
+  margin: 0;
+}
+
+.liveConnectCard p {
+  color: var(--text-muted);
+  margin: 0;
+  max-width: var(--width-lg);
+}
+
+/* ――― Buttons ――― */
+.liveButton {
+  background-color: var(--main-fg);
+  border: none;
+  border-radius: var(--border-radius-lg);
+  color: var(--main-bg, #fff);
+  cursor: pointer;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-demi-bold);
+  padding: var(--padding-sm) var(--padding-xl);
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast), opacity var(--transition-fast);
+}
+
+.liveButton:hover:not(:disabled) {
+  box-shadow: var(--shadow-md);
+  transform: var(--hover-scale-sm);
+}
+
+.liveButtonGhost {
+  background-color: var(--input-bg);
+  color: var(--text-color);
+}
+
+.liveActions {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--padding-lg);
+}
+
+/* ――― Live drive screen ――― */
+.liveScreen {
+  background-color: var(--secondary-bg);
+  border-radius: var(--border-radius-lg);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-lg);
+  padding: var(--padding-xl);
+}
+
+.liveHero {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-lg);
+  justify-content: space-between;
+}
+
+.liveSpeed {
+  align-items: baseline;
+  display: flex;
+  gap: var(--gap-sm);
+}
+
+.liveSpeedValue {
+  font-size: 5rem;
+  font-weight: var(--font-weight-bold);
+  line-height: 1;
+}
+
+.liveSpeedUnit {
+  color: var(--text-muted);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-demi-bold);
+  letter-spacing: 0.08em;
+}
+
+.liveSetSpeed {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+}
+
+.liveSetSpeed span {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  letter-spacing: 0.08em;
+}
+
+.liveSetSpeed strong {
+  font-size: var(--font-size-xl, 1.8rem);
+}
+
+/* ――― Border-mirroring status card ――― */
+.liveStatusCard {
+  --border-color: transparent;
+  background-color: color-mix(in srgb, var(--border-color) 22%, var(--secondary-bg));
+  border: 2px solid var(--border-color);
+  border-radius: var(--border-radius-lg);
+  padding: var(--padding-lg);
+  text-align: center;
+}
+
+.liveStatusLabel {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.liveStatusSub {
+  color: var(--text-muted);
+  margin-top: var(--gap-xs);
+}
+
+/* ――― Lead card ――― */
+.liveLeadCard {
+  align-items: center;
+  background-color: var(--input-bg);
+  border-radius: var(--border-radius-lg);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-base);
+  padding: var(--padding-base) var(--padding-lg);
+}
+
+.liveLeadDot {
+  background-color: var(--success-fg);
+  border-radius: 50%;
+  height: 0.6rem;
+  width: 0.6rem;
+}
+
+.liveLeadLabel {
+  font-weight: var(--font-weight-demi-bold);
+  text-transform: uppercase;
+}
+
+.liveLeadDistance {
+  font-weight: var(--font-weight-bold);
+}
+
+.liveLeadRel {
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+/* ――― Feature chips ――― */
+.liveChips {
+  display: grid;
+  gap: var(--gap-sm);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.liveChip {
+  align-items: center;
+  background-color: var(--input-bg);
+  border-radius: var(--border-radius-lg);
+  display: flex;
+  justify-content: space-between;
+  opacity: 0.6;
+  padding: var(--padding-sm) var(--padding-base);
+}
+
+.liveChipOn {
+  opacity: 1;
+}
+
+.liveChipLabel {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+}
+
+.liveChipValue {
+  font-weight: var(--font-weight-bold);
+}
+
+.liveChipOn .liveChipValue {
+  color: var(--main-fg);
+}
+
+/* ――― Alert + footer ――― */
+.liveAlert {
+  background-color: rgba(218, 111, 37, 0.16);
+  border-radius: var(--border-radius-lg);
+  color: var(--warning-fg, #da6f25);
+  font-weight: var(--font-weight-demi-bold);
+  padding: var(--padding-base) var(--padding-lg);
+  text-align: center;
+}
+
+.liveFooter {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+/* ――― Waiting indicator ――― */
+.liveWaiting {
+  display: flex;
+  gap: var(--gap-sm);
+  justify-content: center;
+  padding: var(--padding-xl);
+}
+
+.liveWaiting span {
+  animation: liveBounce 1.2s infinite ease-in-out both;
+  background-color: var(--main-fg);
+  border-radius: 50%;
+  height: 0.7rem;
+  width: 0.7rem;
+}
+
+.liveWaiting span:nth-child(1) { animation-delay: -0.24s; }
+.liveWaiting span:nth-child(2) { animation-delay: -0.12s; }
+
+@keyframes liveBounce {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.7); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* ――― Mobile ――― */
+@media only screen and (max-width: 768px) and (orientation: portrait) {
+  .liveLinkPage {
+    padding: var(--padding-sm) var(--padding-base) var(--padding-xl);
+  }
+
+  .liveSpeedValue {
+    font-size: 4rem;
+  }
+
+  .liveChips {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

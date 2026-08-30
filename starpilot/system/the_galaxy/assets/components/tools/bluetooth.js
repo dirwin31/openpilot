@@ -483,7 +483,15 @@ export function Bluetooth() {
             </button>
           </div>
           ${() => state.companionPairing ? html`
-            <div class="bluetoothCompanionHint">On the phone, open a Bluetooth LE utility and connect to StarPilot. Confirm the matching code here and on the phone.</div>
+            <div class="bluetoothCompanionHint">
+              <strong>On an iPhone:</strong>
+              <ol>
+                <li>Open the secure Live Link page in Safari.</li>
+                <li>Follow its beacio install and website-permission checks.</li>
+                <li>Tap Connect over Bluetooth and choose StarPilot.</li>
+                <li>Allow Bluetooth and confirm any matching code here and on the phone.</li>
+              </ol>
+            </div>
           ` : ""}
         </div>
       ` : ""}

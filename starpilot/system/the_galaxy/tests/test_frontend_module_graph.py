@@ -8,6 +8,13 @@ INDEX_PATH = REPO_ROOT / "starpilot/system/the_galaxy/templates/index.html"
 BLUETOOTH_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/components/tools/bluetooth.js"
 CONTROLLERS_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/components/tools/wheel_controls.js"
 SIDEBAR_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/components/sidebar.js"
+LIVE_STANDALONE_HTML_PATH = REPO_ROOT / "starpilot/system/the_galaxy/templates/live_link.html"
+LIVE_STANDALONE_JS_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/components/tools/live_link_standalone.js"
+LIVE_STANDALONE_CSS_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/components/tools/live_link_standalone.css"
+LIVE_COMPATIBILITY_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/components/tools/live_link.js"
+LIVE_MANIFEST_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/live-manifest.json"
+SERVICE_WORKER_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/service-worker.js"
+GALAXY_SERVER_PATH = REPO_ROOT / "starpilot/system/the_galaxy/the_galaxy.py"
 
 
 def test_settings_does_not_create_a_second_router_module():
@@ -62,7 +69,8 @@ def test_bluetooth_actions_use_reactive_disabled_bindings():
   assert "state.enabled && !state.companionDevices.length" in source
   assert "state.operationError || state.statusError" in source
   assert "<h3>Phone connection</h3>" in source
-  assert "open a Bluetooth LE utility" in source
+  assert "Follow its beacio install and website-permission checks" in source
+  assert "Tap Connect over Bluetooth and choose StarPilot" in source
   assert "isCompanionDevice(device) && !device.connected" in source
   assert "Reconnect from phone" in source
 
@@ -113,3 +121,72 @@ def test_bluetooth_and_controllers_sidebar_order():
   sentry = source.index('{ name: "Sentry Mode"')
   controllers = source.index('{ name: "Controllers"')
   assert toggles < bluetooth < sentry < controllers
+
+
+def test_live_link_page_is_wired_consistently():
+  sidebar = SIDEBAR_PATH.read_text(encoding="utf-8")
+  router = ROUTER_PATH.read_text(encoding="utf-8")
+  index = INDEX_PATH.read_text(encoding="utf-8")
+  compatibility_page = LIVE_COMPATIBILITY_PATH.read_text(encoding="utf-8")
+
+  # Sidebar entry sits directly after Bluetooth.
+  bluetooth = sidebar.index('{ name: "Bluetooth"')
+  live_link = sidebar.index('{ name: "Live Link", link: "/live"')
+  download = sidebar.index('{ name: "Download Speed Limits"')
+  assert bluetooth < live_link < download
+  assert 'link: "/live", icon: "bi-broadcast", documentNavigation: true' in sidebar
+  assert 'window.location.assign(galaxyPath(href))' in sidebar
+
+  # Router imports and registers the page with a consistent cache-bust string.
+  assert '/assets/components/tools/live_link.js?v=live-link-1' in router
+  assert 'createRoute("live_link", "/live_link", LiveLink)' in router
+  assert 'const target = galaxyPath("/live")' in compatibility_page
+  assert "window.location.replace(target)" in compatibility_page
+  assert "navigator.bluetooth" not in compatibility_page
+
+  # Stylesheet is linked with the matching cache-bust string.
+  assert '/assets/components/tools/live_link.css?v=live-link-1' in index
+
+
+def test_live_link_has_a_self_contained_offline_app_shell():
+  html = LIVE_STANDALONE_HTML_PATH.read_text(encoding="utf-8")
+  script = LIVE_STANDALONE_JS_PATH.read_text(encoding="utf-8")
+  styles = LIVE_STANDALONE_CSS_PATH.read_text(encoding="utf-8")
+  manifest = LIVE_MANIFEST_PATH.read_text(encoding="utf-8")
+  worker = SERVICE_WORKER_PATH.read_text(encoding="utf-8")
+  server = GALAXY_SERVER_PATH.read_text(encoding="utf-8")
+
+  assert 'href="assets/live-manifest.json"' in html
+  assert 'src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-2"' in html
+  assert 'href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-2"' in html
+  assert 'id="connectButton"' in html
+  assert 'id="secureAppLink"' in html
+  assert 'id="checkSetupButton"' in html
+  assert 'id="reloadSetupButton"' in html
+  assert 'href="https://apps.apple.com/app/id6761301368"' in html
+  assert "Allow on Every Website" in html
+  assert "Galaxy → Bluetooth" in html
+  assert 'id="engagementValue"' in html
+  assert 'id="slcDetail"' in html
+
+  # The installed page gets driving state only from the companion GATT service.
+  assert "navigator.bluetooth.requestDevice" in script
+  assert "navigator.bluetooth.getAvailability" in script
+  assert "Live Link still cannot see beacio" in script
+  assert "The comma did not authorize this phone" in script
+  assert "liveCharacteristic.startNotifications()" in script
+  assert 'op: "get_live_metadata"' in script
+  assert "fetch(" not in script
+  assert "/api/" not in script
+
+  assert '"start_url": "../live"' in manifest
+  assert '"display": "standalone"' in manifest
+  assert '"/assets/components/tools/live_link_standalone.js"' in worker
+  assert '"/assets/components/tools/live_link_standalone.css"' in worker
+  assert 'const liveCacheName = "starpilot-live-shell-v2"' in worker
+  assert 'event.request.mode === "navigate"' in worker
+  assert '@app.route("/live", methods=["GET"])' in server
+  assert 'render_template("live_link.html", secure_live_url=_galaxy_public_url())' in server
+
+  # The exact comma border wraps the whole live surface, not only a status card.
+  assert "border: 4px solid var(--drive-border)" in styles

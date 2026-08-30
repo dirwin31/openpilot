@@ -4938,6 +4938,11 @@ def setup(app):
       "/assets/components/tools/toggles.js",
       "/assets/components/tools/bluetooth.js",
       "/assets/components/tools/bluetooth.css",
+      "/assets/components/tools/live_link.js",
+      "/assets/components/tools/live_link.css",
+      "/assets/components/tools/live_link_standalone.js",
+      "/assets/components/tools/live_link_standalone.css",
+      "/assets/live-manifest.json",
       "/assets/components/tools/wheel_controls.js",
       "/assets/components/tools/wheel_controls.css",
     }:
@@ -4964,6 +4969,25 @@ def setup(app):
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
+    return response
+
+  @app.route("/live", methods=["GET"])
+  def live_link_app():
+    # This deliberately avoids the Galaxy SPA and every API dependency. The
+    # service worker caches the complete shell so runtime communication with
+    # the comma is exclusively through the BLE companion service.
+    response = make_response(render_template("live_link.html", secure_live_url=_galaxy_public_url()))
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+  @app.route("/live/", methods=["GET"])
+  def live_link_app_trailing_slash():
+    # Keep relative PWA asset URLs rooted beside /live, including behind the
+    # Galaxy tunnel's per-device path prefix.
+    response = make_response("", 308)
+    response.headers["Location"] = "../live"
     return response
 
   @app.route("/api/bluetooth/status", methods=["GET"])
