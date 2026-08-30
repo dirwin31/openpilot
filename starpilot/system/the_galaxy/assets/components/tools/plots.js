@@ -7,7 +7,12 @@ const state = reactive({
   showAdvancedTerms: false,
   live: null,
   samples: [],
+  overrides: { driveId: 0, isOnroad: false, episodes: [] },
+  helpOpen: false,
 })
+
+// Below this |gap| the model and driver agree closely enough to call it "about the same".
+const DISAGREEMENT_DEADBAND = 0.05
 
 let initialized = false
 let pollHandle = null
@@ -255,6 +260,11 @@ function pushSample(payload) {
     longitudinalUpAccelCmd: toNumber(payload.longitudinalUpAccelCmd),
     longitudinalUiAccelCmd: toNumber(payload.longitudinalUiAccelCmd),
     longitudinalUfAccelCmd: toNumber(payload.longitudinalUfAccelCmd),
+    modelLateralAccel: toNumber(payload.modelLateralAccel),
+    driverLateralAccel: toNumber(payload.driverLateralAccel),
+    modelCurvature: toNumber(payload.modelCurvature),
+    steeringPressed: !!payload.steeringPressed,
+    steeringTorque: toNumber(payload.steeringTorque),
   })
 
   if (state.samples.length > MAX_POINTS) {
@@ -279,6 +289,21 @@ async function fetchLiveData() {
   }
 }
 
+async function fetchOverrideLog() {
+  const response = await fetch("/api/plots/overrides")
+  const payload = await response.json()
+
+  if (!response.ok) {
+    throw new Error(payload.error || response.statusText || "Failed to load override log")
+  }
+
+  state.overrides = {
+    driveId: toNumber(payload.driveId),
+    isOnroad: !!payload.isOnroad,
+    episodes: Array.isArray(payload.episodes) ? payload.episodes : [],
+  }
+}
+
 function ensurePolling() {
   if (pollHandle) return
 
@@ -300,6 +325,9 @@ function ensurePolling() {
         state.error = error?.message || String(error)
         state.loading = false
       }
+
+      // Refresh the last-drive override log alongside live data; failures here are non-fatal.
+      fetchOverrideLog().catch(() => {})
     }
 
     pollHandle = setTimeout(poll, POLL_INTERVAL_MS)
@@ -335,6 +363,10 @@ function toggleAdvancedTerms() {
   } catch (error) {
     console.warn("Failed to persist plots advanced terms preference", error)
   }
+}
+
+function toggleHelp() {
+  state.helpOpen = !state.helpOpen
 }
 
 function yForValue(value, min, max) {
@@ -524,6 +556,249 @@ function LongitudinalTermsPlotCard(sourceLabel) {
   `
 }
 
+function buildOverrideBands(samples) {
+  // Returned as CSS percentages for an HTML overlay (not SVG <rect>): ArrowJS can't build
+  // sub-templates in the SVG namespace, so the shaded bands live as divs over the chart.
+  const runs = []
+  if (samples.length < 2) return runs
+
+  const lastIndex = Math.max(1, samples.length - 1)
+  let runStart = -1
+  for (let i = 0; i < samples.length; i++) {
+    const pressed = !!samples[i]?.steeringPressed
+    if (pressed && runStart < 0) {
+      runStart = i
+    } else if (!pressed && runStart >= 0) {
+      runs.push({ startIndex: runStart, endIndex: i - 1 })
+      runStart = -1
+    }
+  }
+  if (runStart >= 0) runs.push({ startIndex: runStart, endIndex: samples.length - 1 })
+
+  return runs.map((run) => {
+    const leftPct = (run.startIndex / lastIndex) * 100
+    const rightPct = (run.endIndex / lastIndex) * 100
+    return { leftPct, widthPct: Math.max(0.5, rightPct - leftPct) }
+  })
+}
+
+// Signed gap relative to the turn direction: >0 = driver steering tighter than the model asked,
+// <0 = wider. Raw (driver - model) is direction-ambiguous (both negative in a right turn), so
+// project onto the turn direction. Mirrors backend _directional_gap.
+function directionalGap(modelAccel, driverAccel) {
+  const model = toNumber(modelAccel)
+  const driver = toNumber(driverAccel)
+  const ref = Math.abs(model) > 1e-6 ? model : driver
+  const refSign = ref >= 0 ? 1 : -1
+  return refSign * (driver - model)
+}
+
+// Expects an already direction-relative gap (see directionalGap / backend gapMean).
+function describeGap(directionRelativeGap) {
+  const value = toNumber(directionRelativeGap)
+  if (Math.abs(value) < DISAGREEMENT_DEADBAND) {
+    return { word: "about the same", tone: "great", magnitude: Math.abs(value) }
+  }
+  return {
+    word: value > 0 ? "tighter" : "wider",
+    tone: Math.abs(value) < 0.3 ? "good" : (Math.abs(value) < 0.5 ? "fair" : "poor"),
+    magnitude: Math.abs(value),
+  }
+}
+
+function computeLateralDisagreement(samples) {
+  const config = LATERAL_QUALITY_CONFIG
+  const safeSamples = Array.isArray(samples) ? samples : []
+  if (!safeSamples.length) {
+    return { label: "N/A", detail: "Waiting for data", value: null }
+  }
+
+  const latestTs = toNumber(safeSamples[safeSamples.length - 1]?.timestamp, 0)
+  const cutoffTs = latestTs > 0 ? latestTs - QUALITY_WINDOW_SECONDS : 0
+  const eligible = safeSamples.filter((sample) => {
+    if (!sample?.steeringPressed) return false
+    if (toNumber(sample?.timestamp, 0) < cutoffTs) return false
+    const speed = Math.abs(toNumber(sample?.speed, 0))
+    const demand = Math.max(Math.abs(toNumber(sample?.modelLateralAccel)), Math.abs(toNumber(sample?.driverLateralAccel)))
+    const speedOk = config.minSpeedMps <= 0 ? true : speed >= config.minSpeedMps
+    const demandOk = config.minDemand <= 0 ? true : demand >= config.minDemand
+    return speedOk && demandOk
+  })
+
+  if (eligible.length < QUALITY_MIN_SAMPLES) {
+    return { label: "N/A", value: null, detail: `Need ${QUALITY_MIN_SAMPLES} override samples (${eligible.length} so far)` }
+  }
+
+  const gaps = eligible
+    .map((sample) => directionalGap(sample?.modelLateralAccel, sample?.driverLateralAccel))
+    .sort((a, b) => a - b)
+  const medianGap = percentile(gaps, 0.5)
+  const described = describeGap(medianGap)
+
+  return {
+    label: described.word,
+    tone: described.tone,
+    value: medianGap,
+    magnitude: described.magnitude,
+    detail: `${eligible.length} override samples / ${QUALITY_WINDOW_SECONDS}s`,
+  }
+}
+
+function ModelVsDriverLateralCard() {
+  const hasData = state.samples.length > 1
+  const keys = ["modelLateralAccel", "driverLateralAccel"]
+  const range = computeRange(state.samples, keys[0], keys[1])
+  const zeroY = yForValue(0, range.min, range.max)
+  const topQuarterY = yForValue(range.max * 0.5, range.min, range.max)
+  const bottomQuarterY = yForValue(range.min * 0.5, range.min, range.max)
+  const bands = buildOverrideBands(state.samples)
+  const disagreement = computeLateralDisagreement(state.samples)
+
+  return html`
+    <section class="plotCard plotChartCard">
+      <div class="plotCardHeader">
+        <h2>Model Command vs You (Lateral)</h2>
+        <span class="plotSource">Source: Model path request vs your steering</span>
+      </div>
+
+      <div class="plotLegend">
+        <span class="plotLegendItem"><i class="plotLegendLine model"></i>Model command: ${formatValue(latestSampleValue("modelLateralAccel"))}</span>
+        <span class="plotLegendItem"><i class="plotLegendLine driver"></i>You (measured): ${formatValue(latestSampleValue("driverLateralAccel"))}</span>
+        <span class="plotLegendItem"><i class="plotLegendBand"></i>Override active</span>
+      </div>
+
+      <div class="plotSvgWrap plotOverlayWrap">
+        ${hasData ? html`
+          ${bands.map((band) => html`<div class="plotOverrideBand" style="left:${band.leftPct.toFixed(2)}%;width:${band.widthPct.toFixed(2)}%"></div>`)}
+          <svg class="plotSvg" viewBox="0 0 ${SVG_WIDTH} ${SVG_HEIGHT}" preserveAspectRatio="none" role="img" aria-label="Model command vs driver lateral plot">
+            <line class="plotGridLine" x1="0" y1="${topQuarterY}" x2="${SVG_WIDTH}" y2="${topQuarterY}"></line>
+            <line class="plotZeroLine" x1="0" y1="${zeroY}" x2="${SVG_WIDTH}" y2="${zeroY}"></line>
+            <line class="plotGridLine" x1="0" y1="${bottomQuarterY}" x2="${SVG_WIDTH}" y2="${bottomQuarterY}"></line>
+            <polyline class="plotLine model" points="${buildPolyline(state.samples, "modelLateralAccel", range.min, range.max)}"></polyline>
+            <polyline class="plotLine driver" points="${buildPolyline(state.samples, "driverLateralAccel", range.min, range.max)}"></polyline>
+          </svg>
+        ` : html`
+          <div class="plotEmpty">Waiting for enough live samples...</div>
+        `}
+      </div>
+
+      <div class="plotRangeRow">
+        <span>${formatValue(range.max, 1)} m/s²</span>
+        <span>0.0 m/s²</span>
+        <span>${formatValue(range.min, 1)} m/s²</span>
+      </div>
+
+      <div class="qualitySummaryRow">
+        <p class="qualitySentence">
+          ${disagreement.value === null
+            ? html`When you override, model vs you is <span class="qualityTone qualityTone-na">N/A</span>`
+            : html`When you override, you steer <span class="qualityTone ${qualityToneClass(disagreement.tone)}">${disagreement.label}</span>${disagreement.label === "about the same" ? "" : html` than the model by ${formatValue(disagreement.magnitude)} m/s²`}`}
+        </p>
+        <p class="qualityDetail">${disagreement.detail}</p>
+      </div>
+
+      ${HowToReadThis()}
+    </section>
+  `
+}
+
+function HowToReadThis() {
+  // Driven by reactive state (not native <details>) so it survives the live re-render on each poll.
+  return html`
+    <div class="plotHelp">
+      <button class="plotHelpToggle" @click="${toggleHelp}">
+        <span class="plotHelpCaret ${state.helpOpen ? "open" : ""}">▸</span> How to read this
+      </button>
+      ${state.helpOpen ? html`
+      <div class="plotHelpBody">
+        <p>
+          <strong>Tighter</strong> = you steered more into the turn than the model asked;
+          <strong>wider</strong> = less. One event means little — look for the same direction
+          repeating across the Last Drive log below.
+        </p>
+        <p>
+          <strong>First glance at the "Lateral Response" chart above</strong> — it shows whether the
+          controller is actually <em>achieving</em> the model's target. That's what tells a tuning
+          problem apart from a preference:
+        </p>
+        <ul class="plotHelpList">
+          <li>
+            <strong>Tracks well, but you still override</strong> → the tune is fine; you disagree with
+            the model's line. Look at lane position (<code>LaneCenterOffset</code> /
+            <code>CameraOffset</code>), or it's just preference.
+          </li>
+          <li>
+            <strong>Tracks poorly (car lags / understeers) and you correct it</strong> → your override
+            is compensating for a mistune. Use the patterns below.
+          </li>
+        </ul>
+        <div class="plotHelpTable">
+          <div class="plotHelpRow"><span>Always tighter, car under-responds in curves</span><span>↑ <code>SteerLatAccel</code> or <code>SteerKP</code></span></div>
+          <div class="plotHelpRow"><span>Gap scales with how sharp the curve is</span><span><code>SteerRatio</code> or <code>SteerFriction</code></span></div>
+          <div class="plotHelpRow"><span>Vague / sticky near center, wanders on straights</span><span><code>SteerFriction</code></span></div>
+          <div class="plotHelpRow"><span>You correct just after the model moves (timing)</span><span><code>SteerDelay</code></span></div>
+          <div class="plotHelpRow"><span>Constant one-side bias regardless of curve</span><span><code>SteerOffset</code></span></div>
+        </div>
+        <p class="plotHelpNote">
+          Guidance only — this page never changes any values. Confirm a pattern repeats across
+          conditions before you touch a knob, then tune in your own workflow.
+        </p>
+      </div>
+      ` : ""}
+    </div>
+  `
+}
+
+function OverrideEventLog() {
+  const episodes = Array.isArray(state.overrides?.episodes) ? state.overrides.episodes : []
+  const ordered = episodes.slice().reverse()
+
+  return html`
+    <section class="plotCard overrideLogCard">
+      <div class="plotCardHeader">
+        <h2>Last Drive — Override Events (${episodes.length})</h2>
+        <span class="plotSource">${state.overrides?.isOnroad ? "Recording this drive" : "Last completed drive"}</span>
+      </div>
+
+      ${ordered.length ? html`
+        <div class="overrideTableWrap">
+          <table class="overrideTable">
+            <thead>
+              <tr>
+                <th>Duration</th>
+                <th>Speed</th>
+                <th>Turn</th>
+                <th>Model wanted</th>
+                <th>You did</th>
+                <th>Gap</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${ordered.map((episode) => {
+                const gap = describeGap(episode.gapMean)
+                return html`
+                  <tr>
+                    <td data-label="Duration">${formatValue(episode.durationS, 1)} s</td>
+                    <td data-label="Speed">${formatValue(episode.avgSpeed, 1)} m/s</td>
+                    <td data-label="Turn">${episode.direction === "left" ? "Left" : "Right"}</td>
+                    <td data-label="Model wanted">${formatValue(episode.modelLatAccelMean)} m/s²</td>
+                    <td data-label="You did">${formatValue(episode.driverLatAccelMean)} m/s²</td>
+                    <td data-label="Gap" class="qualityTone ${qualityToneClass(gap.tone)}">
+                      ${gap.word === "about the same" ? "≈ same" : `${formatValue(gap.magnitude)} ${gap.word}`}
+                    </td>
+                  </tr>
+                `
+              })}
+            </tbody>
+          </table>
+        </div>
+      ` : html`
+        <div class="plotEmpty">No overrides recorded this drive yet.</div>
+      `}
+    </section>
+  `
+}
+
 async function initialize() {
   try {
     state.showAdvancedTerms = localStorage.getItem(ADVANCED_TERMS_KEY) === "1"
@@ -539,6 +814,8 @@ async function initialize() {
   } finally {
     ensurePolling()
   }
+
+  fetchOverrideLog().catch(() => {})
 
   if (!visibilityListenerAttached) {
     visibilityListenerAttached = true
@@ -651,6 +928,12 @@ export function LivePlots() {
           "Measured",
         )}
       </div>
+
+      <div class="plotCharts">
+        ${ModelVsDriverLateralCard()}
+      </div>
+
+      ${OverrideEventLog()}
 
       <div class="plotAdvancedRow">
         <button class="plotButton" @click="${toggleAdvancedTerms}">

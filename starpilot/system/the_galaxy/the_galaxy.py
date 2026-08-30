@@ -1701,13 +1701,33 @@ _plots_state = {
   "longitudinalUpAccelCmd": 0.0,
   "longitudinalUiAccelCmd": 0.0,
   "longitudinalUfAccelCmd": 0.0,
+  "modelLateralAccel": 0.0,
+  "driverLateralAccel": 0.0,
+  "modelCurvature": 0.0,
+  "steeringPressed": False,
+  "steeringTorque": 0.0,
   "speed": 0.0,
   "lateralSource": "curvature",
   "longitudinalSource": "controlsState + livePose",
   "lateralTermsSource": "unknown",
   "longitudinalTermsSource": "controlsState",
+  "latModelSource": "modelV2.action",
   "sampleIndex": 0,
   "lastError": "",
+}
+
+# --- Last-drive override event log (model command vs driver override, lateral) ---
+_OVERRIDE_LOG_POLL_INTERVAL_S = 0.05      # ~20 Hz while onroad to catch brief overrides
+_OVERRIDE_LOG_OFFROAD_IDLE_S = 1.0        # idle poll while parked; holds the completed list
+_OVERRIDE_LOG_RELEASE_DEBOUNCE_S = 0.3    # keep an episode open across brief releases
+_OVERRIDE_LOG_MIN_DURATION_S = 0.2        # drop momentary blips
+_OVERRIDE_LOG_MAX_EPISODES = 200          # bound memory; always holds only the last drive
+
+_override_log_lock = threading.Lock()
+_override_log_worker_thread = None
+_override_log = {
+  "driveId": 0,
+  "episodes": [],
 }
 
 _TROUBLESHOOT_PERSONALITY_KEYS = [
@@ -1908,6 +1928,39 @@ def _extract_lateral_accel_values(controls_state, speed_mps):
   actual_curvature = _safe_float(getattr(controls_state, "curvature", 0.0))
   return desired_curvature * speed_sq, actual_curvature * speed_sq, "curvature"
 
+def _extract_lateral_command_values(controls_state, model_v2, car_state, speed_mps):
+  """Model's commanded lateral intent vs what the driver is actually doing.
+
+  Unlike controlsState.desiredCurvature (which collapses to the measured curvature while
+  the driver overrides), modelV2.action.desiredCurvature keeps reporting model intent, so
+  it stays meaningful during an override. Both sides are expressed as lateral accel
+  (curvature * v^2, m/s^2) so they are directly comparable and match the rest of the page.
+  """
+  v_ego = max(0.0, _safe_float(speed_mps))
+  speed_sq = v_ego * v_ego
+
+  model_curvature = 0.0
+  try:
+    action = getattr(model_v2, "action", None)
+    if action is not None:
+      model_curvature = _safe_float(getattr(action, "desiredCurvature", 0.0))
+  except Exception:
+    model_curvature = 0.0
+
+  driver_curvature = _safe_float(getattr(controls_state, "curvature", 0.0))
+
+  steering_pressed = bool(getattr(car_state, "steeringPressed", False))
+  steering_torque = _safe_float(getattr(car_state, "steeringTorque", 0.0))
+
+  return {
+    "modelCurvature": model_curvature,
+    "modelLateralAccel": model_curvature * speed_sq,
+    "driverLateralAccel": driver_curvature * speed_sq,
+    "steeringPressed": steering_pressed,
+    "steeringTorque": steering_torque,
+    "speed": v_ego,
+  }
+
 def _extract_longitudinal_accel_values(controls_state, live_pose):
   desired = _safe_float(getattr(controls_state, "aTarget", 0.0))
   source = "controlsState.aTarget + livePose"
@@ -1976,7 +2029,7 @@ def _plots_worker():
   global _plots_worker_thread
 
   try:
-    sm = messaging.SubMaster(["controlsState", "livePose"], poll="controlsState")
+    sm = messaging.SubMaster(["controlsState", "livePose", "modelV2", "carState"], poll="controlsState")
   except Exception as exception:
     with _plots_lock:
       _plots_state["lastError"] = str(exception)
@@ -2004,6 +2057,7 @@ def _plots_worker():
       desired_longitudinal, actual_longitudinal, longitudinal_source = _extract_longitudinal_accel_values(controls_state, live_pose)
       lateral_terms, lateral_terms_source = _extract_lateral_controller_terms(controls_state)
       longitudinal_terms, longitudinal_terms_source = _extract_longitudinal_controller_terms(controls_state)
+      lateral_command = _extract_lateral_command_values(controls_state, sm["modelV2"], sm["carState"], speed)
 
       with _plots_lock:
         _plots_state.update({
@@ -2021,11 +2075,17 @@ def _plots_worker():
           "longitudinalUpAccelCmd": round(longitudinal_terms["longitudinalUpAccelCmd"], 4),
           "longitudinalUiAccelCmd": round(longitudinal_terms["longitudinalUiAccelCmd"], 4),
           "longitudinalUfAccelCmd": round(longitudinal_terms["longitudinalUfAccelCmd"], 4),
+          "modelLateralAccel": round(lateral_command["modelLateralAccel"], 4),
+          "driverLateralAccel": round(lateral_command["driverLateralAccel"], 4),
+          "modelCurvature": round(lateral_command["modelCurvature"], 6),
+          "steeringPressed": lateral_command["steeringPressed"],
+          "steeringTorque": round(lateral_command["steeringTorque"], 4),
           "speed": round(speed, 4),
           "lateralSource": lateral_source,
           "longitudinalSource": longitudinal_source,
           "lateralTermsSource": lateral_terms_source,
           "longitudinalTermsSource": longitudinal_terms_source,
+          "latModelSource": "modelV2.action",
           "sampleIndex": int(_plots_state.get("sampleIndex", 0)) + 1,
           "lastError": "",
         })
@@ -2050,6 +2110,153 @@ def _ensure_plots_worker():
       return
     _plots_worker_thread = threading.Thread(target=_plots_worker, daemon=True)
     _plots_worker_thread.start()
+
+def _directional_gap(model_accel, driver_accel):
+  """Signed gap expressed relative to the turn direction: >0 = driver steering tighter
+  (more lateral accel toward the turn than the model asked), <0 = wider/counter.
+
+  Raw (driver - model) is direction-ambiguous: in a right turn both values are negative, so
+  a tighter driver reads as a more-negative number. Project onto the turn direction to fix that.
+  """
+  ref = model_accel if abs(model_accel) > 1e-6 else driver_accel
+  ref_sign = 1.0 if ref >= 0 else -1.0
+  return ref_sign * (driver_accel - model_accel)
+
+def _finalize_override_episode(episode):
+  """Turn an in-progress accumulator into a rounded, immutable episode record."""
+  count = max(1, int(episode.get("sampleCount", 0)))
+  duration = max(0.0, _safe_float(episode.get("endTime", 0.0)) - _safe_float(episode.get("startTime", 0.0)))
+  model_mean = episode["modelSum"] / count
+  driver_mean = episode["driverSum"] / count
+  gap_mean = episode.get("dirGapSum", 0.0) / count
+  # Direction from what the model was asking for. This fork's convention is positive curvature =
+  # RIGHT turn (see selfdrive/controls/controlsd.py: a left turn logs a negative desiredCurvature).
+  direction = "right" if episode.get("modelCurvatureSum", 0.0) > 0 else "left"
+  return {
+    "startTime": round(_safe_float(episode.get("startTime", 0.0)), 3),
+    "durationS": round(duration, 2),
+    "avgSpeed": round(episode["speedSum"] / count, 3),
+    "direction": direction,
+    "modelLatAccelMean": round(model_mean, 4),
+    "modelLatAccelPeak": round(episode.get("modelPeak", 0.0), 4),
+    "driverLatAccelMean": round(driver_mean, 4),
+    "driverLatAccelPeak": round(episode.get("driverPeak", 0.0), 4),
+    "gapMean": round(gap_mean, 4),
+    "gapPeak": round(episode.get("gapPeak", 0.0), 4),
+    "sampleCount": count,
+  }
+
+def _commit_override_episode(episode):
+  """Finalize a pending override episode and append it to the last-drive log (bounded).
+
+  Used both when the override is released and when the drive ends while still overriding, so an
+  in-progress episode is not lost. Momentary blips below the min duration are dropped.
+  """
+  if not episode or episode.get("sampleCount", 0) <= 0:
+    return
+  duration = _safe_float(episode.get("endTime", 0.0)) - _safe_float(episode.get("startTime", 0.0))
+  if duration < _OVERRIDE_LOG_MIN_DURATION_S:
+    return
+
+  record = _finalize_override_episode(episode)
+  with _override_log_lock:
+    episodes = _override_log["episodes"]
+    episodes.append(record)
+    if len(episodes) > _OVERRIDE_LOG_MAX_EPISODES:
+      del episodes[0:len(episodes) - _OVERRIDE_LOG_MAX_EPISODES]
+
+def _override_log_worker():
+  """Always-on-while-onroad recorder of per-override lateral events for the last drive.
+
+  Independent of whether the /plots page is open, so the log is complete when the driver
+  parks. In-memory only (no file/param); reset each drive; bounded to the last N episodes.
+  """
+  global _override_log_worker_thread
+
+  try:
+    sm = messaging.SubMaster(["controlsState", "modelV2", "carState"], poll="carState")
+  except Exception:
+    with _override_log_lock:
+      _override_log_worker_thread = None
+    return
+
+  was_onroad = False
+  episode = None          # in-progress accumulator, or None
+  last_pressed_ts = 0.0   # for release debounce
+
+  while True:
+    try:
+      onroad = bool(params.get_bool("IsOnroad"))
+    except Exception:
+      onroad = False
+
+    # Drive boundary: reset the log on each offroad -> onroad transition.
+    if onroad and not was_onroad:
+      episode = None
+      with _override_log_lock:
+        _override_log["driveId"] = int(_override_log.get("driveId", 0)) + 1
+        _override_log["episodes"] = []
+    was_onroad = onroad
+
+    if not onroad:
+      # Drive ended: capture an override still in progress before idling (don't drop it).
+      if episode is not None:
+        _commit_override_episode(episode)
+        episode = None
+      time.sleep(_OVERRIDE_LOG_OFFROAD_IDLE_S)
+      continue
+
+    try:
+      sm.update(0)
+      controls_state = sm["controlsState"]
+      car_state = sm["carState"]
+      # carState.vEgo is the authoritative vehicle speed and is already subscribed here; the
+      # lateral-accel math is curvature * speed^2, so a missing speed would zero every value.
+      speed = _safe_float(getattr(car_state, "vEgo", 0.0))
+      lateral = _extract_lateral_command_values(controls_state, sm["modelV2"], car_state, speed)
+      now = time.time()
+
+      if lateral["steeringPressed"]:
+        last_pressed_ts = now
+        if episode is None:
+          episode = {
+            "startTime": now, "endTime": now, "sampleCount": 0,
+            "modelSum": 0.0, "driverSum": 0.0, "speedSum": 0.0, "modelCurvatureSum": 0.0,
+            "modelPeak": 0.0, "driverPeak": 0.0, "dirGapSum": 0.0, "gapPeak": 0.0,
+          }
+        model_accel = lateral["modelLateralAccel"]
+        driver_accel = lateral["driverLateralAccel"]
+        dir_gap = _directional_gap(model_accel, driver_accel)
+        episode["endTime"] = now
+        episode["sampleCount"] += 1
+        episode["modelSum"] += model_accel
+        episode["driverSum"] += driver_accel
+        episode["speedSum"] += lateral["speed"]
+        episode["modelCurvatureSum"] += lateral["modelCurvature"]
+        episode["dirGapSum"] += dir_gap
+        if abs(model_accel) > abs(episode["modelPeak"]):
+          episode["modelPeak"] = model_accel
+        if abs(driver_accel) > abs(episode["driverPeak"]):
+          episode["driverPeak"] = driver_accel
+        if abs(dir_gap) > abs(episode["gapPeak"]):
+          episode["gapPeak"] = dir_gap
+      elif episode is not None and (now - last_pressed_ts) >= _OVERRIDE_LOG_RELEASE_DEBOUNCE_S:
+        # Override released long enough: finalize and store (dropping momentary blips).
+        _commit_override_episode(episode)
+        episode = None
+    except Exception:
+      pass
+
+    time.sleep(_OVERRIDE_LOG_POLL_INTERVAL_S)
+
+def _ensure_override_log_worker():
+  global _override_log_worker_thread
+
+  with _override_log_lock:
+    if _override_log_worker_thread and _override_log_worker_thread.is_alive():
+      return
+    _override_log_worker_thread = threading.Thread(target=_override_log_worker, daemon=True)
+    _override_log_worker_thread.start()
 
 def _set_fast_update_state(**kwargs):
   with _fast_update_lock:
@@ -6976,6 +7183,19 @@ def setup(app):
       "stale": age_seconds > _PLOTS_SAMPLE_STALE_AFTER_S,
     }), 200
 
+  @app.route("/api/plots/overrides", methods=["GET"])
+  def get_override_log():
+    _ensure_override_log_worker()
+    with _override_log_lock:
+      drive_id = int(_override_log.get("driveId", 0))
+      episodes = list(_override_log.get("episodes", []))
+
+    return jsonify({
+      "driveId": drive_id,
+      "isOnroad": params.get_bool("IsOnroad"),
+      "episodes": episodes,
+    }), 200
+
   @app.route("/api/testing_grounds", methods=["GET"])
   def get_testing_grounds():
     state = _get_testing_grounds_state()
@@ -9075,6 +9295,8 @@ def main():
   app = Flask(__name__, static_folder="assets", static_url_path="/assets")
   setup(app)
   threading.Thread(target=_testing_ground_custom_reserved_worker, daemon=True).start()
+  # Record per-override lateral events for the whole drive, even if /plots is never opened.
+  _ensure_override_log_worker()
 
   # Desktop-only debug mode. On-device must stay on 8082 to match Galaxy FRP routing.
   on_device = _is_comma_device_runtime()

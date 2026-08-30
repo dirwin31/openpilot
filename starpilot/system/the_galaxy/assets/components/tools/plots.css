@@ -135,6 +135,46 @@
   stroke: #d08bff;
 }
 
+.plotLegendLine.model,
+.plotLine.model {
+  background-color: #63b3ff;
+  stroke: #63b3ff;
+}
+
+.plotLegendLine.driver,
+.plotLine.driver {
+  background-color: #f5a623;
+  stroke: #f5a623;
+}
+
+.plotLegendBand {
+  background-color: rgba(245, 166, 35, 0.18);
+  border: 1px solid rgba(245, 166, 35, 0.5);
+  border-radius: var(--border-radius-sm);
+  display: inline-block;
+  height: 12px;
+  width: 22px;
+}
+
+.plotOverlayWrap {
+  position: relative;
+}
+
+/* Override shading rendered as an HTML overlay (not an SVG <rect>) so ArrowJS can build it. */
+.plotOverrideBand {
+  background: rgba(245, 166, 35, 0.16);
+  bottom: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  z-index: 1;
+}
+
+.plotOverlayWrap .plotSvg {
+  position: relative;
+  z-index: 2;
+}
+
 .plotSvgWrap {
   background: #0b0b18;
   border: 1px solid var(--track-color);
@@ -255,6 +295,119 @@
   margin: var(--margin-sm) 0 0 0;
 }
 
+.overrideLogCard {
+  margin-top: var(--margin-md);
+}
+
+.overrideTableWrap {
+  margin-top: var(--margin-sm);
+  overflow-x: auto;
+}
+
+.overrideTable {
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+  width: 100%;
+}
+
+.overrideTable th,
+.overrideTable td {
+  border-bottom: 1px solid var(--track-color);
+  padding: var(--padding-xs) var(--padding-sm);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.overrideTable th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.overrideTable td.qualityTone {
+  font-weight: 600;
+}
+
+.plotHelp {
+  border-top: 1px solid var(--track-color);
+  margin-top: var(--margin-base);
+  padding-top: var(--margin-sm);
+}
+
+.plotHelpToggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-demi-bold);
+  padding: 0;
+}
+
+.plotHelpCaret {
+  display: inline-block;
+  transition: transform var(--transition-fast);
+}
+
+.plotHelpCaret.open {
+  transform: rotate(90deg);
+}
+
+.plotHelpBody {
+  margin-top: var(--margin-sm);
+  font-size: var(--font-size-sm);
+}
+
+.plotHelpBody p {
+  margin: 0 0 var(--margin-sm) 0;
+}
+
+.plotHelpList {
+  margin: 0 0 var(--margin-sm) 0;
+  padding-left: 1.2em;
+}
+
+.plotHelpList li {
+  margin-bottom: var(--gap-xs);
+}
+
+.plotHelpBody code {
+  background: var(--secondary-bg);
+  border: 1px solid var(--track-color);
+  border-radius: var(--border-radius-sm);
+  font-size: 0.92em;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.plotHelpTable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+  margin-bottom: var(--margin-sm);
+}
+
+.plotHelpRow {
+  align-items: baseline;
+  border: 1px solid var(--track-color);
+  border-radius: var(--border-radius-sm);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs) var(--gap-sm);
+  justify-content: space-between;
+  padding: var(--padding-xs) var(--padding-sm);
+}
+
+.plotHelpRow > span:last-child {
+  color: var(--text-color);
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.plotHelpNote {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 @media only screen and (max-width: 768px) and (orientation: portrait) {
   .plotCard,
   .plotCharts {
@@ -274,7 +427,62 @@
   }
 
   .plotLegend {
+    flex-wrap: wrap;
+    gap: var(--gap-xs) var(--gap-sm);
+  }
+
+  .plotCard {
+    max-width: 100%;
+    padding: var(--padding-base);
+  }
+
+  .plotCardHeader {
     flex-direction: column;
-    gap: var(--gap-xs);
+    gap: 2px;
+  }
+}
+
+/* Restack the override table into one labelled card per event so its 6 columns never
+   force a left/right scroll on a narrow screen. Width-only (no orientation gate) so it
+   applies to portrait AND landscape phones. */
+@media only screen and (max-width: 768px) {
+  .overrideTableWrap {
+    overflow-x: visible;
+  }
+
+  .overrideTable,
+  .overrideTable tbody,
+  .overrideTable tr,
+  .overrideTable td {
+    display: block;
+    width: 100%;
+  }
+
+  .overrideTable thead {
+    display: none;
+  }
+
+  .overrideTable tr {
+    border: 1px solid var(--track-color);
+    border-radius: var(--border-radius-sm);
+    margin-bottom: var(--gap-sm);
+    padding: var(--padding-xs) var(--padding-sm);
+  }
+
+  .overrideTable td {
+    border-bottom: none;
+    display: flex;
+    gap: var(--gap-sm);
+    justify-content: space-between;
+    padding: 3px 0;
+    text-align: right;
+    white-space: normal;
+  }
+
+  .overrideTable td::before {
+    color: var(--text-muted);
+    content: attr(data-label);
+    font-weight: 600;
+    text-align: left;
   }
 }
