@@ -300,7 +300,7 @@ export function Bluetooth() {
                 <li>Open the secure Live Link page in Safari.</li>
                 <li>Follow its beacio install and website-permission checks.</li>
                 <li>Tap Connect over Bluetooth and choose StarPilot.</li>
-                <li>Allow Bluetooth and confirm any matching code here and on the phone.</li>
+                <li>Keep this pairing window open until Live Link connects. StarPilot authorizes the phone automatically; no confirmation slider is shown.</li>
               </ol>
             </div>
           ` : ""}

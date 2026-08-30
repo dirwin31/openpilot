@@ -11,8 +11,8 @@
   <link rel="manifest" href="assets/live-manifest.json">
   <link rel="apple-touch-icon" href="assets/images/apple-touch-icon.png">
   <link rel="icon" href="assets/images/favicon.ico">
-  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-3">
-  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-3"></script>
+  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-4">
+  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-4"></script>
   <title>StarPilot Live</title>
 </head>
 <body data-secure-live-url="{{ secure_live_url | default('', true) | e }}">
@@ -67,7 +67,7 @@
           <span id="connectStepMarker" class="setupStepMarker" aria-hidden="true">4</span>
           <div>
             <strong id="connectStepTitle">Open the secure Live Link page</strong>
-            <span id="connectStepDetail">Open the HTTPS page in Safari, connect, choose StarPilot, and accept any matching-code prompts.</span>
+            <span id="connectStepDetail">Open the HTTPS page in Safari, connect, and choose StarPilot. Pair a Phone authorizes it automatically.</span>
             <div class="setupStepActions">
               <a id="secureAppLink" class="primaryButton" href="#" target="_blank" rel="noopener" hidden>Open secure Galaxy</a>
               <button id="connectButton" class="primaryButton" type="button">Connect over Bluetooth</button>

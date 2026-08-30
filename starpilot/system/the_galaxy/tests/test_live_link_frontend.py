@@ -241,6 +241,100 @@ const result = insecure ? {
 process.stdout.write(JSON.stringify(result))
 """
 
+CONNECTION_HARNESS = r"""
+import fs from "node:fs"
+import vm from "node:vm"
+
+class FakeElement {
+  constructor() {
+    this.className = ""
+    this.hidden = false
+    this.textContent = ""
+    this.disabled = false
+    this.listeners = new Map()
+    this.classList = { toggle: () => {} }
+    this.style = { setProperty: () => {} }
+  }
+  addEventListener(name, callback) { this.listeners.set(name, callback) }
+  removeEventListener(name) { this.listeners.delete(name) }
+}
+
+const mode = process.argv[2]
+const dom = new Map()
+let chooserCalls = 0
+let gattConnects = 0
+const bluetoothDevice = {
+  name: "StarPilot",
+  listeners: new Map(),
+  addEventListener(name, callback) { this.listeners.set(name, callback) },
+  removeEventListener(name) { this.listeners.delete(name) },
+  gatt: {
+    connected: mode === "granted",
+    async connect() {
+      gattConnects += 1
+      throw Object.assign(new Error("test connection stop"), { name: "NetworkError" })
+    },
+  },
+}
+const navigator = {
+  userAgent: "Mozilla/5.0 Safari/605.1.15",
+  standalone: false,
+  bluetooth: {
+    getAvailability: async () => true,
+    getDevices: async () => mode === "granted" ? [bluetoothDevice] : [],
+    requestDevice: async () => {
+      chooserCalls += 1
+      return bluetoothDevice
+    },
+  },
+}
+const context = {
+  console,
+  TextEncoder,
+  TextDecoder,
+  Uint8Array,
+  DataView,
+  ArrayBuffer,
+  JSON,
+  Math,
+  Number,
+  Date,
+  Promise,
+  URL,
+  Response,
+  performance: { now: () => 1000 },
+  document: {
+    baseURI: "https://galaxy.firestar.link/device/live",
+    body: { dataset: { secureLiveUrl: "" } },
+    getElementById(id) {
+      if (!dom.has(id)) dom.set(id, new FakeElement())
+      return dom.get(id)
+    },
+  },
+  navigator,
+  setTimeout,
+  clearTimeout,
+  setInterval: () => 1,
+  clearInterval: () => {},
+}
+context.window = {
+  isSecureContext: true,
+  navigator,
+  location: { reload: () => {} },
+  matchMedia: () => ({ matches: false }),
+  addEventListener: () => {},
+}
+context.globalThis = context
+vm.createContext(context)
+
+const source = fs.readFileSync(process.argv[1], "utf8")
+vm.runInContext(source, context)
+await new Promise((resolve) => setTimeout(resolve, 0))
+await dom.get("connectButton").listeners.get("click")()
+
+process.stdout.write(JSON.stringify({ chooserCalls, gattConnects }))
+"""
+
 
 def test_standalone_live_link_reassembles_decodes_and_renders_protocol_frame():
   node = shutil.which("node")
@@ -281,8 +375,8 @@ def test_standalone_live_link_reassembles_decodes_and_renders_protocol_frame():
       + "Also verify Settings → Privacy & Security → Bluetooth → beacio is on."
     ),
     "authorizationError": (
-      "The comma did not authorize this phone. While parked, open Galaxy → Bluetooth → Pair a Phone on the comma, "
-      + "reconnect here, and accept any matching-code prompts."
+      "The comma did not authorize this phone. While parked, leave Galaxy → Bluetooth → Pair a Phone open on the comma, "
+      + "then reconnect here. StarPilot authorizes the phone automatically during that window."
     ),
   }
 
@@ -325,3 +419,19 @@ def test_ios_setup_guidance_tracks_beacio_availability(mode, expected):
     timeout=30,
   )
   assert json.loads(result.stdout) == expected
+
+
+@pytest.mark.parametrize(("mode", "expected_chooser_calls"), [("granted", 0), ("new", 1)])
+def test_connect_reuses_a_granted_starpilot_before_opening_the_picker(mode, expected_chooser_calls):
+  node = shutil.which("node")
+  if node is None:
+    pytest.skip("node is required for the Live Link Bluetooth connection test")
+
+  result = subprocess.run(
+    [node, "--input-type=module", "-e", CONNECTION_HARNESS, str(LIVE_LINK_SOURCE), mode],
+    check=True,
+    capture_output=True,
+    text=True,
+    timeout=30,
+  )
+  assert json.loads(result.stdout) == {"chooserCalls": expected_chooser_calls, "gattConnects": 1}

@@ -31,8 +31,8 @@ def test_router_and_settings_cache_bust_is_consistent():
   index = INDEX_PATH.read_text(encoding="utf-8")
 
   assert "/assets/components/settings.js?v=router-cycle-fix-4" in router
-  assert "/assets/components/router.js?v=router-cycle-fix-4" in index
-  assert "/assets/components/tools/bluetooth.js?v=bluetooth-phone-connection-4" in router
+  assert "/assets/components/router.js?v=router-cycle-fix-5" in index
+  assert "/assets/components/tools/bluetooth.js?v=bluetooth-phone-connection-5" in router
   assert "/assets/components/tools/bluetooth.css?v=bluetooth-phone-connection-3" in index
 
 
@@ -58,6 +58,7 @@ def test_bluetooth_actions_use_reactive_disabled_bindings():
   assert "<h3>Phone connection</h3>" in source
   assert "Follow its beacio install and website-permission checks" in source
   assert "Tap Connect over Bluetooth and choose StarPilot" in source
+  assert "no confirmation slider is shown" in source
   assert "isCompanionDevice(device) && !device.connected" in source
   assert "Reconnect from phone" in source
 
@@ -146,8 +147,8 @@ def test_live_link_has_a_self_contained_offline_app_shell():
   server = GALAXY_SERVER_PATH.read_text(encoding="utf-8")
 
   assert 'href="assets/live-manifest.json"' in html
-  assert 'src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-3"' in html
-  assert 'href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-3"' in html
+  assert 'src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-4"' in html
+  assert 'href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-4"' in html
   assert 'id="connectButton"' in html
   assert 'id="secureAppLink"' in html
   assert 'target="_blank" rel="noopener"' in html
@@ -178,7 +179,7 @@ def test_live_link_has_a_self_contained_offline_app_shell():
   assert '"display": "standalone"' in manifest
   assert '"/assets/components/tools/live_link_standalone.js"' in worker
   assert '"/assets/components/tools/live_link_standalone.css"' in worker
-  assert 'const liveCacheName = "starpilot-live-shell-v3"' in worker
+  assert 'const liveCacheName = "starpilot-live-shell-v4"' in worker
   assert 'event.request.mode === "navigate"' in worker
   assert '@app.route("/live", methods=["GET"])' in server
   assert 'render_template("live_link.html", secure_live_url=_galaxy_public_base_url())' in server

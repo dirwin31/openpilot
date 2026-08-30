@@ -29,6 +29,8 @@ AUDIO_TEST_HOLD_TIME = 3.0
 # way around, so a Connect() on it can only ever fail.
 PROFILE_UNAVAILABLE_ERROR = "profile-unavailable"
 PHONE_RECONNECT_HINT = "{name} has to connect from the phone. Open Bluetooth on the phone and select StarPilot."
+COMPANION_BOND_SETTLE_ATTEMPTS = 10
+COMPANION_BOND_SETTLE_INTERVAL = 0.1
 
 
 class BluetoothController:
@@ -48,6 +50,9 @@ class BluetoothController:
     # Device paths of phones auto-accepted during the companion window, pending
     # registration as companions once BlueZ reports them bonded.
     self._pending_companion_paths: set[str] = set()
+    # Companion phones seen connected on the previous maintenance pass, so a
+    # connected -> disconnected transition can re-arm the advertisement they link back to.
+    self._connected_companions: set[str] = set()
     self._last_reconnect = 0.0
     self._scan_deadline = 0.0
     self._audio_test_deadline = 0.0
@@ -221,11 +226,28 @@ class BluetoothController:
     return normalized in previous and not addresses
 
   def _authorize_companion(self, device_path: str) -> bool:
-    with self._lock:
-      if self._bluez is None or not self.params.get_bool("BluetoothCompanionEnabled"):
+    # BlueZ can dispatch the encrypted GATT read immediately after the agent
+    # accepts a bond, just before Device1.Paired becomes visible. That device
+    # path is safe to wait for only when our user-opened companion window has
+    # already auto-accepted it; arbitrary GATT clients still fail immediately.
+    device = None
+    for attempt in range(COMPANION_BOND_SETTLE_ATTEMPTS):
+      with self._lock:
+        client = self._bluez
+        enabled = self.params.get_bool("BluetoothCompanionEnabled")
+        pending = (device_path in self._pending_companion_paths and self._companion_pairing_deadline > 0.0 and
+                   time.monotonic() < self._companion_pairing_deadline)
+      if client is None or not enabled:
         return False
-      device = self._bluez.paired_device_for_path(device_path)
-      if device is None:
+      device = client.paired_device_for_path(device_path)
+      if device is not None:
+        break
+      if not pending or attempt == COMPANION_BOND_SETTLE_ATTEMPTS - 1:
+        return False
+      self._sleep(COMPANION_BOND_SETTLE_INTERVAL)
+
+    with self._lock:
+      if self._bluez is not client or not self.params.get_bool("BluetoothCompanionEnabled"):
         return False
       address = str(device["address"]).upper()
       known_companion = address in self._companion_addresses()
@@ -234,6 +256,7 @@ class BluetoothController:
       if not device.get("trusted", False):
         self._bluez.set_device_property(device["address"], "Trusted", "b", True)
       self._remember_companion(address)
+      self._pending_companion_paths.discard(device_path)
       if not known_companion and self._companion_pairing_deadline:
         try:
           self._bluez.set_pairing_mode(False)
@@ -331,6 +354,9 @@ class BluetoothController:
         client.set_device_property(device["address"], "Trusted", "b", True)
       with self._lock:
         self._enable_companion()
+        companion = self._companion
+      if companion is not None:
+        companion.rearm_advertisement()
     except Exception:
       cloudlog.exception("Unable to re-arm the Bluetooth companion service for a phone reconnect")
 
@@ -494,6 +520,30 @@ class BluetoothController:
         except Exception:
           cloudlog.warning(f"Bluetooth reconnect failed for {device['address']}")
 
+  def _maintain_companion_advertisement(self, status: dict[str, Any]) -> None:
+    # A saved phone reconnects to our persistent advertisement itself, but BlueZ stops
+    # broadcasting once it links and does not resume after it drops. Watch for a companion
+    # going connected -> disconnected and re-register the advertisement so it can link back.
+    with self._lock:
+      companion = self._companion
+    if companion is None:
+      self._connected_companions = set()
+      return
+    known = {address.upper() for address in self._companion_addresses()}
+    connected = {
+      str(device.get("address", "")).upper()
+      for device in status["devices"]
+      if device.get("connected") and str(device.get("address", "")).upper() in known
+    }
+    dropped = self._connected_companions - connected
+    self._connected_companions = connected
+    if not dropped:
+      return
+    try:
+      companion.rearm_advertisement()
+    except Exception:
+      cloudlog.exception("Unable to re-arm the Bluetooth companion advertisement after a phone disconnect")
+
   def maintain_connections(self) -> None:
     while True:
       time.sleep(2)
@@ -507,6 +557,7 @@ class BluetoothController:
         self._maintain_scan(status, now)
         self._maintain_pending_companions()
         self._maintain_companion_pairing(now, status["offroad"])
+        self._maintain_companion_advertisement(status)
         self._maintain_reconnects(status, now)
       except Exception:
         cloudlog.exception("Bluetooth connection maintenance failed")
