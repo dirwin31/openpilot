@@ -19,6 +19,7 @@ DEVICE_IFACE = "org.bluez.Device1"
 AGENT_MANAGER_IFACE = "org.bluez.AgentManager1"
 AGENT_IFACE = "org.bluez.Agent1"
 AGENT_PATH = "/link/firestar/starpilot/agent"
+DEVICE_STATE_TIMEOUT = 5.0
 
 
 def unwrap_variant(value: Any) -> Any:
@@ -286,10 +287,27 @@ class BlueZClient:
   def connect(self, address: str) -> None:
     device = self.device_for_address(address)
     self._call(device["path"], DEVICE_IFACE, "Connect", timeout=30.0)
+    self._wait_for_connection_state(address, True)
 
   def disconnect(self, address: str) -> None:
     device = self.device_for_address(address)
     self._call(device["path"], DEVICE_IFACE, "Disconnect", timeout=15.0)
+    self._wait_for_connection_state(address, False)
+
+  def _wait_for_connection_state(self, address: str, connected: bool) -> None:
+    deadline = time.monotonic() + DEVICE_STATE_TIMEOUT
+    while True:
+      try:
+        if self.device_for_address(address).get("connected", False) == connected:
+          return
+      except RuntimeError as error:
+        if not connected and "was not found" in str(error):
+          return
+        raise
+      if time.monotonic() >= deadline:
+        state = "connect" if connected else "disconnect"
+        raise RuntimeError(f"Bluetooth device did not {state}")
+      time.sleep(0.1)
 
   def remove(self, address: str) -> None:
     adapter_path, _ = self.adapter()
