@@ -23,7 +23,8 @@ def test_router_and_settings_cache_bust_is_consistent():
 
   assert "/assets/components/settings.js?v=router-cycle-fix-4" in router
   assert "/assets/components/router.js?v=router-cycle-fix-4" in index
-  assert "/assets/components/tools/bluetooth.js?v=bluetooth-phone-connection-1" in router
+  assert "/assets/components/tools/bluetooth.js?v=bluetooth-phone-connection-3" in router
+  assert "/assets/components/tools/bluetooth.css?v=bluetooth-phone-connection-2" in index
 
 
 def test_bluetooth_actions_use_reactive_disabled_bindings():
@@ -47,6 +48,20 @@ def test_bluetooth_actions_use_reactive_disabled_bindings():
   assert "state.operationError || state.statusError" in source
   assert "<h3>Phone connection</h3>" in source
   assert "open a Bluetooth LE utility" in source
+  assert "isCompanionDevice(device) && !device.connected" in source
+  assert "Reconnect from phone" in source
+
+
+def test_bluetooth_device_list_reads_state_inside_reactive_blocks():
+  source = BLUETOOTH_PATH.read_text(encoding="utf-8")
+
+  assert "deviceSection(title, icon, selectDevices, emptyText)" in source
+  assert "${() => selectDevices().length}" in source
+  assert "const devices = selectDevices()" in source
+  assert 'deviceSection("My Devices", "bi-check2-circle", knownDevices, () => "No saved devices yet.")' in source
+  assert 'deviceSection("Available Devices", "bi-radar", availableDevices,' in source
+  assert ", knownDevices()," not in source
+  assert ", availableDevices()," not in source
 
 
 def test_controller_test_mode_has_explicit_start_and_stop():

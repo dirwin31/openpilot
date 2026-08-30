@@ -281,6 +281,16 @@
   justify-content: flex-end;
 }
 
+.bluetoothReconnectHint {
+  align-items: center;
+  color: #d9c9ff;
+  display: inline-flex;
+  font-size: 0.84rem;
+  font-weight: 700;
+  gap: 7px;
+  padding: 10px 4px;
+}
+
 .bluetoothActions button.selected {
   background: linear-gradient(135deg, #258b58, #40c97c);
 }

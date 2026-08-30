@@ -64,11 +64,11 @@ async function request(operation, body = {}) {
       startAudioTestCountdown(String(body.address || ""), Number(payload.audio_test_delay_ms || 3000), requestStartedAt)
     }
     state.operationError = ""
-    await refresh()
   } catch (error) {
     state.operationError = error?.message || "Bluetooth operation failed"
   } finally {
     state.busy = ""
+    await refresh()
   }
 }
 
@@ -171,6 +171,11 @@ function availableDevices() {
   return state.devices.filter((device) => !device.paired && !device.trusted && !device.connected)
 }
 
+function isCompanionDevice(device) {
+  const address = normalizedAddress(device)
+  return state.companionDevices.some((companionAddress) => String(companionAddress).toUpperCase() === address)
+}
+
 function deviceActions(device) {
   const audioSelected = () => state.selectedAudio.toUpperCase() === device.address.toUpperCase()
   const pairing = () => isPairing(device)
@@ -181,9 +186,13 @@ function deviceActions(device) {
           ${() => pairing() ? "Pairing…" : "Pair"}
         </button>
       ` : html`
-        <button disabled="${() => !!state.busy}" @click="${() => request(device.connected ? "disconnect" : "connect", { address: device.address })}">
-          ${device.connected ? "Disconnect" : "Connect"}
-        </button>
+        ${isCompanionDevice(device) && !device.connected ? html`
+          <span class="bluetoothReconnectHint"><i class="bi bi-phone" aria-hidden="true"></i> Reconnect from phone</span>
+        ` : html`
+          <button disabled="${() => !!state.busy}" @click="${() => request(device.connected ? "disconnect" : "connect", { address: device.address })}">
+            ${device.connected ? "Disconnect" : "Connect"}
+          </button>
+        `}
         ${device.audio ? html`
           <button class="${() => audioSelected() ? "selected" : ""}"
                   disabled="${() => !!state.busy}" @click="${() => request("select_audio", { address: audioSelected() ? "" : device.address })}">
@@ -221,17 +230,18 @@ function deviceRow(device) {
   `
 }
 
-function deviceSection(title, icon, devices, emptyText = "") {
+function deviceSection(title, icon, selectDevices, emptyText) {
   return html`
     <section class="bluetoothSection">
       <div class="bluetoothSectionHeader">
         <div><i class="bi ${icon}" aria-hidden="true"></i><h3>${title}</h3></div>
-        <span>${devices.length}</span>
+        <span>${() => selectDevices().length}</span>
       </div>
       <div class="bluetoothSectionBody">
-        ${devices.length ? devices.map(deviceRow) : html`
-          <div class="bluetoothEmptyState">${emptyText}</div>
-        `}
+        ${() => {
+          const devices = selectDevices()
+          return devices.length ? devices.map(deviceRow) : html`<div class="bluetoothEmptyState">${emptyText()}</div>`
+        }}
       </div>
     </section>
   `
@@ -312,8 +322,9 @@ export function Bluetooth() {
           </div>
         ` : ""}
         ${() => !state.loading && state.enabled ? html`
-          ${deviceSection("My Devices", "bi-check2-circle", knownDevices(), "No saved devices yet.")}
-          ${deviceSection("Available Devices", "bi-radar", availableDevices(), state.discovering ? "Searching for nearby devices…" : "No nearby devices found. Start a search to try again.")}
+          ${deviceSection("My Devices", "bi-check2-circle", knownDevices, () => "No saved devices yet.")}
+          ${deviceSection("Available Devices", "bi-radar", availableDevices,
+                          () => state.discovering ? "Searching for nearby devices…" : "No nearby devices found. Start a search to try again.")}
         ` : ""}
       </div>
     </div>
