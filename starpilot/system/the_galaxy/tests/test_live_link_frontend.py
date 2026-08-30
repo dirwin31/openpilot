@@ -166,6 +166,7 @@ class FakeElement {
 }
 
 const mode = process.argv[2]
+const insecure = mode === "insecure"
 const dom = new Map()
 const navigator = {
   userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 Version/26.0 Mobile/15E148 Safari/604.1",
@@ -197,7 +198,7 @@ const context = {
   performance: { now: () => 1000 },
   document: {
     baseURI: "https://galaxy.firestar.link/device/live",
-    body: { dataset: { secureLiveUrl: "" } },
+    body: { dataset: { secureLiveUrl: insecure ? "https://galaxy.firestar.link/AbCdEf0123456789" : "" } },
     getElementById(id) {
       if (!dom.has(id)) dom.set(id, new FakeElement())
       return dom.get(id)
@@ -210,7 +211,7 @@ const context = {
   clearInterval: () => {},
 }
 context.window = {
-  isSecureContext: true,
+  isSecureContext: !insecure,
   navigator,
   location: { reload: () => {} },
   matchMedia: () => ({ matches: false }),
@@ -223,14 +224,21 @@ const source = fs.readFileSync(process.argv[1], "utf8")
 vm.runInContext(source, context)
 await new Promise((resolve) => setTimeout(resolve, 0))
 
-process.stdout.write(JSON.stringify({
+const result = insecure ? {
+  title: dom.get("setupTitle").textContent,
+  message: dom.get("setupMessage").textContent,
+  linkText: dom.get("secureAppLink").textContent,
+  linkHref: dom.get("secureAppLink").href,
+  linkHidden: dom.get("secureAppLink").hidden,
+} : {
   title: dom.get("setupTitle").textContent,
   message: dom.get("setupMessage").textContent,
   installHidden: dom.get("beacioInstallLink").hidden,
   connectHidden: dom.get("connectButton").hidden,
   beacioClass: dom.get("beacioStep").className,
   permissionClass: dom.get("permissionStep").className,
-}))
+}
+process.stdout.write(JSON.stringify(result))
 """
 
 
@@ -268,24 +276,37 @@ def test_standalone_live_link_reassembles_decodes_and_renders_protocol_frame():
     "curve": "38",
     "border": "rgba(22, 127, 64, 1.000)",
     "chooserError": "No StarPilot device was selected. On the comma, open Galaxy → Bluetooth → Pair a Phone, then try again and choose StarPilot.",
-    "permissionError": "Bluetooth access was denied. In Safari, allow beacio on this website. Also verify Settings → Privacy & Security → Bluetooth → beacio is on.",
-    "authorizationError": "The comma did not authorize this phone. While parked, open Galaxy → Bluetooth → Pair a Phone on the comma, reconnect here, and accept any matching-code prompts.",
+    "permissionError": (
+      "Bluetooth access was denied. In Safari, allow beacio on this website. "
+      + "Also verify Settings → Privacy & Security → Bluetooth → beacio is on."
+    ),
+    "authorizationError": (
+      "The comma did not authorize this phone. While parked, open Galaxy → Bluetooth → Pair a Phone on the comma, "
+      + "reconnect here, and accept any matching-code prompts."
+    ),
   }
 
 
 @pytest.mark.parametrize(("mode", "expected"), [
+  ("insecure", {
+    "title": "Set up Live Link",
+    "message": "Use any step when you need it. Keep Pair a Phone open on the comma when you connect.",
+    "linkText": "Open secure Galaxy",
+    "linkHref": "https://galaxy.firestar.link/AbCdEf0123456789",
+    "linkHidden": False,
+  }),
   ("missing", {
-    "title": "Set up Bluetooth on iPhone",
-    "message": "Install beacio, enable its Safari extension, and allow it on websites.",
+    "title": "Set up Live Link",
+    "message": "Use any step when you need it. Keep Pair a Phone open on the comma when you connect.",
     "installHidden": False,
-    "connectHidden": True,
-    "beacioClass": "setupStep setupStepCurrent",
-    "permissionClass": "setupStep setupStepPending",
+    "connectHidden": False,
+    "beacioClass": "setupStep setupStepPending",
+    "permissionClass": "setupStep setupStepCurrent",
   }),
   ("ready", {
-    "title": "Pair with StarPilot",
-    "message": "Bluetooth is ready. Open Pair a Phone on the comma, then connect here.",
-    "installHidden": True,
+    "title": "Set up Live Link",
+    "message": "Use any step when you need it. Keep Pair a Phone open on the comma when you connect.",
+    "installHidden": False,
     "connectHidden": False,
     "beacioClass": "setupStep setupStepComplete",
     "permissionClass": "setupStep setupStepComplete",

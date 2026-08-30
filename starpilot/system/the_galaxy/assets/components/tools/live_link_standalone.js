@@ -46,9 +46,9 @@ const M_TO_FT = 3.2808399
 const elements = Object.fromEntries([
   "connectionBadge", "connectionText", "setupCard", "setupTitle", "setupMessage", "setupSteps", "connectButton", "connectionError",
   "secureAppLink", "installHint", "beacioInstallLink", "checkSetupButton", "reloadSetupButton", "permissionHelp",
-  "browserStep", "browserStepMarker", "browserStepDetail", "beacioStep", "beacioStepMarker", "beacioStepDetail",
+  "beacioStep", "beacioStepMarker", "beacioStepDetail",
   "permissionStep", "permissionStepMarker", "permissionStepDetail", "pairStep", "pairStepMarker", "pairStepDetail",
-  "connectStep", "connectStepMarker", "connectStepDetail", "livePanel", "vehicleSpeed", "speedUnit", "setSpeed", "driveStatus", "driveStatusLabel",
+  "connectStep", "connectStepMarker", "connectStepTitle", "connectStepDetail", "livePanel", "vehicleSpeed", "speedUnit", "setSpeed", "driveStatus", "driveStatusLabel",
   "driveStatusDetail", "leadCard", "leadDistance", "leadRelativeSpeed", "engagementChip", "engagementValue",
   "aolChip", "aolValue", "experimentalChip", "experimentalValue", "slcChip", "slcValue", "slcDetail",
   "curveChip", "curveValue", "alertCard", "alertText", "disconnectButton", "offlineReady",
@@ -235,7 +235,6 @@ function setSetupStep(element, marker, status) {
   }[status] || "setupStepPending"
   element.className = `setupStep ${statusClass}`
   const markers = [
-    elements.browserStepMarker,
     elements.beacioStepMarker,
     elements.permissionStepMarker,
     elements.pairStepMarker,
@@ -249,36 +248,21 @@ function renderSetup() {
   const safariContext = isIOSSafari() || isStandaloneApp()
   const secure = window.isSecureContext
   const apiReady = secure && setupState.bluetoothApi
-  const radioReady = apiReady && setupState.bluetoothAvailable !== false
-  const browserReady = secure && (!ios || safariContext)
+  const secureBaseUrl = String(document.body.dataset.secureLiveUrl || "").replace(/\/$/, "")
 
-  elements.browserStep.hidden = !ios && secure
   elements.beacioStep.hidden = !ios
   elements.permissionStep.hidden = !ios
-  elements.beacioInstallLink.hidden = !ios || apiReady
-  elements.checkSetupButton.hidden = !ios || apiReady
+  elements.beacioInstallLink.hidden = !ios
+  elements.checkSetupButton.hidden = !ios
   elements.checkSetupButton.disabled = setupState.checking
   elements.checkSetupButton.textContent = setupState.checking ? "Checking…" : "Check beacio setup"
   elements.reloadSetupButton.hidden = !(ios && setupState.checked && !apiReady)
   elements.permissionHelp.hidden = !(ios && setupState.checked && !apiReady)
-  elements.connectButton.hidden = !radioReady
+  elements.secureAppLink.hidden = secure || !secureBaseUrl
+  elements.connectButton.hidden = !secure
 
-  if (!secure) {
-    setSetupStep(elements.browserStep, elements.browserStepMarker, "attention")
-    elements.browserStepDetail.textContent = "Bluetooth requires the HTTPS Live Link address. This HTTP page cannot request Bluetooth."
-    elements.setupTitle.textContent = "Open secure Live Link"
-    elements.setupMessage.textContent = "Open the secure page before setting up Bluetooth."
-  } else if (ios && !safariContext) {
-    setSetupStep(elements.browserStep, elements.browserStepMarker, "attention")
-    elements.browserStepDetail.textContent = "Open this address in Safari. Chrome, Firefox, and in-app browsers on iPhone cannot load Safari extensions."
-    elements.setupTitle.textContent = "Open Live Link in Safari"
-    elements.setupMessage.textContent = "beacio only runs in Safari or the installed Live Link app."
-  } else {
-    setSetupStep(elements.browserStep, elements.browserStepMarker, "complete")
-    elements.browserStepDetail.textContent = isStandaloneApp()
-      ? "Secure installed Live Link app detected."
-      : "Secure Safari page detected. Avoid Private Browsing during setup."
-  }
+  elements.setupTitle.textContent = "Set up Live Link"
+  elements.setupMessage.textContent = "Use any step when you need it. Keep Pair a Phone open on the comma when you connect."
 
   if (ios) {
     if (apiReady) {
@@ -289,9 +273,9 @@ function renderSetup() {
         ? "Website access works, but Bluetooth is unavailable. Turn on Bluetooth and allow beacio under Settings → Privacy & Security → Bluetooth."
         : "beacio website access and the Bluetooth API are available."
     } else {
-      const status = setupState.checked ? "attention" : "current"
+      const status = setupState.checked ? "attention" : "pending"
       setSetupStep(elements.beacioStep, elements.beacioStepMarker, status)
-      setSetupStep(elements.permissionStep, elements.permissionStepMarker, setupState.checked ? "attention" : "pending")
+      setSetupStep(elements.permissionStep, elements.permissionStepMarker, setupState.checked ? "attention" : "current")
       elements.beacioStepDetail.textContent = setupState.checked
         ? "Live Link still cannot detect beacio. Install it if you have not already."
         : "Install the free beacio Safari extension from the App Store."
@@ -301,38 +285,39 @@ function renderSetup() {
     }
   }
 
-  if (browserReady && ios && !apiReady) {
-    elements.setupTitle.textContent = "Set up Bluetooth on iPhone"
-    elements.setupMessage.textContent = setupState.checked
-      ? "Live Link still cannot see beacio. Check its Safari website permission, then reload and verify."
-      : "Install beacio, enable its Safari extension, and allow it on websites."
-  } else if (browserReady && apiReady && setupState.bluetoothAvailable === false) {
-    elements.setupTitle.textContent = "Turn on Bluetooth"
-    elements.setupMessage.textContent = "beacio is active, but Bluetooth is currently unavailable."
-  } else if (browserReady && !ios && !apiReady) {
-    elements.setupTitle.textContent = "Bluetooth browser required"
-    elements.setupMessage.textContent = "This browser does not provide Web Bluetooth."
-  }
-
   if (setupState.companionAuthorized) {
     setSetupStep(elements.pairStep, elements.pairStepMarker, "complete")
-    setSetupStep(elements.connectStep, elements.connectStepMarker, "complete")
     elements.pairStepDetail.textContent = "This phone is registered as a StarPilot companion."
-    elements.connectStepDetail.textContent = "The protected Live Link service authorized this phone."
   } else if (setupState.authorizationFailed) {
     setSetupStep(elements.pairStep, elements.pairStepMarker, "attention")
-    setSetupStep(elements.connectStep, elements.connectStepMarker, "pending")
     elements.pairStepDetail.textContent = "StarPilot rejected the protected read. On the comma, tap Pair a Phone and try again while that window is open."
     elements.setupTitle.textContent = "Finish pairing on the comma"
     elements.setupMessage.textContent = "Bluetooth reached StarPilot, but this phone is not registered as a companion yet."
-  } else if (radioReady && browserReady) {
-    setSetupStep(elements.pairStep, elements.pairStepMarker, "current")
-    setSetupStep(elements.connectStep, elements.connectStepMarker, "pending")
-    elements.setupTitle.textContent = "Pair with StarPilot"
-    elements.setupMessage.textContent = "Bluetooth is ready. Open Pair a Phone on the comma, then connect here."
   } else {
     setSetupStep(elements.pairStep, elements.pairStepMarker, "pending")
-    setSetupStep(elements.connectStep, elements.connectStepMarker, "pending")
+    elements.pairStepDetail.textContent = "While parked, open Galaxy → Bluetooth on the comma, turn Bluetooth on, then tap Pair a Phone."
+  }
+
+  if (setupState.companionAuthorized) {
+    setSetupStep(elements.connectStep, elements.connectStepMarker, "complete")
+    elements.connectStepTitle.textContent = "Secure Live Link connected"
+    elements.connectStepDetail.textContent = "The protected Live Link service authorized this phone."
+  } else if (!secure) {
+    setSetupStep(elements.connectStep, elements.connectStepMarker, secureBaseUrl ? "current" : "attention")
+    elements.connectStepTitle.textContent = "Open the secure Live Link page"
+    elements.connectStepDetail.textContent = secureBaseUrl
+      ? "Open secure Galaxy, sign in, then choose Live Link. Bluetooth cannot run on this HTTP page."
+      : "Set up Galaxy remote access first so Live Link has the required HTTPS address."
+  } else if (ios && !safariContext) {
+    setSetupStep(elements.connectStep, elements.connectStepMarker, "attention")
+    elements.connectStepTitle.textContent = "Open this secure page in Safari"
+    elements.connectStepDetail.textContent = "Chrome, Firefox, and in-app browsers on iPhone cannot load Safari extensions."
+  } else {
+    setSetupStep(elements.connectStep, elements.connectStepMarker, "current")
+    elements.connectStepTitle.textContent = "Connect from the secure page"
+    elements.connectStepDetail.textContent = isStandaloneApp()
+      ? "Secure installed Live Link detected. Tap Connect, choose StarPilot, and approve any prompts."
+      : "Secure Safari page detected. Tap Connect, choose StarPilot, and approve any prompts."
   }
 }
 
@@ -350,7 +335,7 @@ function renderConnection() {
   const [className, label] = connectionLabel()
   elements.connectionBadge.className = `connectionBadge ${className}`
   elements.connectionText.textContent = label
-  elements.connectButton.disabled = state.phase === "connecting" || !setupState.bluetoothApi || setupState.bluetoothAvailable === false
+  elements.connectButton.disabled = state.phase === "connecting"
   elements.connectButton.textContent = state.phase === "connecting" ? "Connecting…" : "Connect over Bluetooth"
   elements.connectionError.hidden = !state.error
   elements.connectionError.textContent = state.error
@@ -735,8 +720,11 @@ function configureLaunchContext() {
   elements.connectButton.hidden = true
   elements.installHint.hidden = true
   if (secureBaseUrl) {
-    elements.setupMessage.textContent = "Bluetooth requires the secure installable page. Open it once, then add it to your Home Screen for offline use."
-    elements.secureAppLink.href = `${secureBaseUrl}/live`
+    // The public gateway only exposes nested device paths after its slug-root
+    // sign-in has established a Galaxy session. Enter through the supported
+    // root first; the authenticated sidebar can then open /{slug}/live.
+    elements.secureAppLink.href = secureBaseUrl
+    elements.secureAppLink.textContent = "Open secure Galaxy"
     elements.secureAppLink.hidden = false
   } else {
     elements.setupMessage.textContent = "Set up Galaxy remote access once to create the secure installable Live Link page."

@@ -159,15 +159,19 @@ def test_live_link_has_a_self_contained_offline_app_shell():
   server = GALAXY_SERVER_PATH.read_text(encoding="utf-8")
 
   assert 'href="assets/live-manifest.json"' in html
-  assert 'src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-2"' in html
-  assert 'href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-2"' in html
+  assert 'src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-3"' in html
+  assert 'href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-3"' in html
   assert 'id="connectButton"' in html
   assert 'id="secureAppLink"' in html
+  assert 'target="_blank" rel="noopener"' in html
   assert 'id="checkSetupButton"' in html
   assert 'id="reloadSetupButton"' in html
   assert 'href="https://apps.apple.com/app/id6761301368"' in html
   assert "Allow on Every Website" in html
   assert "Galaxy → Bluetooth" in html
+  assert html.index('id="beacioStep"') < html.index('id="permissionStep"') < html.index('id="pairStep"') < html.index('id="connectStep"')
+  assert html.index('id="beacioInstallLink"') < html.index('id="permissionStep"')
+  assert html.index('id="checkSetupButton"') < html.index('id="pairStep"')
   assert 'id="engagementValue"' in html
   assert 'id="slcDetail"' in html
 
@@ -175,6 +179,8 @@ def test_live_link_has_a_self_contained_offline_app_shell():
   assert "navigator.bluetooth.requestDevice" in script
   assert "navigator.bluetooth.getAvailability" in script
   assert "Live Link still cannot see beacio" in script
+  assert 'elements.secureAppLink.href = secureBaseUrl' in script
+  assert 'elements.secureAppLink.href = `${secureBaseUrl}/live`' not in script
   assert "The comma did not authorize this phone" in script
   assert "liveCharacteristic.startNotifications()" in script
   assert 'op: "get_live_metadata"' in script
@@ -185,7 +191,7 @@ def test_live_link_has_a_self_contained_offline_app_shell():
   assert '"display": "standalone"' in manifest
   assert '"/assets/components/tools/live_link_standalone.js"' in worker
   assert '"/assets/components/tools/live_link_standalone.css"' in worker
-  assert 'const liveCacheName = "starpilot-live-shell-v2"' in worker
+  assert 'const liveCacheName = "starpilot-live-shell-v3"' in worker
   assert 'event.request.mode === "navigate"' in worker
   assert '@app.route("/live", methods=["GET"])' in server
   assert 'render_template("live_link.html", secure_live_url=_galaxy_public_base_url())' in server
