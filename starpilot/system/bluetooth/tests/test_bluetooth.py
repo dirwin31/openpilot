@@ -914,6 +914,76 @@ def test_reconnect_maintenance_connects_audio_and_controllers_but_not_phone_cent
   assert not any(action[0] == "connect" for action in client.actions)
 
 
+def test_connect_to_phone_reports_actionable_hint_and_rearms_companion():
+  address = "00:11:22:33:44:55"
+  params = TypedJsonFakeParams(
+    IsOffroad=True,
+    BluetoothEnabled=True,
+    BluetoothCompanionEnabled=True,
+    BluetoothCompanionDevices=[address],
+  )
+
+  class ProfileUnavailableBlueZ(FakeBlueZ):
+    def __init__(self):
+      super().__init__()
+      self.device.update({"name": "iPhone", "audio": False, "controller": False, "trusted": False})
+
+    def connect(self, address):
+      self.actions.append(("connect", address))
+      raise RuntimeError("br-connection-profile-unavailable")
+
+  client = ProfileUnavailableBlueZ()
+  companions = []
+  controller = BluetoothController(params, lambda: client, FakeRadio(),
+                                   companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1])
+
+  with pytest.raises(RuntimeError, match="connect from the phone"):
+    controller.handle({"command": "connect", "address": address})
+
+  # The bond is kept trusted and the service stays advertised so the phone, which
+  # is the BLE central, can link back on its own.
+  assert ("property", address, "Trusted", "b", True) in client.actions
+  assert companions and companions[-1].started == "/org/bluez/hci0" and not companions[-1].closed
+
+
+def test_connect_failure_on_audio_device_keeps_the_bluez_error():
+  params = FakeParams(IsOffroad=True, BluetoothEnabled=True)
+
+  class ProfileUnavailableBlueZ(FakeBlueZ):
+    def connect(self, address):
+      self.actions.append(("connect", address))
+      raise RuntimeError("br-connection-profile-unavailable")
+
+  client = ProfileUnavailableBlueZ()
+  controller = BluetoothController(params, lambda: client, FakeRadio())
+
+  with pytest.raises(RuntimeError, match="br-connection-profile-unavailable"):
+    controller.handle({"command": "connect", "address": client.device["address"]})
+
+
+def test_connect_failure_on_unregistered_ble_device_keeps_the_bluez_error():
+  params = TypedJsonFakeParams(
+    IsOffroad=True,
+    BluetoothEnabled=True,
+    BluetoothCompanionDevices=[],
+  )
+
+  class ProfileUnavailableBlueZ(FakeBlueZ):
+    def __init__(self):
+      super().__init__()
+      self.device.update({"name": "BLE Sensor", "audio": False, "controller": False})
+
+    def connect(self, address):
+      self.actions.append(("connect", address))
+      raise RuntimeError("br-connection-profile-unavailable")
+
+  client = ProfileUnavailableBlueZ()
+  controller = BluetoothController(params, lambda: client, FakeRadio())
+
+  with pytest.raises(RuntimeError, match="br-connection-profile-unavailable"):
+    controller.handle({"command": "connect", "address": client.device["address"]})
+
+
 def test_saved_companion_reenables_service_when_daemon_starts():
   params = FakeParams(
     BluetoothCompanionEnabled=False,

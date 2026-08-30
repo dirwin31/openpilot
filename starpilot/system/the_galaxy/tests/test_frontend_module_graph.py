@@ -24,6 +24,7 @@ def test_router_and_settings_cache_bust_is_consistent():
   assert "/assets/components/settings.js?v=router-cycle-fix-5" in router
   assert "/assets/components/router.js?v=router-cycle-fix-6" in index
   assert "/assets/components/tools/bluetooth.js?v=bluetooth-live-15" in router
+  assert "/assets/components/tools/bluetooth.css?v=bluetooth-6" in index
 
 
 def test_bluetooth_actions_use_reactive_disabled_bindings():
@@ -62,6 +63,18 @@ def test_bluetooth_actions_use_reactive_disabled_bindings():
   assert "state.operationError || state.statusError" in source
   assert "<h3>Phone connection</h3>" in source
   assert "open a Bluetooth LE utility" in source
+  assert "isCompanionDevice(device) && !device.connected" in source
+  assert "Reconnect from phone" in source
+
+
+def test_bluetooth_device_list_rerenders_when_state_changes():
+  source = BLUETOOTH_PATH.read_text(encoding="utf-8")
+
+  assert "renderDeviceSection(title, icon, devices, emptyText" in source
+  assert 'renderDeviceSection("My Devices", "bi-check2-circle", knownDevices()' in source
+  assert 'renderDeviceSection("Available Devices", "bi-radar", availableDevices()' in source
+  assert "state.deviceSignature !== deviceSignature" in source
+  assert "state.revision++" in source
 
 
 def test_controller_test_mode_has_explicit_start_and_stop():

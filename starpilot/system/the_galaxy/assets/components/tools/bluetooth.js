@@ -101,13 +101,13 @@ async function request(operation, body = {}) {
       startAudioTestCountdown(String(body.address || ""), Number(payload.audio_test_delay_ms || 3000), requestStartedAt)
     }
     state.operationError = ""
-    await refresh()
   } catch (error) {
     state.operationError = error?.message || "Bluetooth operation failed"
   } finally {
     state.busy = ""
     if (operation === "power") state.powerTarget = null
     schedulePoll(250)
+    await refresh()
   }
 }
 
@@ -282,6 +282,11 @@ function availableDevices() {
   return state.devices.filter((device) => !device.paired && !device.trusted && !device.connected)
 }
 
+function isCompanionDevice(device) {
+  const address = normalizedAddress(device)
+  return state.companionDevices.some((companionAddress) => String(companionAddress).toUpperCase() === address)
+}
+
 function deviceActions(device) {
   const audioSelected = () => state.selectedAudio.toUpperCase() === device.address.toUpperCase()
   const pairing = () => isPairing(device)
@@ -293,9 +298,13 @@ function deviceActions(device) {
         </button>
       ` : ""}
       ${device.paired || device.connected ? html`
-        <button disabled="${() => !!state.busy}" @click="${() => request(device.connected ? "disconnect" : "connect", { address: device.address })}">
-          ${device.connected ? "Disconnect" : "Connect"}
-        </button>
+        ${isCompanionDevice(device) && !device.connected ? html`
+          <span class="bluetoothReconnectHint"><i class="bi bi-phone" aria-hidden="true"></i> Reconnect from phone</span>
+        ` : html`
+          <button disabled="${() => !!state.busy}" @click="${() => request(device.connected ? "disconnect" : "connect", { address: device.address })}">
+            ${device.connected ? "Disconnect" : "Connect"}
+          </button>
+        `}
       ` : ""}
       ${device.paired || device.connected ? html`
         ${device.audio ? html`
@@ -367,9 +376,13 @@ function renderDeviceActions(device) {
       renderDisabledAttribute(!state.offroad || !!state.busy || pairing) + ">" + (pairing ? "Pairing…" : "Pair") + "</button>")
   }
   if (device.paired || device.connected) {
-    const operation = device.connected ? "disconnect" : "connect"
-    actions.push("<button data-bluetooth-operation=\"" + operation + "\" data-address=\"" + address + "\"" +
-      renderDisabledAttribute(!!state.busy) + ">" + (device.connected ? "Disconnect" : "Connect") + "</button>")
+    if (isCompanionDevice(device) && !device.connected) {
+      actions.push("<span class=\"bluetoothReconnectHint\"><i class=\"bi bi-phone\" aria-hidden=\"true\"></i> Reconnect from phone</span>")
+    } else {
+      const operation = device.connected ? "disconnect" : "connect"
+      actions.push("<button data-bluetooth-operation=\"" + operation + "\" data-address=\"" + address + "\"" +
+        renderDisabledAttribute(!!state.busy) + ">" + (device.connected ? "Disconnect" : "Connect") + "</button>")
+    }
     if (device.audio) {
       actions.push("<button class=\"" + (selected ? "selected" : "") + "\" data-bluetooth-operation=\"select_audio\" data-address=\"" +
         (selected ? "" : address) + "\"" + renderDisabledAttribute(!!state.busy) + ">" +

@@ -23,6 +23,12 @@ SCAN_DURATION = 20.0
 COMPANION_PAIRING_DURATION = 120.0
 AUDIO_TEST_START_DELAY = 3.0
 AUDIO_TEST_HOLD_TIME = 3.0
+# BlueZ raises "br-connection-profile-unavailable" (or the LE spelling) when the
+# bond carries no profile we can drive as a client. A phone is exactly that: it
+# is the BLE central for the companion service and links to us, never the other
+# way around, so a Connect() on it can only ever fail.
+PROFILE_UNAVAILABLE_ERROR = "profile-unavailable"
+PHONE_RECONNECT_HINT = "{name} has to connect from the phone. Open Bluetooth on the phone and select StarPilot."
 
 
 class BluetoothController:
@@ -316,6 +322,32 @@ class BluetoothController:
         pass
       self._pairing_address = ""
 
+  def _connect(self, address: str) -> None:
+    client = self._client()
+    try:
+      client.connect(address)
+    except RuntimeError as error:
+      if PROFILE_UNAVAILABLE_ERROR not in str(error):
+        raise
+      device = client.device_for_address(address)
+      is_companion = str(device.get("address", "")).upper() in self._companion_addresses()
+      if not is_companion:
+        raise
+      self._rearm_companion(client, device)
+      raise RuntimeError(PHONE_RECONNECT_HINT.format(name=device.get("name") or address)) from None
+
+  def _rearm_companion(self, client: BlueZClient, device: dict[str, Any]) -> None:
+    # Keep the peripheral service available so the saved phone can link back.
+    if str(device.get("address", "")).upper() not in self._companion_addresses():
+      return
+    try:
+      if not device.get("trusted", False):
+        client.set_device_property(device["address"], "Trusted", "b", True)
+      with self._lock:
+        self._enable_companion()
+    except Exception:
+      cloudlog.exception("Unable to re-arm the Bluetooth companion service for a phone reconnect")
+
   def _test_audio_worker(self, address: str, deadline: float) -> None:
     try:
       self._sleep(max(0.0, deadline - time.monotonic()))
@@ -408,16 +440,13 @@ class BluetoothController:
       self._pairing_error = ""
       threading.Thread(target=self._pair_worker, args=(address,), daemon=True).start()
     elif command == "connect":
-      self._client().connect(address)
+      self._connect(address)
     elif command == "disconnect":
       self._client().disconnect(address)
     elif command == "forget":
       self._client().remove(address)
       with self._lock:
         if self._forget_companion(address):
-          # Forgetting the final phone removes both its BlueZ bond and the
-          # local authorization/service state. Starting a new phone pairing
-          # window will register a fresh service for re-pairing.
           self._stop_companion(require_pairing_closed=True)
           self.params.put_bool("BluetoothCompanionEnabled", False)
       if (self.params.get("BluetoothAudioAddress", encoding="utf-8") or "").upper() == address.upper():
