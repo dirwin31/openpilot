@@ -39,14 +39,17 @@ class BluetoothController:
     self._companion_pairing_deadline = 0.0
     self._pairing_address = ""
     self._pairing_error = ""
+    # Device paths of phones auto-accepted during the companion window, pending
+    # registration as companions once BlueZ reports them bonded.
+    self._pending_companion_paths: set[str] = set()
     self._last_reconnect = 0.0
     self._scan_deadline = 0.0
     self._audio_test_deadline = 0.0
     self._sleep = sleep
     # Companion service availability follows the saved phone now that the UI
-    # no longer exposes a separate enable switch.
-    if self._companion_addresses():
-      self.params.put_bool("BluetoothCompanionEnabled", True)
+    # no longer exposes a separate enable switch. A new pairing window enables
+    # it temporarily until the first phone is saved.
+    self.params.put_bool("BluetoothCompanionEnabled", bool(self._companion_addresses()))
     self.params.remove("BluetoothAudioTestActive")
     self.params_memory.remove("TestAlert")
 
@@ -71,6 +74,7 @@ class BluetoothController:
           raise RuntimeError("Bluetooth is disabled")
         self._radio.start()
         self._bluez = self._bluez_factory()
+        self._bluez.agent.auto_accept_handler = self._auto_accept_bond
         self._bluez.set_powered(True)
         self._bluez.agent.set_auto_accept_incoming(self._offroad())
         try:
@@ -140,6 +144,61 @@ class BluetoothController:
     if self._companion is not None:
       self._companion.close()
       self._companion = None
+    self._pending_companion_paths.clear()
+
+  def _auto_accept_bond(self, device_path: str) -> bool:
+    # Saved bonded phones may reconnect without another settings prompt. New
+    # phones are accepted only during a user-opened pairing window. A
+    # device-initiated pair (audio/controller) keeps its normal prompt.
+    with self._lock:
+      if self._bluez is not None:
+        try:
+          device = self._bluez.paired_device_for_path(device_path)
+        except Exception:
+          device = None
+        if (device is not None and device.get("trusted", False) and
+            str(device.get("address", "")).upper() in self._companion_addresses()):
+          return True
+      if self._pairing_address:
+        return False
+      if self._companion_pairing_deadline <= 0.0 or time.monotonic() >= self._companion_pairing_deadline:
+        return False
+      if device_path:
+        self._pending_companion_paths.add(device_path)
+      return True
+
+  def _maintain_pending_companions(self) -> None:
+    with self._lock:
+      pending = list(self._pending_companion_paths)
+      client = self._bluez
+    if not pending or client is None:
+      return
+    for path in pending:
+      try:
+        device = client.paired_device_for_path(path)
+      except Exception:
+        continue
+      if device is None:
+        continue  # still bonding; revisit on the next maintenance pass
+      address = device["address"]
+      if not device.get("trusted", False):
+        try:
+          client.set_device_property(address, "Trusted", "b", True)
+        except Exception:
+          cloudlog.exception("Unable to trust companion phone")
+          continue
+      with self._lock:
+        self._pending_companion_paths.discard(path)
+        self._remember_companion(address)
+        close_window = bool(self._companion_pairing_deadline)
+      if close_window:
+        try:
+          client.set_pairing_mode(False)
+        except Exception:
+          cloudlog.exception("Unable to close companion pairing window after bond")
+        else:
+          with self._lock:
+            self._companion_pairing_deadline = 0.0
 
   def _companion_addresses(self) -> list[str]:
     try:
@@ -156,10 +215,12 @@ class BluetoothController:
       addresses.append(normalized)
       self.params.put("BluetoothCompanionDevices", addresses[-8:])
 
-  def _forget_companion(self, address: str) -> None:
+  def _forget_companion(self, address: str) -> bool:
     normalized = address.upper()
-    addresses = [item for item in self._companion_addresses() if item != normalized]
+    previous = self._companion_addresses()
+    addresses = [item for item in previous if item != normalized]
     self.params.put("BluetoothCompanionDevices", addresses)
+    return normalized in previous and not addresses
 
   def _authorize_companion(self, device_path: str) -> bool:
     with self._lock:
@@ -352,7 +413,13 @@ class BluetoothController:
       self._client().disconnect(address)
     elif command == "forget":
       self._client().remove(address)
-      self._forget_companion(address)
+      with self._lock:
+        if self._forget_companion(address):
+          # Forgetting the final phone removes both its BlueZ bond and the
+          # local authorization/service state. Starting a new phone pairing
+          # window will register a fresh service for re-pairing.
+          self._stop_companion(require_pairing_closed=True)
+          self.params.put_bool("BluetoothCompanionEnabled", False)
       if (self.params.get("BluetoothAudioAddress", encoding="utf-8") or "").upper() == address.upper():
         self.params.remove("BluetoothAudioAddress")
     elif command == "select_audio":
@@ -396,6 +463,23 @@ class BluetoothController:
       if self._companion_pairing_deadline and (offroad is False or now >= self._companion_pairing_deadline):
         self._client().set_pairing_mode(False)
         self._companion_pairing_deadline = 0.0
+        self._pending_companion_paths.clear()
+
+  def _maintain_reconnects(self, status: dict[str, Any], now: float) -> None:
+    if self._pairing_address or now - self._last_reconnect < 15:
+      return
+    self._last_reconnect = now
+    selected = str(status["selected_audio"])
+    candidates = [device for device in status["devices"] if device["paired"] and device["trusted"] and not device["connected"]]
+    candidates.sort(key=lambda device: device["address"].upper() != selected.upper())
+    for device in candidates:
+      # Phones are BLE centrals for this service and reconnect to our persistent
+      # advertisement themselves. We only initiate links to audio/HID devices.
+      if device["audio"] or device["controller"]:
+        try:
+          self._client().connect(device["address"])
+        except Exception:
+          cloudlog.warning(f"Bluetooth reconnect failed for {device['address']}")
 
   def maintain_connections(self) -> None:
     while True:
@@ -408,19 +492,9 @@ class BluetoothController:
           continue
         now = time.monotonic()
         self._maintain_scan(status, now)
+        self._maintain_pending_companions()
         self._maintain_companion_pairing(now, status["offroad"])
-        if self._pairing_address or now - self._last_reconnect < 15:
-          continue
-        self._last_reconnect = now
-        selected = str(status["selected_audio"])
-        candidates = [device for device in status["devices"] if device["paired"] and device["trusted"] and not device["connected"]]
-        candidates.sort(key=lambda device: device["address"].upper() != selected.upper())
-        for device in candidates:
-          if device["audio"] or device["controller"]:
-            try:
-              self._client().connect(device["address"])
-            except Exception:
-              cloudlog.warning(f"Bluetooth reconnect failed for {device['address']}")
+        self._maintain_reconnects(status, now)
       except Exception:
         cloudlog.exception("Bluetooth connection maintenance failed")
 

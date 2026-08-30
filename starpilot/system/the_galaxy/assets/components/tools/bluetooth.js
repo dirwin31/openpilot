@@ -24,7 +24,8 @@ const state = reactive({
   prompt: null,
   audioTestAddress: "",
   audioTestLabel: "",
-  error: "",
+  operationError: "",
+  statusError: "",
 })
 
 let initialized = false
@@ -99,10 +100,10 @@ async function request(operation, body = {}) {
     if (operation === "test_audio") {
       startAudioTestCountdown(String(body.address || ""), Number(payload.audio_test_delay_ms || 3000), requestStartedAt)
     }
-    state.error = ""
+    state.operationError = ""
     await refresh()
   } catch (error) {
-    state.error = error?.message || "Bluetooth operation failed"
+    state.operationError = error?.message || "Bluetooth operation failed"
   } finally {
     state.busy = ""
     if (operation === "power") state.powerTarget = null
@@ -140,7 +141,7 @@ async function refreshOnce() {
   }
   state.lastUpdated = Date.now()
   state.prompt = payload.prompt || null
-  state.error = payload.error || (response.ok ? "" : "Bluetooth service unavailable")
+  state.statusError = payload.error || (response.ok ? "" : "Bluetooth service unavailable")
 }
 
 function pairingPromptNeedsValue() {
@@ -153,12 +154,12 @@ function respondToPairingPrompt(accepted) {
   const input = document.getElementById("bluetoothPairingValue")
   const value = input?.value.trim() || ""
   if (accepted && prompt.kind === "pin" && !value) {
-    state.error = "Enter the PIN to continue pairing."
+    state.operationError = "Enter the PIN to continue pairing."
     input?.focus()
     return
   }
   if (accepted && prompt.kind === "passkey" && !/^\d{1,6}$/.test(value)) {
-    state.error = "Enter the numeric passkey to continue pairing."
+    state.operationError = "Enter the numeric passkey to continue pairing."
     input?.focus()
     return
   }
@@ -210,7 +211,7 @@ async function refresh() {
         await refreshOnce()
       } catch (error) {
         state.available = false
-        state.error = error?.message || "Bluetooth service unavailable"
+        state.statusError = error?.message || "Bluetooth service unavailable"
       } finally {
         state.loading = false
       }
@@ -235,6 +236,10 @@ function initialize() {
   })
   refresh()
   schedulePoll(0)
+}
+
+function currentError() {
+  return state.operationError || state.statusError
 }
 
 function normalizedAddress(device) {
@@ -440,7 +445,7 @@ export function Bluetooth() {
       </div>
 
       ${() => !state.offroad ? html`<div class="bluetoothNotice">Scanning, pairing, and forgetting devices are available offroad only.</div>` : ""}
-      ${() => state.error ? html`<div class="bluetoothError">${state.error}</div>` : ""}
+      ${() => currentError() ? html`<div class="bluetoothError">${currentError()}</div>` : ""}
       ${pairingPrompt}
       ${() => state.audioTestLabel ? html`
         <div class="bluetoothAudioCountdown">
@@ -453,8 +458,8 @@ export function Bluetooth() {
         <div class="bluetoothCompanionCard">
           <div class="bluetoothDeviceHeader">
             <div>
-              <h3>StarPilot phone app</h3>
-              <p>Pair a phone over an encrypted BLE link for the companion app.</p>
+              <h3>Phone connection</h3>
+              <p>Pair a phone over an encrypted Bluetooth LE connection.</p>
             </div>
             <span class="bluetoothBadge">Not paired</span>
           </div>
@@ -465,7 +470,7 @@ export function Bluetooth() {
             </button>
           </div>
           ${() => state.companionPairing ? html`
-            <div class="bluetoothCompanionHint">Open the StarPilot app and select this device. Confirm the matching code here and on the phone.</div>
+            <div class="bluetoothCompanionHint">On the phone, open a Bluetooth LE utility and connect to StarPilot. Confirm the matching code here and on the phone.</div>
           ` : ""}
         </div>
       ` : ""}

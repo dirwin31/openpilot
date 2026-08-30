@@ -28,7 +28,7 @@ COMPANION_COMMAND_PATH = f"{COMPANION_SERVICE_PATH}/char1"
 COMPANION_RESPONSE_PATH = f"{COMPANION_SERVICE_PATH}/char2"
 COMPANION_ADVERTISEMENT_PATH = f"{COMPANION_APP_PATH}/advertisement0"
 
-# These UUIDs are the stable public contract used by the mobile app.
+# These UUIDs are the stable public contract used by Bluetooth LE clients.
 COMPANION_SERVICE_UUID = "9b6d1000-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
 COMPANION_STATUS_UUID = "9b6d1001-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
 COMPANION_COMMAND_UUID = "9b6d1002-6f7a-4a5b-8c3d-2e1f0a9b8c7d"

@@ -464,7 +464,7 @@ class BluetoothManagerUI(Widget):
     rl.draw_line(int(rect.x), line_y, int(rect.x + rect.width), line_y, ROW_BORDER)
 
     text_width = rect.width - HEADER_PADDING * 2 - COMPANION_BUTTON_WIDTH - ACTION_GAP
-    gui_label(rl.Rectangle(rect.x + HEADER_PADDING, rect.y + 24, text_width, 64), tr("StarPilot phone app"),
+    gui_label(rl.Rectangle(rect.x + HEADER_PADDING, rect.y + 24, text_width, 64), tr("Phone connection"),
               font_size=52, font_weight=FontWeight.MEDIUM)
     gui_label(rl.Rectangle(rect.x + HEADER_PADDING, rect.y + 94, text_width, 48), companion_status_text(status),
               font_size=39, color=TEXT_CONNECTED if status.companion_connected else TEXT_SECONDARY)

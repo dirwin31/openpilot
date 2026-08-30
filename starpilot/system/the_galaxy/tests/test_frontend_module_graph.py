@@ -59,8 +59,9 @@ def test_bluetooth_actions_use_reactive_disabled_bindings():
   assert 'data-revision="${revision}"' in source
   assert 'bluetooth-live-15' in ROUTER_PATH.read_text(encoding="utf-8")
   assert "state.enabled && !state.companionDevices.length" in source
-  assert "Enable Phone App" not in source
-  assert "Disable Phone App" not in source
+  assert "state.operationError || state.statusError" in source
+  assert "<h3>Phone connection</h3>" in source
+  assert "open a Bluetooth LE utility" in source
 
 
 def test_controller_test_mode_has_explicit_start_and_stop():
