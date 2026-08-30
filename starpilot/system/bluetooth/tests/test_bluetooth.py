@@ -10,7 +10,7 @@ import pytest
 from jeepney import DBusAddress, new_method_call
 
 from openpilot.starpilot.system.bluetooth.audio import BluetoothAudioSink
-from openpilot.starpilot.system.bluetooth.bluez import PairingAgent
+from openpilot.starpilot.system.bluetooth.bluez import BlueZClient, PairingAgent
 from openpilot.starpilot.system.bluetooth.companion import (
   ADVERTISEMENT_IFACE, COMPANION_ADVERTISEMENT_PATH, COMPANION_APP_PATH, COMPANION_COMMAND_PATH, COMPANION_PROTOCOL_VERSION,
   COMPANION_RESPONSE_PATH, COMPANION_SERVICE_PATH, COMPANION_SERVICE_UUID, COMPANION_STATUS_PATH, GATT_CHARACTERISTIC_IFACE,
@@ -104,9 +104,11 @@ class FakeBlueZ:
 
   def connect(self, address):
     self.actions.append(("connect", address))
+    self.device["connected"] = True
 
   def disconnect(self, address):
     self.actions.append(("disconnect", address))
+    self.device["connected"] = False
 
   def remove(self, address):
     self.actions.append(("remove", address))
@@ -406,6 +408,36 @@ def test_pairing_agent_accept_reject_and_timeout():
   worker.join(timeout=1.0)
   assert result == [(True, "")]
   assert agent.request("pin", "/device", timeout=0.01) == (False, "")
+
+
+def test_bluez_disconnect_waits_for_confirmed_state(monkeypatch):
+  client = object.__new__(BlueZClient)
+  states = iter((True, True, False))
+  calls = []
+  client.device_for_address = lambda _address: {"path": "/phone", "connected": next(states)}
+  client._call = lambda *args, **kwargs: calls.append((args, kwargs))
+  monkeypatch.setattr("openpilot.starpilot.system.bluetooth.bluez.time.sleep", lambda _delay: None)
+
+  client.disconnect("00:11:22:33:44:55")
+
+  assert calls[0][0][:3] == ("/phone", "org.bluez.Device1", "Disconnect")
+
+
+def test_bluez_disconnect_accepts_removed_device_as_disconnected():
+  client = object.__new__(BlueZClient)
+  calls = 0
+
+  def device_for_address(_address):
+    nonlocal calls
+    calls += 1
+    if calls == 1:
+      return {"path": "/phone", "connected": True}
+    raise RuntimeError("Bluetooth device was not found")
+
+  client.device_for_address = device_for_address
+  client._call = lambda *_args, **_kwargs: None
+
+  client.disconnect("00:11:22:33:44:55")
 
 
 def test_disabled_status_does_not_start_radio_or_bluez():
