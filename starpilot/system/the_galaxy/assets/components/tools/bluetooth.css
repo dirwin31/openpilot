@@ -55,6 +55,8 @@
   opacity: 0.72;
 }
 
+.bluetoothCard,
+.bluetoothCompanionCard,
 .bluetoothNotice,
 .bluetoothError,
 .bluetoothPrompt {
@@ -62,6 +64,22 @@
   border: 1px solid var(--sidebar-border-color);
   border-radius: var(--border-radius-lg);
   padding: 14px 16px;
+}
+
+.bluetoothCompanionCard h3,
+.bluetoothCompanionCard p {
+  margin: 0;
+}
+
+.bluetoothCompanionCard p {
+  margin-top: 6px;
+  opacity: 0.8;
+}
+
+.bluetoothCompanionHint {
+  margin-top: 12px;
+  color: #d9c9ff;
+  font-size: 0.9rem;
 }
 
 .bluetoothNotice,

@@ -4,11 +4,9 @@ from types import SimpleNamespace
 os.environ.setdefault("SP_HEADLESS_TEST", "1")
 
 from openpilot.starpilot.system.bluetooth.protocol import BluetoothDevice, BluetoothStatus
-import openpilot.selfdrive.ui.layouts.settings.settings as settings_module
-from openpilot.selfdrive.ui.layouts.settings.settings import PanelType, SettingsLayout
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.bluetooth import (BluetoothManagerUI, PANEL_BACKGROUND, ROW_BORDER,
-                                                   device_action_allowed, device_status_text)
+                                                   companion_status_text, device_action_allowed, device_status_text)
 
 
 ADDRESS = "00:11:22:33:44:55"
@@ -34,6 +32,12 @@ class FakeBluetoothManager:
   def set_scanning(self, enabled: bool):
     self.calls.append(("scan", enabled))
 
+  def set_companion(self, enabled: bool):
+    self.calls.append(("companion", enabled))
+
+  def set_companion_pairing(self, pairing: bool):
+    self.calls.append(("companion_pairing", pairing))
+
   def respond(self, prompt_id: str, accepted: bool, value: str = ""):
     self.calls.append(("respond", prompt_id, accepted, value))
 
@@ -42,6 +46,8 @@ def make_ui(manager: FakeBluetoothManager) -> BluetoothManagerUI:
   ui = object.__new__(BluetoothManagerUI)
   ui._manager = manager
   ui._scan_pending = False
+  ui._pending_companion = None
+  ui._pending_companion_pairing = None
   return ui
 
 
@@ -50,6 +56,8 @@ def make_device(**overrides) -> BluetoothDevice:
 
 
 def test_bluetooth_is_a_standalone_settings_panel():
+  from openpilot.selfdrive.ui.layouts.settings.settings import PanelType
+
   assert PanelType.BLUETOOTH.value == PanelType.NETWORK.value + 1
   assert PanelType.TOGGLES.value == PanelType.BLUETOOTH.value + 1
 
@@ -63,6 +71,9 @@ def test_bluetooth_uses_the_network_panel_black_surface():
 
 
 def test_settings_constructs_a_dedicated_bluetooth_panel(monkeypatch):
+  import openpilot.selfdrive.ui.layouts.settings.settings as settings_module
+  from openpilot.selfdrive.ui.layouts.settings.settings import PanelType, SettingsLayout
+
   class PanelStub:
     def __init__(self, *_args):
       pass
@@ -152,6 +163,35 @@ def test_scan_is_only_requested_when_the_existing_daemon_policy_allows_it():
   manager.status = BluetoothStatus(enabled=True, offroad=False)
   ui._scan()
   assert manager.calls == [("scan", True)]
+
+
+def test_companion_controls_follow_status_and_offroad_policy():
+  manager = FakeBluetoothManager(BluetoothStatus(enabled=True, offroad=True, companion_enabled=True))
+  ui = make_ui(manager)
+
+  ui._toggle_companion_pairing()
+  assert manager.calls == [("companion_pairing", True)]
+
+  ui._pending_companion_pairing = None
+  manager.status = BluetoothStatus(enabled=True, offroad=True, companion_enabled=True, companion_pairing=True)
+  ui._toggle_companion_pairing()
+  assert manager.calls[-1] == ("companion_pairing", False)
+
+  ui._pending_companion_pairing = None
+  ui._toggle_companion(False)
+  assert manager.calls[-1] == ("companion", False)
+
+  ui._pending_companion = None
+  manager.status = BluetoothStatus(enabled=True, offroad=False, companion_enabled=True)
+  ui._toggle_companion_pairing()
+  assert manager.calls[-1] == ("companion", False)
+
+
+def test_companion_status_prioritizes_connection_pairing_and_bond():
+  assert companion_status_text(BluetoothStatus(companion_connected=True, companion_pairing=True)) == "Connected"
+  assert companion_status_text(BluetoothStatus(companion_pairing=True, companion_pairing_remaining=87)) == "Pairing open - 87s"
+  assert companion_status_text(BluetoothStatus(companion_devices=(ADDRESS,))) == "Paired"
+  assert companion_status_text(BluetoothStatus()) == "Not paired"
 
 
 def test_pairing_dialog_callbacks_send_explicit_acceptance_or_rejection():

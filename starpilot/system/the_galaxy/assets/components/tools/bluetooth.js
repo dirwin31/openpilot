@@ -10,6 +10,11 @@ const state = reactive({
   offroad: false,
   selectedAudio: "",
   pairingAddress: "",
+  companionEnabled: false,
+  companionPairing: false,
+  companionPairingRemaining: 0,
+  companionConnected: false,
+  companionDevices: [],
   devices: [],
   prompt: null,
   audioTestAddress: "",
@@ -98,6 +103,11 @@ async function refresh() {
     state.offroad = !!payload.offroad
     state.selectedAudio = String(payload.selected_audio || "")
     state.pairingAddress = String(payload.pairing_address || "")
+    state.companionEnabled = !!payload.companion_enabled
+    state.companionPairing = !!payload.companion_pairing
+    state.companionPairingRemaining = Math.max(0, Number(payload.companion_pairing_remaining || 0))
+    state.companionConnected = !!payload.companion_connected
+    state.companionDevices = Array.isArray(payload.companion_devices) ? payload.companion_devices : []
     state.devices = Array.isArray(payload.devices) ? payload.devices : []
     state.prompt = payload.prompt || null
     state.error = payload.error || (response.ok ? "" : "Bluetooth service unavailable")
@@ -252,6 +262,36 @@ export function Bluetooth() {
         <div class="bluetoothAudioCountdown">
           <strong>${state.audioTestLabel}</strong>
           <span>The test sound is sent at NOW. The audible gap is Bluetooth latency.</span>
+        </div>
+      ` : ""}
+
+      ${() => state.enabled ? html`
+        <div class="bluetoothCompanionCard">
+          <div class="bluetoothDeviceHeader">
+            <div>
+              <h3>StarPilot phone app</h3>
+              <p>Pair a phone over an encrypted BLE link for the companion app.</p>
+            </div>
+            <span class="${() => `bluetoothBadge${state.companionConnected ? " bluetoothBadgeConnected" : ""}`}">
+              ${() => state.companionConnected ? "Connected" : state.companionDevices.length ? "Paired" : "Not paired"}
+            </span>
+          </div>
+          <div class="bluetoothActions">
+            <button class="${() => state.companionEnabled ? "selected" : ""}"
+                    disabled="${() => !state.offroad || !!state.busy}"
+                    @click="${() => request("companion", { enabled: !state.companionEnabled })}">
+              ${() => state.companionEnabled ? "Disable Phone App" : "Enable Phone App"}
+            </button>
+            ${() => state.companionEnabled ? html`
+              <button disabled="${() => !state.offroad || !!state.busy}"
+                      @click="${() => request(state.companionPairing ? "companion_pair_stop" : "companion_pair")}">
+                ${() => state.companionPairing ? `Stop Pairing (${state.companionPairingRemaining}s)` : "Pair a Phone"}
+              </button>
+            ` : ""}
+          </div>
+          ${() => state.companionPairing ? html`
+            <div class="bluetoothCompanionHint">Open the StarPilot app and select this device. Confirm the matching code here and on the phone.</div>
+          ` : ""}
         </div>
       ` : ""}
 

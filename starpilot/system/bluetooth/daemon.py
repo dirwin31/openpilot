@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import socketserver
 import threading
@@ -9,25 +10,33 @@ from typing import Any
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.starpilot.system.bluetooth.bluez import BlueZClient
+from openpilot.starpilot.system.bluetooth.companion import COMPANION_SERVICE_UUID, CompanionGattApplication, CompanionProtocol
 from openpilot.starpilot.system.bluetooth.protocol import BLUETOOTH_SOCKET_PATH
 from openpilot.starpilot.system.bluetooth.radio import BluetoothRadio
 
 
-OFFROAD_COMMANDS = {"set_power", "start_scan", "stop_scan", "pair", "forget", "test_audio", "pairing_response"}
+OFFROAD_COMMANDS = {
+  "set_power", "start_scan", "stop_scan", "pair", "forget", "test_audio", "pairing_response",
+  "set_companion", "start_companion_pairing", "stop_companion_pairing",
+}
 SCAN_DURATION = 20.0
+COMPANION_PAIRING_DURATION = 120.0
 AUDIO_TEST_START_DELAY = 3.0
 AUDIO_TEST_HOLD_TIME = 3.0
 
 
 class BluetoothController:
   def __init__(self, params: Params | None = None, bluez_factory=BlueZClient, radio: BluetoothRadio | None = None,
-               params_memory: Params | None = None, sleep=time.sleep):
+               params_memory: Params | None = None, sleep=time.sleep, companion_factory=CompanionGattApplication):
     self.params = params or Params()
     self.params_memory = params_memory or Params(memory=True)
     self._bluez_factory = bluez_factory
     self._radio = radio or BluetoothRadio()
     self._lock = threading.RLock()
     self._bluez: BlueZClient | None = None
+    self._companion: CompanionGattApplication | None = None
+    self._companion_factory = companion_factory
+    self._companion_pairing_deadline = 0.0
     self._pairing_address = ""
     self._pairing_error = ""
     self._last_reconnect = 0.0
@@ -41,6 +50,7 @@ class BluetoothController:
     self.params.remove("BluetoothAudioTestActive")
     self.params_memory.remove("TestAlert")
     with self._lock:
+      self._stop_companion()
       if self._bluez is not None:
         self._bluez.close()
         self._bluez = None
@@ -58,10 +68,13 @@ class BluetoothController:
         self._radio.start()
         self._bluez = self._bluez_factory()
         self._bluez.set_powered(True)
+        if self.params.get_bool("BluetoothCompanionEnabled"):
+          self._start_companion(self._bluez)
       return self._bluez
 
   def _reset_client(self) -> None:
     with self._lock:
+      self._stop_companion()
       if self._bluez is not None:
         try:
           self._bluez.close()
@@ -69,12 +82,78 @@ class BluetoothController:
           pass
         self._bluez = None
 
+  def _start_companion(self, client: BlueZClient) -> None:
+    if self._companion is not None:
+      return
+    client.set_pairing_mode(False)
+    companion = self._companion_factory(client.router, client._call, self._authorize_companion, CompanionProtocol(self.params))
+    try:
+      adapter_path, _ = client.adapter()
+      companion.start(adapter_path)
+    except Exception:
+      companion.close()
+      raise
+    self._companion = companion
+
+  def _stop_companion(self, require_pairing_closed: bool = False) -> None:
+    pairing_active = self._companion_pairing_deadline > 0.0
+    if self._bluez is not None and pairing_active:
+      try:
+        self._bluez.set_pairing_mode(False)
+      except Exception:
+        if require_pairing_closed:
+          raise
+      else:
+        self._companion_pairing_deadline = 0.0
+    else:
+      self._companion_pairing_deadline = 0.0
+    if self._companion is not None:
+      self._companion.close()
+      self._companion = None
+
+  def _companion_addresses(self) -> list[str]:
+    try:
+      raw = self.params.get("BluetoothCompanionDevices", encoding="utf-8") or "[]"
+      values = json.loads(raw)
+      return [str(value).upper() for value in values if isinstance(value, str)] if isinstance(values, list) else []
+    except (TypeError, ValueError):
+      return []
+
+  def _remember_companion(self, address: str) -> None:
+    normalized = address.upper()
+    addresses = self._companion_addresses()
+    if normalized and normalized not in addresses:
+      addresses.append(normalized)
+      self.params.put("BluetoothCompanionDevices", json.dumps(addresses[-8:], separators=(",", ":")))
+
+  def _forget_companion(self, address: str) -> None:
+    normalized = address.upper()
+    addresses = [item for item in self._companion_addresses() if item != normalized]
+    self.params.put("BluetoothCompanionDevices", json.dumps(addresses, separators=(",", ":")))
+
+  def _authorize_companion(self, device_path: str) -> bool:
+    with self._lock:
+      if self._bluez is None or not self.params.get_bool("BluetoothCompanionEnabled"):
+        return False
+      device = self._bluez.paired_device_for_path(device_path)
+      if device is None:
+        return False
+      address = str(device["address"]).upper()
+      if address not in self._companion_addresses() and time.monotonic() >= self._companion_pairing_deadline:
+        return False
+      if not device.get("trusted", False):
+        self._bluez.set_device_property(device["address"], "Trusted", "b", True)
+      self._remember_companion(address)
+      return True
+
   def _offroad(self) -> bool:
     return self.params.get_bool("IsOffroad")
 
   def status(self) -> dict[str, Any]:
     # Status lazily initializes the radio, so serialize it with power changes.
     with self._lock:
+      companion_addresses = self._companion_addresses()
+      pairing_remaining = max(0, math.ceil(self._companion_pairing_deadline - time.monotonic()))
       result = {
         "available": self._radio.available,
         "enabled": self.params.get_bool("BluetoothEnabled"),
@@ -86,12 +165,22 @@ class BluetoothController:
         "prompt": None,
         "error": self._pairing_error,
         "pairing_address": self._pairing_address,
+        "companion_enabled": self.params.get_bool("BluetoothCompanionEnabled"),
+        "companion_pairing": pairing_remaining > 0,
+        "companion_pairing_remaining": pairing_remaining,
+        "companion_service_uuid": COMPANION_SERVICE_UUID,
+        "companion_devices": companion_addresses,
+        "companion_connected": False,
       }
       if not result["enabled"]:
         return result
       try:
         result.update(self._client().status())
         result["available"] = True
+        result["companion_connected"] = any(
+          device.get("connected", False) and str(device.get("address", "")).upper() in companion_addresses
+          for device in result["devices"]
+        )
         prompt = result.get("prompt")
         if prompt is not None and self._pairing_address:
           prompt["address"] = self._pairing_address
@@ -169,6 +258,39 @@ class BluetoothController:
             self.params.remove("BluetoothAudioAddress")
             self.params.put_bool("BluetoothEnabled", False)
             self._scan_deadline = 0.0
+    elif command == "set_companion":
+      enabled = bool(request.get("enabled", False))
+      if enabled and not self.params.get_bool("BluetoothEnabled"):
+        raise RuntimeError("Enable Bluetooth first")
+      with self._lock:
+        if enabled:
+          self.params.put_bool("BluetoothCompanionEnabled", True)
+          try:
+            self._start_companion(self._client())
+          except Exception:
+            self.params.put_bool("BluetoothCompanionEnabled", False)
+            raise
+        else:
+          # Do not report the feature disabled while the adapter could still
+          # accept new bonds. Maintenance will keep retrying an expired window.
+          self._stop_companion(require_pairing_closed=True)
+          self.params.put_bool("BluetoothCompanionEnabled", False)
+    elif command == "start_companion_pairing":
+      if not self.params.get_bool("BluetoothEnabled"):
+        raise RuntimeError("Enable Bluetooth first")
+      with self._lock:
+        if not self.params.get_bool("BluetoothCompanionEnabled"):
+          raise RuntimeError("Enable phone app pairing first")
+        client = self._client()
+        self._start_companion(client)
+        client.set_pairing_mode(True)
+        self._companion_pairing_deadline = time.monotonic() + COMPANION_PAIRING_DURATION
+    elif command == "stop_companion_pairing":
+      if not self.params.get_bool("BluetoothEnabled"):
+        raise RuntimeError("Enable Bluetooth first")
+      with self._lock:
+        self._client().set_pairing_mode(False)
+        self._companion_pairing_deadline = 0.0
     elif command == "start_scan":
       if not self.params.get_bool("BluetoothEnabled"):
         raise RuntimeError("Enable Bluetooth before scanning")
@@ -189,6 +311,7 @@ class BluetoothController:
       self._client().disconnect(address)
     elif command == "forget":
       self._client().remove(address)
+      self._forget_companion(address)
       if (self.params.get("BluetoothAudioAddress", encoding="utf-8") or "").upper() == address.upper():
         self.params.remove("BluetoothAudioAddress")
     elif command == "select_audio":
@@ -227,6 +350,12 @@ class BluetoothController:
       self._client().stop_discovery()
       self._scan_deadline = 0.0
 
+  def _maintain_companion_pairing(self, now: float, offroad: bool | None = None) -> None:
+    with self._lock:
+      if self._companion_pairing_deadline and (offroad is False or now >= self._companion_pairing_deadline):
+        self._client().set_pairing_mode(False)
+        self._companion_pairing_deadline = 0.0
+
   def maintain_connections(self) -> None:
     while True:
       time.sleep(2)
@@ -238,6 +367,7 @@ class BluetoothController:
           continue
         now = time.monotonic()
         self._maintain_scan(status, now)
+        self._maintain_companion_pairing(now, status["offroad"])
         if self._pairing_address or now - self._last_reconnect < 15:
           continue
         self._last_reconnect = now

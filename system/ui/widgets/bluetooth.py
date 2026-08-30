@@ -20,9 +20,11 @@ from openpilot.system.ui.widgets.toggle import Toggle
 
 
 HEADER_HEIGHT = 180
+COMPANION_HEIGHT = 170
 ITEM_HEIGHT = 160
 HEADER_PADDING = 40
 SCAN_BUTTON_WIDTH = 260
+COMPANION_BUTTON_WIDTH = 300
 FORGET_BUTTON_WIDTH = 180
 ACTION_GAP = 35
 
@@ -61,6 +63,16 @@ def device_action_allowed(device: BluetoothDevice, operation: str, offroad: bool
   if not offroad and not device.paired:
     return False
   return True
+
+
+def companion_status_text(status: BluetoothStatus) -> str:
+  if status.companion_connected:
+    return tr("Connected")
+  if status.companion_pairing:
+    return tr("Pairing open") + f" - {status.companion_pairing_remaining}s"
+  if status.companion_devices:
+    return tr("Paired")
+  return tr("Not paired")
 
 
 @dataclass(frozen=True)
@@ -183,8 +195,13 @@ class BluetoothManagerUI(Widget):
     self._scroll_panel = GuiScrollPanel()
     self._power_toggle = Toggle(initial_state=False, callback=self._toggle_power)
     self._scan_button = Button(tr("Scan"), self._scan, button_style=ButtonStyle.NORMAL, font_size=42)
+    self._companion_toggle = Toggle(initial_state=False, callback=self._toggle_companion)
+    self._companion_pair_button = Button(tr("Pair phone"), self._toggle_companion_pairing,
+                                         button_style=ButtonStyle.NORMAL, font_size=42)
     self._device_rows: dict[str, BluetoothDeviceRow] = {}
     self._pending_power: bool | None = None
+    self._pending_companion: bool | None = None
+    self._pending_companion_pairing: bool | None = None
     self._scan_pending = False
     self._scan_on_ready = False
     self._last_prompt_id = ""
@@ -220,6 +237,25 @@ class BluetoothManagerUI(Widget):
       self._scan_pending = True
       self._manager.set_scanning(True)
 
+  def _toggle_companion(self, enabled: bool):
+    status = self._manager.status
+    if not status.enabled or not status.offroad:
+      self._companion_toggle.set_state(status.companion_enabled)
+      return
+    self._pending_companion = enabled
+    if not enabled:
+      self._pending_companion_pairing = None
+    self._manager.set_companion(enabled)
+
+  def _toggle_companion_pairing(self):
+    status = self._manager.status
+    if (not status.enabled or not status.companion_enabled or not status.offroad or
+        self._pending_companion is not None or self._pending_companion_pairing is not None):
+      return
+    pairing = not status.companion_pairing
+    self._pending_companion_pairing = pairing
+    self._manager.set_companion_pairing(pairing)
+
   def _operation_for(self, device: BluetoothDevice, status: BluetoothStatus) -> str:
     operation = self._manager.operation_for(device.address)
     if not operation and status.pairing_address.upper() == device.address.upper():
@@ -236,6 +272,28 @@ class BluetoothManagerUI(Widget):
     self._power_toggle.set_enabled(status.available and status.offroad and self._pending_power is None)
     self._scan_button.set_enabled(status.enabled and status.offroad and not status.discovering and not self._scan_pending)
     self._scan_button.set_text(tr("Scanning") if status.discovering or self._scan_pending else tr("Scan"))
+
+  def _sync_companion(self, status: BluetoothStatus) -> None:
+    if self._pending_companion is not None and status.companion_enabled == self._pending_companion:
+      self._pending_companion = None
+    if self._pending_companion_pairing is not None and status.companion_pairing == self._pending_companion_pairing:
+      self._pending_companion_pairing = None
+
+    if self._pending_companion is None:
+      self._companion_toggle.set_state(status.companion_enabled)
+    self._companion_toggle.set_enabled(
+      status.enabled and status.offroad and self._pending_companion is None and self._pending_companion_pairing is None,
+    )
+    pairing_pending = self._pending_companion_pairing
+    pairing = status.companion_pairing if pairing_pending is None else pairing_pending
+    label = tr("Stop pairing") if pairing else tr("Pair phone")
+    if status.companion_pairing and pairing_pending is None:
+      label += f" ({status.companion_pairing_remaining}s)"
+    self._companion_pair_button.set_text(label)
+    self._companion_pair_button.set_enabled(
+      status.enabled and status.companion_enabled and status.offroad and
+      self._pending_companion is None and pairing_pending is None,
+    )
 
   def _sync_rows(self, status: BluetoothStatus) -> list[BluetoothDeviceRow]:
     visible_rows = []
@@ -347,6 +405,8 @@ class BluetoothManagerUI(Widget):
     operation_error = self._manager.consume_error()
     if operation_error:
       self._pending_power = None
+      self._pending_companion = None
+      self._pending_companion_pairing = None
       self._scan_pending = False
       if operation_error != self._last_operation_error:
         self._last_operation_error = operation_error
@@ -366,6 +426,7 @@ class BluetoothManagerUI(Widget):
   def _update_state(self):
     status = self._manager.status
     self._sync_power(status)
+    self._sync_companion(status)
     if self._scan_on_ready and status.available and status.enabled:
       self._scan_on_ready = False
       if status.offroad and not status.discovering:
@@ -387,6 +448,12 @@ class BluetoothManagerUI(Widget):
       gui_label(content_rect, tr("Bluetooth is off."), font_size=62, color=TEXT_SECONDARY,
                 alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
       return
+
+    companion_rect = rl.Rectangle(content_rect.x, content_rect.y, content_rect.width, COMPANION_HEIGHT)
+    self._render_companion(companion_rect, status)
+    content_rect = rl.Rectangle(
+      content_rect.x, content_rect.y + COMPANION_HEIGHT, content_rect.width, content_rect.height - COMPANION_HEIGHT,
+    )
 
     rows = self._sync_rows(status)
     if not rows:
@@ -410,6 +477,26 @@ class BluetoothManagerUI(Widget):
     self._power_toggle.render(toggle_rect)
     scan_rect = rl.Rectangle(toggle_rect.x - ACTION_GAP - SCAN_BUTTON_WIDTH, rect.y + (rect.height - 100) / 2, SCAN_BUTTON_WIDTH, 100)
     self._scan_button.render(scan_rect)
+
+  def _render_companion(self, rect: rl.Rectangle, status: BluetoothStatus):
+    rl.draw_rectangle_rec(rect, PANEL_BACKGROUND)
+    line_y = int(rect.y + rect.height - 1)
+    rl.draw_line(int(rect.x), line_y, int(rect.x + rect.width), line_y, ROW_BORDER)
+
+    text_width = rect.width - HEADER_PADDING * 2 - 160 - ACTION_GAP
+    if status.companion_enabled:
+      text_width -= COMPANION_BUTTON_WIDTH + ACTION_GAP
+    gui_label(rl.Rectangle(rect.x + HEADER_PADDING, rect.y + 24, text_width, 64), tr("StarPilot phone app"),
+              font_size=52, font_weight=FontWeight.MEDIUM)
+    gui_label(rl.Rectangle(rect.x + HEADER_PADDING, rect.y + 94, text_width, 48), companion_status_text(status),
+              font_size=39, color=TEXT_CONNECTED if status.companion_connected else TEXT_SECONDARY)
+
+    toggle_rect = rl.Rectangle(rect.x + rect.width - HEADER_PADDING - 160, rect.y + (rect.height - 80) / 2, 160, 80)
+    self._companion_toggle.render(toggle_rect)
+    if status.companion_enabled:
+      pair_rect = rl.Rectangle(toggle_rect.x - ACTION_GAP - COMPANION_BUTTON_WIDTH,
+                               rect.y + (rect.height - 100) / 2, COMPANION_BUTTON_WIDTH, 100)
+      self._companion_pair_button.render(pair_rect)
 
   def _render_device_list(self, rect: rl.Rectangle, rows: list[BluetoothDeviceRow]):
     content_rect = rl.Rectangle(rect.x, rect.y, rect.width, len(rows) * ITEM_HEIGHT)
