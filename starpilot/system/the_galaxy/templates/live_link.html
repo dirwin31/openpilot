@@ -11,8 +11,8 @@
   <link rel="manifest" href="assets/live-manifest.json">
   <link rel="apple-touch-icon" href="assets/images/apple-touch-icon.png">
   <link rel="icon" href="assets/images/favicon.ico">
-  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-2">
-  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-2"></script>
+  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-3">
+  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-3"></script>
   <title>StarPilot Live</title>
 </head>
 <body data-secure-live-url="{{ secure_live_url | default('', true) | e }}">
@@ -35,50 +35,46 @@
       <p id="setupMessage">Checking Bluetooth setup…</p>
 
       <ol id="setupSteps" class="setupSteps">
-        <li id="browserStep" class="setupStep setupStepPending">
-          <span id="browserStepMarker" class="setupStepMarker" aria-hidden="true">1</span>
-          <div>
-            <strong>Open the secure page in Safari</strong>
-            <span id="browserStepDetail">Use a regular Safari tab or the installed Live Link app.</span>
-          </div>
-        </li>
         <li id="beacioStep" class="setupStep setupStepPending">
-          <span id="beacioStepMarker" class="setupStepMarker" aria-hidden="true">2</span>
+          <span id="beacioStepMarker" class="setupStepMarker" aria-hidden="true">1</span>
           <div>
             <strong>Install beacio</strong>
             <span id="beacioStepDetail">Install the free Safari Bluetooth extension from the App Store.</span>
+            <div class="setupStepActions">
+              <a id="beacioInstallLink" class="secondaryButton" href="https://apps.apple.com/app/id6761301368" target="_blank" rel="noopener">Install beacio</a>
+            </div>
           </div>
         </li>
         <li id="permissionStep" class="setupStep setupStepPending">
-          <span id="permissionStepMarker" class="setupStepMarker" aria-hidden="true">3</span>
+          <span id="permissionStepMarker" class="setupStepMarker" aria-hidden="true">2</span>
           <div>
             <strong>Enable beacio and its website permission</strong>
             <span id="permissionStepDetail">In Safari, tap aA → Manage Extensions → beacio, turn it on, then choose Allow on Every Website.</span>
+            <div class="setupStepActions">
+              <button id="checkSetupButton" class="secondaryButton" type="button">Check beacio setup</button>
+              <button id="reloadSetupButton" class="secondaryButton" type="button" hidden>Reload and verify</button>
+            </div>
           </div>
         </li>
         <li id="pairStep" class="setupStep setupStepPending">
-          <span id="pairStepMarker" class="setupStepMarker" aria-hidden="true">4</span>
+          <span id="pairStepMarker" class="setupStepMarker" aria-hidden="true">3</span>
           <div>
             <strong>Open pairing on the comma</strong>
             <span id="pairStepDetail">While parked, open Galaxy → Bluetooth, turn Bluetooth on, then tap Pair a Phone.</span>
           </div>
         </li>
         <li id="connectStep" class="setupStep setupStepPending">
-          <span id="connectStepMarker" class="setupStepMarker" aria-hidden="true">5</span>
+          <span id="connectStepMarker" class="setupStepMarker" aria-hidden="true">4</span>
           <div>
-            <strong>Connect and approve the phone</strong>
-            <span id="connectStepDetail">Tap Connect below, allow Bluetooth, choose StarPilot, and accept any matching-code prompts.</span>
+            <strong id="connectStepTitle">Open the secure Live Link page</strong>
+            <span id="connectStepDetail">Open the HTTPS page in Safari, connect, choose StarPilot, and accept any matching-code prompts.</span>
+            <div class="setupStepActions">
+              <a id="secureAppLink" class="primaryButton" href="#" target="_blank" rel="noopener" hidden>Open secure Galaxy</a>
+              <button id="connectButton" class="primaryButton" type="button">Connect over Bluetooth</button>
+            </div>
           </div>
         </li>
       </ol>
-
-      <div class="setupActions">
-        <a id="beacioInstallLink" class="secondaryButton" href="https://apps.apple.com/app/id6761301368" target="_blank" rel="noopener">Install beacio</a>
-        <button id="checkSetupButton" class="secondaryButton" type="button">Check beacio setup</button>
-        <button id="reloadSetupButton" class="secondaryButton" type="button" hidden>Reload and verify</button>
-        <button id="connectButton" class="primaryButton" type="button" hidden>Connect over Bluetooth</button>
-      </div>
-      <a id="secureAppLink" class="primaryButton" href="#" hidden>Open secure Live Link</a>
       <p id="connectionError" class="errorMessage" role="alert" hidden></p>
       <div id="permissionHelp" class="permissionHelp" hidden>
         <strong>Installed beacio, but Live Link still cannot see it?</strong>
