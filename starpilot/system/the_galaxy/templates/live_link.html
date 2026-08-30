@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#06060f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="StarPilot Live">
+  <meta name="description" content="StarPilot live driving state over a direct Bluetooth connection.">
+  <link rel="manifest" href="assets/live-manifest.json">
+  <link rel="apple-touch-icon" href="assets/images/apple-touch-icon.png">
+  <link rel="icon" href="assets/images/favicon.ico">
+  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-2">
+  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-2"></script>
+  <title>StarPilot Live</title>
+</head>
+<body data-secure-live-url="{{ secure_live_url | default('', true) | e }}">
+  <main class="appShell">
+    <header class="appHeader">
+      <div>
+        <p class="eyebrow">STAR PILOT</p>
+        <h1>Live Link</h1>
+        <p class="subtitle">Direct Bluetooth second screen</p>
+      </div>
+      <div id="connectionBadge" class="connectionBadge connectionOffline" aria-live="polite">
+        <span class="connectionDot"></span>
+        <span id="connectionText">Offline</span>
+      </div>
+    </header>
+
+    <section id="setupCard" class="setupCard">
+      <div class="bluetoothMark" aria-hidden="true">ᛒ</div>
+      <h2 id="setupTitle">Set up Live Link</h2>
+      <p id="setupMessage">Checking Bluetooth setup…</p>
+
+      <ol id="setupSteps" class="setupSteps">
+        <li id="browserStep" class="setupStep setupStepPending">
+          <span id="browserStepMarker" class="setupStepMarker" aria-hidden="true">1</span>
+          <div>
+            <strong>Open the secure page in Safari</strong>
+            <span id="browserStepDetail">Use a regular Safari tab or the installed Live Link app.</span>
+          </div>
+        </li>
+        <li id="beacioStep" class="setupStep setupStepPending">
+          <span id="beacioStepMarker" class="setupStepMarker" aria-hidden="true">2</span>
+          <div>
+            <strong>Install beacio</strong>
+            <span id="beacioStepDetail">Install the free Safari Bluetooth extension from the App Store.</span>
+          </div>
+        </li>
+        <li id="permissionStep" class="setupStep setupStepPending">
+          <span id="permissionStepMarker" class="setupStepMarker" aria-hidden="true">3</span>
+          <div>
+            <strong>Enable beacio and its website permission</strong>
+            <span id="permissionStepDetail">In Safari, tap aA → Manage Extensions → beacio, turn it on, then choose Allow on Every Website.</span>
+          </div>
+        </li>
+        <li id="pairStep" class="setupStep setupStepPending">
+          <span id="pairStepMarker" class="setupStepMarker" aria-hidden="true">4</span>
+          <div>
+            <strong>Open pairing on the comma</strong>
+            <span id="pairStepDetail">While parked, open Galaxy → Bluetooth, turn Bluetooth on, then tap Pair a Phone.</span>
+          </div>
+        </li>
+        <li id="connectStep" class="setupStep setupStepPending">
+          <span id="connectStepMarker" class="setupStepMarker" aria-hidden="true">5</span>
+          <div>
+            <strong>Connect and approve the phone</strong>
+            <span id="connectStepDetail">Tap Connect below, allow Bluetooth, choose StarPilot, and accept any matching-code prompts.</span>
+          </div>
+        </li>
+      </ol>
+
+      <div class="setupActions">
+        <a id="beacioInstallLink" class="secondaryButton" href="https://apps.apple.com/app/id6761301368" target="_blank" rel="noopener">Install beacio</a>
+        <button id="checkSetupButton" class="secondaryButton" type="button">Check beacio setup</button>
+        <button id="reloadSetupButton" class="secondaryButton" type="button" hidden>Reload and verify</button>
+        <button id="connectButton" class="primaryButton" type="button" hidden>Connect over Bluetooth</button>
+      </div>
+      <a id="secureAppLink" class="primaryButton" href="#" hidden>Open secure Live Link</a>
+      <p id="connectionError" class="errorMessage" role="alert" hidden></p>
+      <div id="permissionHelp" class="permissionHelp" hidden>
+        <strong>Installed beacio, but Live Link still cannot see it?</strong>
+        <span>In Safari, tap aA → Manage Extensions → beacio. Make sure it is on and set to Allow on Every Website. You can also check Settings → Apps → Safari → Extensions → beacio.</span>
+        <span>Then return here and reload. Private Browsing and in-app browsers cannot use the extension.</span>
+      </div>
+      <div id="installHint" class="installHint">
+        <strong>Make it available offline</strong>
+        <span>After Bluetooth works in Safari, use Share → Add to Home Screen. Once installed, Live Link needs no network connection.</span>
+      </div>
+    </section>
+
+    <section id="livePanel" class="livePanel" aria-live="polite" hidden>
+      <div class="speedRow">
+        <div class="currentSpeed">
+          <span id="vehicleSpeed" class="speedValue">0</span>
+          <span id="speedUnit" class="speedUnit">MPH</span>
+        </div>
+        <div class="setSpeed">
+          <span>SET SPEED</span>
+          <strong id="setSpeed">--</strong>
+        </div>
+      </div>
+
+      <div id="driveStatus" class="driveStatus">
+        <strong id="driveStatusLabel">Disconnected</strong>
+        <span id="driveStatusDetail"></span>
+      </div>
+
+      <div id="leadCard" class="leadCard" hidden>
+        <span class="leadDot"></span>
+        <strong>LEAD</strong>
+        <span id="leadDistance">--</span>
+        <span id="leadRelativeSpeed" class="muted pushRight">--</span>
+      </div>
+
+      <div class="stateGrid">
+        <div id="engagementChip" class="stateChip">
+          <span>Engagement</span>
+          <strong id="engagementValue">Off</strong>
+        </div>
+        <div id="aolChip" class="stateChip">
+          <span>AOL</span>
+          <strong id="aolValue">Off</strong>
+        </div>
+        <div id="experimentalChip" class="stateChip">
+          <span>Experimental</span>
+          <strong id="experimentalValue">Off</strong>
+        </div>
+        <div id="slcChip" class="stateChip">
+          <span>SLC</span>
+          <strong id="slcValue">Off</strong>
+          <small id="slcDetail"></small>
+        </div>
+        <div id="curveChip" class="stateChip">
+          <span>Curve Control</span>
+          <strong id="curveValue">Off</strong>
+        </div>
+      </div>
+
+      <div id="alertCard" class="alertCard" hidden>
+        <strong id="alertText"></strong>
+      </div>
+
+      <footer class="liveFooter">
+        <span>StarPilot • Bluetooth</span>
+        <button id="disconnectButton" class="textButton" type="button">Disconnect</button>
+      </footer>
+    </section>
+
+    <p id="offlineReady" class="offlineReady" hidden>Offline app ready</p>
+  </main>
+</body>
+</html>

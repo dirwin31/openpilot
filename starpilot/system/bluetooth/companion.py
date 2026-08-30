@@ -6,10 +6,22 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from jeepney import MatchRule, new_error, new_method_return
+from jeepney import DBusAddress, MatchRule, new_error, new_method_return, new_signal
 from jeepney.low_level import HeaderFields
 
 from openpilot.common.params import Params
+from openpilot.common.swaglog import cloudlog
+from openpilot.starpilot.system.bluetooth.live import (
+  LIVE_FRAME_RATE_HZ,
+  LIVE_FRAME_SIZE,
+  LIVE_NOTIFICATION_FRAGMENT_COUNT,
+  LIVE_NOTIFICATION_SIZE,
+  LIVE_PROTOCOL_VERSION,
+  LiveSnapshot,
+  LiveTelemetryPublisher,
+  live_metadata,
+  live_notification_fragments,
+)
 
 
 BLUEZ = "org.bluez"
@@ -26,6 +38,7 @@ COMPANION_SERVICE_PATH = f"{COMPANION_APP_PATH}/service0"
 COMPANION_STATUS_PATH = f"{COMPANION_SERVICE_PATH}/char0"
 COMPANION_COMMAND_PATH = f"{COMPANION_SERVICE_PATH}/char1"
 COMPANION_RESPONSE_PATH = f"{COMPANION_SERVICE_PATH}/char2"
+COMPANION_LIVE_PATH = f"{COMPANION_SERVICE_PATH}/char3"
 COMPANION_ADVERTISEMENT_PATH = f"{COMPANION_APP_PATH}/advertisement0"
 
 # These UUIDs are the stable public contract used by Bluetooth LE clients.
@@ -33,9 +46,11 @@ COMPANION_SERVICE_UUID = "9b6d1000-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
 COMPANION_STATUS_UUID = "9b6d1001-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
 COMPANION_COMMAND_UUID = "9b6d1002-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
 COMPANION_RESPONSE_UUID = "9b6d1003-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
+COMPANION_LIVE_UUID = "9b6d1004-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
 
-COMPANION_PROTOCOL_VERSION = 1
+COMPANION_PROTOCOL_VERSION = 2
 MAX_COMPANION_COMMAND_BYTES = 512
+MAX_COMPANION_RESPONSE_BYTES = 512
 
 
 def _wall_time() -> float:
@@ -50,11 +65,18 @@ def _param_text(params: Params, key: str) -> str:
 
 
 class CompanionProtocol:
-  """Small, intentionally read-only protocol exposed to a bonded phone."""
+  """Versioned, intentionally read-only protocol exposed to a bonded phone."""
 
-  def __init__(self, params: Params | None = None, clock=_wall_time):
+  def __init__(self, params: Params | None = None, clock=_wall_time, params_memory: Params | None = None,
+               publisher_factory=LiveTelemetryPublisher):
     self.params = params or Params()
+    self.params_memory = params_memory or Params(memory=True)
     self._clock = clock
+    self._publisher_factory = publisher_factory
+    self._publisher = None
+    self._live_lock = threading.Lock()
+    self._live_listeners: set[Callable[[bytes], None]] = set()
+    self._live_frame = LiveSnapshot().pack(0, 0)
 
   def status(self) -> dict[str, Any]:
     return {
@@ -63,10 +85,52 @@ class CompanionProtocol:
       "version": _param_text(self.params, "Version"),
       "branch": _param_text(self.params, "GitBranch"),
       "onroad": not self.params.get_bool("IsOffroad"),
+      "live": {
+        "uuid": COMPANION_LIVE_UUID,
+        "protocol_version": LIVE_PROTOCOL_VERSION,
+        "frame_size": LIVE_FRAME_SIZE,
+        "rate_hz": LIVE_FRAME_RATE_HZ,
+        "notification_size": LIVE_NOTIFICATION_SIZE,
+        "notification_fragments": LIVE_NOTIFICATION_FRAGMENT_COUNT,
+      },
     }
 
   def status_bytes(self) -> bytes:
     return json.dumps(self.status(), separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+  def live_bytes(self) -> bytes:
+    with self._live_lock:
+      return self._live_frame
+
+  def add_live_listener(self, listener: Callable[[bytes], None]) -> None:
+    with self._live_lock:
+      self._live_listeners.add(listener)
+
+  def remove_live_listener(self, listener: Callable[[bytes], None]) -> None:
+    with self._live_lock:
+      self._live_listeners.discard(listener)
+
+  def _publish_live(self, frame: bytes) -> None:
+    with self._live_lock:
+      self._live_frame = frame
+      listeners = tuple(self._live_listeners)
+    for listener in listeners:
+      try:
+        listener(frame)
+      except Exception:
+        cloudlog.exception("Bluetooth live telemetry notification failed")
+
+  def start(self) -> None:
+    if self._publisher is not None:
+      return
+    self._publisher = self._publisher_factory(self._publish_live, self.params, self.params_memory)
+    self._publisher.start()
+
+  def close(self) -> None:
+    publisher = self._publisher
+    self._publisher = None
+    if publisher is not None:
+      publisher.close()
 
   def handle(self, payload: bytes) -> bytes:
     request_id = ""
@@ -83,12 +147,37 @@ class CompanionProtocol:
         data = {"time": int(self._clock())}
       elif operation == "get_status":
         data = self.status()
+      elif operation == "get_live_metadata":
+        current = self._publisher.details() if self._publisher is not None and hasattr(self._publisher, "details") else None
+        data = live_metadata(self.params, current)
       else:
         raise ValueError(f"Unsupported companion operation: {operation or '<empty>'}")
       response = {"id": request_id, "ok": True, "op": operation, "data": data}
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
       response = {"id": request_id, "ok": False, "op": operation, "error": str(error)}
-    return json.dumps(response, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    encoded = json.dumps(response, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    if len(encoded) > MAX_COMPANION_RESPONSE_BYTES and response.get("ok") and operation == "get_live_metadata":
+      data = response["data"]
+      for container, key in (
+        (data["alert"], "text2"),
+        (data["alert"], "text1"),
+        (data["alert"], "type"),
+        (data["model"], "name"),
+        (data["model"], "key"),
+        (data, "speed_limit_source"),
+      ):
+        container[key] = ""
+        encoded = json.dumps(response, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        if len(encoded) <= MAX_COMPANION_RESPONSE_BYTES:
+          break
+    if len(encoded) > MAX_COMPANION_RESPONSE_BYTES:
+      encoded = json.dumps({
+        "id": request_id,
+        "ok": False,
+        "op": operation,
+        "error": "Companion response exceeds the 512-byte GATT limit",
+      }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return encoded
 
 
 class CompanionGattApplication:
@@ -103,6 +192,8 @@ class CompanionGattApplication:
     self._adapter_path = ""
     self._registered = False
     self._responses: dict[str, bytes] = {}
+    self._notifying = False
+    self._notify_lock = threading.Lock()
     self._running = True
     self._closed = False
     self._close_lock = threading.Lock()
@@ -110,6 +201,7 @@ class CompanionGattApplication:
     self._queue = self._filter.__enter__()
     self._thread = threading.Thread(target=self._serve, daemon=True)
     self._thread.start()
+    self.protocol.add_live_listener(self._on_live_frame)
 
   @property
   def registered(self) -> bool:
@@ -144,6 +236,14 @@ class CompanionGattApplication:
           "Flags": ("as", ["encrypt-authenticated-read"]),
         },
       },
+      COMPANION_LIVE_PATH: {
+        GATT_CHARACTERISTIC_IFACE: {
+          "UUID": ("s", COMPANION_LIVE_UUID),
+          "Service": ("o", COMPANION_SERVICE_PATH),
+          "Flags": ("as", ["encrypt-authenticated-read", "notify"]),
+          "Notifying": ("b", bool(getattr(self, "_notifying", False))),
+        },
+      },
     }
 
   def advertisement_properties(self) -> dict[str, tuple[str, Any]]:
@@ -168,12 +268,17 @@ class CompanionGattApplication:
         pass
       raise
     self._registered = True
+    self.protocol.start()
 
   def close(self) -> None:
     with self._close_lock:
       if self._closed:
         return
       self._closed = True
+      with self._notify_lock:
+        self._notifying = False
+      self.protocol.remove_live_listener(self._on_live_frame)
+      self.protocol.close()
       if self._registered:
         try:
           self._bluez_call(self._adapter_path, ADVERTISEMENT_MANAGER_IFACE, "UnregisterAdvertisement", "o",
@@ -231,6 +336,36 @@ class CompanionGattApplication:
       return new_method_return(message, "v", (properties[name],))
     raise KeyError("Unsupported properties request")
 
+  def _emit_live_properties(self, changed: dict[str, tuple[str, Any]]) -> None:
+    emitter = DBusAddress(COMPANION_LIVE_PATH, interface=PROPERTIES_IFACE)
+    self.router.send(new_signal(
+      emitter,
+      "PropertiesChanged",
+      "sa{sv}as",
+      (GATT_CHARACTERISTIC_IFACE, changed, []),
+    ))
+
+  def _on_live_frame(self, frame: bytes) -> None:
+    with self._notify_lock:
+      notifying = self._notifying and self._registered and not self._closed
+    if notifying:
+      self._emit_live_frame(frame)
+
+  def _emit_live_frame(self, frame: bytes) -> None:
+    for fragment in live_notification_fragments(frame):
+      self._emit_live_properties({"Value": ("ay", fragment)})
+
+  def _set_notifying(self, notifying: bool) -> None:
+    with self._notify_lock:
+      if self._notifying == notifying:
+        if notifying:
+          raise RuntimeError("Notifications are already enabled")
+        return
+      self._notifying = notifying
+    self._emit_live_properties({"Notifying": ("b", notifying)})
+    if notifying:
+      self._emit_live_frame(self.protocol.live_bytes())
+
   def _dispatch(self, message):
     path = str(message.header.fields.get(HeaderFields.path, ""))
     interface = str(message.header.fields.get(HeaderFields.interface, ""))
@@ -244,14 +379,25 @@ class CompanionGattApplication:
     if interface != GATT_CHARACTERISTIC_IFACE:
       raise KeyError("Unsupported companion interface")
 
-    if member == "ReadValue" and path in (COMPANION_STATUS_PATH, COMPANION_RESPONSE_PATH):
+    if member == "ReadValue" and path in (COMPANION_STATUS_PATH, COMPANION_RESPONSE_PATH, COMPANION_LIVE_PATH):
       device_path = self._require_bonded_phone(message)
-      value = self.protocol.status_bytes() if path == COMPANION_STATUS_PATH else self._responses.get(device_path, b"{}")
+      if path == COMPANION_STATUS_PATH:
+        value = self.protocol.status_bytes()
+      elif path == COMPANION_LIVE_PATH:
+        value = self.protocol.live_bytes()
+      else:
+        value = self._responses.get(device_path, b"{}")
       return new_method_return(message, "ay", (self._slice_value(value, message),))
     if member == "WriteValue" and path == COMPANION_COMMAND_PATH:
       device_path = self._require_bonded_phone(message)
       value = bytes(message.body[0]) if message.body else b""
       self._responses[device_path] = self.protocol.handle(value)
+      return new_method_return(message)
+    if path == COMPANION_LIVE_PATH and member == "StartNotify":
+      self._set_notifying(True)
+      return new_method_return(message)
+    if path == COMPANION_LIVE_PATH and member == "StopNotify":
+      self._set_notifying(False)
       return new_method_return(message)
     raise KeyError("Unsupported companion characteristic operation")
 

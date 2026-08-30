@@ -1,5 +1,5 @@
 import { html } from "/assets/vendor/arrow-core.js";
-import { hideSidebar, upperFirst } from "/assets/js/utils.js";
+import { galaxyPath, hideSidebar, upperFirst } from "/assets/js/utils.js";
 
 const MENU_ITEMS = {
   home: [
@@ -12,6 +12,7 @@ const MENU_ITEMS = {
   tools: [
     { name: "Toggles", link: "/device_settings", icon: "bi-toggle-on" },
     { name: "Bluetooth", link: "/bluetooth", icon: "bi-bluetooth" },
+    { name: "Live Link", link: "/live", icon: "bi-broadcast", documentNavigation: true },
     { name: "Download Speed Limits", link: "/download_speed_limits", icon: "bi-download" },
     { name: "Error Logs", link: "/manage_error_logs", icon: "bi-exclamation-triangle" },
     { name: "Galaxy", link: "/galaxy", icon: "bi-globe2" },
@@ -49,7 +50,7 @@ function buildSectionMarkup(section, links, currentPath) {
     const active = matchesPath(currentPath, link.link) ? "active" : "";
     return `
       <li class="${active}">
-        <a class="menu-item-link" href="${link.link}">
+        <a class="menu-item-link" href="${link.link}" data-document-navigation="${link.documentNavigation ? "1" : "0"}">
           <i class="bi ${link.icon}"></i>
           <span>${upperFirst(link.name)}</span>
         </a>
@@ -115,6 +116,10 @@ function bindSidebarHandlers() {
 
       event.preventDefault();
       const href = anchor.getAttribute("href") || "/";
+      if (anchor.dataset.documentNavigation === "1") {
+        window.location.assign(galaxyPath(href));
+        return;
+      }
       const navigate = window.__theGalaxyNavigate;
       if (typeof navigate === "function") {
         navigate(href);

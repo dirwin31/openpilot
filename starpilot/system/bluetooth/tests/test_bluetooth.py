@@ -1,8 +1,11 @@
 import io
 import json
 import queue
+import struct
 import threading
 import time
+
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -13,10 +16,16 @@ from openpilot.starpilot.system.bluetooth.audio import BluetoothAudioSink
 from openpilot.starpilot.system.bluetooth.bluez import BlueZClient, PairingAgent
 from openpilot.starpilot.system.bluetooth.companion import (
   ADVERTISEMENT_IFACE, COMPANION_ADVERTISEMENT_PATH, COMPANION_APP_PATH, COMPANION_COMMAND_PATH, COMPANION_PROTOCOL_VERSION,
-  COMPANION_RESPONSE_PATH, COMPANION_SERVICE_PATH, COMPANION_SERVICE_UUID, COMPANION_STATUS_PATH, GATT_CHARACTERISTIC_IFACE,
-  OBJECT_MANAGER_IFACE, PROPERTIES_IFACE, CompanionGattApplication, CompanionProtocol,
+  COMPANION_LIVE_PATH, COMPANION_LIVE_UUID, COMPANION_RESPONSE_PATH, COMPANION_SERVICE_PATH, COMPANION_SERVICE_UUID,
+  COMPANION_STATUS_PATH, GATT_CHARACTERISTIC_IFACE, OBJECT_MANAGER_IFACE, PROPERTIES_IFACE, CompanionGattApplication,
+  CompanionProtocol,
 )
 from openpilot.starpilot.system.bluetooth.daemon import BluetoothController
+from openpilot.starpilot.system.bluetooth.live import (
+  LIVE_FRAME_MAGIC, LIVE_FRAME_RATE_HZ, LIVE_FRAME_SIZE, LIVE_NOTIFICATION_FRAGMENT_COUNT, LIVE_NOTIFICATION_SIZE,
+  LIVE_PROTOCOL_VERSION, BorderState, ConditionalChillReason, LiveFlags, LiveSnapshot, LiveTelemetryPublisher, ModelSource,
+  build_live_details, build_live_snapshot, live_notification_fragments,
+)
 from openpilot.starpilot.system.bluetooth.protocol import (A2DP_SINK_UUID, HID_UUID, BluetoothClient, BluetoothDevice, BluetoothStatus,
                                                            device_capabilities, show_pairing_device)
 from openpilot.system import hardware
@@ -29,6 +38,10 @@ class FakeParams:
 
   def get_bool(self, key):
     return bool(self.values.get(key, False))
+
+  def get_int(self, key, default=0):
+    value = self.values.get(key)
+    return default if value is None else int(value)
 
   def get(self, key, encoding=None, **_kwargs):
     value = self.values.get(key)
@@ -234,6 +247,14 @@ def test_companion_protocol_is_read_only_and_versioned():
   assert status == {
     "branch": "Dom",
     "device": "StarPilot",
+    "live": {
+      "frame_size": LIVE_FRAME_SIZE,
+      "protocol_version": LIVE_PROTOCOL_VERSION,
+      "rate_hz": LIVE_FRAME_RATE_HZ,
+      "notification_fragments": LIVE_NOTIFICATION_FRAGMENT_COUNT,
+      "notification_size": LIVE_NOTIFICATION_SIZE,
+      "uuid": COMPANION_LIVE_UUID,
+    },
     "onroad": False,
     "protocol_version": COMPANION_PROTOCOL_VERSION,
     "version": "0.10",
@@ -241,8 +262,104 @@ def test_companion_protocol_is_read_only_and_versioned():
   assert json.loads(protocol.handle(b'{"id":"one","op":"ping"}')) == {
     "data": {"time": 1234}, "id": "one", "ok": True, "op": "ping",
   }
+  metadata_response = protocol.handle(b'{"id":"meta","op":"get_live_metadata"}')
+  metadata = json.loads(metadata_response)["data"]
+  assert metadata["model"]["key"] == ""
+  assert metadata["alert"]["id"] == 0
+  assert len(metadata_response) <= 512
   rejected = json.loads(protocol.handle(b'{"id":"two","op":"set_speed"}'))
   assert not rejected["ok"] and "Unsupported" in rejected["error"]
+
+
+class FakeSubMaster(dict):
+  def __init__(self, **services):
+    super().__init__(services)
+    self.valid = dict.fromkeys(services, True)
+
+
+def test_live_snapshot_packs_complete_versioned_driving_state():
+  params = FakeParams(
+    ConditionalChill=True,
+    SpeedLimitController=True,
+    CurveSpeedController=True,
+    UsbGpuActive=True,
+    UsbGpuLoading=False,
+    IsMetric=False,
+    AccelerationProfile=3,
+    LongitudinalPersonality=2,
+    DrivingModel="galaxy-model",
+    DrivingModelName="Galaxy Model",
+    DrivingModelVersion="v15",
+  )
+  params_memory = FakeParams(CCStatus=4, CEStatus=0, SwitchbackModeEnabled=False)
+  lateral_state = SimpleNamespace(
+    which=lambda: "angleState",
+    angleState=SimpleNamespace(steeringAngleDesiredDeg=13.7),
+  )
+  sm = FakeSubMaster(
+    deviceState=SimpleNamespace(started=True),
+    carState=SimpleNamespace(
+      vEgo=20.0, vEgoCluster=20.25, vCruiseCluster=23.5, aEgo=-0.45,
+      gasPressed=False, brakePressed=True, standstill=False, steeringAngleDeg=12.3, steeringTorque=-2.5,
+      cruiseState=SimpleNamespace(available=True, enabled=True, standstill=False, nonAdaptive=False),
+    ),
+    selfdriveState=SimpleNamespace(
+      enabled=True, active=True, experimentalMode=False, personality=2, state=2,
+      alertType="controlsUnresponsive", alertText1="TAKE CONTROL", alertText2="Controls Unresponsive", alertStatus=2,
+    ),
+    carControl=SimpleNamespace(latActive=True, longActive=True, actuators=SimpleNamespace(steeringAngleDeg=0.0)),
+    controlsState=SimpleNamespace(longControlState=2, lateralControlState=lateral_state, vCruiseDEPRECATED=0.0),
+    radarState=SimpleNamespace(leadOne=SimpleNamespace(status=True, dRel=26.4, vRel=-1.75, modelProb=0.992)),
+    longitudinalPlan=SimpleNamespace(aTarget=-0.61, shouldStop=False),
+    modelV2=SimpleNamespace(meta=SimpleNamespace(laneChangeState=2, laneChangeDirection=2)),
+    starpilotCarState=SimpleNamespace(
+      alwaysOnLateralEnabled=True, pauseLateral=True, trafficModeEnabled=False, pulseAndGlide=False,
+    ),
+    starpilotPlan=SimpleNamespace(
+      slcSpeedLimit=20.1, slcSpeedLimitOffset=1.12, cscControllingSpeed=True, cscSpeed=17.2,
+      forcingStop=False, trackingLead=True, pulseGlideCoasting=False,
+    ),
+    onroadEvents=[],
+  )
+
+  snapshot = build_live_snapshot(sm, params, params_memory)
+  frame = snapshot.pack(513, 0x12345678)
+
+  assert len(frame) == LIVE_FRAME_SIZE
+  assert struct.unpack_from("<2sBBHHII", frame) == (
+    LIVE_FRAME_MAGIC, LIVE_PROTOCOL_VERSION, 1, LIVE_FRAME_SIZE, 513, 0x12345678, snapshot.flags,
+  )
+  telemetry = struct.unpack_from("<hHhhhhhHhHHhH", frame, 16)
+  assert telemetry == (2025, 2350, -45, -61, 123, 137, -25, 264, -175, 992, 2010, 112, 1720)
+  state = struct.unpack_from("<10B4BII", frame, 42)
+  assert state[:10] == (2, int(BorderState.LONGITUDINAL_ONLY), 2, int(ConditionalChillReason.LEAD), 3, 2, 2, 2, 2, int(ModelSource.BIG))
+  assert state[10:14] == (255, 105, 180, 255)
+  assert state[14] != 0 and state[15] != 0
+  assert snapshot.flags & LiveFlags.CONDITIONAL_CHILL
+  assert snapshot.flags & LiveFlags.BIG_MODEL
+  assert snapshot.flags & LiveFlags.BRAKE_PRESSED
+  assert snapshot.flags & LiveFlags.STOPPING
+  fragments = live_notification_fragments(frame)
+  assert len(fragments) == LIVE_NOTIFICATION_FRAGMENT_COUNT
+  assert all(len(fragment) == LIVE_NOTIFICATION_SIZE for fragment in fragments)
+  assert b"".join(fragment[4:] for fragment in fragments) == frame
+  assert [fragment[3] & 0x0F for fragment in fragments] == list(range(LIVE_NOTIFICATION_FRAGMENT_COUNT))
+  details = build_live_details(sm)
+  assert details["alert"]["id"] == snapshot.alert_id
+  assert details["alert"]["text1"] == "TAKE CONTROL"
+
+
+def test_live_publisher_sequences_frames():
+  params = FakeParams(DrivingModel="model")
+  frames = []
+  publisher = LiveTelemetryPublisher(frames.append, params, FakeParams(), monotonic=lambda: 12.345)
+  sm = FakeSubMaster()
+
+  publisher.publish_once(sm)
+  publisher.publish_once(sm)
+
+  assert [struct.unpack_from("<H", frame, 6)[0] for frame in frames] == [0, 1]
+  assert all(struct.unpack_from("<I", frame, 8)[0] == 12345 for frame in frames)
 
 
 def test_companion_gatt_contract_requires_authenticated_characteristics():
@@ -253,6 +370,60 @@ def test_companion_gatt_contract_requires_authenticated_characteristics():
   assert objects[COMPANION_STATUS_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read"])
   assert objects[COMPANION_COMMAND_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-write"])
   assert objects[COMPANION_RESPONSE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read"])
+  assert objects[COMPANION_LIVE_PATH]["org.bluez.GattCharacteristic1"]["UUID"] == ("s", COMPANION_LIVE_UUID)
+  assert objects[COMPANION_LIVE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read", "notify"])
+
+
+def test_companion_live_characteristic_reads_and_notifies():
+  class FakeFilter:
+    def __init__(self):
+      self.messages = queue.Queue()
+
+    def __enter__(self):
+      return self.messages
+
+    def __exit__(self, *_args):
+      pass
+
+  class FakeRouter:
+    def __init__(self):
+      self.message_filter = FakeFilter()
+      self.sent = []
+
+    def filter(self, *_args, **_kwargs):
+      return self.message_filter
+
+    def send(self, message):
+      self.sent.append(message)
+
+  def message(member, signature=None, body=()):
+    request = new_method_call(
+      DBusAddress(COMPANION_LIVE_PATH, bus_name="org.bluez", interface=GATT_CHARACTERISTIC_IFACE),
+      member, signature, body,
+    )
+    request.header.serial = 1
+    return request
+
+  router = FakeRouter()
+  protocol = CompanionProtocol(FakeParams(IsOffroad=False, DrivingModel="model"))
+  app = CompanionGattApplication(router, lambda *_args: (), lambda path: path == "/phone/one", protocol)
+  app._registered = True
+
+  read = message("ReadValue", "a{sv}", ({"device": ("o", "/phone/one")},))
+  assert len(app._dispatch(read).body[0]) == LIVE_FRAME_SIZE
+
+  app._dispatch(message("StartNotify"))
+  frame = LiveSnapshot().pack(7, 100)
+  protocol._publish_live(frame)
+  notification_values = [signal.body[1]["Value"][1] for signal in router.sent[-LIVE_NOTIFICATION_FRAGMENT_COUNT:]]
+  assert b"".join(value[4:] for value in notification_values) == frame
+  assert len(router.sent[-1].serialise(2)) > 0
+
+  app._dispatch(message("StopNotify"))
+  notifications = len(router.sent)
+  protocol._publish_live(LiveSnapshot().pack(8, 200))
+  assert len(router.sent) == notifications
+  app.close()
 
 
 def test_companion_gatt_exports_serializable_bluez_objects():
