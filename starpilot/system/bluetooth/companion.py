@@ -1,0 +1,271 @@
+import json
+import queue
+import threading
+
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
+
+from jeepney import MatchRule, new_error, new_method_return
+from jeepney.low_level import HeaderFields
+
+from openpilot.common.params import Params
+
+
+BLUEZ = "org.bluez"
+OBJECT_MANAGER_IFACE = "org.freedesktop.DBus.ObjectManager"
+PROPERTIES_IFACE = "org.freedesktop.DBus.Properties"
+GATT_MANAGER_IFACE = "org.bluez.GattManager1"
+GATT_SERVICE_IFACE = "org.bluez.GattService1"
+GATT_CHARACTERISTIC_IFACE = "org.bluez.GattCharacteristic1"
+ADVERTISEMENT_MANAGER_IFACE = "org.bluez.LEAdvertisingManager1"
+ADVERTISEMENT_IFACE = "org.bluez.LEAdvertisement1"
+
+COMPANION_APP_PATH = "/link/firestar/starpilot/companion"
+COMPANION_SERVICE_PATH = f"{COMPANION_APP_PATH}/service0"
+COMPANION_STATUS_PATH = f"{COMPANION_SERVICE_PATH}/char0"
+COMPANION_COMMAND_PATH = f"{COMPANION_SERVICE_PATH}/char1"
+COMPANION_RESPONSE_PATH = f"{COMPANION_SERVICE_PATH}/char2"
+COMPANION_ADVERTISEMENT_PATH = f"{COMPANION_APP_PATH}/advertisement0"
+
+# These UUIDs are the stable public contract used by the mobile app.
+COMPANION_SERVICE_UUID = "9b6d1000-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
+COMPANION_STATUS_UUID = "9b6d1001-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
+COMPANION_COMMAND_UUID = "9b6d1002-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
+COMPANION_RESPONSE_UUID = "9b6d1003-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
+
+COMPANION_PROTOCOL_VERSION = 1
+MAX_COMPANION_COMMAND_BYTES = 512
+
+
+def _wall_time() -> float:
+  return datetime.now(UTC).timestamp()
+
+
+def _param_text(params: Params, key: str) -> str:
+  value = params.get(key, encoding="utf-8") or ""
+  if isinstance(value, bytes):
+    value = value.decode("utf-8", errors="ignore")
+  return str(value)[:64]
+
+
+class CompanionProtocol:
+  """Small, intentionally read-only protocol exposed to a bonded phone."""
+
+  def __init__(self, params: Params | None = None, clock=_wall_time):
+    self.params = params or Params()
+    self._clock = clock
+
+  def status(self) -> dict[str, Any]:
+    return {
+      "protocol_version": COMPANION_PROTOCOL_VERSION,
+      "device": "StarPilot",
+      "version": _param_text(self.params, "Version"),
+      "branch": _param_text(self.params, "GitBranch"),
+      "onroad": not self.params.get_bool("IsOffroad"),
+    }
+
+  def status_bytes(self) -> bytes:
+    return json.dumps(self.status(), separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+  def handle(self, payload: bytes) -> bytes:
+    request_id = ""
+    operation = ""
+    try:
+      if not payload or len(payload) > MAX_COMPANION_COMMAND_BYTES:
+        raise ValueError(f"Command must be between 1 and {MAX_COMPANION_COMMAND_BYTES} bytes")
+      request = json.loads(payload.decode("utf-8"))
+      if not isinstance(request, dict):
+        raise ValueError("Command must be a JSON object")
+      request_id = str(request.get("id", ""))[:64]
+      operation = str(request.get("op", ""))
+      if operation == "ping":
+        data = {"time": int(self._clock())}
+      elif operation == "get_status":
+        data = self.status()
+      else:
+        raise ValueError(f"Unsupported companion operation: {operation or '<empty>'}")
+      response = {"id": request_id, "ok": True, "op": operation, "data": data}
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+      response = {"id": request_id, "ok": False, "op": operation, "error": str(error)}
+    return json.dumps(response, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+class CompanionGattApplication:
+  """Exports the StarPilot companion GATT service on an existing BlueZ D-Bus connection."""
+
+  def __init__(self, router, bluez_call: Callable[..., Any], authorize: Callable[[str], bool],
+               protocol: CompanionProtocol | None = None):
+    self.router = router
+    self._bluez_call = bluez_call
+    self._authorize = authorize
+    self.protocol = protocol or CompanionProtocol()
+    self._adapter_path = ""
+    self._registered = False
+    self._responses: dict[str, bytes] = {}
+    self._running = True
+    self._closed = False
+    self._close_lock = threading.Lock()
+    self._filter = self.router.filter(MatchRule(type="method_call", path_namespace=COMPANION_APP_PATH), bufsize=20)
+    self._queue = self._filter.__enter__()
+    self._thread = threading.Thread(target=self._serve, daemon=True)
+    self._thread.start()
+
+  @property
+  def registered(self) -> bool:
+    return self._registered
+
+  def managed_objects(self) -> dict[str, dict[str, dict[str, tuple[str, Any]]]]:
+    return {
+      COMPANION_SERVICE_PATH: {
+        GATT_SERVICE_IFACE: {
+          "UUID": ("s", COMPANION_SERVICE_UUID),
+          "Primary": ("b", True),
+        },
+      },
+      COMPANION_STATUS_PATH: {
+        GATT_CHARACTERISTIC_IFACE: {
+          "UUID": ("s", COMPANION_STATUS_UUID),
+          "Service": ("o", COMPANION_SERVICE_PATH),
+          "Flags": ("as", ["encrypt-authenticated-read"]),
+        },
+      },
+      COMPANION_COMMAND_PATH: {
+        GATT_CHARACTERISTIC_IFACE: {
+          "UUID": ("s", COMPANION_COMMAND_UUID),
+          "Service": ("o", COMPANION_SERVICE_PATH),
+          "Flags": ("as", ["encrypt-authenticated-write"]),
+        },
+      },
+      COMPANION_RESPONSE_PATH: {
+        GATT_CHARACTERISTIC_IFACE: {
+          "UUID": ("s", COMPANION_RESPONSE_UUID),
+          "Service": ("o", COMPANION_SERVICE_PATH),
+          "Flags": ("as", ["encrypt-authenticated-read"]),
+        },
+      },
+    }
+
+  def advertisement_properties(self) -> dict[str, tuple[str, Any]]:
+    return {
+      "Type": ("s", "peripheral"),
+      "ServiceUUIDs": ("as", [COMPANION_SERVICE_UUID]),
+      "LocalName": ("s", "StarPilot"),
+    }
+
+  def start(self, adapter_path: str) -> None:
+    if self._registered:
+      return
+    self._adapter_path = adapter_path
+    self._bluez_call(adapter_path, GATT_MANAGER_IFACE, "RegisterApplication", "oa{sv}", (COMPANION_APP_PATH, {}))
+    try:
+      self._bluez_call(adapter_path, ADVERTISEMENT_MANAGER_IFACE, "RegisterAdvertisement", "oa{sv}",
+                       (COMPANION_ADVERTISEMENT_PATH, {}))
+    except Exception:
+      try:
+        self._bluez_call(adapter_path, GATT_MANAGER_IFACE, "UnregisterApplication", "o", (COMPANION_APP_PATH,))
+      except Exception:
+        pass
+      raise
+    self._registered = True
+
+  def close(self) -> None:
+    with self._close_lock:
+      if self._closed:
+        return
+      self._closed = True
+      if self._registered:
+        try:
+          self._bluez_call(self._adapter_path, ADVERTISEMENT_MANAGER_IFACE, "UnregisterAdvertisement", "o",
+                           (COMPANION_ADVERTISEMENT_PATH,))
+        except Exception:
+          pass
+        try:
+          self._bluez_call(self._adapter_path, GATT_MANAGER_IFACE, "UnregisterApplication", "o", (COMPANION_APP_PATH,))
+        except Exception:
+          pass
+      self._registered = False
+      self._running = False
+      self._filter.__exit__(None, None, None)
+      try:
+        self._queue.put_nowait(None)
+      except queue.Full:
+        pass
+      if self._thread.is_alive():
+        self._thread.join(timeout=1.0)
+
+  @staticmethod
+  def _options(message) -> dict[str, Any]:
+    raw = message.body[-1] if message.body and isinstance(message.body[-1], dict) else {}
+    return {key: value[1] if isinstance(value, tuple) and len(value) == 2 else value for key, value in raw.items()}
+
+  def _require_bonded_phone(self, message) -> str:
+    device_path = str(self._options(message).get("device", ""))
+    if not device_path or not self._authorize(device_path):
+      raise PermissionError("A bonded phone is required")
+    return device_path
+
+  @staticmethod
+  def _slice_value(value: bytes, message) -> bytes:
+    offset = int(CompanionGattApplication._options(message).get("offset", 0))
+    if offset < 0 or offset > len(value):
+      raise ValueError("Invalid characteristic offset")
+    return value[offset:]
+
+  def _properties_for(self, path: str, interface: str) -> dict[str, tuple[str, Any]]:
+    if path == COMPANION_ADVERTISEMENT_PATH and interface == ADVERTISEMENT_IFACE:
+      return self.advertisement_properties()
+    return self.managed_objects().get(path, {}).get(interface, {})
+
+  def _properties(self, message, path: str, member: str):
+    interface = str(message.body[0]) if message.body else ""
+    properties = self._properties_for(path, interface)
+    if not properties:
+      raise KeyError(f"Unknown interface {interface}")
+    if member == "GetAll":
+      return new_method_return(message, "a{sv}", (properties,))
+    if member == "Get" and len(message.body) > 1:
+      name = str(message.body[1])
+      if name not in properties:
+        raise KeyError(f"Unknown property {name}")
+      return new_method_return(message, "v", (properties[name],))
+    raise KeyError("Unsupported properties request")
+
+  def _dispatch(self, message):
+    path = str(message.header.fields.get(HeaderFields.path, ""))
+    interface = str(message.header.fields.get(HeaderFields.interface, ""))
+    member = str(message.header.fields.get(HeaderFields.member, ""))
+    if path == COMPANION_APP_PATH and interface == OBJECT_MANAGER_IFACE and member == "GetManagedObjects":
+      return new_method_return(message, "a{oa{sa{sv}}}", (self.managed_objects(),))
+    if interface == PROPERTIES_IFACE:
+      return self._properties(message, path, member)
+    if path == COMPANION_ADVERTISEMENT_PATH and interface == ADVERTISEMENT_IFACE and member == "Release":
+      return new_method_return(message)
+    if interface != GATT_CHARACTERISTIC_IFACE:
+      raise KeyError("Unsupported companion interface")
+
+    if member == "ReadValue" and path in (COMPANION_STATUS_PATH, COMPANION_RESPONSE_PATH):
+      device_path = self._require_bonded_phone(message)
+      value = self.protocol.status_bytes() if path == COMPANION_STATUS_PATH else self._responses.get(device_path, b"{}")
+      return new_method_return(message, "ay", (self._slice_value(value, message),))
+    if member == "WriteValue" and path == COMPANION_COMMAND_PATH:
+      device_path = self._require_bonded_phone(message)
+      value = bytes(message.body[0]) if message.body else b""
+      self._responses[device_path] = self.protocol.handle(value)
+      return new_method_return(message)
+    raise KeyError("Unsupported companion characteristic operation")
+
+  def _serve(self) -> None:
+    while self._running:
+      message = self._queue.get()
+      if message is None:
+        return
+      try:
+        response = self._dispatch(message)
+      except PermissionError as error:
+        response = new_error(message, "org.bluez.Error.NotAuthorized", "s", (str(error),))
+      except ValueError as error:
+        response = new_error(message, "org.bluez.Error.InvalidValueLength", "s", (str(error),))
+      except Exception as error:
+        response = new_error(message, "org.bluez.Error.NotSupported", "s", (str(error),))
+      self.router.send(response)

@@ -1,12 +1,21 @@
 import io
+import json
+import queue
 import threading
 import time
 
 import numpy as np
 import pytest
 
+from jeepney import DBusAddress, new_method_call
+
 from openpilot.starpilot.system.bluetooth.audio import BluetoothAudioSink
 from openpilot.starpilot.system.bluetooth.bluez import PairingAgent
+from openpilot.starpilot.system.bluetooth.companion import (
+  ADVERTISEMENT_IFACE, COMPANION_ADVERTISEMENT_PATH, COMPANION_APP_PATH, COMPANION_COMMAND_PATH, COMPANION_PROTOCOL_VERSION,
+  COMPANION_RESPONSE_PATH, COMPANION_SERVICE_PATH, COMPANION_SERVICE_UUID, COMPANION_STATUS_PATH, GATT_CHARACTERISTIC_IFACE,
+  OBJECT_MANAGER_IFACE, PROPERTIES_IFACE, CompanionGattApplication, CompanionProtocol,
+)
 from openpilot.starpilot.system.bluetooth.daemon import BluetoothController
 from openpilot.starpilot.system.bluetooth.protocol import (A2DP_SINK_UUID, HID_UUID, BluetoothClient, BluetoothDevice, BluetoothStatus,
                                                            device_capabilities, show_pairing_device)
@@ -55,6 +64,8 @@ class FakeBlueZ:
     self.discovering = False
     self.closed = False
     self.actions = []
+    self.pairing_mode_error = None
+    self.router = object()
     self.device = {
       "path": "/fake/device",
       "address": "00:11:22:33:44:55",
@@ -99,6 +110,41 @@ class FakeBlueZ:
 
   def remove(self, address):
     self.actions.append(("remove", address))
+
+  def _call(self, *args):
+    self.actions.append(("call", *args))
+
+  def adapter(self):
+    return "/org/bluez/hci0", {}
+
+  def set_pairing_mode(self, enabled):
+    self.actions.append(("pairing_mode", enabled))
+    if self.pairing_mode_error is not None:
+      raise self.pairing_mode_error
+
+  def paired_device_for_path(self, path):
+    if path != "/org/bluez/hci0/dev_phone" or not self.device["paired"]:
+      return None
+    return {**self.device, "path": path}
+
+  def set_device_property(self, address, name, signature, value):
+    self.actions.append(("property", address, name, signature, value))
+    if name == "Trusted":
+      self.device["trusted"] = bool(value)
+
+
+class FakeCompanion:
+  def __init__(self, _router, _call, authorize, protocol):
+    self.authorize = authorize
+    self.protocol = protocol
+    self.started = ""
+    self.closed = False
+
+  def start(self, adapter_path):
+    self.started = adapter_path
+
+  def close(self):
+    self.closed = True
 
 
 class FakeRadio:
@@ -174,6 +220,112 @@ def test_protocol_round_trip_and_capabilities():
   assert status.devices == (BluetoothDevice("00:11:22:33:44:55", "Combo", uuids=(A2DP_SINK_UUID, HID_UUID), audio=True, controller=True),)
 
 
+def test_companion_protocol_is_read_only_and_versioned():
+  params = FakeParams(IsOffroad=True, Version="0.10", GitBranch="Dom")
+  protocol = CompanionProtocol(params, clock=lambda: 1234.9)
+
+  status = json.loads(protocol.status_bytes())
+  assert status == {
+    "branch": "Dom",
+    "device": "StarPilot",
+    "onroad": False,
+    "protocol_version": COMPANION_PROTOCOL_VERSION,
+    "version": "0.10",
+  }
+  assert json.loads(protocol.handle(b'{"id":"one","op":"ping"}')) == {
+    "data": {"time": 1234}, "id": "one", "ok": True, "op": "ping",
+  }
+  rejected = json.loads(protocol.handle(b'{"id":"two","op":"set_speed"}'))
+  assert not rejected["ok"] and "Unsupported" in rejected["error"]
+
+
+def test_companion_gatt_contract_requires_authenticated_characteristics():
+  app = object.__new__(CompanionGattApplication)
+  objects = app.managed_objects()
+
+  assert objects[COMPANION_SERVICE_PATH]["org.bluez.GattService1"]["UUID"] == ("s", COMPANION_SERVICE_UUID)
+  assert objects[COMPANION_STATUS_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read"])
+  assert objects[COMPANION_COMMAND_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-write"])
+  assert objects[COMPANION_RESPONSE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read"])
+
+
+def test_companion_gatt_exports_serializable_bluez_objects():
+  app = object.__new__(CompanionGattApplication)
+
+  object_manager = new_method_call(
+    DBusAddress(COMPANION_APP_PATH, bus_name="org.bluez", interface=OBJECT_MANAGER_IFACE), "GetManagedObjects",
+  )
+  object_manager.header.serial = 1
+  assert len(app._dispatch(object_manager).serialise(2)) > 0
+
+  advertisement = new_method_call(
+    DBusAddress(COMPANION_ADVERTISEMENT_PATH, bus_name="org.bluez", interface=PROPERTIES_IFACE),
+    "GetAll", "s", (ADVERTISEMENT_IFACE,),
+  )
+  advertisement.header.serial = 1
+  response = app._dispatch(advertisement)
+  assert response.body[0]["ServiceUUIDs"] == ("as", [COMPANION_SERVICE_UUID])
+  assert len(response.serialise(2)) > 0
+
+
+def test_companion_gatt_close_is_idempotent():
+  class FakeFilter:
+    def __init__(self):
+      self.messages = queue.Queue()
+      self.exit_count = 0
+
+    def __enter__(self):
+      return self.messages
+
+    def __exit__(self, *_args):
+      self.exit_count += 1
+
+  class FakeRouter:
+    def __init__(self):
+      self.message_filter = FakeFilter()
+
+    def filter(self, *_args, **_kwargs):
+      return self.message_filter
+
+    def send(self, _message):
+      pass
+
+  router = FakeRouter()
+  app = CompanionGattApplication(router, lambda *_args: (), lambda _path: False)
+
+  app.close()
+  app.close()
+
+  assert router.message_filter.exit_count == 1
+  assert not app._thread.is_alive()
+
+
+def test_companion_gatt_rejects_unbonded_access_and_scopes_responses_by_phone():
+  protocol = CompanionProtocol(FakeParams(IsOffroad=True))
+  app = object.__new__(CompanionGattApplication)
+  app.protocol = protocol
+  app._authorize = lambda path: path == "/phone/one"
+  app._responses = {}
+
+  def message(path, member, signature, body):
+    request = new_method_call(DBusAddress(path, bus_name="org.bluez", interface=GATT_CHARACTERISTIC_IFACE), member, signature, body)
+    request.header.serial = 1
+    return request
+
+  unbonded = message(COMPANION_STATUS_PATH, "ReadValue", "a{sv}", ({"device": ("o", "/phone/two")},))
+  with pytest.raises(PermissionError, match="bonded"):
+    app._dispatch(unbonded)
+
+  write = message(COMPANION_COMMAND_PATH, "WriteValue", "aya{sv}", (
+    b'{"id":"one","op":"ping"}', {"device": ("o", "/phone/one")},
+  ))
+  app._dispatch(write)
+  read = message(COMPANION_RESPONSE_PATH, "ReadValue", "a{sv}", ({"device": ("o", "/phone/one")},))
+  response = json.loads(app._dispatch(read).body[0])
+  assert response["id"] == "one" and response["ok"]
+  assert "/phone/two" not in app._responses
+
+
 def test_pairing_list_filters_anonymous_and_irrelevant_advertisements():
   assert not show_pairing_device("00:11:22:33:44:55", "00:11:22:33:44:55", False, False, False, False, False, False)
   assert not show_pairing_device("00:11:22:33:44:55", "Nearby sensor", False, False, False, False, False, False)
@@ -204,6 +356,14 @@ def test_desktop_fake_bluetooth_is_stateful_and_interactive(monkeypatch, tmp_pat
   client.select_audio(speaker.address)
   assert client.status().selected_audio == speaker.address
   assert client.test_audio(speaker.address) == 3.0
+
+  client.set_companion(True)
+  client.start_companion_pairing()
+  companion = client.status()
+  assert companion.companion_enabled and companion.companion_pairing
+  assert 115 <= companion.companion_pairing_remaining <= 120
+  client.stop_companion_pairing()
+  assert not client.status().companion_pairing
 
   client.forget(controller.address)
   forgotten_controller = next(device for device in client.status().devices if device.address == controller.address)
@@ -433,6 +593,104 @@ def test_pair_keeps_discovery_until_pair_starts():
   pair_index = client.actions.index(("pair", client.device["address"]))
   assert client.actions[-1] == ("stop_scan", "")
   assert pair_index < len(client.actions) - 1
+
+
+def test_companion_pairing_window_and_bond_authorization():
+  params = FakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionEnabled=False)
+  client = FakeBlueZ()
+  client.device.update({"name": "Phone", "audio": False, "trusted": False})
+  companions = []
+
+  def companion_factory(*args):
+    companions.append(FakeCompanion(*args))
+    return companions[-1]
+
+  controller = BluetoothController(params, lambda: client, FakeRadio(), companion_factory=companion_factory)
+  controller.handle({"command": "set_companion", "enabled": True})
+  assert params.get_bool("BluetoothCompanionEnabled")
+  assert companions[0].started == "/org/bluez/hci0"
+
+  controller.handle({"command": "start_companion_pairing"})
+  status = controller.status()
+  assert status["companion_pairing"] and 115 <= status["companion_pairing_remaining"] <= 120
+  assert client.actions[-1] == ("pairing_mode", True)
+
+  assert companions[0].authorize("/org/bluez/hci0/dev_phone")
+  assert params.get("BluetoothCompanionDevices") == '["00:11:22:33:44:55"]'
+  assert ("property", "00:11:22:33:44:55", "Trusted", "b", True) in client.actions
+
+  controller._maintain_companion_pairing(controller._companion_pairing_deadline)
+  assert not controller.status()["companion_pairing"]
+  assert client.actions[-1] == ("pairing_mode", False)
+
+  controller.handle({"command": "set_companion", "enabled": False})
+  assert companions[0].closed and not params.get_bool("BluetoothCompanionEnabled")
+
+
+@pytest.mark.parametrize("command_request,companion_enabled", [
+  ({"command": "set_companion", "enabled": True}, False),
+  ({"command": "start_companion_pairing"}, True),
+  ({"command": "stop_companion_pairing"}, True),
+])
+def test_companion_commands_cannot_power_disabled_bluetooth(command_request, companion_enabled):
+  params = FakeParams(IsOffroad=True, BluetoothEnabled=False, BluetoothCompanionEnabled=companion_enabled)
+  client = FakeBlueZ()
+  radio = FakeRadio()
+  factory_calls = []
+
+  def client_factory():
+    factory_calls.append(True)
+    return client
+
+  controller = BluetoothController(params, client_factory, radio)
+
+  with pytest.raises(RuntimeError, match="Enable Bluetooth"):
+    controller.handle(command_request)
+
+  assert factory_calls == []
+  assert radio.starts == 0
+  assert controller._bluez is None
+  assert not client.powered
+
+
+def test_companion_pairing_is_offroad_only_and_rejects_unbonded_phone():
+  params = FakeParams(IsOffroad=False, BluetoothEnabled=True, BluetoothCompanionEnabled=True)
+  client = FakeBlueZ()
+  client.device["paired"] = False
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
+
+  with pytest.raises(RuntimeError, match="offroad"):
+    controller.handle({"command": "start_companion_pairing"})
+  controller.status()
+  assert not companions[0].authorize("/org/bluez/hci0/dev_phone")
+
+
+def test_companion_disable_does_not_fail_open_when_pairing_close_fails():
+  params = FakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionEnabled=False)
+  client = FakeBlueZ()
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
+  controller.handle({"command": "set_companion", "enabled": True})
+  controller.handle({"command": "start_companion_pairing"})
+
+  client.pairing_mode_error = RuntimeError("adapter busy")
+  with pytest.raises(RuntimeError, match="adapter busy"):
+    controller.handle({"command": "set_companion", "enabled": False})
+  assert params.get_bool("BluetoothCompanionEnabled")
+  assert controller._companion is companions[0] and not companions[0].closed
+  assert controller.status()["companion_pairing"]
+
+  client.pairing_mode_error = None
+  controller.handle({"command": "set_companion", "enabled": False})
+  assert not params.get_bool("BluetoothCompanionEnabled")
+  assert companions[0].closed
 
 
 def test_audio_queue_is_nonblocking_and_falls_back():

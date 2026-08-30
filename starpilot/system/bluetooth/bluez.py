@@ -249,12 +249,37 @@ class BlueZClient:
       "prompt": prompt,
     }
 
-  def set_powered(self, powered: bool) -> None:
+  def set_adapter_property(self, name: str, signature: str, value: Any) -> None:
     path, _ = self.adapter()
     address = DBusAddress(path, bus_name=BLUEZ, interface=ADAPTER_IFACE)
-    reply = self.router.send_and_get_reply(Properties(address).set("Powered", "b", powered), timeout=10.0)
+    reply = self.router.send_and_get_reply(Properties(address).set(name, signature, value), timeout=10.0)
     if reply.header.message_type == MessageType.error:
-      raise RuntimeError(str(reply.body[0] if reply.body else "Unable to change Bluetooth power"))
+      raise RuntimeError(str(reply.body[0] if reply.body else f"Unable to set adapter {name}"))
+
+  def set_powered(self, powered: bool) -> None:
+    self.set_adapter_property("Powered", "b", powered)
+
+  def set_pairing_mode(self, enabled: bool) -> None:
+    # Pairing windows are timed by bluetooth_managerd instead of BlueZ so all UIs
+    # report the same deadline.
+    if enabled:
+      self.set_adapter_property("PairableTimeout", "u", 0)
+      self.set_adapter_property("DiscoverableTimeout", "u", 0)
+      self.set_adapter_property("Pairable", "b", True)
+      try:
+        self.set_adapter_property("Discoverable", "b", True)
+      except Exception:
+        self.set_adapter_property("Pairable", "b", False)
+        raise
+    else:
+      error: Exception | None = None
+      for name in ("Discoverable", "Pairable"):
+        try:
+          self.set_adapter_property(name, "b", False)
+        except Exception as current_error:
+          error = error or current_error
+      if error is not None:
+        raise error
 
   def set_discoverable(self, discoverable: bool) -> None:
     path, _ = self.adapter()
@@ -284,6 +309,20 @@ class BlueZClient:
       if device["address"].upper() == normalized:
         return device
     raise RuntimeError(f"Bluetooth device {address} was not found")
+
+  def paired_device_for_path(self, path: str) -> dict[str, Any] | None:
+    interfaces = self.managed_objects().get(path, {})
+    props = interfaces.get(DEVICE_IFACE)
+    if props is None or not props.get("Paired", False):
+      return None
+    return {
+      "path": path,
+      "address": str(props.get("Address", "")),
+      "name": str(props.get("Alias") or props.get("Name") or props.get("Address") or "Bluetooth device"),
+      "paired": True,
+      "trusted": bool(props.get("Trusted", False)),
+      "connected": bool(props.get("Connected", False)),
+    }
 
   def set_device_property(self, address: str, name: str, signature: str, value: Any) -> None:
     device = self.device_for_address(address)
