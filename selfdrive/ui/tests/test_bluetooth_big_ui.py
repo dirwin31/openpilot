@@ -4,6 +4,8 @@ from types import SimpleNamespace
 os.environ.setdefault("SP_HEADLESS_TEST", "1")
 
 from openpilot.starpilot.system.bluetooth.protocol import BluetoothDevice, BluetoothStatus
+from openpilot.selfdrive.ui.mici.layouts.settings.bluetooth import companion_pair_button_content
+from openpilot.system.ui.lib.bluetooth_manager import companion_setup_visible
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.bluetooth import (BluetoothManagerUI, PANEL_BACKGROUND, ROW_BORDER,
                                                    companion_status_text, device_action_allowed, device_status_text)
@@ -46,7 +48,6 @@ def make_ui(manager: FakeBluetoothManager) -> BluetoothManagerUI:
   ui = object.__new__(BluetoothManagerUI)
   ui._manager = manager
   ui._scan_pending = False
-  ui._pending_companion = None
   ui._pending_companion_pairing = None
   return ui
 
@@ -166,25 +167,21 @@ def test_scan_is_only_requested_when_the_existing_daemon_policy_allows_it():
 
 
 def test_companion_controls_follow_status_and_offroad_policy():
-  manager = FakeBluetoothManager(BluetoothStatus(enabled=True, offroad=True, companion_enabled=True))
+  manager = FakeBluetoothManager(BluetoothStatus(enabled=True, offroad=True, companion_enabled=False))
   ui = make_ui(manager)
 
   ui._toggle_companion_pairing()
   assert manager.calls == [("companion_pairing", True)]
 
   ui._pending_companion_pairing = None
-  manager.status = BluetoothStatus(enabled=True, offroad=True, companion_enabled=True, companion_pairing=True)
+  manager.status = BluetoothStatus(enabled=True, offroad=True, companion_pairing=True)
   ui._toggle_companion_pairing()
   assert manager.calls[-1] == ("companion_pairing", False)
 
   ui._pending_companion_pairing = None
-  ui._toggle_companion(False)
-  assert manager.calls[-1] == ("companion", False)
-
-  ui._pending_companion = None
-  manager.status = BluetoothStatus(enabled=True, offroad=False, companion_enabled=True)
+  manager.status = BluetoothStatus(enabled=True, offroad=False)
   ui._toggle_companion_pairing()
-  assert manager.calls[-1] == ("companion", False)
+  assert manager.calls == [("companion_pairing", True), ("companion_pairing", False)]
 
 
 def test_companion_status_prioritizes_connection_pairing_and_bond():
@@ -192,6 +189,18 @@ def test_companion_status_prioritizes_connection_pairing_and_bond():
   assert companion_status_text(BluetoothStatus(companion_pairing=True, companion_pairing_remaining=87)) == "Pairing open - 87s"
   assert companion_status_text(BluetoothStatus(companion_devices=(ADDRESS,))) == "Paired"
   assert companion_status_text(BluetoothStatus()) == "Not paired"
+
+
+def test_companion_setup_card_disappears_after_pairing():
+  assert companion_setup_visible(BluetoothStatus())
+  assert companion_setup_visible(BluetoothStatus(companion_pairing=True))
+  assert not companion_setup_visible(BluetoothStatus(companion_devices=(ADDRESS,)))
+  assert not companion_setup_visible(BluetoothStatus(companion_devices=(ADDRESS,), companion_connected=True))
+
+  assert companion_pair_button_content(BluetoothStatus()) == ("pair a phone", "start")
+  assert companion_pair_button_content(BluetoothStatus(companion_pairing=True, companion_pairing_remaining=87)) == (
+    "pair a phone", "discoverable / 87s",
+  )
 
 
 def test_pairing_dialog_callbacks_send_explicit_acceptance_or_rejection():

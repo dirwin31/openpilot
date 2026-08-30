@@ -183,8 +183,7 @@ class _DesktopFakeBluetooth:
           self._companion_pairing_deadline = 0.0
       elif command == "start_companion_pairing":
         self._require_enabled()
-        if not self._companion_enabled:
-          raise RuntimeError("Enable phone app pairing first")
+        self._companion_enabled = True
         self._companion_pairing_deadline = time.monotonic() + 120.0
       elif command == "stop_companion_pairing":
         self._companion_pairing_deadline = 0.0
