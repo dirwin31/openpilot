@@ -290,7 +290,7 @@ function renderSetup() {
     elements.pairStepDetail.textContent = "This phone is registered as a StarPilot companion."
   } else if (setupState.authorizationFailed) {
     setSetupStep(elements.pairStep, elements.pairStepMarker, "attention")
-    elements.pairStepDetail.textContent = "StarPilot rejected the protected read. On the comma, tap Pair a Phone and try again while that window is open."
+    elements.pairStepDetail.textContent = "StarPilot rejected the protected read. On the comma, tap Pair a Phone and try again while that window is open; no confirmation slider is expected."
     elements.setupTitle.textContent = "Finish pairing on the comma"
     elements.setupMessage.textContent = "Bluetooth reached StarPilot, but this phone is not registered as a companion yet."
   } else {
@@ -316,8 +316,8 @@ function renderSetup() {
     setSetupStep(elements.connectStep, elements.connectStepMarker, "current")
     elements.connectStepTitle.textContent = "Connect from the secure page"
     elements.connectStepDetail.textContent = isStandaloneApp()
-      ? "Secure installed Live Link detected. Tap Connect, choose StarPilot, and approve any prompts."
-      : "Secure Safari page detected. Tap Connect, choose StarPilot, and approve any prompts."
+      ? "Secure installed Live Link detected. Tap Connect and choose StarPilot; the open pairing window authorizes it automatically."
+      : "Secure Safari page detected. Tap Connect and choose StarPilot; the open pairing window authorizes it automatically."
   }
 }
 
@@ -577,7 +577,7 @@ function connectionErrorMessage(error, stage = connectionStage) {
   }
   if (stage === "authorization" || /authentication|not authorized|not permitted|insufficient encryption|bond/.test(normalized)) {
     setupState.authorizationFailed = true
-    return "The comma did not authorize this phone. While parked, open Galaxy → Bluetooth → Pair a Phone on the comma, reconnect here, and accept any matching-code prompts."
+    return "The comma did not authorize this phone. While parked, leave Galaxy → Bluetooth → Pair a Phone open on the comma, then reconnect here. StarPilot authorizes the phone automatically during that window."
   }
   if (name === "NotAllowedError" || name === "SecurityError" || normalized.includes("permission denied")) {
     return "Bluetooth access was denied. In Safari, allow beacio on this website. Also verify Settings → Privacy & Security → Bluetooth → beacio is on."
@@ -615,7 +615,7 @@ async function detectBluetoothSetup({ manual = false } = {}) {
 
 async function checkSetup() {
   await detectBluetoothSetup({ manual: true })
-  if (setupState.bluetoothApi) reconnectGrantedDevice()
+  if (setupState.bluetoothApi) loadGrantedDevice()
 }
 
 function reloadSetup() {
@@ -638,11 +638,16 @@ async function connect() {
   connectionStage = "chooser"
   render()
   try {
-    const selected = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [SERVICE_UUID] }],
-      optionalServices: [SERVICE_UUID],
-    })
-    bindDevice(selected)
+    // getDevices() is populated on page load. Reuse that grant when the phone
+    // is already linked, because a connected peripheral is no longer
+    // advertising and therefore cannot appear in a new requestDevice picker.
+    if (!device) {
+      const selected = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [SERVICE_UUID] }],
+        optionalServices: [SERVICE_UUID],
+      })
+      bindDevice(selected)
+    }
     await openConnection()
     startClock()
   } catch (error) {
@@ -673,26 +678,17 @@ function startClock() {
   clockTimer = setInterval(renderConnection, 250)
 }
 
-async function reconnectGrantedDevice() {
+async function loadGrantedDevice() {
   if (state.phase !== "idle") return
   if (!window.isSecureContext || !navigator.bluetooth || typeof navigator.bluetooth.getDevices !== "function") return
   try {
     const devices = await navigator.bluetooth.getDevices()
-    const granted = devices.find((candidate) => candidate.name === "StarPilot")
+    const starPilotDevices = devices.filter((candidate) => candidate.name === "StarPilot")
+    const granted = starPilotDevices.find((candidate) => candidate.gatt && candidate.gatt.connected) || starPilotDevices[0]
     if (!granted) return
     bindDevice(granted)
-    state.phase = "reconnecting"
-    render()
-    await openConnection()
-    startClock()
   } catch (error) {
-    console.warn("[live_link] granted-device reconnect failed", error)
-    if (device) device.removeEventListener("gattserverdisconnected", handleDisconnected)
-    resetCharacteristics()
-    device = null
-    state.phase = "idle"
-    state.error = connectionErrorMessage(error)
-    render()
+    console.warn("[live_link] granted-device lookup failed", error)
   }
 }
 
@@ -735,12 +731,12 @@ async function handleBeacioReady() {
   if (beacioReadyHandled) return
   beacioReadyHandled = true
   await detectBluetoothSetup()
-  reconnectGrantedDevice()
+  loadGrantedDevice()
 }
 
 async function initializeBluetoothSetup() {
   await detectBluetoothSetup()
-  reconnectGrantedDevice()
+  loadGrantedDevice()
 }
 
 elements.connectButton.addEventListener("click", connect)

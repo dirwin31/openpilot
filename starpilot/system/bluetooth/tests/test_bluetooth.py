@@ -20,7 +20,7 @@ from openpilot.starpilot.system.bluetooth.companion import (
   COMPANION_STATUS_PATH, GATT_CHARACTERISTIC_IFACE, OBJECT_MANAGER_IFACE, PROPERTIES_IFACE, CompanionGattApplication,
   CompanionProtocol,
 )
-from openpilot.starpilot.system.bluetooth.daemon import BluetoothController
+from openpilot.starpilot.system.bluetooth.daemon import COMPANION_BOND_SETTLE_INTERVAL, BluetoothController
 from openpilot.starpilot.system.bluetooth.live import (
   LIVE_FRAME_MAGIC, LIVE_FRAME_RATE_HZ, LIVE_FRAME_SIZE, LIVE_NOTIFICATION_FRAGMENT_COUNT, LIVE_NOTIFICATION_SIZE,
   LIVE_PROTOCOL_VERSION, BorderState, ConditionalChillReason, LiveFlags, LiveSnapshot, LiveTelemetryPublisher, ModelSource,
@@ -167,9 +167,13 @@ class FakeCompanion:
     self.protocol = protocol
     self.started = ""
     self.closed = False
+    self.rearmed = 0
 
   def start(self, adapter_path):
     self.started = adapter_path
+
+  def rearm_advertisement(self):
+    self.rearmed += 1
 
   def close(self):
     self.closed = True
@@ -433,6 +437,48 @@ def test_companion_live_characteristic_reads_and_notifies():
   protocol._publish_live(LiveSnapshot().pack(8, 200))
   assert len(router.sent) == notifications
   app.close()
+
+
+def test_companion_rearm_advertisement_reregisters_broadcast():
+  class FakeFilter:
+    def __init__(self):
+      self.messages = queue.Queue()
+
+    def __enter__(self):
+      return self.messages
+
+    def __exit__(self, *_args):
+      pass
+
+  class FakeRouter:
+    def __init__(self):
+      self.message_filter = FakeFilter()
+
+    def filter(self, *_args, **_kwargs):
+      return self.message_filter
+
+    def send(self, _message):
+      pass
+
+  calls = []
+  app = CompanionGattApplication(FakeRouter(), lambda *args: calls.append(args), lambda _path: False)
+
+  # Nothing to broadcast until the service has been registered on an adapter.
+  app.rearm_advertisement()
+  assert calls == []
+
+  app._registered = True
+  app._adapter_path = "/org/bluez/hci0"
+  app.rearm_advertisement()
+  members = [call[2] for call in calls]
+  assert members == ["UnregisterAdvertisement", "RegisterAdvertisement"]
+  assert all(call[0] == "/org/bluez/hci0" for call in calls)
+
+  # A closed service never touches BlueZ again.
+  app.close()
+  calls.clear()
+  app.rearm_advertisement()
+  assert calls == []
 
 
 def test_companion_gatt_exports_serializable_bluez_objects():
@@ -908,6 +954,37 @@ def test_companion_bond_auto_accepts_and_registers_without_prompt():
   assert client.actions[-1] == ("pairing_mode", False)
 
 
+def test_companion_authorization_waits_for_auto_accepted_bond_to_settle():
+  class SettlingBondBlueZ(FakeBlueZ):
+    def __init__(self):
+      super().__init__()
+      self.lookup_count = 0
+
+    def paired_device_for_path(self, path):
+      self.lookup_count += 1
+      if self.lookup_count <= 2:
+        return None
+      return super().paired_device_for_path(path)
+
+  params = TypedJsonFakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionEnabled=False)
+  client = SettlingBondBlueZ()
+  client.device.update({"name": "iPhone", "audio": False, "trusted": False})
+  sleeps = []
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(), sleep=lambda delay: sleeps.append(delay),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
+  controller.handle({"command": "start_companion_pairing"})
+
+  # The agent callback accepts the bond before BlueZ exposes Device1.Paired.
+  assert client.agent.auto_accept_handler("/org/bluez/hci0/dev_phone")
+  assert companions[0].authorize("/org/bluez/hci0/dev_phone")
+  assert sleeps == [COMPANION_BOND_SETTLE_INTERVAL]
+  assert params.get("BluetoothCompanionDevices") == [client.device["address"]]
+  assert "/org/bluez/hci0/dev_phone" not in controller._pending_companion_paths
+
+
 def test_phone_pair_forget_repair_and_reconnect_workflow():
   class WorkflowBlueZ(FakeBlueZ):
     def __init__(self):
@@ -1114,6 +1191,58 @@ def test_reconnect_maintenance_connects_audio_and_controllers_but_not_phone_cent
   assert not any(action[0] == "connect" for action in client.actions)
 
 
+def test_companion_advertisement_rearms_when_saved_phone_disconnects():
+  address = "00:11:22:33:44:55"
+  params = TypedJsonFakeParams(
+    IsOffroad=True,
+    BluetoothEnabled=True,
+    BluetoothCompanionEnabled=True,
+    BluetoothCompanionDevices=[address],
+  )
+  client = FakeBlueZ()
+  client.device.update({"name": "iPhone", "audio": False, "controller": False, "connected": True})
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
+
+  # Seeing the phone connected only records state; nothing to re-arm yet.
+  controller._maintain_companion_advertisement(controller.status())
+  assert companions[-1].rearmed == 0
+
+  # The phone drops (drives out of range): re-arm the advertisement so it can link back.
+  client.device["connected"] = False
+  controller._maintain_companion_advertisement(controller.status())
+  assert companions[-1].rearmed == 1
+
+  # A phone that stays disconnected does not keep re-registering the advertisement.
+  controller._maintain_companion_advertisement(controller.status())
+  assert companions[-1].rearmed == 1
+
+
+def test_companion_advertisement_ignores_disconnect_of_unsaved_device():
+  params = TypedJsonFakeParams(
+    IsOffroad=True,
+    BluetoothEnabled=True,
+    BluetoothCompanionEnabled=True,
+    BluetoothCompanionDevices=["AA:BB:CC:DD:EE:FF"],
+  )
+  client = FakeBlueZ()
+  # A random audio device links and drops; it is not the saved companion phone.
+  client.device.update({"address": "00:11:22:33:44:55", "name": "Speaker", "connected": True})
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
+
+  controller._maintain_companion_advertisement(controller.status())
+  client.device["connected"] = False
+  controller._maintain_companion_advertisement(controller.status())
+  assert companions[-1].rearmed == 0
+
+
 def test_connect_to_phone_reports_actionable_hint_and_rearms_companion():
   address = "00:11:22:33:44:55"
   params = TypedJsonFakeParams(
@@ -1140,10 +1269,11 @@ def test_connect_to_phone_reports_actionable_hint_and_rearms_companion():
   with pytest.raises(RuntimeError, match="connect from the phone"):
     controller.handle({"command": "connect", "address": address})
 
-  # The bond is kept trusted and the service stays advertised so the phone, which
+  # The bond is kept trusted and the advertisement is re-armed so the phone, which
   # is the BLE central, can link back on its own.
   assert ("property", address, "Trusted", "b", True) in client.actions
   assert companions and companions[-1].started == "/org/bluez/hci0" and not companions[-1].closed
+  assert companions[-1].rearmed == 1
 
 
 def test_connect_failure_on_audio_device_keeps_the_bluez_error():

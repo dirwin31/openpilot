@@ -270,6 +270,25 @@ class CompanionGattApplication:
     self._registered = True
     self.protocol.start()
 
+  def rearm_advertisement(self) -> None:
+    # BlueZ stops broadcasting the LE advertisement once a central links and does not
+    # resume the already-registered instance after the phone drops. Saved phones are the
+    # BLE central and reconnect to our advertisement themselves, so re-register it to bring
+    # the broadcast back whenever a companion disconnects.
+    with self._close_lock:
+      if self._closed or not self._registered:
+        return
+      adapter_path = self._adapter_path
+    if not adapter_path:
+      return
+    try:
+      self._bluez_call(adapter_path, ADVERTISEMENT_MANAGER_IFACE, "UnregisterAdvertisement", "o",
+                       (COMPANION_ADVERTISEMENT_PATH,))
+    except Exception:
+      pass
+    self._bluez_call(adapter_path, ADVERTISEMENT_MANAGER_IFACE, "RegisterAdvertisement", "oa{sv}",
+                     (COMPANION_ADVERTISEMENT_PATH, {}))
+
   def close(self) -> None:
     with self._close_lock:
       if self._closed:
