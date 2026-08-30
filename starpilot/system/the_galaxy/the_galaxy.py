@@ -951,7 +951,7 @@ def _sentry_push_subscription_count() -> int:
     return len(_load_sentry_push_subscriptions())
 
 
-def _sentry_public_base_url() -> str:
+def _galaxy_public_base_url() -> str:
   configured_url = os.getenv("STARPILOT_GALAXY_PUBLIC_URL", "").strip().rstrip("/")
   if configured_url:
     return configured_url
@@ -961,7 +961,7 @@ def _sentry_public_base_url() -> str:
 
 
 def _sentry_external_image_urls(event: dict) -> list[str]:
-  base_url = _sentry_public_base_url()
+  base_url = _galaxy_public_base_url()
   if not base_url:
     return []
 
@@ -4976,7 +4976,7 @@ def setup(app):
     # This deliberately avoids the Galaxy SPA and every API dependency. The
     # service worker caches the complete shell so runtime communication with
     # the comma is exclusively through the BLE companion service.
-    response = make_response(render_template("live_link.html", secure_live_url=_galaxy_public_url()))
+    response = make_response(render_template("live_link.html", secure_live_url=_galaxy_public_base_url()))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"

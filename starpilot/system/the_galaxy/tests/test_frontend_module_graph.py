@@ -1,3 +1,5 @@
+import ast
+
 from pathlib import Path
 
 
@@ -186,7 +188,9 @@ def test_live_link_has_a_self_contained_offline_app_shell():
   assert 'const liveCacheName = "starpilot-live-shell-v2"' in worker
   assert 'event.request.mode === "navigate"' in worker
   assert '@app.route("/live", methods=["GET"])' in server
-  assert 'render_template("live_link.html", secure_live_url=_galaxy_public_url())' in server
+  assert 'render_template("live_link.html", secure_live_url=_galaxy_public_base_url())' in server
+  declared_functions = {node.name for node in ast.walk(ast.parse(server)) if isinstance(node, ast.FunctionDef)}
+  assert "_galaxy_public_base_url" in declared_functions
 
   # The exact comma border wraps the whole live surface, not only a status card.
   assert "border: 4px solid var(--drive-border)" in styles
