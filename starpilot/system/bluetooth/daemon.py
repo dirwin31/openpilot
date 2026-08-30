@@ -143,8 +143,8 @@ class BluetoothController:
 
   def _companion_addresses(self) -> list[str]:
     try:
-      raw = self.params.get("BluetoothCompanionDevices", encoding="utf-8") or "[]"
-      values = json.loads(raw)
+      raw = self.params.get("BluetoothCompanionDevices") or []
+      values = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
       return [str(value).upper() for value in values if isinstance(value, str)] if isinstance(values, list) else []
     except (TypeError, ValueError):
       return []
@@ -154,12 +154,12 @@ class BluetoothController:
     addresses = self._companion_addresses()
     if normalized and normalized not in addresses:
       addresses.append(normalized)
-      self.params.put("BluetoothCompanionDevices", json.dumps(addresses[-8:], separators=(",", ":")))
+      self.params.put("BluetoothCompanionDevices", addresses[-8:])
 
   def _forget_companion(self, address: str) -> None:
     normalized = address.upper()
     addresses = [item for item in self._companion_addresses() if item != normalized]
-    self.params.put("BluetoothCompanionDevices", json.dumps(addresses, separators=(",", ":")))
+    self.params.put("BluetoothCompanionDevices", addresses)
 
   def _authorize_companion(self, device_path: str) -> bool:
     with self._lock:

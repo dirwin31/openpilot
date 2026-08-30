@@ -44,6 +44,19 @@ class FakeParams:
     self.values.pop(key, None)
 
 
+class TypedJsonFakeParams(FakeParams):
+  def get(self, key, encoding=None, **kwargs):
+    value = super().get(key, encoding=encoding, **kwargs)
+    if key == "BluetoothCompanionDevices" and isinstance(value, str):
+      return json.loads(value)
+    return value
+
+  def put(self, key, value):
+    if key == "BluetoothCompanionDevices" and not isinstance(value, list):
+      raise TypeError("Type mismatch while writing param BluetoothCompanionDevices")
+    super().put(key, value)
+
+
 class FakeAgent:
   def __init__(self):
     self.responses = []
@@ -627,7 +640,7 @@ def test_pair_keeps_discovery_until_pair_starts():
 
 
 def test_companion_pairing_window_and_bond_authorization():
-  params = FakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionEnabled=False)
+  params = TypedJsonFakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionEnabled=False)
   client = FakeBlueZ()
   client.device.update({"name": "Phone", "audio": False, "trusted": False})
   companions = []
@@ -645,7 +658,7 @@ def test_companion_pairing_window_and_bond_authorization():
   assert client.actions[-1] == ("pairing_mode", True)
 
   assert companions[0].authorize("/org/bluez/hci0/dev_phone")
-  assert params.get("BluetoothCompanionDevices") == '["00:11:22:33:44:55"]'
+  assert params.get("BluetoothCompanionDevices") == ["00:11:22:33:44:55"]
   assert ("property", "00:11:22:33:44:55", "Trusted", "b", True) in client.actions
   status = controller.status()
   assert status["companion_enabled"]
@@ -655,6 +668,9 @@ def test_companion_pairing_window_and_bond_authorization():
 
   controller.handle({"command": "set_companion", "enabled": False})
   assert companions[0].closed and not params.get_bool("BluetoothCompanionEnabled")
+
+  controller.handle({"command": "forget", "address": client.device["address"]})
+  assert params.get("BluetoothCompanionDevices") == []
 
 
 def test_saved_companion_reenables_service_when_daemon_starts():
