@@ -222,6 +222,10 @@ function isStandaloneApp() {
   return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true
 }
 
+function isGalaxyTunnelPage() {
+  return window.location.hostname === "galaxy.firestar.link"
+}
+
 function setSetupStep(element, marker, status) {
   const statusClass = {
     complete: "setupStepComplete",
@@ -246,20 +250,36 @@ function renderSetup() {
   const secure = window.isSecureContext
   const apiReady = secure && setupState.bluetoothApi
   const secureBaseUrl = String(document.body.dataset.secureLiveUrl || "").replace(/\/$/, "")
+  const iphoneLanHandoff = ios && !isGalaxyTunnelPage()
 
-  elements.beacioStep.hidden = !ios
-  elements.permissionStep.hidden = !ios
-  elements.beacioInstallLink.hidden = !ios
-  elements.checkSetupButton.hidden = !ios
+  elements.beacioStep.hidden = !ios || iphoneLanHandoff
+  elements.permissionStep.hidden = !ios || iphoneLanHandoff
+  elements.pairStep.hidden = iphoneLanHandoff
+  elements.beacioInstallLink.hidden = !ios || iphoneLanHandoff
+  elements.checkSetupButton.hidden = !ios || iphoneLanHandoff
   elements.checkSetupButton.disabled = setupState.checking
   elements.checkSetupButton.textContent = setupState.checking ? "Checking…" : "Check beacio setup"
-  elements.reloadSetupButton.hidden = !(ios && setupState.checked && !apiReady)
-  elements.permissionHelp.hidden = !(ios && setupState.checked && !apiReady)
+  elements.reloadSetupButton.hidden = iphoneLanHandoff || !(ios && setupState.checked && !apiReady)
+  elements.permissionHelp.hidden = iphoneLanHandoff || !(ios && setupState.checked && !apiReady)
   elements.secureAppLink.hidden = secure || !secureBaseUrl
-  elements.connectButton.hidden = !secure || (ios && standalone)
+  elements.connectButton.hidden = iphoneLanHandoff || !secure || (ios && standalone)
 
   elements.setupTitle.textContent = "Set up Live Link"
   elements.setupMessage.textContent = "Follow the highlighted step. Keep Pair a Phone open on the comma while connecting."
+
+  if (iphoneLanHandoff) {
+    elements.setupTitle.textContent = secureBaseUrl ? "Continue in secure Galaxy" : "Galaxy remote access required"
+    elements.setupMessage.textContent = secureBaseUrl
+      ? "On iPhone, Live Link setup and Bluetooth connection run only through your Galaxy tunnel."
+      : "Set up Galaxy remote access on the comma before using Live Link on iPhone."
+    setSetupStep(elements.connectStep, elements.connectStepMarker, secureBaseUrl ? "current" : "attention")
+    elements.connectStepMarker.textContent = "→"
+    elements.connectStepTitle.textContent = secureBaseUrl ? "Open your secure Galaxy page" : "Set up the Galaxy tunnel"
+    elements.connectStepDetail.textContent = secureBaseUrl
+      ? "Continue there, sign in, then choose Live Link from the Galaxy menu. This local page does not connect over Bluetooth."
+      : "Create the secure Galaxy link from the comma, then return to Live Link."
+    return
+  }
 
   if (ios) {
     if (apiReady) {
@@ -707,7 +727,7 @@ function configureLaunchContext() {
     // sign-in has established a Galaxy session. Enter through the supported
     // root first; the authenticated sidebar can then open /{slug}/live.
     elements.secureAppLink.href = secureBaseUrl
-    elements.secureAppLink.textContent = "Open secure Galaxy"
+    elements.secureAppLink.textContent = "Continue in secure Galaxy"
     elements.secureAppLink.hidden = false
   } else {
     elements.setupMessage.textContent = "Set up Galaxy remote access once to create the secure installable Live Link page."

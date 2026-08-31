@@ -174,7 +174,7 @@ def test_live_link_has_a_self_contained_bluetooth_page():
   assert 'href="assets/components/tools/live_link_standalone.css?v=live-link-safari-5"' in html
   assert 'id="connectButton"' in html
   assert 'id="secureAppLink"' in html
-  assert 'target="_blank" rel="noopener"' in html
+  assert '<a id="secureAppLink" class="primaryButton" href="#" hidden>' in html
   assert 'id="checkSetupButton"' in html
   assert 'id="reloadSetupButton"' in html
   assert 'href="https://apps.apple.com/app/id6761301368"' in html
@@ -197,6 +197,8 @@ def test_live_link_has_a_self_contained_bluetooth_page():
   assert 'elements.secureAppLink.href = secureBaseUrl' in script
   assert 'elements.secureAppLink.href = `${secureBaseUrl}/live`' not in script
   assert "The comma did not authorize this phone" in script
+  assert 'window.location.hostname === "galaxy.firestar.link"' in script
+  assert "This local page does not connect over Bluetooth" in script
   assert "liveCharacteristic.startNotifications()" in script
   assert 'op: "get_live_metadata"' in script
   assert "fetch(" not in script
