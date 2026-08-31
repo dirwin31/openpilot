@@ -45,7 +45,7 @@ const M_TO_FT = 3.2808399
 
 const elements = Object.fromEntries([
   "connectionBadge", "connectionText", "setupCard", "setupTitle", "setupMessage", "setupSteps", "connectButton", "connectionError",
-  "secureAppLink", "beacioInstallLink", "checkSetupButton", "reloadSetupButton", "permissionHelp",
+  "secureAppLink", "galaxyMenuLink", "beacioInstallLink", "checkSetupButton", "reloadSetupButton", "permissionHelp",
   "beacioStep", "beacioStepMarker", "beacioStepDetail",
   "permissionStep", "permissionStepMarker", "permissionStepDetail", "pairStep", "pairStepMarker", "pairStepDetail",
   "connectStep", "connectStepMarker", "connectStepTitle", "connectStepDetail", "livePanel", "vehicleSpeed", "speedUnit", "setSpeed", "driveStatus", "driveStatusLabel",
@@ -223,7 +223,7 @@ function isStandaloneApp() {
 }
 
 function isGalaxyTunnelPage() {
-  return window.location.hostname === "galaxy.firestar.link"
+  return window.location?.hostname === "galaxy.firestar.link"
 }
 
 function setSetupStep(element, marker, status) {
@@ -249,6 +249,7 @@ function renderSetup() {
   const safariContext = isIOSSafari() && !standalone
   const secure = window.isSecureContext
   const apiReady = secure && setupState.bluetoothApi
+  const setupVerified = apiReady && setupState.bluetoothAvailable !== false
   const secureBaseUrl = String(document.body.dataset.secureLiveUrl || "").replace(/\/$/, "")
   const iphoneLanHandoff = ios && !isGalaxyTunnelPage()
 
@@ -258,7 +259,9 @@ function renderSetup() {
   elements.beacioInstallLink.hidden = !ios || iphoneLanHandoff
   elements.checkSetupButton.hidden = !ios || iphoneLanHandoff
   elements.checkSetupButton.disabled = setupState.checking
-  elements.checkSetupButton.textContent = setupState.checking ? "Checking…" : "Check beacio setup"
+  elements.checkSetupButton.textContent = setupState.checking
+    ? "Checking…"
+    : setupState.checked && setupVerified ? "beacio setup verified ✓" : "Check beacio setup"
   elements.reloadSetupButton.hidden = iphoneLanHandoff || !(ios && setupState.checked && !apiReady)
   elements.permissionHelp.hidden = iphoneLanHandoff || !(ios && setupState.checked && !apiReady)
   elements.secureAppLink.hidden = secure || !secureBaseUrl
@@ -267,10 +270,20 @@ function renderSetup() {
   elements.setupTitle.textContent = "Set up Live Link"
   elements.setupMessage.textContent = "Follow the highlighted step. Keep Pair a Phone open on the comma while connecting."
 
+  if (ios && setupState.checked && !setupState.checking) {
+    if (setupVerified) {
+      elements.setupMessage.textContent = "beacio is active and ready. Next, open Pair a Phone on the comma, then tap Connect over Bluetooth."
+    } else if (apiReady) {
+      elements.setupMessage.textContent = "beacio is active, but Bluetooth is unavailable. Turn on Bluetooth and allow beacio in iPhone Settings."
+    } else {
+      elements.setupMessage.textContent = "beacio was not detected on this page. Enable its Safari extension and website permission, then reload."
+    }
+  }
+
   if (iphoneLanHandoff) {
     elements.setupTitle.textContent = secureBaseUrl ? "Continue in secure Galaxy" : "Galaxy remote access required"
     elements.setupMessage.textContent = secureBaseUrl
-      ? "On iPhone, Live Link setup and Bluetooth connection run only through your Galaxy tunnel."
+      ? "On iPhone, Live Link setup needs HTTPS, which your Galaxy tunnel provides."
       : "Set up Galaxy remote access on the comma before using Live Link on iPhone."
     setSetupStep(elements.connectStep, elements.connectStepMarker, secureBaseUrl ? "current" : "attention")
     elements.connectStepMarker.textContent = "→"
@@ -399,17 +412,15 @@ function renderFrame() {
   const experimental = has(frame, FLAG.EXPERIMENTAL_MODE)
   elements.experimentalChip.hidden = !experimental
 
-  const slcEnabled = has(frame, FLAG.SPEED_LIMIT_CONTROL)
   const slcActive = has(frame, FLAG.SPEED_LIMIT_ACTIVE)
-  elements.slcChip.hidden = !slcEnabled
-  elements.slcValue.textContent = slcActive ? speedText(frame.speedLimit) : "Ready"
-  elements.slcDetail.textContent = slcEnabled ? offsetText(frame.speedLimitOffset) : ""
+  elements.slcChip.hidden = !slcActive
+  elements.slcValue.textContent = speedText(frame.speedLimit)
+  elements.slcDetail.textContent = slcActive ? offsetText(frame.speedLimitOffset) : ""
 
-  const curveEnabled = has(frame, FLAG.CURVE_CONTROL)
   const curveActive = has(frame, FLAG.CURVE_CONTROL_ACTIVE)
-  elements.curveChip.hidden = !curveEnabled
-  elements.curveValue.textContent = curveActive ? speedText(frame.curveTargetSpeed) : "Ready"
-  elements.featureGrid.hidden = !(aol || experimental || slcEnabled || curveEnabled)
+  elements.curveChip.hidden = !curveActive
+  elements.curveValue.textContent = speedText(frame.curveTargetSpeed)
+  elements.featureGrid.hidden = !(aol || experimental || slcActive || curveActive)
 
   const alert = state.metadata && state.metadata.alert
   const alertText = alert ? [alert.text1, alert.text2].filter(Boolean).join(" — ") : ""
@@ -719,8 +730,9 @@ async function registerCachedShell() {
 }
 
 function configureLaunchContext() {
-  if (window.isSecureContext) return
   const secureBaseUrl = String(document.body.dataset.secureLiveUrl || "").replace(/\/$/, "")
+  elements.galaxyMenuLink.href = (isIOSDevice() || isGalaxyTunnelPage()) && secureBaseUrl ? secureBaseUrl : "/"
+  if (window.isSecureContext) return
   elements.connectButton.hidden = true
   if (secureBaseUrl) {
     // The public gateway only exposes nested device paths after its slug-root
