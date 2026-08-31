@@ -13,14 +13,14 @@ import pytest
 from jeepney import DBusAddress, new_method_call
 
 from openpilot.starpilot.system.bluetooth.audio import BluetoothAudioSink
-from openpilot.starpilot.system.bluetooth.bluez import BlueZClient, BlueZError, PairingAgent
+from openpilot.starpilot.system.bluetooth.bluez import DEVICE_IFACE, BlueZClient, BlueZError, PairingAgent
 from openpilot.starpilot.system.bluetooth.companion import (
   ADVERTISEMENT_IFACE, COMPANION_ADVERTISEMENT_PATH, COMPANION_APP_PATH, COMPANION_COMMAND_PATH, COMPANION_PROTOCOL_VERSION,
   COMPANION_LIVE_PATH, COMPANION_LIVE_UUID, COMPANION_RESPONSE_PATH, COMPANION_SERVICE_PATH, COMPANION_SERVICE_UUID,
   COMPANION_STATUS_PATH, GATT_CHARACTERISTIC_IFACE, OBJECT_MANAGER_IFACE, PROPERTIES_IFACE, CompanionGattApplication,
   CompanionProtocol,
 )
-from openpilot.starpilot.system.bluetooth.daemon import COMPANION_BOND_SETTLE_INTERVAL, BluetoothController
+from openpilot.starpilot.system.bluetooth.daemon import BluetoothController
 from openpilot.starpilot.system.bluetooth.live import (
   LIVE_FRAME_MAGIC, LIVE_FRAME_RATE_HZ, LIVE_FRAME_SIZE, LIVE_NOTIFICATION_FRAGMENT_COUNT, LIVE_NOTIFICATION_SIZE,
   LIVE_PROTOCOL_VERSION, BorderState, ConditionalChillReason, LiveFlags, LiveSnapshot, LiveTelemetryPublisher, ModelSource,
@@ -117,6 +117,11 @@ class FakeBlueZ:
   def device_for_address(self, _address):
     return dict(self.device)
 
+  def device_for_path(self, path):
+    if path != "/org/bluez/hci0/dev_phone":
+      return None
+    return {**self.device, "path": path}
+
   def pair(self, address):
     self.actions.append(("pair", address))
 
@@ -144,9 +149,8 @@ class FakeBlueZ:
       raise self.pairing_mode_error
 
   def paired_device_for_path(self, path):
-    if path != "/org/bluez/hci0/dev_phone" or not self.device["paired"]:
-      return None
-    return {**self.device, "path": path}
+    device = self.device_for_path(path)
+    return device if device is not None and device["paired"] else None
 
   def set_device_property(self, address, name, signature, value):
     self.actions.append(("property", address, name, signature, value))
@@ -699,6 +703,31 @@ def test_bluez_start_discovery_preserves_other_errors():
     client.start_discovery()
 
 
+def test_bluez_device_for_path_exposes_bond_before_paired_state():
+  client = object.__new__(BlueZClient)
+  props = {
+    "Address": "00:11:22:33:44:55",
+    "Alias": "iPhone",
+    "Paired": False,
+    "Trusted": False,
+    "Connected": True,
+  }
+  client.managed_objects = lambda: {"/phone": {DEVICE_IFACE: props}}
+
+  assert client.device_for_path("/phone") == {
+    "path": "/phone",
+    "address": "00:11:22:33:44:55",
+    "name": "iPhone",
+    "paired": False,
+    "trusted": False,
+    "connected": True,
+  }
+  assert client.paired_device_for_path("/phone") is None
+
+  props["Paired"] = True
+  assert client.paired_device_for_path("/phone")["paired"]
+
+
 def test_bluez_companion_pairing_does_not_enable_classic_discovery():
   client = object.__new__(BlueZClient)
   properties = []
@@ -932,35 +961,58 @@ def test_companion_bond_auto_accepts_but_registers_only_after_gatt_access():
   assert client.actions[-1] == ("pairing_mode", False)
 
 
-def test_companion_authorization_waits_for_auto_accepted_bond_to_settle():
-  class SettlingBondBlueZ(FakeBlueZ):
-    def __init__(self):
-      super().__init__()
-      self.lookup_count = 0
-
-    def paired_device_for_path(self, path):
-      self.lookup_count += 1
-      if self.lookup_count <= 2:
-        return None
-      return super().paired_device_for_path(path)
-
-  params = TypedJsonFakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionEnabled=False)
-  client = SettlingBondBlueZ()
-  client.device.update({"name": "iPhone", "audio": False, "trusted": False})
-  sleeps = []
+def test_browser_gatt_authorization_finishes_pending_bond_asynchronously():
+  params = TypedJsonFakeParams(
+    IsOffroad=True,
+    BluetoothEnabled=True,
+    BluetoothCompanionEnabled=False,
+    BluetoothCompanionDevices=[],
+  )
+  client = FakeBlueZ()
+  client.device.update({"name": "iPhone", "paired": False, "audio": False, "trusted": False})
   companions = []
   controller = BluetoothController(
-    params, lambda: client, FakeRadio(), sleep=lambda delay: sleeps.append(delay),
+    params, lambda: client, FakeRadio(),
     companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
   )
   controller.handle({"command": "start_companion_pairing"})
 
-  # The agent callback accepts the bond before BlueZ exposes Device1.Paired.
-  assert client.agent.auto_accept_handler("/org/bluez/hci0/dev_phone")
+  # A browser's encrypted GATT read can arrive before BlueZ publishes Paired.
+  # It must return immediately so the browser/BlueZ handshake can finish.
   assert companions[0].authorize("/org/bluez/hci0/dev_phone")
-  assert sleeps == [COMPANION_BOND_SETTLE_INTERVAL]
+  assert params.get("BluetoothCompanionDevices") == []
+  assert "/org/bluez/hci0/dev_phone" in controller._pending_companion_paths
+  assert controller.status()["companion_pairing"]
+
+  # Once BlueZ publishes the bond, maintenance trusts and saves this specific
+  # GATT client, then closes the pairing window.
+  client.device["paired"] = True
+  controller._maintain_pending_companions()
   assert params.get("BluetoothCompanionDevices") == [client.device["address"]]
+  assert ("property", client.device["address"], "Trusted", "b", True) in client.actions
   assert "/org/bluez/hci0/dev_phone" not in controller._pending_companion_paths
+  assert not controller.status()["companion_pairing"]
+
+
+def test_unbonded_gatt_client_is_rejected_outside_pairing_window():
+  params = TypedJsonFakeParams(
+    IsOffroad=True,
+    BluetoothEnabled=True,
+    BluetoothCompanionEnabled=True,
+    BluetoothCompanionDevices=[],
+  )
+  client = FakeBlueZ()
+  client.device.update({"paired": False, "trusted": False, "audio": False})
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
+  controller.handle({"command": "set_companion", "enabled": True})
+
+  assert not companions[0].authorize("/org/bluez/hci0/dev_phone")
+  assert controller._pending_companion_paths == set()
+  assert params.get("BluetoothCompanionDevices") == []
 
 
 def test_phone_pair_forget_repair_and_reconnect_workflow():

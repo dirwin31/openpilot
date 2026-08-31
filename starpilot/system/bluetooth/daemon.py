@@ -29,8 +29,6 @@ AUDIO_TEST_HOLD_TIME = 3.0
 # way around, so a Connect() on it can only ever fail.
 PROFILE_UNAVAILABLE_ERROR = "profile-unavailable"
 PHONE_RECONNECT_HINT = "{name} has to connect from the phone. Open Bluetooth on the phone and select StarPilot."
-COMPANION_BOND_SETTLE_ATTEMPTS = 10
-COMPANION_BOND_SETTLE_INTERVAL = 0.1
 
 
 class BluetoothController:
@@ -47,13 +45,17 @@ class BluetoothController:
     self._companion_pairing_deadline = 0.0
     self._pairing_address = ""
     self._pairing_error = ""
-    # Device paths auto-accepted during the companion window. A path is not
-    # registered as a companion until it accesses the protected GATT service;
-    # otherwise an unrelated classic bond can consume the window first.
+    # Device paths that reached the encrypted companion GATT service while a
+    # pairing window was open, but whose bond BlueZ has not published yet.
+    # Keeping this GATT-specific prevents an unrelated classic bond from being
+    # registered as a companion merely because it used the same pairing window.
     self._pending_companion_paths: set[str] = set()
     # Companion phones seen connected on the previous maintenance pass, so a
     # connected -> disconnected transition can re-arm the advertisement they link back to.
     self._connected_companions: set[str] = set()
+    # Last BluetoothConnected value written for the status-bar icon, so we only
+    # touch the param on a transition instead of every maintenance pass.
+    self._connected_published: bool | None = None
     self._last_reconnect = 0.0
     self._scan_deadline = 0.0
     self._audio_test_deadline = 0.0
@@ -167,8 +169,6 @@ class BluetoothController:
         return False
       if self._companion_pairing_deadline <= 0.0 or time.monotonic() >= self._companion_pairing_deadline:
         return False
-      if device_path:
-        self._pending_companion_paths.add(device_path)
       return True
 
   def _companion_addresses(self) -> list[str]:
@@ -194,33 +194,42 @@ class BluetoothController:
     return normalized in previous and not addresses
 
   def _authorize_companion(self, device_path: str) -> bool:
-    # BlueZ can dispatch the encrypted GATT read immediately after the agent
-    # accepts a bond, just before Device1.Paired becomes visible. That device
-    # path is safe to wait for only when our user-opened companion window has
-    # already auto-accepted it; arbitrary GATT clients still fail immediately.
-    device = None
-    for attempt in range(COMPANION_BOND_SETTLE_ATTEMPTS):
-      with self._lock:
-        client = self._bluez
-        enabled = self.params.get_bool("BluetoothCompanionEnabled")
-        pending = (device_path in self._pending_companion_paths and self._companion_pairing_deadline > 0.0 and
-                   time.monotonic() < self._companion_pairing_deadline)
-      if client is None or not enabled:
+    # With browser-initiated Just Works pairing, BlueZ can call ReadValue before
+    # it publishes Device1.Paired. Blocking that read while waiting for Paired
+    # deadlocks the ordering: the browser needs the read to return before BlueZ
+    # finishes the bond. Admit the encrypted GATT request during the explicit
+    # pairing window, then let maintenance trust/save it after Paired appears.
+    with self._lock:
+      client = self._bluez
+      if client is None or not self.params.get_bool("BluetoothCompanionEnabled"):
         return False
-      device = client.paired_device_for_path(device_path)
-      if device is not None:
-        break
-      if not pending or attempt == COMPANION_BOND_SETTLE_ATTEMPTS - 1:
-        return False
-      self._sleep(COMPANION_BOND_SETTLE_INTERVAL)
+    try:
+      device = client.device_for_path(device_path)
+    except Exception:
+      cloudlog.exception(f"Unable to inspect Bluetooth companion {device_path}")
+      return False
+    if device is None or not device.get("address"):
+      cloudlog.warning(f"Bluetooth companion read from {device_path} rejected: device is unavailable")
+      return False
 
     with self._lock:
       if self._bluez is not client or not self.params.get_bool("BluetoothCompanionEnabled"):
         return False
       address = str(device["address"]).upper()
       known_companion = address in self._companion_addresses()
-      if not known_companion and time.monotonic() >= self._companion_pairing_deadline:
+      pending = device_path in self._pending_companion_paths
+      window_open = 0.0 < self._companion_pairing_deadline and time.monotonic() < self._companion_pairing_deadline
+      if not device.get("paired", False):
+        if not pending and not window_open:
+          cloudlog.warning(f"Bluetooth companion read from {address} rejected: device is not bonded")
+          return False
+        self._pending_companion_paths.add(device_path)
+        return True
+      if not known_companion and not pending and not window_open:
+        cloudlog.warning(f"Bluetooth companion read from {address} rejected: pairing window is closed")
         return False
+      if not known_companion:
+        self._pending_companion_paths.add(device_path)
       if not device.get("trusted", False):
         self._bluez.set_device_property(device["address"], "Trusted", "b", True)
       self._remember_companion(address)
@@ -235,7 +244,44 @@ class BluetoothController:
           cloudlog.exception("Unable to close Bluetooth companion pairing after authorization")
         else:
           self._companion_pairing_deadline = 0.0
+      cloudlog.warning(f"Bluetooth companion authorized {address} (known={known_companion})")
       return True
+
+  def _maintain_pending_companions(self) -> None:
+    with self._lock:
+      pending = tuple(self._pending_companion_paths)
+      client = self._bluez
+    if client is None:
+      return
+
+    for device_path in pending:
+      try:
+        device = client.paired_device_for_path(device_path)
+      except Exception:
+        continue
+      if device is None or not device.get("address"):
+        continue
+      with self._lock:
+        if self._bluez is not client or device_path not in self._pending_companion_paths:
+          continue
+        address = str(device["address"]).upper()
+        try:
+          if not device.get("trusted", False):
+            client.set_device_property(device["address"], "Trusted", "b", True)
+        except Exception:
+          cloudlog.exception("Unable to trust browser-paired companion phone")
+          continue
+        self._remember_companion(address)
+        self._pending_companion_paths.discard(device_path)
+        if self._companion_pairing_deadline:
+          try:
+            client.set_pairing_mode(False)
+          except Exception:
+            self._companion_pairing_deadline = min(self._companion_pairing_deadline, time.monotonic() + 1.0)
+            cloudlog.exception("Unable to close Bluetooth companion pairing after browser bond")
+          else:
+            self._companion_pairing_deadline = 0.0
+        cloudlog.warning(f"Bluetooth browser companion bond finalized for {address}")
 
   def _offroad(self) -> bool:
     return self.params.get_bool("IsOffroad")
@@ -515,17 +561,26 @@ class BluetoothController:
     except Exception:
       cloudlog.exception("Unable to re-arm the Bluetooth companion advertisement after a phone disconnect")
 
+  def _publish_connected(self, connected: bool) -> None:
+    # Surface a live "any device connected" flag for the home-screen status icon.
+    if connected != self._connected_published:
+      self.params.put_bool("BluetoothConnected", connected)
+      self._connected_published = connected
+
   def maintain_connections(self) -> None:
     while True:
       time.sleep(2)
       if not self.params.get_bool("BluetoothEnabled"):
+        self._publish_connected(False)
         continue
       try:
         status = self.status()
+        self._publish_connected(any(device.get("connected") for device in status["devices"]))
         if not status["available"] or not status["powered"]:
           continue
         now = time.monotonic()
         self._maintain_scan(status, now)
+        self._maintain_pending_companions()
         self._maintain_companion_pairing(now, status["offroad"])
         self._maintain_companion_advertisement(status)
         self._maintain_reconnects(status, now)

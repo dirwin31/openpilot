@@ -307,19 +307,23 @@ class BlueZClient:
         return device
     raise RuntimeError(f"Bluetooth device {address} was not found")
 
-  def paired_device_for_path(self, path: str) -> dict[str, Any] | None:
+  def device_for_path(self, path: str) -> dict[str, Any] | None:
     interfaces = self.managed_objects().get(path, {})
     props = interfaces.get(DEVICE_IFACE)
-    if props is None or not props.get("Paired", False):
+    if props is None:
       return None
     return {
       "path": path,
       "address": str(props.get("Address", "")),
       "name": str(props.get("Alias") or props.get("Name") or props.get("Address") or "Bluetooth device"),
-      "paired": True,
+      "paired": bool(props.get("Paired", False)),
       "trusted": bool(props.get("Trusted", False)),
       "connected": bool(props.get("Connected", False)),
     }
+
+  def paired_device_for_path(self, path: str) -> dict[str, Any] | None:
+    device = self.device_for_path(path)
+    return device if device is not None and device["paired"] else None
 
   def set_device_property(self, address: str, name: str, signature: str, value: Any) -> None:
     device = self.device_for_address(address)
