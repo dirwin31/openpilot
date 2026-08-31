@@ -85,6 +85,9 @@ let lastAlertId = null
 let assembly = emptyAssembly()
 let connectionStage = "idle"
 let beacioReadyHandled = false
+let grantedDeviceLoad = null
+let authorizationRetryCount = 0
+let autoReconnectEnabled = true
 
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
@@ -368,7 +371,9 @@ function renderConnection() {
   elements.connectionBadge.className = `connectionBadge ${className}`
   elements.connectionText.textContent = label
   elements.connectButton.disabled = state.phase === "connecting"
-  elements.connectButton.textContent = state.phase === "connecting" ? "Connecting…" : "Connect over Bluetooth"
+  elements.connectButton.textContent = state.phase === "reconnecting"
+    ? "Choose StarPilot"
+    : state.phase === "connecting" ? "Connecting…" : "Connect over Bluetooth"
   elements.connectionError.hidden = !state.error
   elements.connectionError.textContent = state.error
 }
@@ -432,7 +437,7 @@ function render() {
   renderSetup()
   renderConnection()
   if (state.frame && state.phase !== "idle") renderFrame()
-  if (state.phase === "idle") {
+  else {
     elements.setupCard.hidden = false
     elements.livePanel.hidden = true
   }
@@ -531,7 +536,9 @@ async function openConnection() {
   state.phase = "connected"
   state.error = ""
   reconnectDelay = 1000
+  authorizationRetryCount = 0
   connectionStage = "connected"
+  startClock()
   render()
 
   // Notifications are authoritative, but a read provides an immediate complete frame.
@@ -543,9 +550,12 @@ async function openConnection() {
 }
 
 function handleDisconnected() {
-  if (!device || state.phase === "idle") return
+  if (!autoReconnectEnabled || !device || state.phase === "idle") return
   resetCharacteristics()
+  setupState.companionAuthorized = false
+  authorizationRetryCount = 0
   state.phase = "reconnecting"
+  state.error = ""
   render()
   scheduleReconnect()
 }
@@ -558,24 +568,49 @@ function bindDevice(nextDevice) {
   device.addEventListener("gattserverdisconnected", handleDisconnected)
 }
 
+function handleReconnectFailure(error) {
+  if (!autoReconnectEnabled) return
+  const failedStage = connectionStage
+  console.warn("[live_link] reconnect failed", error)
+  resetCharacteristics()
+
+  // A protocol mismatch requires a software update, but transport and
+  // encrypted-read failures can be transient while the comma is rebooting.
+  if (failedStage === "protocol") {
+    state.phase = "idle"
+    state.error = connectionErrorMessage(error, failedStage)
+    render()
+    return
+  }
+
+  state.phase = "reconnecting"
+  if (failedStage === "authorization") {
+    authorizationRetryCount += 1
+    if (authorizationRetryCount >= 3) {
+      setupState.companionAuthorized = false
+      setupState.authorizationFailed = true
+      state.frame = null
+      state.error = "The comma is not accepting this phone's encrypted bond. Open Galaxy → Bluetooth → Pair a Phone on the comma; Live Link will keep retrying automatically."
+    } else {
+      state.error = "Restoring the encrypted Bluetooth link…"
+    }
+  } else {
+    state.error = "StarPilot is unavailable. Live Link will keep retrying while this page is open."
+  }
+  reconnectDelay = Math.min(reconnectDelay * 2, 10000)
+  render()
+  scheduleReconnect()
+}
+
 function scheduleReconnect() {
   if (reconnectTimer !== null) clearTimeout(reconnectTimer)
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null
-    if (!device || state.phase !== "reconnecting") return
+    if (!autoReconnectEnabled || !device || state.phase !== "reconnecting") return
     try {
       await openConnection()
     } catch (error) {
-      console.warn("[live_link] reconnect failed", error)
-      if (connectionStage === "authorization" || connectionStage === "protocol") {
-        state.phase = "idle"
-        state.error = connectionErrorMessage(error)
-        resetCharacteristics()
-        render()
-        return
-      }
-      reconnectDelay = Math.min(reconnectDelay * 2, 10000)
-      scheduleReconnect()
+      handleReconnectFailure(error)
     }
   }, reconnectDelay)
 }
@@ -640,7 +675,7 @@ async function detectBluetoothSetup({ manual = false } = {}) {
 
 async function checkSetup() {
   await detectBluetoothSetup({ manual: true })
-  if (setupState.bluetoothApi) loadGrantedDevice()
+  if (setupState.bluetoothApi) await loadGrantedDevice()
 }
 
 function reloadSetup() {
@@ -648,6 +683,7 @@ function reloadSetup() {
 }
 
 async function connect() {
+  autoReconnectEnabled = true
   state.error = ""
   if (!window.isSecureContext || !navigator.bluetooth) {
     setupState.checked = true
@@ -655,6 +691,18 @@ async function connect() {
     state.error = bluetoothUnavailableMessage()
     render()
     return
+  }
+
+  if (state.phase === "reconnecting") {
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer)
+    reconnectTimer = null
+    if (device) {
+      device.removeEventListener("gattserverdisconnected", handleDisconnected)
+      if (device.gatt && device.gatt.connected) device.gatt.disconnect()
+    }
+    device = null
+    resetCharacteristics()
+    authorizationRetryCount = 0
   }
 
   state.phase = "connecting"
@@ -674,7 +722,6 @@ async function connect() {
       bindDevice(selected)
     }
     await openConnection()
-    startClock()
   } catch (error) {
     state.phase = "idle"
     state.error = connectionErrorMessage(error)
@@ -684,6 +731,7 @@ async function connect() {
 }
 
 function disconnect() {
+  autoReconnectEnabled = false
   if (reconnectTimer !== null) clearTimeout(reconnectTimer)
   reconnectTimer = null
   if (device) device.removeEventListener("gattserverdisconnected", handleDisconnected)
@@ -704,16 +752,40 @@ function startClock() {
 }
 
 async function loadGrantedDevice() {
-  if (state.phase !== "idle") return
-  if (!window.isSecureContext || !navigator.bluetooth || typeof navigator.bluetooth.getDevices !== "function") return
+  if (!autoReconnectEnabled || state.phase !== "idle") return false
+  if (!window.isSecureContext || !navigator.bluetooth || typeof navigator.bluetooth.getDevices !== "function") return false
+  if (grantedDeviceLoad) return grantedDeviceLoad
+
+  grantedDeviceLoad = (async () => {
+    try {
+      const devices = await navigator.bluetooth.getDevices()
+      const starPilotDevices = devices.filter((candidate) => candidate.name === "StarPilot")
+      const granted = starPilotDevices.find((candidate) => candidate.gatt && candidate.gatt.connected) || starPilotDevices[0]
+      if (!granted || !autoReconnectEnabled || state.phase !== "idle") return false
+
+      bindDevice(granted)
+      setupState.authorizationFailed = false
+      state.phase = "reconnecting"
+      state.error = ""
+      connectionStage = "gatt"
+      render()
+      try {
+        await openConnection()
+        return true
+      } catch (error) {
+        handleReconnectFailure(error)
+        return false
+      }
+    } catch (error) {
+      console.warn("[live_link] granted-device lookup failed", error)
+      return false
+    }
+  })()
+
   try {
-    const devices = await navigator.bluetooth.getDevices()
-    const starPilotDevices = devices.filter((candidate) => candidate.name === "StarPilot")
-    const granted = starPilotDevices.find((candidate) => candidate.gatt && candidate.gatt.connected) || starPilotDevices[0]
-    if (!granted) return
-    bindDevice(granted)
-  } catch (error) {
-    console.warn("[live_link] granted-device lookup failed", error)
+    return await grantedDeviceLoad
+  } finally {
+    grantedDeviceLoad = null
   }
 }
 
@@ -750,12 +822,23 @@ async function handleBeacioReady() {
   if (beacioReadyHandled) return
   beacioReadyHandled = true
   await detectBluetoothSetup()
-  loadGrantedDevice()
+  await loadGrantedDevice()
 }
 
 async function initializeBluetoothSetup() {
   await detectBluetoothSetup()
-  loadGrantedDevice()
+  await loadGrantedDevice()
+}
+
+async function resumeBluetoothSetup() {
+  if (document.visibilityState === "hidden") return
+  await detectBluetoothSetup()
+  if (state.phase === "reconnecting") {
+    reconnectDelay = 1000
+    scheduleReconnect()
+    return
+  }
+  await loadGrantedDevice()
 }
 
 elements.connectButton.addEventListener("click", connect)
@@ -765,6 +848,8 @@ elements.disconnectButton.addEventListener("click", disconnect)
 window.addEventListener("beacio:ready", handleBeacioReady, { once: true })
 window.addEventListener("beacio:extension:ready", handleBeacioReady, { once: true })
 window.addEventListener("online", registerCachedShell)
+window.addEventListener("pageshow", resumeBluetoothSetup)
+document.addEventListener("visibilitychange", resumeBluetoothSetup)
 
 configureLaunchContext()
 render()

@@ -57,7 +57,9 @@ const context = {
   performance: { now: () => 1000 },
   document: {
     baseURI: "https://galaxy.firestar.link/device/live",
+    visibilityState: "visible",
     body: { dataset: { secureLiveUrl: "" } },
+    addEventListener: () => {},
     getElementById(id) {
       if (!dom.has(id)) dom.set(id, new FakeElement())
       return dom.get(id)
@@ -202,7 +204,9 @@ const context = {
   performance: { now: () => 1000 },
   document: {
     baseURI: "https://galaxy.firestar.link/device/live",
+    visibilityState: "visible",
     body: { dataset: { secureLiveUrl: "https://galaxy.firestar.link/AbCdEf0123456789" } },
+    addEventListener: () => {},
     getElementById(id) {
       if (!dom.has(id)) dom.set(id, new FakeElement())
       return dom.get(id)
@@ -279,8 +283,11 @@ class FakeElement {
 
 const mode = process.argv[2]
 const dom = new Map()
+const documentListeners = new Map()
+const windowListeners = new Map()
 let chooserCalls = 0
 let gattConnects = 0
+let grantAvailable = mode === "granted" || mode === "stale"
 const bluetoothDevice = {
   name: "StarPilot",
   listeners: new Map(),
@@ -299,7 +306,7 @@ const navigator = {
   standalone: false,
   bluetooth: {
     getAvailability: async () => true,
-    getDevices: async () => mode === "granted" ? [bluetoothDevice] : [],
+    getDevices: async () => grantAvailable ? [bluetoothDevice] : [],
     requestDevice: async () => {
       chooserCalls += 1
       return bluetoothDevice
@@ -323,15 +330,91 @@ const context = {
   performance: { now: () => 1000 },
   document: {
     baseURI: "https://galaxy.firestar.link/device/live",
+    visibilityState: "visible",
     body: { dataset: { secureLiveUrl: "" } },
+    addEventListener: (name, callback) => documentListeners.set(name, callback),
     getElementById(id) {
       if (!dom.has(id)) dom.set(id, new FakeElement())
       return dom.get(id)
     },
   },
   navigator,
-  setTimeout,
-  clearTimeout,
+  setTimeout: () => 1,
+  clearTimeout: () => {},
+  setInterval: () => 1,
+  clearInterval: () => {},
+}
+context.window = {
+  isSecureContext: true,
+  navigator,
+  location: { reload: () => {} },
+  matchMedia: () => ({ matches: false }),
+  addEventListener: (name, callback) => windowListeners.set(name, callback),
+}
+context.globalThis = context
+vm.createContext(context)
+
+const source = fs.readFileSync(process.argv[1], "utf8")
+vm.runInContext(source, context)
+await new Promise((resolve) => setTimeout(resolve, 0))
+if (mode === "new" || mode === "stale") await dom.get("connectButton").listeners.get("click")()
+if (mode === "resume") {
+  grantAvailable = true
+  await documentListeners.get("visibilitychange")()
+}
+
+process.stdout.write(JSON.stringify({ chooserCalls, gattConnects }))
+"""
+
+RECONNECT_HARNESS = r"""
+import fs from "node:fs"
+import vm from "node:vm"
+
+class FakeElement {
+  constructor() {
+    this.className = ""
+    this.hidden = false
+    this.textContent = ""
+    this.disabled = false
+    this.listeners = new Map()
+    this.classList = { toggle: () => {} }
+    this.style = { setProperty: () => {} }
+  }
+  addEventListener(name, callback) { this.listeners.set(name, callback) }
+  removeEventListener(name) { this.listeners.delete(name) }
+}
+
+const dom = new Map()
+let timerCalls = 0
+const navigator = { userAgent: "Mozilla/5.0 Safari/605.1.15", standalone: false }
+const context = {
+  console,
+  TextEncoder,
+  TextDecoder,
+  Uint8Array,
+  DataView,
+  ArrayBuffer,
+  JSON,
+  Math,
+  Number,
+  Date,
+  Promise,
+  URL,
+  Response,
+  performance: { now: () => 1000 },
+  document: {
+    baseURI: "https://galaxy.firestar.link/device/live",
+    visibilityState: "visible",
+    body: { dataset: { secureLiveUrl: "" } },
+    addEventListener: () => {},
+    getElementById(id) {
+      if (!dom.has(id)) dom.set(id, new FakeElement())
+      return dom.get(id)
+    },
+  },
+  navigator,
+  setTimeout: () => { timerCalls += 1; return timerCalls },
+  clearTimeout: () => {},
   setInterval: () => 1,
   clearInterval: () => {},
 }
@@ -346,11 +429,38 @@ context.globalThis = context
 vm.createContext(context)
 
 const source = fs.readFileSync(process.argv[1], "utf8")
-vm.runInContext(source, context)
-await new Promise((resolve) => setTimeout(resolve, 0))
-await dom.get("connectButton").listeners.get("click")()
+vm.runInContext(`${source}\nglobalThis.__liveTest = {
+  authorizationFailure(error) {
+    connectionStage = "authorization"
+    handleReconnectFailure(error)
+  },
+  state,
+  setupState,
+}`, context)
 
-process.stdout.write(JSON.stringify({ chooserCalls, gattConnects }))
+context.__liveTest.state.frame = {
+  flags: 0,
+  borderColor: [0, 0, 0, 0],
+  vehicleSpeed: 0,
+  setSpeed: 0,
+  borderState: 0,
+  leadDistance: 0,
+  leadRelativeSpeed: 0,
+  speedLimit: 0,
+  speedLimitOffset: 0,
+  curveTargetSpeed: 0,
+}
+for (let attempt = 0; attempt < 3; attempt += 1) {
+  context.__liveTest.authorizationFailure(new Error("encrypted read failed"))
+}
+
+process.stdout.write(JSON.stringify({
+  phase: context.__liveTest.state.phase,
+  error: context.__liveTest.state.error,
+  authorizationFailed: context.__liveTest.setupState.authorizationFailed,
+  frameCleared: context.__liveTest.state.frame === null,
+  timerCalls,
+}))
 """
 
 
@@ -479,8 +589,13 @@ def test_ios_setup_guidance_tracks_beacio_availability(mode, expected):
   assert json.loads(result.stdout) == expected
 
 
-@pytest.mark.parametrize(("mode", "expected_chooser_calls"), [("granted", 0), ("new", 1)])
-def test_connect_reuses_a_granted_starpilot_before_opening_the_picker(mode, expected_chooser_calls):
+@pytest.mark.parametrize(("mode", "expected"), [
+  ("granted", {"chooserCalls": 0, "gattConnects": 1}),
+  ("resume", {"chooserCalls": 0, "gattConnects": 1}),
+  ("new", {"chooserCalls": 1, "gattConnects": 1}),
+  ("stale", {"chooserCalls": 1, "gattConnects": 2}),
+])
+def test_connects_a_granted_starpilot_automatically_or_opens_the_picker_for_a_new_one(mode, expected):
   node = shutil.which("node")
   if node is None:
     pytest.skip("node is required for the Live Link Bluetooth connection test")
@@ -492,4 +607,28 @@ def test_connect_reuses_a_granted_starpilot_before_opening_the_picker(mode, expe
     text=True,
     timeout=30,
   )
-  assert json.loads(result.stdout) == {"chooserCalls": expected_chooser_calls, "gattConnects": 1}
+  assert json.loads(result.stdout) == expected
+
+
+def test_reconnect_keeps_retrying_transient_authorization_failures():
+  node = shutil.which("node")
+  if node is None:
+    pytest.skip("node is required for the Live Link Bluetooth reconnect test")
+
+  result = subprocess.run(
+    [node, "--input-type=module", "-e", RECONNECT_HARNESS, str(LIVE_LINK_SOURCE)],
+    check=True,
+    capture_output=True,
+    text=True,
+    timeout=30,
+  )
+  assert json.loads(result.stdout) == {
+    "phase": "reconnecting",
+    "error": (
+      "The comma is not accepting this phone's encrypted bond. Open Galaxy → Bluetooth → Pair a Phone on the comma; "
+      "Live Link will keep retrying automatically."
+    ),
+    "authorizationFailed": True,
+    "frameCleared": True,
+    "timerCalls": 3,
+  }
