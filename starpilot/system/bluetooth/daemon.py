@@ -53,6 +53,9 @@ class BluetoothController:
     # Companion phones seen connected on the previous maintenance pass, so a
     # connected -> disconnected transition can re-arm the advertisement they link back to.
     self._connected_companions: set[str] = set()
+    # Last BluetoothConnected value written for the status-bar icon, so we only
+    # touch the param on a transition instead of every maintenance pass.
+    self._connected_published: bool | None = None
     self._last_reconnect = 0.0
     self._scan_deadline = 0.0
     self._audio_test_deadline = 0.0
@@ -544,13 +547,21 @@ class BluetoothController:
     except Exception:
       cloudlog.exception("Unable to re-arm the Bluetooth companion advertisement after a phone disconnect")
 
+  def _publish_connected(self, connected: bool) -> None:
+    # Surface a live "any device connected" flag for the home-screen status icon.
+    if connected != self._connected_published:
+      self.params.put_bool("BluetoothConnected", connected)
+      self._connected_published = connected
+
   def maintain_connections(self) -> None:
     while True:
       time.sleep(2)
       if not self.params.get_bool("BluetoothEnabled"):
+        self._publish_connected(False)
         continue
       try:
         status = self.status()
+        self._publish_connected(any(device.get("connected") for device in status["devices"]))
         if not status["available"] or not status["powered"]:
           continue
         now = time.monotonic()
