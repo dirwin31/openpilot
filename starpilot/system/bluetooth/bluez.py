@@ -28,6 +28,18 @@ AUTO_ACCEPTABLE_AGENT_METHODS = frozenset(
 )
 
 
+class BlueZError(RuntimeError):
+  """A named org.bluez.Error response."""
+
+  def __init__(self, name: str, detail: str):
+    super().__init__(detail)
+    self.name = name
+
+
+class AdapterUnavailableError(RuntimeError):
+  """BlueZ is reachable but is not exporting an adapter."""
+
+
 def unwrap_variant(value: Any) -> Any:
   if isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], str):
     return unwrap_variant(value[1])
@@ -121,8 +133,10 @@ class BlueZClient:
     message = new_method_call(address, member, signature, body) if signature is not None else new_method_call(address, member)
     reply = self.router.send_and_get_reply(message, timeout=timeout)
     if reply.header.message_type == MessageType.error:
-      error_name = reply.header.fields.get(HeaderFields.error_name, "org.bluez.Error.Failed")
+      error_name = str(reply.header.fields.get(HeaderFields.error_name, "org.bluez.Error.Failed"))
       detail = reply.body[0] if reply.body else error_name
+      if error_name.startswith("org.bluez.Error."):
+        raise BlueZError(error_name, str(detail))
       raise RuntimeError(str(detail))
     return reply.body
 
@@ -188,7 +202,7 @@ class BlueZClient:
     for path, interfaces in objects.items():
       if ADAPTER_IFACE in interfaces:
         return path, interfaces[ADAPTER_IFACE]
-    raise RuntimeError("Bluetooth adapter is not available")
+    raise AdapterUnavailableError("Bluetooth adapter is not available")
 
   def devices(self, objects: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     objects = self.managed_objects() if objects is None else objects
@@ -268,8 +282,14 @@ class BlueZClient:
         raise error
 
   def start_discovery(self) -> None:
-    path, _ = self.adapter()
-    self._call(path, ADAPTER_IFACE, "StartDiscovery")
+    path, props = self.adapter()
+    if props.get("Discovering", False):
+      return
+    try:
+      self._call(path, ADAPTER_IFACE, "StartDiscovery")
+    except BlueZError as error:
+      if error.name != "org.bluez.Error.InProgress":
+        raise
 
   def stop_discovery(self) -> None:
     path, props = self.adapter()
@@ -306,7 +326,11 @@ class BlueZClient:
 
   def pair(self, address: str) -> None:
     device = self.device_for_address(address)
-    self._call(device["path"], DEVICE_IFACE, "Pair", timeout=90.0)
+    try:
+      self._call(device["path"], DEVICE_IFACE, "Pair", timeout=90.0)
+    except BlueZError as error:
+      if error.name != "org.bluez.Error.AlreadyExists" or not self.device_for_address(address).get("paired", False):
+        raise
     self.set_device_property(address, "Trusted", "b", True)
     self.agent.clear()
 

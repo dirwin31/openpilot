@@ -169,6 +169,21 @@ class CompanionGattApplication:
       raise
     self._registered = True
 
+  def rearm_advertisement(self) -> None:
+    with self._close_lock:
+      if self._closed or not self._registered:
+        return
+      adapter_path = self._adapter_path
+      if not adapter_path:
+        return
+      try:
+        self._bluez_call(adapter_path, ADVERTISEMENT_MANAGER_IFACE, "UnregisterAdvertisement", "o",
+                         (COMPANION_ADVERTISEMENT_PATH,))
+      except Exception:
+        pass
+      self._bluez_call(adapter_path, ADVERTISEMENT_MANAGER_IFACE, "RegisterAdvertisement", "oa{sv}",
+                       (COMPANION_ADVERTISEMENT_PATH, {}))
+
   def close(self) -> None:
     with self._close_lock:
       if self._closed:
