@@ -10,6 +10,7 @@ from typing import Any
 
 from cereal import messaging
 
+from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 
@@ -57,6 +58,7 @@ class LiveFlags(IntFlag):
   PULSE_AND_GLIDE = 1 << 28
   METRIC = 1 << 29
   OVERRIDING = 1 << 30
+  RED_LIGHT = 1 << 31
 
 
 class CruiseState(IntEnum):
@@ -392,6 +394,7 @@ def build_live_snapshot(sm: Any, params: Params, params_memory: Params) -> LiveS
   cruise = getattr(car_state, "cruiseState", None)
   conditional_chill, conditional_reason = _conditional_chill(params, params_memory)
   speed_limit_control = _param_bool(params, "SpeedLimitController")
+  show_speed_limit = speed_limit_control or _param_bool(params, "ShowSpeedLimits")
   speed_limit = _finite(getattr(starpilot_plan, "slcSpeedLimit", 0.0))
   curve_control = _param_bool(params, "CurveSpeedController")
   curve_active = bool(getattr(starpilot_plan, "cscControllingSpeed", False))
@@ -424,7 +427,7 @@ def build_live_snapshot(sm: Any, params: Params, params_memory: Params) -> LiveS
     (LiveFlags.EXPERIMENTAL_MODE, bool(getattr(selfdrive_state, "experimentalMode", False))),
     (LiveFlags.CONDITIONAL_CHILL, conditional_chill),
     (LiveFlags.SPEED_LIMIT_CONTROL, speed_limit_control),
-    (LiveFlags.SPEED_LIMIT_ACTIVE, speed_limit_control and speed_limit > 0.0),
+    (LiveFlags.SPEED_LIMIT_ACTIVE, show_speed_limit and speed_limit > 0.0),
     (LiveFlags.CURVE_CONTROL, curve_control),
     (LiveFlags.CURVE_CONTROL_ACTIVE, curve_active),
     (LiveFlags.LEAD_PRESENT, lead_present),
@@ -445,6 +448,7 @@ def build_live_snapshot(sm: Any, params: Params, params_memory: Params) -> LiveS
     (LiveFlags.PULSE_AND_GLIDE, pulse_and_glide),
     (LiveFlags.METRIC, _param_bool(params, "IsMetric")),
     (LiveFlags.OVERRIDING, overriding),
+    (LiveFlags.RED_LIGHT, bool(getattr(starpilot_plan, "redLight", False))),
   )
   for flag, enabled in flag_values:
     if enabled:
@@ -452,9 +456,12 @@ def build_live_snapshot(sm: Any, params: Params, params_memory: Params) -> LiveS
 
   v_ego_cluster = _finite(getattr(car_state, "vEgoCluster", 0.0))
   vehicle_speed = v_ego_cluster if v_ego_cluster != 0.0 else _finite(getattr(car_state, "vEgo", 0.0))
-  set_speed = _finite(getattr(car_state, "vCruiseCluster", 0.0))
-  if set_speed == 0.0:
-    set_speed = _finite(getattr(controls_state, "vCruiseDEPRECATED", 0.0))
+  # Unlike the other speed fields in this payload, vCruiseCluster and its
+  # deprecated controlsState fallback are published in kph.
+  set_speed_kph = _finite(getattr(car_state, "vCruiseCluster", 0.0))
+  if set_speed_kph == 0.0:
+    set_speed_kph = _finite(getattr(controls_state, "vCruiseDEPRECATED", 0.0))
+  set_speed = set_speed_kph * CV.KPH_TO_MS
 
   border_state = _border_state(started, selfdrive_state, starpilot_car_state, starpilot_plan, events, params_memory)
   model_source = ModelSource.BIG_LOADING if big_model_loading else ModelSource.BIG if big_model else ModelSource.SMALL

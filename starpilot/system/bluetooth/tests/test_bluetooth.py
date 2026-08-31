@@ -312,7 +312,7 @@ def test_live_snapshot_packs_complete_versioned_driving_state():
   sm = FakeSubMaster(
     deviceState=SimpleNamespace(started=True),
     carState=SimpleNamespace(
-      vEgo=20.0, vEgoCluster=20.25, vCruiseCluster=23.5, aEgo=-0.45,
+      vEgo=20.0, vEgoCluster=20.25, vCruiseCluster=84.6, aEgo=-0.45,
       gasPressed=False, brakePressed=True, standstill=False, steeringAngleDeg=12.3, steeringTorque=-2.5,
       cruiseState=SimpleNamespace(available=True, enabled=True, standstill=False, nonAdaptive=False),
     ),
@@ -329,7 +329,7 @@ def test_live_snapshot_packs_complete_versioned_driving_state():
       alwaysOnLateralEnabled=True, pauseLateral=True, trafficModeEnabled=False, pulseAndGlide=False,
     ),
     starpilotPlan=SimpleNamespace(
-      slcSpeedLimit=20.1, slcSpeedLimitOffset=1.12, cscControllingSpeed=True, cscSpeed=17.2,
+      slcSpeedLimit=20.1, slcSpeedLimitOffset=1.12, cscControllingSpeed=True, cscSpeed=17.2, redLight=True,
       forcingStop=False, trackingLead=True, pulseGlideCoasting=False,
     ),
     onroadEvents=[],
@@ -352,6 +352,7 @@ def test_live_snapshot_packs_complete_versioned_driving_state():
   assert snapshot.flags & LiveFlags.BIG_MODEL
   assert snapshot.flags & LiveFlags.BRAKE_PRESSED
   assert snapshot.flags & LiveFlags.STOPPING
+  assert snapshot.flags & LiveFlags.RED_LIGHT
   fragments = live_notification_fragments(frame)
   assert len(fragments) == LIVE_NOTIFICATION_FRAGMENT_COUNT
   assert all(len(fragment) == LIVE_NOTIFICATION_SIZE for fragment in fragments)

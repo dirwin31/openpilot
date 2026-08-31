@@ -170,8 +170,8 @@ def test_live_link_has_a_self_contained_bluetooth_page():
 
   assert "live-manifest.json" not in html
   assert "apple-mobile-web-app" not in html
-  assert 'src="assets/components/tools/live_link_standalone.js?v=live-link-safari-6"' in html
-  assert 'href="assets/components/tools/live_link_standalone.css?v=live-link-safari-6"' in html
+  assert 'src="assets/components/tools/live_link_standalone.js?v=live-link-safari-7"' in html
+  assert 'href="assets/components/tools/live_link_standalone.css?v=live-link-safari-7"' in html
   assert 'id="connectButton"' in html
   assert 'id="secureAppLink"' in html
   assert 'id="galaxyMenuLink"' in html
@@ -201,7 +201,7 @@ def test_live_link_has_a_self_contained_bluetooth_page():
   assert 'window.location?.hostname === "galaxy.firestar.link"' in script
   assert "This local page does not connect over Bluetooth" in script
   assert "elements.slcChip.hidden = !slcActive" in script
-  assert "elements.curveChip.hidden = !curveActive" in script
+  assert "elements.curveChip.hidden = !curveEnabled" in script
   assert "liveCharacteristic.startNotifications()" in script
   assert 'op: "get_live_metadata"' in script
   assert "fetch(" not in script
@@ -210,7 +210,7 @@ def test_live_link_has_a_self_contained_bluetooth_page():
   assert '"/assets/components/tools/live_link_standalone.js"' in worker
   assert '"/assets/components/tools/live_link_standalone.css"' in worker
   assert '"/assets/live-manifest.json"' not in worker
-  assert 'const liveCacheName = "starpilot-live-shell-v6"' in worker
+  assert 'const liveCacheName = "starpilot-live-shell-v7"' in worker
   assert 'event.request.mode === "navigate"' in worker
   assert '@app.route("/live", methods=["GET"])' in server
   assert 'render_template("live_link.html", secure_live_url=_galaxy_public_base_url())' in server
