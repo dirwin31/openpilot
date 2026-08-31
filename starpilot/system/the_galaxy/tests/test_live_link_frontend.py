@@ -217,7 +217,7 @@ const context = {
 context.window = {
   isSecureContext: !insecure,
   navigator,
-  location: { reload: () => {} },
+  location: { hostname: insecure ? "192.168.1.10" : "galaxy.firestar.link", reload: () => {} },
   matchMedia: () => ({ matches: false }),
   addEventListener: () => {},
 }
@@ -234,6 +234,13 @@ const result = insecure ? {
   linkText: dom.get("secureAppLink").textContent,
   linkHref: dom.get("secureAppLink").href,
   linkHidden: dom.get("secureAppLink").hidden,
+  beacioHidden: dom.get("beacioStep").hidden,
+  permissionHidden: dom.get("permissionStep").hidden,
+  pairHidden: dom.get("pairStep").hidden,
+  connectHidden: dom.get("connectButton").hidden,
+  connectMarker: dom.get("connectStepMarker").textContent,
+  connectTitle: dom.get("connectStepTitle").textContent,
+  connectDetail: dom.get("connectStepDetail").textContent,
 } : {
   title: dom.get("setupTitle").textContent,
   message: dom.get("setupMessage").textContent,
@@ -393,11 +400,18 @@ def test_standalone_live_link_reassembles_decodes_and_renders_protocol_frame():
 
 @pytest.mark.parametrize(("mode", "expected"), [
   ("insecure", {
-    "title": "Set up Live Link",
-    "message": "Follow the highlighted step. Keep Pair a Phone open on the comma while connecting.",
-    "linkText": "Open secure Galaxy",
+    "title": "Continue in secure Galaxy",
+    "message": "On iPhone, Live Link setup and Bluetooth connection run only through your Galaxy tunnel.",
+    "linkText": "Continue in secure Galaxy",
     "linkHref": "https://galaxy.firestar.link/AbCdEf0123456789",
     "linkHidden": False,
+    "beacioHidden": True,
+    "permissionHidden": True,
+    "pairHidden": True,
+    "connectHidden": True,
+    "connectMarker": "→",
+    "connectTitle": "Open your secure Galaxy page",
+    "connectDetail": "Continue there, sign in, then choose Live Link from the Galaxy menu. This local page does not connect over Bluetooth.",
   }),
   ("missing", {
     "title": "Set up Live Link",
