@@ -32,10 +32,12 @@ class FakeElement {
     this.disabled = false
     this.listeners = new Map()
     this.properties = new Map()
+    this.attributes = new Map()
     this.style = { setProperty: (name, value) => this.properties.set(name, value) }
   }
   addEventListener(name, callback) { this.listeners.set(name, callback) }
   removeEventListener(name) { this.listeners.delete(name) }
+  setAttribute(name, value) { this.attributes.set(name, value) }
 }
 
 const dom = new Map()
@@ -90,11 +92,12 @@ view.setUint8(3, 1)
 view.setUint16(4, 64, true)
 view.setUint16(6, 513, true)
 view.setUint32(8, 123456, true)
-const flags = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 8) | (1 << 9) | (1 << 10) |
-  (1 << 11) | (1 << 12) | (1 << 13) | (1 << 24) | (1 << 25)
+const flags = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10) |
+  (1 << 11) | (1 << 12) | (1 << 13) | (1 << 18) | (1 << 24) | (1 << 25) | (1 << 26) | (1 << 31)
 view.setUint32(12, flags >>> 0, true)
 view.setInt16(16, 2025, true)
 view.setUint16(18, 2350, true)
+view.setInt16(26, 137, true)
 view.setUint16(30, 264, true)
 view.setInt16(32, -175, true)
 view.setUint16(34, 992, true)
@@ -144,6 +147,15 @@ process.stdout.write(JSON.stringify({
   experimentalHidden: dom.get("experimentalChip").hidden,
   slcHidden: dom.get("slcChip").hidden,
   curveHidden: dom.get("curveChip").hidden,
+  stopHidden: dom.get("stopChip").hidden,
+  stopLabel: dom.get("stopLabel").textContent,
+  stopValue: dom.get("stopValue").textContent,
+  trafficSignalHidden: dom.get("trafficSignal").hidden,
+  stopLineHidden: dom.get("sceneStopLine").hidden,
+  sceneMode: dom.get("sceneMode").textContent,
+  sceneCurve: dom.get("sceneCurve").textContent,
+  curvedPath: dom.get("scenePath").attributes.get("d") !== "M 240 238 C 240 180, 240 104, 240 38",
+  experimentalScene: dom.get("roadScene").classList.contains("roadSceneExperimental"),
   border: dom.get("livePanel").properties.get("--drive-border"),
   chooserError: context.__liveTest.connectionErrorMessage({ name: "NotFoundError" }, "chooser"),
   permissionError: context.__liveTest.connectionErrorMessage({ name: "NotAllowedError" }, "chooser"),
@@ -383,13 +395,22 @@ def test_standalone_live_link_reassembles_decodes_and_renders_protocol_frame():
     "lead": "87 ft",
     "relativeSpeed": "Closing 3.9 mph",
     "slc": "45",
-    "slcDetail": "Offset +2.5 mph",
-    "curve": "38",
+    "slcDetail": "+2.5 mph",
+    "curve": "38 mph",
     "featureGridHidden": False,
     "aolHidden": True,
-    "experimentalHidden": True,
+    "experimentalHidden": False,
     "slcHidden": False,
     "curveHidden": False,
+    "stopHidden": False,
+    "stopLabel": "Traffic signal",
+    "stopValue": "Red light ahead",
+    "trafficSignalHidden": False,
+    "stopLineHidden": False,
+    "sceneMode": "Experimental path",
+    "sceneCurve": "Curve target 38 mph",
+    "curvedPath": True,
+    "experimentalScene": True,
     "border": "rgba(22, 127, 64, 1.000)",
     "chooserError": "No StarPilot device was selected. On the comma, open Galaxy → Bluetooth → Pair a Phone, then try again and choose StarPilot.",
     "permissionError": (

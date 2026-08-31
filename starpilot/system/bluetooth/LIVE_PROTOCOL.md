@@ -102,7 +102,7 @@ timeline locally by comparing successive frames.
 | 7 | Experimental Mode active |
 | 8 | Conditional Chill active |
 | 9 | Speed Limit Control enabled |
-| 10 | Speed Limit Control has a target |
+| 10 | a speed-limit target is available for display |
 | 11 | Curve Control enabled |
 | 12 | Curve Control actively controls speed |
 | 13 | lead present |
@@ -123,6 +123,7 @@ timeline locally by comparing successive frames.
 | 28 | Pulse & Glide is gliding |
 | 29 | comma display units are metric |
 | 30 | controls overriding |
+| 31 | red traffic light detected |
 
 All physical values remain SI on the wire. Bit 29 only tells the phone which
 presentation the comma uses so Galaxy can default to matching units.

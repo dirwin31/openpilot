@@ -7,8 +7,8 @@
   <meta name="description" content="StarPilot live driving state over a direct Bluetooth connection.">
   <link rel="apple-touch-icon" href="assets/images/apple-touch-icon.png">
   <link rel="icon" href="assets/images/favicon.ico">
-  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-safari-6">
-  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-safari-6"></script>
+  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-safari-7">
+  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-safari-7"></script>
   <title>StarPilot Live</title>
 </head>
 <body data-secure-live-url="{{ secure_live_url | default('', true) | e }}">
@@ -87,9 +87,44 @@
           <span id="vehicleSpeed" class="speedValue">0</span>
           <span id="speedUnit" class="speedUnit">mph</span>
         </div>
-        <div class="setSpeed">
-          <span>Set speed</span>
-          <strong id="setSpeed">--</strong>
+        <div class="speedTargets">
+          <div class="setSpeed">
+            <span>Cruise</span>
+            <strong id="setSpeed">--</strong>
+          </div>
+          <div id="slcChip" class="speedLimitSign" hidden>
+            <span>Speed<br>limit</span>
+            <strong id="slcValue">--</strong>
+            <small id="slcDetail"></small>
+          </div>
+        </div>
+      </div>
+
+      <div id="roadScene" class="roadScene" aria-label="Live driving path preview">
+        <svg class="roadSceneSvg" viewBox="0 0 480 240" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="livePathGradient" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0%" stop-color="#5ec8c8" stop-opacity="0.95"></stop>
+              <stop offset="100%" stop-color="#8b6cc5" stop-opacity="0.28"></stop>
+            </linearGradient>
+          </defs>
+          <path id="roadSurface" class="roadSurface" d="M 42 240 L 206 36 L 274 36 L 438 240 Z"></path>
+          <path id="roadEdgeLeft" class="roadEdge" d="M 42 240 C 112 174, 176 92, 206 36"></path>
+          <path id="roadEdgeRight" class="roadEdge" d="M 438 240 C 368 174, 304 92, 274 36"></path>
+          <path id="sceneStopLine" class="sceneStopLine" d="M 188 82 L 292 82" hidden></path>
+          <path id="scenePath" class="scenePath" d="M 240 238 C 240 180, 240 104, 240 38"></path>
+        </svg>
+        <span id="sceneMode" class="sceneMode">Driving path</span>
+        <span id="sceneCurve" class="sceneCurve" hidden>Curve ahead</span>
+        <div id="sceneLead" class="sceneLead" hidden>
+          <span></span>
+          <strong id="sceneLeadDistance">--</strong>
+        </div>
+        <div id="trafficSignal" class="trafficSignal" hidden>
+          <span class="signalLight signalRed"></span>
+          <span class="signalLight"></span>
+          <span class="signalLight"></span>
+          <strong id="trafficSignalText">Red light</strong>
         </div>
       </div>
 
@@ -114,14 +149,13 @@
           <span>Driving mode</span>
           <strong>Experimental</strong>
         </div>
-        <div id="slcChip" class="featureChip" hidden>
-          <span>Speed limit</span>
-          <strong id="slcValue">--</strong>
-          <small id="slcDetail"></small>
-        </div>
         <div id="curveChip" class="featureChip" hidden>
           <span>Curve slowdown</span>
           <strong id="curveValue">--</strong>
+        </div>
+        <div id="stopChip" class="featureChip featureChipStop" hidden>
+          <span id="stopLabel">Model stop</span>
+          <strong id="stopValue">Slowing down</strong>
         </div>
       </div>
 

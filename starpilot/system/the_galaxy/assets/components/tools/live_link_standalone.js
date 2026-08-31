@@ -28,9 +28,12 @@ const FLAG = {
   CURVE_CONTROL: 1 << 11,
   CURVE_CONTROL_ACTIVE: 1 << 12,
   LEAD_PRESENT: 1 << 13,
+  STOPPING: 1 << 18,
   ALERT_PRESENT: 1 << 24,
   TELEMETRY_VALID: 1 << 25,
+  FORCING_STOP: 1 << 26,
   METRIC: 1 << 29,
+  RED_LIGHT: 2 ** 31,
 }
 
 const BORDER_STATE_LABEL = [
@@ -49,9 +52,10 @@ const elements = Object.fromEntries([
   "beacioStep", "beacioStepMarker", "beacioStepDetail",
   "permissionStep", "permissionStepMarker", "permissionStepDetail", "pairStep", "pairStepMarker", "pairStepDetail",
   "connectStep", "connectStepMarker", "connectStepTitle", "connectStepDetail", "livePanel", "vehicleSpeed", "speedUnit", "setSpeed", "driveStatus", "driveStatusLabel",
-  "driveStatusDetail", "leadCard", "leadDistance", "leadRelativeSpeed", "featureGrid",
+  "driveStatusDetail", "roadScene", "roadSurface", "roadEdgeLeft", "roadEdgeRight", "scenePath", "sceneStopLine", "sceneMode", "sceneCurve",
+  "sceneLead", "sceneLeadDistance", "trafficSignal", "trafficSignalText", "leadCard", "leadDistance", "leadRelativeSpeed", "featureGrid",
   "aolChip", "experimentalChip", "slcChip", "slcValue", "slcDetail",
-  "curveChip", "curveValue", "alertCard", "alertText", "disconnectButton",
+  "curveChip", "curveValue", "stopChip", "stopLabel", "stopValue", "alertCard", "alertText", "disconnectButton",
 ].map((id) => [id, document.getElementById(id)]))
 
 const state = {
@@ -185,11 +189,11 @@ function speedText(ms, { zeroIsEmpty = false } = {}) {
   return String(Math.round(Math.max(0, convertedSpeed(ms))))
 }
 
-function offsetText(ms) {
-  if (!Number.isFinite(ms)) return "Offset --"
+function compactOffsetText(ms) {
+  if (!Number.isFinite(ms)) return ""
   const converted = convertedSpeed(ms)
-  const value = Math.abs(converted) >= 10 ? Math.round(converted).toString() : converted.toFixed(1)
-  return `Offset ${converted > 0 ? "+" : ""}${value} ${isMetric() ? "km/h" : "mph"}`
+  const value = Math.abs(converted) >= 10 ? Math.round(Math.abs(converted)).toString() : Math.abs(converted).toFixed(1)
+  return `${converted > 0 ? "+" : converted < 0 ? "−" : ""}${value} ${isMetric() ? "km/h" : "mph"}`
 }
 
 function distanceText(meters) {
@@ -200,6 +204,33 @@ function relativeSpeedText(ms) {
   const converted = Math.abs(convertedSpeed(ms))
   if (converted < 0.1) return "Steady"
   return `${ms < 0 ? "Closing" : "Opening"} ${converted.toFixed(1)} ${isMetric() ? "km/h" : "mph"}`
+}
+
+function speedWithUnitText(ms) {
+  const value = speedText(ms, { zeroIsEmpty: true })
+  return value === "--" ? value : `${value} ${isMetric() ? "km/h" : "mph"}`
+}
+
+function clamped(value, low, high) {
+  return Math.min(high, Math.max(low, value))
+}
+
+function scenePaths(steeringAngle) {
+  // The desired wheel angle is already in the compact live frame. It gives the
+  // phone a low-bandwidth approximation of the model path without streaming
+  // model arrays over Bluetooth.
+  const shift = clamped(-Number(steeringAngle || 0) * 3.2, -105, 105)
+  return {
+    surface: `M 42 240 L ${206 + shift} 36 L ${274 + shift} 36 L 438 240 Z`,
+    center: `M 240 238 C ${240 + shift * 0.04} 180, ${240 + shift * 0.42} 104, ${240 + shift} 38`,
+    left: `M 42 240 C ${112 + shift * 0.08} 174, ${176 + shift * 0.48} 92, ${206 + shift} 36`,
+    right: `M 438 240 C ${368 + shift * 0.08} 174, ${304 + shift * 0.48} 92, ${274 + shift} 36`,
+    stop: `M ${188 + shift * 0.72} 82 L ${292 + shift * 0.72} 82`,
+  }
+}
+
+function setPath(element, path) {
+  if (element && typeof element.setAttribute === "function") element.setAttribute("d", path)
 }
 
 function borderColor(frame) {
@@ -385,6 +416,13 @@ function renderFrame() {
   elements.speedUnit.textContent = isMetric(frame) ? "km/h" : "mph"
   elements.setSpeed.textContent = speedText(frame.setSpeed, { zeroIsEmpty: true })
 
+  const paths = scenePaths(frame.desiredSteeringAngle)
+  setPath(elements.roadSurface, paths.surface)
+  setPath(elements.scenePath, paths.center)
+  setPath(elements.roadEdgeLeft, paths.left)
+  setPath(elements.roadEdgeRight, paths.right)
+  setPath(elements.sceneStopLine, paths.stop)
+
   const conditionalChill = has(frame, FLAG.CONDITIONAL_CHILL)
   elements.driveStatusLabel.textContent = conditionalChill
     ? "Conditional Chill"
@@ -401,9 +439,11 @@ function renderFrame() {
 
   const leadPresent = has(frame, FLAG.LEAD_PRESENT)
   elements.leadCard.hidden = !leadPresent
+  elements.sceneLead.hidden = !leadPresent
   if (leadPresent) {
     elements.leadDistance.textContent = distanceText(frame.leadDistance)
     elements.leadRelativeSpeed.textContent = relativeSpeedText(frame.leadRelativeSpeed)
+    elements.sceneLeadDistance.textContent = distanceText(frame.leadDistance)
   }
 
   const aol = has(frame, FLAG.ALWAYS_ON_LATERAL)
@@ -411,16 +451,32 @@ function renderFrame() {
 
   const experimental = has(frame, FLAG.EXPERIMENTAL_MODE)
   elements.experimentalChip.hidden = !experimental
+  elements.roadScene.classList.toggle("roadSceneExperimental", experimental)
+  elements.sceneMode.textContent = experimental ? "Experimental path" : "Driving path"
 
   const slcActive = has(frame, FLAG.SPEED_LIMIT_ACTIVE)
   elements.slcChip.hidden = !slcActive
   elements.slcValue.textContent = speedText(frame.speedLimit)
-  elements.slcDetail.textContent = slcActive ? offsetText(frame.speedLimitOffset) : ""
+  elements.slcDetail.textContent = slcActive && Math.abs(frame.speedLimitOffset) >= 0.01 ? compactOffsetText(frame.speedLimitOffset) : ""
 
+  const curveEnabled = has(frame, FLAG.CURVE_CONTROL)
   const curveActive = has(frame, FLAG.CURVE_CONTROL_ACTIVE)
-  elements.curveChip.hidden = !curveActive
-  elements.curveValue.textContent = speedText(frame.curveTargetSpeed)
-  elements.featureGrid.hidden = !(aol || experimental || slcActive || curveActive)
+  const curvedPath = Math.abs(frame.desiredSteeringAngle) >= 2.5
+  elements.curveChip.hidden = !curveEnabled
+  elements.curveValue.textContent = curveActive ? speedWithUnitText(frame.curveTargetSpeed) : "Watching road"
+  elements.sceneCurve.hidden = !(curveActive || curvedPath)
+  elements.sceneCurve.textContent = curveActive ? `Curve target ${speedWithUnitText(frame.curveTargetSpeed)}` : "Curve ahead"
+
+  const redLight = has(frame, FLAG.RED_LIGHT)
+  const forcingStop = has(frame, FLAG.FORCING_STOP)
+  const stopping = redLight || forcingStop || has(frame, FLAG.STOPPING)
+  elements.trafficSignal.hidden = !redLight
+  elements.sceneStopLine.hidden = !stopping
+  elements.stopChip.hidden = !stopping
+  elements.stopLabel.textContent = redLight ? "Traffic signal" : "Model stop"
+  elements.stopValue.textContent = redLight ? "Red light ahead" : forcingStop ? "Stop confirmed" : "Slowing down"
+
+  elements.featureGrid.hidden = !(aol || experimental || curveEnabled || stopping)
 
   const alert = state.metadata && state.metadata.alert
   const alertText = alert ? [alert.text1, alert.text2].filter(Boolean).join(" — ") : ""
