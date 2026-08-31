@@ -178,7 +178,7 @@ const navigator = {
   maxTouchPoints: 5,
   standalone: mode === "standalone",
 }
-if (mode === "ready") {
+if (mode === "ready" || mode === "ready_checked") {
   navigator.bluetooth = {
     getAvailability: async () => true,
     getDevices: async () => [],
@@ -202,7 +202,7 @@ const context = {
   performance: { now: () => 1000 },
   document: {
     baseURI: "https://galaxy.firestar.link/device/live",
-    body: { dataset: { secureLiveUrl: insecure ? "https://galaxy.firestar.link/AbCdEf0123456789" : "" } },
+    body: { dataset: { secureLiveUrl: "https://galaxy.firestar.link/AbCdEf0123456789" } },
     getElementById(id) {
       if (!dom.has(id)) dom.set(id, new FakeElement())
       return dom.get(id)
@@ -227,6 +227,9 @@ vm.createContext(context)
 const source = fs.readFileSync(process.argv[1], "utf8")
 vm.runInContext(source, context)
 await new Promise((resolve) => setTimeout(resolve, 0))
+if (mode === "ready_checked") {
+  await dom.get("checkSetupButton").listeners.get("click")()
+}
 
 const result = insecure ? {
   title: dom.get("setupTitle").textContent,
@@ -234,6 +237,7 @@ const result = insecure ? {
   linkText: dom.get("secureAppLink").textContent,
   linkHref: dom.get("secureAppLink").href,
   linkHidden: dom.get("secureAppLink").hidden,
+  menuHref: dom.get("galaxyMenuLink").href,
   beacioHidden: dom.get("beacioStep").hidden,
   permissionHidden: dom.get("permissionStep").hidden,
   pairHidden: dom.get("pairStep").hidden,
@@ -245,6 +249,7 @@ const result = insecure ? {
   title: dom.get("setupTitle").textContent,
   message: dom.get("setupMessage").textContent,
   installHidden: dom.get("beacioInstallLink").hidden,
+  checkText: dom.get("checkSetupButton").textContent,
   connectHidden: dom.get("connectButton").hidden,
   beacioClass: dom.get("beacioStep").className,
   permissionClass: dom.get("permissionStep").className,
@@ -401,10 +406,11 @@ def test_standalone_live_link_reassembles_decodes_and_renders_protocol_frame():
 @pytest.mark.parametrize(("mode", "expected"), [
   ("insecure", {
     "title": "Continue in secure Galaxy",
-    "message": "On iPhone, Live Link setup and Bluetooth connection run only through your Galaxy tunnel.",
+    "message": "On iPhone, Live Link setup needs HTTPS, which your Galaxy tunnel provides.",
     "linkText": "Continue in secure Galaxy",
     "linkHref": "https://galaxy.firestar.link/AbCdEf0123456789",
     "linkHidden": False,
+    "menuHref": "https://galaxy.firestar.link/AbCdEf0123456789",
     "beacioHidden": True,
     "permissionHidden": True,
     "pairHidden": True,
@@ -417,6 +423,7 @@ def test_standalone_live_link_reassembles_decodes_and_renders_protocol_frame():
     "title": "Set up Live Link",
     "message": "Follow the highlighted step. Keep Pair a Phone open on the comma while connecting.",
     "installHidden": False,
+    "checkText": "Check beacio setup",
     "connectHidden": False,
     "beacioClass": "setupStep setupStepPending",
     "permissionClass": "setupStep setupStepCurrent",
@@ -427,6 +434,18 @@ def test_standalone_live_link_reassembles_decodes_and_renders_protocol_frame():
     "title": "Set up Live Link",
     "message": "Follow the highlighted step. Keep Pair a Phone open on the comma while connecting.",
     "installHidden": False,
+    "checkText": "Check beacio setup",
+    "connectHidden": False,
+    "beacioClass": "setupStep setupStepComplete",
+    "permissionClass": "setupStep setupStepComplete",
+    "connectTitle": "Connect from the secure page",
+    "connectDetail": "Secure Safari page detected. Tap Connect and choose StarPilot; the open pairing window authorizes it automatically.",
+  }),
+  ("ready_checked", {
+    "title": "Set up Live Link",
+    "message": "beacio is active and ready. Next, open Pair a Phone on the comma, then tap Connect over Bluetooth.",
+    "installHidden": False,
+    "checkText": "beacio setup verified ✓",
     "connectHidden": False,
     "beacioClass": "setupStep setupStepComplete",
     "permissionClass": "setupStep setupStepComplete",
@@ -437,6 +456,7 @@ def test_standalone_live_link_reassembles_decodes_and_renders_protocol_frame():
     "title": "Set up Live Link",
     "message": "Follow the highlighted step. Keep Pair a Phone open on the comma while connecting.",
     "installHidden": False,
+    "checkText": "Check beacio setup",
     "connectHidden": True,
     "beacioClass": "setupStep setupStepPending",
     "permissionClass": "setupStep setupStepCurrent",

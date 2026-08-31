@@ -113,6 +113,29 @@ h1 {
   box-shadow: 0 0 0 0.25rem rgb(94 200 200 / 13%);
 }
 
+.galaxyMenuButton {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 50%;
+  bottom: max(0.8rem, env(safe-area-inset-bottom));
+  box-shadow: 0 0.45rem 1.2rem rgb(0 0 0 / 38%);
+  color: white;
+  display: flex;
+  font-size: 1.45rem;
+  height: 3rem;
+  justify-content: center;
+  line-height: 1;
+  position: fixed;
+  right: max(0.8rem, env(safe-area-inset-right));
+  text-decoration: none;
+  width: 3rem;
+  z-index: 10;
+}
+
+.galaxyMenuButton:active {
+  transform: scale(0.96);
+}
+
 .setupCard,
 .livePanel {
   background: var(--card);

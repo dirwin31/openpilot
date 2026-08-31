@@ -7,8 +7,8 @@
   <meta name="description" content="StarPilot live driving state over a direct Bluetooth connection.">
   <link rel="apple-touch-icon" href="assets/images/apple-touch-icon.png">
   <link rel="icon" href="assets/images/favicon.ico">
-  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-safari-5">
-  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-safari-5"></script>
+  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-safari-6">
+  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-safari-6"></script>
   <title>StarPilot Live</title>
 </head>
 <body data-secure-live-url="{{ secure_live_url | default('', true) | e }}">
@@ -25,10 +25,12 @@
       </div>
     </header>
 
+    <a id="galaxyMenuLink" class="galaxyMenuButton" href="/" aria-label="Open Galaxy menu">☰</a>
+
     <section id="setupCard" class="setupCard">
       <div class="bluetoothMark" aria-hidden="true">ᛒ</div>
       <h2 id="setupTitle">Set up Live Link</h2>
-      <p id="setupMessage">Checking Bluetooth setup…</p>
+      <p id="setupMessage" aria-live="polite">Checking Bluetooth setup…</p>
 
       <ol id="setupSteps" class="setupSteps">
         <li id="beacioStep" class="setupStep setupStepPending">
@@ -114,12 +116,12 @@
         </div>
         <div id="slcChip" class="featureChip" hidden>
           <span>Speed limit</span>
-          <strong id="slcValue">Ready</strong>
+          <strong id="slcValue">--</strong>
           <small id="slcDetail"></small>
         </div>
         <div id="curveChip" class="featureChip" hidden>
           <span>Curve slowdown</span>
-          <strong id="curveValue">Ready</strong>
+          <strong id="curveValue">--</strong>
         </div>
       </div>
 
