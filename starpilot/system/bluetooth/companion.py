@@ -219,28 +219,34 @@ class CompanionGattApplication:
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_STATUS_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-authenticated-read"]),
+          # "encrypt-*" (not "encrypt-authenticated-*"): the read-only telemetry
+          # service only needs an encrypted bonded link, not MITM protection.
+          # iOS Web Bluetooth (Beacio) creates a Just Works bond, which is
+          # unauthenticated; requiring authentication made the encrypted read
+          # fail before it reached our handler, so the phone could bond but never
+          # complete the Live Link connection.
+          "Flags": ("as", ["encrypt-read"]),
         },
       },
       COMPANION_COMMAND_PATH: {
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_COMMAND_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-authenticated-write"]),
+          "Flags": ("as", ["encrypt-write"]),
         },
       },
       COMPANION_RESPONSE_PATH: {
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_RESPONSE_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-authenticated-read"]),
+          "Flags": ("as", ["encrypt-read"]),
         },
       },
       COMPANION_LIVE_PATH: {
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_LIVE_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-authenticated-read", "notify"]),
+          "Flags": ("as", ["encrypt-read", "notify"]),
           "Notifying": ("b", bool(getattr(self, "_notifying", False))),
         },
       },
