@@ -1,9 +1,12 @@
 const appBasePath = self.location.pathname.replace(/\/service-worker\.js$/, "").replace(/\/$/, "")
-const liveCacheName = "starpilot-live-shell-v7"
+const liveCacheName = "starpilot-live-shell-v8"
 const liveShellPaths = [
   "/live",
   "/assets/components/tools/live_link_standalone.css",
   "/assets/components/tools/live_link_standalone.js",
+  "/assets/vendor/bootstrap-icons/bootstrap-icons.min.css",
+  "/assets/vendor/bootstrap-icons/fonts/bootstrap-icons.woff",
+  "/assets/vendor/bootstrap-icons/fonts/bootstrap-icons.woff2",
   "/assets/images/apple-touch-icon.png",
   "/assets/images/android-chrome-192x192.png",
   "/assets/images/android-chrome-512x512.png",

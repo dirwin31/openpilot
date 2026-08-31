@@ -7,8 +7,9 @@
   <meta name="description" content="StarPilot live driving state over a direct Bluetooth connection.">
   <link rel="apple-touch-icon" href="assets/images/apple-touch-icon.png">
   <link rel="icon" href="assets/images/favicon.ico">
-  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-safari-7">
-  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-safari-7"></script>
+  <link rel="stylesheet" href="assets/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-safari-8">
+  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-safari-8"></script>
   <title>StarPilot Live</title>
 </head>
 <body data-secure-live-url="{{ secure_live_url | default('', true) | e }}">
@@ -25,7 +26,9 @@
       </div>
     </header>
 
-    <a id="galaxyMenuLink" class="galaxyMenuButton" href="/" aria-label="Open Galaxy menu">☰</a>
+    <a id="menu_button" href="/" aria-label="Open Galaxy menu">
+      <i class="bi bi-list" aria-hidden="true"></i>
+    </a>
 
     <section id="setupCard" class="setupCard">
       <div class="bluetoothMark" aria-hidden="true">ᛒ</div>

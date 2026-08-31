@@ -241,7 +241,7 @@ const result = insecure ? {
   linkText: dom.get("secureAppLink").textContent,
   linkHref: dom.get("secureAppLink").href,
   linkHidden: dom.get("secureAppLink").hidden,
-  menuHref: dom.get("galaxyMenuLink").href,
+  menuHref: dom.get("menu_button").href,
   beacioHidden: dom.get("beacioStep").hidden,
   permissionHidden: dom.get("permissionStep").hidden,
   pairHidden: dom.get("pairStep").hidden,

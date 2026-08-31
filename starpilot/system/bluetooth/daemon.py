@@ -47,8 +47,9 @@ class BluetoothController:
     self._companion_pairing_deadline = 0.0
     self._pairing_address = ""
     self._pairing_error = ""
-    # Device paths of phones auto-accepted during the companion window, pending
-    # registration as companions once BlueZ reports them bonded.
+    # Device paths auto-accepted during the companion window. A path is not
+    # registered as a companion until it accesses the protected GATT service;
+    # otherwise an unrelated classic bond can consume the window first.
     self._pending_companion_paths: set[str] = set()
     # Companion phones seen connected on the previous maintenance pass, so a
     # connected -> disconnected transition can re-arm the advertisement they link back to.
@@ -169,39 +170,6 @@ class BluetoothController:
       if device_path:
         self._pending_companion_paths.add(device_path)
       return True
-
-  def _maintain_pending_companions(self) -> None:
-    with self._lock:
-      pending = list(self._pending_companion_paths)
-      client = self._bluez
-    if not pending or client is None:
-      return
-    for path in pending:
-      try:
-        device = client.paired_device_for_path(path)
-      except Exception:
-        continue
-      if device is None:
-        continue  # still bonding; revisit on the next maintenance pass
-      address = device["address"]
-      if not device.get("trusted", False):
-        try:
-          client.set_device_property(address, "Trusted", "b", True)
-        except Exception:
-          cloudlog.exception("Unable to trust companion phone")
-          continue
-      with self._lock:
-        self._pending_companion_paths.discard(path)
-        self._remember_companion(address)
-        close_window = bool(self._companion_pairing_deadline)
-      if close_window:
-        try:
-          client.set_pairing_mode(False)
-        except Exception:
-          cloudlog.exception("Unable to close companion pairing window after bond")
-        else:
-          with self._lock:
-            self._companion_pairing_deadline = 0.0
 
   def _companion_addresses(self) -> list[str]:
     try:
@@ -427,7 +395,10 @@ class BluetoothController:
         raise RuntimeError("Enable Bluetooth first")
       with self._lock:
         client = self._enable_companion()
-        client.set_pairing_mode(True)
+        # The companion LE advertisement is sufficient for discovery. Keeping
+        # classic discovery off prevents iOS from offering a second StarPilot
+        # device that cannot carry the Live Link GATT service.
+        client.set_pairing_mode(True, discoverable=False)
         self._companion_pairing_deadline = time.monotonic() + COMPANION_PAIRING_DURATION
     elif command == "stop_companion_pairing":
       if not self.params.get_bool("BluetoothEnabled"):
@@ -555,7 +526,6 @@ class BluetoothController:
           continue
         now = time.monotonic()
         self._maintain_scan(status, now)
-        self._maintain_pending_companions()
         self._maintain_companion_pairing(now, status["offroad"])
         self._maintain_companion_advertisement(status)
         self._maintain_reconnects(status, now)

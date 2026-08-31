@@ -9,6 +9,11 @@
   --success: #5ec8c8;
   --text: #f4f4fb;
   --warning: #e3a353;
+  --border-radius-xl: 1rem;
+  --main-fg: #8b6cc5;
+  --padding-xl: 2rem;
+  --text-color: #e8e8f0;
+  --z-modal: 1000;
 }
 
 * {
@@ -113,27 +118,24 @@ h1 {
   box-shadow: 0 0 0 0.25rem rgb(94 200 200 / 13%);
 }
 
-.galaxyMenuButton {
+#menu_button {
   align-items: center;
-  background: var(--accent);
+  background-color: var(--main-fg);
   border-radius: 50%;
-  bottom: max(0.8rem, env(safe-area-inset-bottom));
-  box-shadow: 0 0.45rem 1.2rem rgb(0 0 0 / 38%);
-  color: white;
+  bottom: var(--border-radius-xl);
   display: flex;
-  font-size: 1.45rem;
-  height: 3rem;
+  height: 50px;
   justify-content: center;
-  line-height: 1;
   position: fixed;
-  right: max(0.8rem, env(safe-area-inset-right));
+  right: var(--border-radius-xl);
   text-decoration: none;
-  width: 3rem;
-  z-index: 10;
+  width: 50px;
+  z-index: var(--z-modal);
 }
 
-.galaxyMenuButton:active {
-  transform: scale(0.96);
+#menu_button i {
+  color: var(--text-color);
+  font-size: var(--padding-xl);
 }
 
 .setupCard,

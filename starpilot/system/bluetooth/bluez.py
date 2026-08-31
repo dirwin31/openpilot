@@ -251,18 +251,27 @@ class BlueZClient:
   def set_powered(self, powered: bool) -> None:
     self.set_adapter_property("Powered", "b", powered)
 
-  def set_pairing_mode(self, enabled: bool) -> None:
+  def set_pairing_mode(self, enabled: bool, discoverable: bool = True) -> None:
     # Pairing windows are timed by bluetooth_managerd instead of BlueZ so all UIs
-    # report the same deadline.
+    # report the same deadline. Companion GATT pairing keeps the adapter out of
+    # classic inquiry results: its LE advertisement is already discoverable, and
+    # exposing both transports gives phones two different devices named StarPilot.
     if enabled:
       self.set_adapter_property("PairableTimeout", "u", 0)
-      self.set_adapter_property("DiscoverableTimeout", "u", 0)
       self.set_adapter_property("Pairable", "b", True)
-      try:
-        self.set_adapter_property("Discoverable", "b", True)
-      except Exception:
-        self.set_adapter_property("Pairable", "b", False)
-        raise
+      if discoverable:
+        self.set_adapter_property("DiscoverableTimeout", "u", 0)
+        try:
+          self.set_adapter_property("Discoverable", "b", True)
+        except Exception:
+          self.set_adapter_property("Pairable", "b", False)
+          raise
+      else:
+        try:
+          self.set_adapter_property("Discoverable", "b", False)
+        except Exception:
+          self.set_adapter_property("Pairable", "b", False)
+          raise
     else:
       error: Exception | None = None
       for name in ("Discoverable", "Pairable"):

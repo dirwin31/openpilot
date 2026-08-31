@@ -45,7 +45,7 @@ const M_TO_FT = 3.2808399
 
 const elements = Object.fromEntries([
   "connectionBadge", "connectionText", "setupCard", "setupTitle", "setupMessage", "setupSteps", "connectButton", "connectionError",
-  "secureAppLink", "galaxyMenuLink", "beacioInstallLink", "checkSetupButton", "reloadSetupButton", "permissionHelp",
+  "secureAppLink", "menu_button", "beacioInstallLink", "checkSetupButton", "reloadSetupButton", "permissionHelp",
   "beacioStep", "beacioStepMarker", "beacioStepDetail",
   "permissionStep", "permissionStepMarker", "permissionStepDetail", "pairStep", "pairStepMarker", "pairStepDetail",
   "connectStep", "connectStepMarker", "connectStepTitle", "connectStepDetail", "livePanel", "vehicleSpeed", "speedUnit", "setSpeed", "driveStatus", "driveStatusLabel",
@@ -803,7 +803,7 @@ async function registerCachedShell() {
 
 function configureLaunchContext() {
   const secureBaseUrl = String(document.body.dataset.secureLiveUrl || "").replace(/\/$/, "")
-  elements.galaxyMenuLink.href = (isIOSDevice() || isGalaxyTunnelPage()) && secureBaseUrl ? secureBaseUrl : "/"
+  elements.menu_button.href = (isIOSDevice() || isGalaxyTunnelPage()) && secureBaseUrl ? secureBaseUrl : "/"
   if (window.isSecureContext) return
   elements.connectButton.hidden = true
   if (secureBaseUrl) {

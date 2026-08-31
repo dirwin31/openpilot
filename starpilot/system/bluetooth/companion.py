@@ -251,6 +251,10 @@ class CompanionGattApplication:
       "Type": ("s", "peripheral"),
       "ServiceUUIDs": ("as", [COMPANION_SERVICE_UUID]),
       "LocalName": ("s", "StarPilot"),
+      # Override the adapter's intentionally disabled global discoverability
+      # for this LE advertisement only. This keeps Live Link visible without
+      # exposing a second classic-Bluetooth device with the same name.
+      "Discoverable": ("b", True),
     }
 
   def start(self, adapter_path: str) -> None:
@@ -377,8 +381,9 @@ class CompanionGattApplication:
   def _set_notifying(self, notifying: bool) -> None:
     with self._notify_lock:
       if self._notifying == notifying:
-        if notifying:
-          raise RuntimeError("Notifications are already enabled")
+        # BlueZ can issue another StartNotify while a previous phone's
+        # disconnect is still being retired. Treat it as an idempotent
+        # subscription so a fast Live Link reconnect is not rejected.
         return
       self._notifying = notifying
     self._emit_live_properties({"Notifying": ("b", notifying)})
