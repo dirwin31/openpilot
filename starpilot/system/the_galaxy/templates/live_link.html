@@ -4,15 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#06060f">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="StarPilot Live">
   <meta name="description" content="StarPilot live driving state over a direct Bluetooth connection.">
-  <link rel="manifest" href="assets/live-manifest.json">
   <link rel="apple-touch-icon" href="assets/images/apple-touch-icon.png">
   <link rel="icon" href="assets/images/favicon.ico">
-  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-4">
-  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-4"></script>
+  <link rel="stylesheet" href="assets/components/tools/live_link_standalone.css?v=live-link-safari-5">
+  <script defer src="assets/components/tools/live_link_standalone.js?v=live-link-safari-5"></script>
   <title>StarPilot Live</title>
 </head>
 <body data-secure-live-url="{{ secure_live_url | default('', true) | e }}">
@@ -21,11 +17,11 @@
       <div>
         <p class="eyebrow">STAR PILOT</p>
         <h1>Live Link</h1>
-        <p class="subtitle">Direct Bluetooth second screen</p>
+        <p class="subtitle">Live driving display over Bluetooth</p>
       </div>
       <div id="connectionBadge" class="connectionBadge connectionOffline" aria-live="polite">
         <span class="connectionDot"></span>
-        <span id="connectionText">Offline</span>
+        <span id="connectionText">Not connected</span>
       </div>
     </header>
 
@@ -81,20 +77,16 @@
         <span>In Safari, tap aA → Manage Extensions → beacio. Make sure it is on and set to Allow on Every Website. You can also check Settings → Apps → Safari → Extensions → beacio.</span>
         <span>Then return here and reload. Private Browsing and in-app browsers cannot use the extension.</span>
       </div>
-      <div id="installHint" class="installHint">
-        <strong>Make it available offline</strong>
-        <span>After Bluetooth works in Safari, use Share → Add to Home Screen. Once installed, Live Link needs no network connection.</span>
-      </div>
     </section>
 
     <section id="livePanel" class="livePanel" aria-live="polite" hidden>
       <div class="speedRow">
         <div class="currentSpeed">
           <span id="vehicleSpeed" class="speedValue">0</span>
-          <span id="speedUnit" class="speedUnit">MPH</span>
+          <span id="speedUnit" class="speedUnit">mph</span>
         </div>
         <div class="setSpeed">
-          <span>SET SPEED</span>
+          <span>Set speed</span>
           <strong id="setSpeed">--</strong>
         </div>
       </div>
@@ -106,32 +98,28 @@
 
       <div id="leadCard" class="leadCard" hidden>
         <span class="leadDot"></span>
-        <strong>LEAD</strong>
+        <strong>Vehicle ahead</strong>
         <span id="leadDistance">--</span>
         <span id="leadRelativeSpeed" class="muted pushRight">--</span>
       </div>
 
-      <div class="stateGrid">
-        <div id="engagementChip" class="stateChip">
-          <span>Engagement</span>
-          <strong id="engagementValue">Off</strong>
+      <div id="featureGrid" class="featureGrid" aria-label="Active driving features" hidden>
+        <div id="aolChip" class="featureChip" hidden>
+          <span>Steering assist</span>
+          <strong>Stays active</strong>
         </div>
-        <div id="aolChip" class="stateChip">
-          <span>AOL</span>
-          <strong id="aolValue">Off</strong>
+        <div id="experimentalChip" class="featureChip" hidden>
+          <span>Driving mode</span>
+          <strong>Experimental</strong>
         </div>
-        <div id="experimentalChip" class="stateChip">
-          <span>Experimental</span>
-          <strong id="experimentalValue">Off</strong>
-        </div>
-        <div id="slcChip" class="stateChip">
-          <span>SLC</span>
-          <strong id="slcValue">Off</strong>
+        <div id="slcChip" class="featureChip" hidden>
+          <span>Speed limit</span>
+          <strong id="slcValue">Ready</strong>
           <small id="slcDetail"></small>
         </div>
-        <div id="curveChip" class="stateChip">
-          <span>Curve Control</span>
-          <strong id="curveValue">Off</strong>
+        <div id="curveChip" class="featureChip" hidden>
+          <span>Curve slowdown</span>
+          <strong id="curveValue">Ready</strong>
         </div>
       </div>
 
@@ -140,12 +128,10 @@
       </div>
 
       <footer class="liveFooter">
-        <span>StarPilot • Bluetooth</span>
+        <span>Live data over Bluetooth</span>
         <button id="disconnectButton" class="textButton" type="button">Disconnect</button>
       </footer>
     </section>
-
-    <p id="offlineReady" class="offlineReady" hidden>Offline app ready</p>
   </main>
 </body>
 </html>

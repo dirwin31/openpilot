@@ -14,7 +14,6 @@ LIVE_STANDALONE_HTML_PATH = REPO_ROOT / "starpilot/system/the_galaxy/templates/l
 LIVE_STANDALONE_JS_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/components/tools/live_link_standalone.js"
 LIVE_STANDALONE_CSS_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/components/tools/live_link_standalone.css"
 LIVE_COMPATIBILITY_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/components/tools/live_link.js"
-LIVE_MANIFEST_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/live-manifest.json"
 SERVICE_WORKER_PATH = REPO_ROOT / "starpilot/system/the_galaxy/assets/service-worker.js"
 GALAXY_SERVER_PATH = REPO_ROOT / "starpilot/system/the_galaxy/the_galaxy.py"
 
@@ -31,9 +30,20 @@ def test_router_and_settings_cache_bust_is_consistent():
   index = INDEX_PATH.read_text(encoding="utf-8")
 
   assert "/assets/components/settings.js?v=router-cycle-fix-4" in router
-  assert "/assets/components/router.js?v=router-cycle-fix-5" in index
+  assert "/assets/components/router.js?v=router-public-path-6" in index
   assert "/assets/components/tools/bluetooth.js?v=bluetooth-phone-connection-5" in router
   assert "/assets/components/tools/bluetooth.css?v=bluetooth-phone-connection-3" in index
+
+
+def test_public_galaxy_bootstrap_keeps_the_device_path_for_module_imports():
+  index = INDEX_PATH.read_text(encoding="utf-8")
+
+  assert 'window.location.hostname === "galaxy.firestar.link"' in index
+  assert '/^[A-Za-z0-9]{16}$/.test(firstPathSegment)' in index
+  assert 'window.__theGalaxyBasePath = galaxyBasePath' in index
+  assert 'galaxyImportMap.type = "importmap"' in index
+  assert 'JSON.stringify({ imports: { "/assets/": `${galaxyBasePath}/assets/` } })' in index
+  assert '`${window.__theGalaxyBasePath}/assets/components/router.js?v=router-public-path-6`' in index
 
 
 def test_bluetooth_actions_use_reactive_disabled_bindings():
@@ -138,17 +148,17 @@ def test_live_link_page_is_wired_consistently():
   assert '/assets/components/tools/live_link.css?v=live-link-1' in index
 
 
-def test_live_link_has_a_self_contained_offline_app_shell():
+def test_live_link_has_a_self_contained_bluetooth_page():
   html = LIVE_STANDALONE_HTML_PATH.read_text(encoding="utf-8")
   script = LIVE_STANDALONE_JS_PATH.read_text(encoding="utf-8")
   styles = LIVE_STANDALONE_CSS_PATH.read_text(encoding="utf-8")
-  manifest = LIVE_MANIFEST_PATH.read_text(encoding="utf-8")
   worker = SERVICE_WORKER_PATH.read_text(encoding="utf-8")
   server = GALAXY_SERVER_PATH.read_text(encoding="utf-8")
 
-  assert 'href="assets/live-manifest.json"' in html
-  assert 'src="assets/components/tools/live_link_standalone.js?v=live-link-pwa-4"' in html
-  assert 'href="assets/components/tools/live_link_standalone.css?v=live-link-pwa-4"' in html
+  assert "live-manifest.json" not in html
+  assert "apple-mobile-web-app" not in html
+  assert 'src="assets/components/tools/live_link_standalone.js?v=live-link-safari-5"' in html
+  assert 'href="assets/components/tools/live_link_standalone.css?v=live-link-safari-5"' in html
   assert 'id="connectButton"' in html
   assert 'id="secureAppLink"' in html
   assert 'target="_blank" rel="noopener"' in html
@@ -160,10 +170,14 @@ def test_live_link_has_a_self_contained_offline_app_shell():
   assert html.index('id="beacioStep"') < html.index('id="permissionStep"') < html.index('id="pairStep"') < html.index('id="connectStep"')
   assert html.index('id="beacioInstallLink"') < html.index('id="permissionStep"')
   assert html.index('id="checkSetupButton"') < html.index('id="pairStep"')
-  assert 'id="engagementValue"' in html
+  assert 'id="featureGrid"' in html
+  assert 'id="engagementValue"' not in html
+  assert ">AOL<" not in html
+  assert ">SLC<" not in html
+  assert "Offline app ready" not in html
   assert 'id="slcDetail"' in html
 
-  # The installed page gets driving state only from the companion GATT service.
+  # The browser page gets driving state only from the companion GATT service.
   assert "navigator.bluetooth.requestDevice" in script
   assert "navigator.bluetooth.getAvailability" in script
   assert "Live Link still cannot see beacio" in script
@@ -175,16 +189,17 @@ def test_live_link_has_a_self_contained_offline_app_shell():
   assert "fetch(" not in script
   assert "/api/" not in script
 
-  assert '"start_url": "../live"' in manifest
-  assert '"display": "standalone"' in manifest
   assert '"/assets/components/tools/live_link_standalone.js"' in worker
   assert '"/assets/components/tools/live_link_standalone.css"' in worker
-  assert 'const liveCacheName = "starpilot-live-shell-v4"' in worker
+  assert '"/assets/live-manifest.json"' not in worker
+  assert 'const liveCacheName = "starpilot-live-shell-v5"' in worker
   assert 'event.request.mode === "navigate"' in worker
   assert '@app.route("/live", methods=["GET"])' in server
   assert 'render_template("live_link.html", secure_live_url=_galaxy_public_base_url())' in server
   declared_functions = {node.name for node in ast.walk(ast.parse(server)) if isinstance(node, ast.FunctionDef)}
   assert "_galaxy_public_base_url" in declared_functions
 
-  # The exact comma border wraps the whole live surface, not only a status card.
-  assert "border: 4px solid var(--drive-border)" in styles
+  # The comma border wraps the whole live surface, and optional features stay compact.
+  assert "border: 3px solid var(--drive-border)" in styles
+  assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in styles
+  assert ".offlineReady" not in styles

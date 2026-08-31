@@ -1,5 +1,5 @@
-// StarPilot Live Link standalone app. This file intentionally has no imports:
-// the complete app shell is cached on the phone and all runtime data comes from BLE.
+// StarPilot Live Link Bluetooth page. This file intentionally has no imports;
+// all runtime driving data comes directly from the companion GATT service.
 const SERVICE_UUID = "9b6d1000-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
 const STATUS_UUID = "9b6d1001-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
 const COMMAND_UUID = "9b6d1002-6f7a-4a5b-8c3d-2e1f0a9b8c7d"
@@ -34,10 +34,10 @@ const FLAG = {
 }
 
 const BORDER_STATE_LABEL = [
-  "Off", "Disengaged", "Engaged", "Always-On Lateral", "Longitudinal Only",
-  "Override", "Experimental", "Conditional Override", "Switchback", "Traffic", "Pulse & Glide",
+  "System off", "Ready", "Engaged", "Steering assist", "Speed control only",
+  "Driver override", "Experimental driving", "Relaxed driving override", "Switchback", "Traffic mode", "Pulse and glide",
 ]
-const CHILL_REASON_LABEL = ["Active", "Lead vehicle", "Speed", "Manual"]
+const CHILL_REASON_LABEL = ["Active", "Vehicle ahead", "Speed", "Manual"]
 
 const MS_TO_MPH = 2.23693629
 const MS_TO_KMH = 3.6
@@ -45,13 +45,13 @@ const M_TO_FT = 3.2808399
 
 const elements = Object.fromEntries([
   "connectionBadge", "connectionText", "setupCard", "setupTitle", "setupMessage", "setupSteps", "connectButton", "connectionError",
-  "secureAppLink", "installHint", "beacioInstallLink", "checkSetupButton", "reloadSetupButton", "permissionHelp",
+  "secureAppLink", "beacioInstallLink", "checkSetupButton", "reloadSetupButton", "permissionHelp",
   "beacioStep", "beacioStepMarker", "beacioStepDetail",
   "permissionStep", "permissionStepMarker", "permissionStepDetail", "pairStep", "pairStepMarker", "pairStepDetail",
   "connectStep", "connectStepMarker", "connectStepTitle", "connectStepDetail", "livePanel", "vehicleSpeed", "speedUnit", "setSpeed", "driveStatus", "driveStatusLabel",
-  "driveStatusDetail", "leadCard", "leadDistance", "leadRelativeSpeed", "engagementChip", "engagementValue",
-  "aolChip", "aolValue", "experimentalChip", "experimentalValue", "slcChip", "slcValue", "slcDetail",
-  "curveChip", "curveValue", "alertCard", "alertText", "disconnectButton", "offlineReady",
+  "driveStatusDetail", "leadCard", "leadDistance", "leadRelativeSpeed", "featureGrid",
+  "aolChip", "experimentalChip", "slcChip", "slcValue", "slcDetail",
+  "curveChip", "curveValue", "alertCard", "alertText", "disconnectButton",
 ].map((id) => [id, document.getElementById(id)]))
 
 const state = {
@@ -208,10 +208,6 @@ function borderColor(frame) {
   return alpha === 0 ? "transparent" : `rgba(${red}, ${green}, ${blue}, ${(alpha / 255).toFixed(3)})`
 }
 
-function setChip(element, enabled) {
-  element.classList.toggle("stateChipOn", enabled)
-}
-
 function isIOSDevice() {
   return /iPad|iPhone|iPod/.test(navigator.userAgent || "") ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
@@ -245,7 +241,8 @@ function setSetupStep(element, marker, status) {
 
 function renderSetup() {
   const ios = isIOSDevice()
-  const safariContext = isIOSSafari() || isStandaloneApp()
+  const standalone = isStandaloneApp()
+  const safariContext = isIOSSafari() && !standalone
   const secure = window.isSecureContext
   const apiReady = secure && setupState.bluetoothApi
   const secureBaseUrl = String(document.body.dataset.secureLiveUrl || "").replace(/\/$/, "")
@@ -259,10 +256,10 @@ function renderSetup() {
   elements.reloadSetupButton.hidden = !(ios && setupState.checked && !apiReady)
   elements.permissionHelp.hidden = !(ios && setupState.checked && !apiReady)
   elements.secureAppLink.hidden = secure || !secureBaseUrl
-  elements.connectButton.hidden = !secure
+  elements.connectButton.hidden = !secure || (ios && standalone)
 
   elements.setupTitle.textContent = "Set up Live Link"
-  elements.setupMessage.textContent = "Use any step when you need it. Keep Pair a Phone open on the comma when you connect."
+  elements.setupMessage.textContent = "Follow the highlighted step. Keep Pair a Phone open on the comma while connecting."
 
   if (ios) {
     if (apiReady) {
@@ -308,6 +305,10 @@ function renderSetup() {
     elements.connectStepDetail.textContent = secureBaseUrl
       ? "Open secure Galaxy, sign in, then choose Live Link. Bluetooth cannot run on this HTTP page."
       : "Set up Galaxy remote access first so Live Link has the required HTTPS address."
+  } else if (ios && standalone) {
+    setSetupStep(elements.connectStep, elements.connectStepMarker, "attention")
+    elements.connectStepTitle.textContent = "Open this page in Safari"
+    elements.connectStepDetail.textContent = "The iPhone Home Screen app cannot load the beacio Safari extension. Open secure Galaxy in Safari and return to Live Link."
   } else if (ios && !safariContext) {
     setSetupStep(elements.connectStep, elements.connectStepMarker, "attention")
     elements.connectStepTitle.textContent = "Open this secure page in Safari"
@@ -315,9 +316,7 @@ function renderSetup() {
   } else {
     setSetupStep(elements.connectStep, elements.connectStepMarker, "current")
     elements.connectStepTitle.textContent = "Connect from the secure page"
-    elements.connectStepDetail.textContent = isStandaloneApp()
-      ? "Secure installed Live Link detected. Tap Connect and choose StarPilot; the open pairing window authorizes it automatically."
-      : "Secure Safari page detected. Tap Connect and choose StarPilot; the open pairing window authorizes it automatically."
+    elements.connectStepDetail.textContent = "Secure Safari page detected. Tap Connect and choose StarPilot; the open pairing window authorizes it automatically."
   }
 }
 
@@ -326,9 +325,9 @@ function connectionLabel() {
   if (state.phase === "reconnecting") return ["connectionBusy", "Reconnecting"]
   if (state.phase === "connected") {
     const fresh = state.lastPacketAt > 0 && performance.now() - state.lastPacketAt < STALE_AFTER_MS
-    return fresh ? ["connectionLive", "Direct"] : ["connectionBusy", "Stale"]
+    return fresh ? ["connectionLive", "Bluetooth live"] : ["connectionBusy", "Waiting for data"]
   }
-  return ["connectionOffline", "Offline"]
+  return ["connectionOffline", "Not connected"]
 }
 
 function renderConnection() {
@@ -350,7 +349,7 @@ function renderFrame() {
   elements.livePanel.style.setProperty("--drive-border", borderColor(frame))
 
   elements.vehicleSpeed.textContent = speedText(frame.vehicleSpeed)
-  elements.speedUnit.textContent = isMetric(frame) ? "KM/H" : "MPH"
+  elements.speedUnit.textContent = isMetric(frame) ? "km/h" : "mph"
   elements.setSpeed.textContent = speedText(frame.setSpeed, { zeroIsEmpty: true })
 
   const conditionalChill = has(frame, FLAG.CONDITIONAL_CHILL)
@@ -374,28 +373,23 @@ function renderFrame() {
     elements.leadRelativeSpeed.textContent = relativeSpeedText(frame.leadRelativeSpeed)
   }
 
-  const engaged = has(frame, FLAG.ENGAGED)
-  elements.engagementValue.textContent = engaged ? "Engaged" : "Disengaged"
-  setChip(elements.engagementChip, engaged)
-
   const aol = has(frame, FLAG.ALWAYS_ON_LATERAL)
-  elements.aolValue.textContent = aol ? "On" : "Off"
-  setChip(elements.aolChip, aol)
+  elements.aolChip.hidden = !aol
 
   const experimental = has(frame, FLAG.EXPERIMENTAL_MODE)
-  elements.experimentalValue.textContent = experimental ? "On" : "Off"
-  setChip(elements.experimentalChip, experimental)
+  elements.experimentalChip.hidden = !experimental
 
   const slcEnabled = has(frame, FLAG.SPEED_LIMIT_CONTROL)
   const slcActive = has(frame, FLAG.SPEED_LIMIT_ACTIVE)
-  elements.slcValue.textContent = slcActive ? speedText(frame.speedLimit) : (slcEnabled ? "On" : "Off")
+  elements.slcChip.hidden = !slcEnabled
+  elements.slcValue.textContent = slcActive ? speedText(frame.speedLimit) : "Ready"
   elements.slcDetail.textContent = slcEnabled ? offsetText(frame.speedLimitOffset) : ""
-  setChip(elements.slcChip, slcEnabled)
 
   const curveEnabled = has(frame, FLAG.CURVE_CONTROL)
   const curveActive = has(frame, FLAG.CURVE_CONTROL_ACTIVE)
-  elements.curveValue.textContent = curveActive ? speedText(frame.curveTargetSpeed) : (curveEnabled ? "On" : "Off")
-  setChip(elements.curveChip, curveEnabled)
+  elements.curveChip.hidden = !curveEnabled
+  elements.curveValue.textContent = curveActive ? speedText(frame.curveTargetSpeed) : "Ready"
+  elements.featureGrid.hidden = !(aol || experimental || slcEnabled || curveEnabled)
 
   const alert = state.metadata && state.metadata.alert
   const alertText = alert ? [alert.text1, alert.text2].filter(Boolean).join(" — ") : ""
@@ -692,29 +686,22 @@ async function loadGrantedDevice() {
   }
 }
 
-async function installOfflineShell() {
+async function registerCachedShell() {
   if (!("serviceWorker" in navigator) || !window.isSecureContext) return
   try {
     const serviceWorkerUrl = new URL("service-worker.js", document.baseURI)
     const scope = new URL(".", serviceWorkerUrl).pathname
     await navigator.serviceWorker.register(serviceWorkerUrl, { scope })
     await navigator.serviceWorker.ready
-    elements.offlineReady.hidden = false
   } catch (error) {
-    console.warn("[live_link] offline app installation failed", error)
+    console.warn("[live_link] page cache registration failed", error)
   }
-}
-
-function configureInstallHint() {
-  const installed = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true
-  elements.installHint.hidden = installed
 }
 
 function configureLaunchContext() {
   if (window.isSecureContext) return
   const secureBaseUrl = String(document.body.dataset.secureLiveUrl || "").replace(/\/$/, "")
   elements.connectButton.hidden = true
-  elements.installHint.hidden = true
   if (secureBaseUrl) {
     // The public gateway only exposes nested device paths after its slug-root
     // sign-in has established a Galaxy session. Enter through the supported
@@ -745,10 +732,9 @@ elements.reloadSetupButton.addEventListener("click", reloadSetup)
 elements.disconnectButton.addEventListener("click", disconnect)
 window.addEventListener("beacio:ready", handleBeacioReady, { once: true })
 window.addEventListener("beacio:extension:ready", handleBeacioReady, { once: true })
-window.addEventListener("online", installOfflineShell)
+window.addEventListener("online", registerCachedShell)
 
-configureInstallHint()
 configureLaunchContext()
 render()
-installOfflineShell()
+registerCachedShell()
 initializeBluetoothSetup()
