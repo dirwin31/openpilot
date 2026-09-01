@@ -376,28 +376,30 @@ class CompanionGattApplication:
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_STATUS_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-read"]),
+          # Force an unbonded iPhone through SMP pairing instead of allowing a
+          # temporary encrypted session that cannot survive a comma reboot.
+          "Flags": ("as", ["encrypt-authenticated-read"]),
         },
       },
       COMPANION_COMMAND_PATH: {
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_COMMAND_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-write"]),
+          "Flags": ("as", ["encrypt-authenticated-write"]),
         },
       },
       COMPANION_RESPONSE_PATH: {
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_RESPONSE_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-read"]),
+          "Flags": ("as", ["encrypt-authenticated-read"]),
         },
       },
       COMPANION_LIVE_PATH: {
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_LIVE_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-read", "encrypt-notify", "notify"]),
+          "Flags": ("as", ["encrypt-authenticated-read", "encrypt-authenticated-notify", "notify"]),
           "Notifying": ("b", bool(getattr(self, "_notifying", False))),
         },
       },

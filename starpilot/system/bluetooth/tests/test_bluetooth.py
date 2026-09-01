@@ -440,16 +440,17 @@ def test_live_publisher_sequences_frames():
   assert all(struct.unpack_from("<I", frame, 8)[0] == 12345 for frame in frames)
 
 
-def test_companion_gatt_contract_requires_encrypted_characteristics():
+def test_companion_gatt_contract_requires_authenticated_characteristics():
   app = object.__new__(CompanionGattApplication)
   objects = app.managed_objects()
 
   assert objects[COMPANION_SERVICE_PATH]["org.bluez.GattService1"]["UUID"] == ("s", COMPANION_SERVICE_UUID)
-  assert objects[COMPANION_STATUS_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-read"])
-  assert objects[COMPANION_COMMAND_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-write"])
-  assert objects[COMPANION_RESPONSE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-read"])
+  assert objects[COMPANION_STATUS_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read"])
+  assert objects[COMPANION_COMMAND_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-write"])
+  assert objects[COMPANION_RESPONSE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read"])
   assert objects[COMPANION_LIVE_PATH]["org.bluez.GattCharacteristic1"]["UUID"] == ("s", COMPANION_LIVE_UUID)
-  assert objects[COMPANION_LIVE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-read", "encrypt-notify", "notify"])
+  assert objects[COMPANION_LIVE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == (
+    "as", ["encrypt-authenticated-read", "encrypt-authenticated-notify", "notify"])
 
 
 def test_companion_live_characteristic_reads_and_notifies():
