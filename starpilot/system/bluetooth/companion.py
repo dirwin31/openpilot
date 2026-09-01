@@ -304,8 +304,8 @@ class CompanionProtocol:
       raise ValueError(f"'{key}' can only be changed while the car is off")
     try:
       stored = _coerce_param_value(meta["data_type"], request["value"])
-    except (TypeError, ValueError):
-      raise ValueError(f"Invalid value for '{key}'")
+    except (TypeError, ValueError) as error:
+      raise ValueError(f"Invalid value for '{key}'") from error
     if isinstance(stored, bool):
       self.params.put_bool(key, stored)
     else:
@@ -376,28 +376,28 @@ class CompanionGattApplication:
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_STATUS_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-authenticated-read"]),
+          "Flags": ("as", ["encrypt-read"]),
         },
       },
       COMPANION_COMMAND_PATH: {
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_COMMAND_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-authenticated-write"]),
+          "Flags": ("as", ["encrypt-write"]),
         },
       },
       COMPANION_RESPONSE_PATH: {
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_RESPONSE_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-authenticated-read"]),
+          "Flags": ("as", ["encrypt-read"]),
         },
       },
       COMPANION_LIVE_PATH: {
         GATT_CHARACTERISTIC_IFACE: {
           "UUID": ("s", COMPANION_LIVE_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
-          "Flags": ("as", ["encrypt-authenticated-read", "notify"]),
+          "Flags": ("as", ["encrypt-read", "encrypt-notify", "notify"]),
           "Notifying": ("b", bool(getattr(self, "_notifying", False))),
         },
       },

@@ -436,16 +436,16 @@ def test_live_publisher_sequences_frames():
   assert all(struct.unpack_from("<I", frame, 8)[0] == 12345 for frame in frames)
 
 
-def test_companion_gatt_contract_requires_authenticated_characteristics():
+def test_companion_gatt_contract_requires_encrypted_characteristics():
   app = object.__new__(CompanionGattApplication)
   objects = app.managed_objects()
 
   assert objects[COMPANION_SERVICE_PATH]["org.bluez.GattService1"]["UUID"] == ("s", COMPANION_SERVICE_UUID)
-  assert objects[COMPANION_STATUS_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read"])
-  assert objects[COMPANION_COMMAND_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-write"])
-  assert objects[COMPANION_RESPONSE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read"])
+  assert objects[COMPANION_STATUS_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-read"])
+  assert objects[COMPANION_COMMAND_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-write"])
+  assert objects[COMPANION_RESPONSE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-read"])
   assert objects[COMPANION_LIVE_PATH]["org.bluez.GattCharacteristic1"]["UUID"] == ("s", COMPANION_LIVE_UUID)
-  assert objects[COMPANION_LIVE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read", "notify"])
+  assert objects[COMPANION_LIVE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-read", "encrypt-notify", "notify"])
 
 
 def test_companion_live_characteristic_reads_and_notifies():
@@ -1045,6 +1045,36 @@ def test_companion_authorization_waits_for_auto_accepted_bond_to_settle():
   assert sleeps == [COMPANION_BOND_SETTLE_INTERVAL]
   assert params.get("BluetoothCompanionDevices") == [client.device["address"]]
   assert "/org/bluez/hci0/dev_phone" not in controller._pending_companion_paths
+
+
+def test_companion_authorization_waits_for_just_works_bond_without_agent_callback():
+  class SettlingJustWorksBlueZ(FakeBlueZ):
+    def __init__(self):
+      super().__init__()
+      self.lookup_count = 0
+
+    def paired_device_for_path(self, path):
+      self.lookup_count += 1
+      if self.lookup_count <= 2:
+        return None
+      return super().paired_device_for_path(path)
+
+  params = TypedJsonFakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionEnabled=False)
+  client = SettlingJustWorksBlueZ()
+  client.device.update({"name": "iPhone", "audio": False, "trusted": False})
+  sleeps = []
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(), sleep=lambda delay: sleeps.append(delay),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
+  controller.handle({"command": "start_companion_pairing"})
+
+  # Some LE Just Works bonds never invoke Agent1. The authenticated GATT read
+  # still gets a bounded settle window while explicit companion pairing is open.
+  assert companions[0].authorize("/org/bluez/hci0/dev_phone")
+  assert sleeps == [COMPANION_BOND_SETTLE_INTERVAL, COMPANION_BOND_SETTLE_INTERVAL]
+  assert params.get("BluetoothCompanionDevices") == [client.device["address"]]
 
 
 def test_phone_pair_forget_repair_and_reconnect_workflow():

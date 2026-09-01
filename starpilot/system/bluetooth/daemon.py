@@ -251,8 +251,12 @@ class BluetoothController:
       with self._lock:
         client = self._bluez
         enabled = self.params.get_bool("BluetoothCompanionEnabled")
-        pending = (device_path in self._pending_companion_paths and self._companion_pairing_deadline > 0.0 and
-                   time.monotonic() < self._companion_pairing_deadline)
+        window_open = (not self._pairing_address and self._companion_pairing_deadline > 0.0 and
+                       time.monotonic() < self._companion_pairing_deadline)
+        # Just Works LE pairing may not call Agent1 at all. While the explicit
+        # companion window is open, allow BlueZ's Paired property a bounded
+        # moment to settle even when the path was not queued by the agent.
+        pending = window_open and bool(device_path)
       if client is None or not enabled:
         return False
       device = client.paired_device_for_path(device_path)
