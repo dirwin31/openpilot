@@ -120,7 +120,7 @@ class BluetoothController:
   def _start_companion(self, client: BlueZClient) -> None:
     if self._companion is not None:
       return
-    client.set_pairing_mode(False)
+    self._set_companion_pairing_mode(client, False)
     companion = self._companion_factory(
       client.router,
       client._call,
@@ -134,6 +134,16 @@ class BluetoothController:
       companion.close()
       raise
     self._companion = companion
+
+  def _set_companion_pairing_mode(self, client: BlueZClient, enabled: bool) -> None:
+    client.set_pairing_mode(enabled)
+    # On this BlueZ/kernel combination, clearing Discoverable also clears the
+    # controller's global Connectable bit. A saved iPhone uses encrypted GATT
+    # over BR/EDR, so it cannot return after a comma reboot unless page scan is
+    # restored. Keep the adapter hidden and non-pairable; only bonded devices can
+    # authenticate to the companion characteristics.
+    if not enabled and self._companion_addresses():
+      self._radio.set_connectable(True)
 
   def _enable_companion(self) -> BlueZClient:
     was_enabled = self.params.get_bool("BluetoothCompanionEnabled")
@@ -212,7 +222,7 @@ class BluetoothController:
         close_window = bool(self._companion_pairing_deadline)
       if close_window:
         try:
-          client.set_pairing_mode(False)
+          self._set_companion_pairing_mode(client, False)
         except Exception:
           cloudlog.exception("Unable to close companion pairing window after bond")
         else:
@@ -279,7 +289,7 @@ class BluetoothController:
       self._pending_companion_paths.discard(device_path)
       if not known_companion and self._companion_pairing_deadline:
         try:
-          self._bluez.set_pairing_mode(False)
+          self._set_companion_pairing_mode(self._bluez, False)
         except Exception:
           # Keep reporting the window until BlueZ confirms it is closed, but
           # make maintenance retry promptly instead of waiting the full window.
@@ -454,18 +464,11 @@ class BluetoothController:
         client = self._enable_companion()
         client.set_pairing_mode(True)
         self._companion_pairing_deadline = time.monotonic() + COMPANION_PAIRING_DURATION
-        companion = self._companion
-      # An unbonded app connection can consume the current advertisement before
-      # authentication fails. Re-register only the advertisement so StarPilot is
-      # visible in iOS Settings for the system-owned bond; leave GATT registered
-      # at its existing handles.
-      if companion is not None:
-        companion.rearm_advertisement()
     elif command == "stop_companion_pairing":
       if not self.params.get_bool("BluetoothEnabled"):
         raise RuntimeError("Enable Bluetooth first")
       with self._lock:
-        self._client().set_pairing_mode(False)
+        self._set_companion_pairing_mode(self._client(), False)
         self._companion_pairing_deadline = 0.0
     elif command == "start_scan":
       if not self.params.get_bool("BluetoothEnabled"):
@@ -535,7 +538,7 @@ class BluetoothController:
   def _maintain_companion_pairing(self, now: float, offroad: bool | None = None) -> None:
     with self._lock:
       if self._companion_pairing_deadline and (offroad is False or now >= self._companion_pairing_deadline):
-        self._client().set_pairing_mode(False)
+        self._set_companion_pairing_mode(self._client(), False)
         self._companion_pairing_deadline = 0.0
         self._pending_companion_paths.clear()
 

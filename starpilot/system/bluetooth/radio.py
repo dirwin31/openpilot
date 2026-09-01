@@ -32,3 +32,12 @@ class BluetoothRadio:
   def stop(self, timeout: float = 10.0) -> None:
     if self.available:
       subprocess.run(["sudo", "-n", "systemctl", "stop", "starpilot-bluetooth-radio.service"], check=True, timeout=timeout)
+
+  def set_connectable(self, enabled: bool, timeout: float = 5.0) -> None:
+    """Allow or reject incoming baseband connections without changing whether
+    the adapter is discoverable or pairable."""
+    subprocess.run(
+      ["sudo", "-n", "btmgmt", "--index", "0", "connectable", "on" if enabled else "off"],
+      check=True,
+      timeout=timeout,
+    )

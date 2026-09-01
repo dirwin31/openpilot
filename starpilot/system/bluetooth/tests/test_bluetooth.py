@@ -190,12 +190,16 @@ class FakeRadio:
   def __init__(self):
     self.starts = 0
     self.stops = 0
+    self.connectable = []
 
   def start(self):
     self.starts += 1
 
   def stop(self):
     self.stops += 1
+
+  def set_connectable(self, enabled):
+    self.connectable.append(enabled)
 
 
 class BlockingStopRadio(FakeRadio):
@@ -966,14 +970,15 @@ def test_companion_pairing_window_and_bond_authorization():
     companions.append(FakeCompanion(*args))
     return companions[-1]
 
-  controller = BluetoothController(params, lambda: client, FakeRadio(), companion_factory=companion_factory)
+  radio = FakeRadio()
+  controller = BluetoothController(params, lambda: client, radio, companion_factory=companion_factory)
   controller.handle({"command": "start_companion_pairing"})
   assert params.get_bool("BluetoothCompanionEnabled")
   assert companions[0].started == "/org/bluez/hci0"
   status = controller.status()
   assert status["companion_pairing"] and 115 <= status["companion_pairing_remaining"] <= 120
   assert ("pairing_mode", True) in client.actions
-  assert companions[0].rearmed == 1
+  assert companions[0].rearmed == 0
 
   assert companions[0].authorize("/org/bluez/hci0/dev_phone")
   assert params.get("BluetoothCompanionDevices") == ["00:11:22:33:44:55"]
@@ -983,6 +988,7 @@ def test_companion_pairing_window_and_bond_authorization():
   assert status["companion_devices"] == ["00:11:22:33:44:55"]
   assert not status["companion_pairing"]
   assert client.actions[-1] == ("pairing_mode", False)
+  assert radio.connectable[-1] is True
 
   controller.handle({"command": "set_companion", "enabled": False})
   assert companions[0].closed and not params.get_bool("BluetoothCompanionEnabled")
