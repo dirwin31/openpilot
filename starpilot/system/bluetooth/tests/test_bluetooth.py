@@ -18,7 +18,7 @@ from openpilot.starpilot.system.bluetooth.companion import (
   ADVERTISEMENT_IFACE, COMPANION_ADVERTISEMENT_PATH, COMPANION_APP_PATH, COMPANION_COMMAND_PATH, COMPANION_PROTOCOL_VERSION,
   COMPANION_LIVE_PATH, COMPANION_LIVE_UUID, COMPANION_RESPONSE_PATH, COMPANION_SERVICE_PATH, COMPANION_SERVICE_UUID,
   COMPANION_STATUS_PATH, GATT_CHARACTERISTIC_IFACE, OBJECT_MANAGER_IFACE, PROPERTIES_IFACE, CompanionGattApplication,
-  CompanionProtocol,
+  CompanionProtocol, load_editable_params,
 )
 from openpilot.starpilot.system.bluetooth.daemon import COMPANION_BOND_SETTLE_INTERVAL, BluetoothController
 from openpilot.starpilot.system.bluetooth.live import (
@@ -282,6 +282,62 @@ def test_companion_protocol_is_read_only_and_versioned():
   assert len(metadata_response) <= 512
   rejected = json.loads(protocol.handle(b'{"id":"two","op":"set_speed"}'))
   assert not rejected["ok"] and "Unsupported" in rejected["error"]
+
+
+def _call(protocol, payload):
+  return json.loads(protocol.handle(json.dumps(payload).encode()))
+
+
+def test_companion_reads_and_writes_editable_params():
+  editable = load_editable_params()
+  assert editable, "settings catalog should provide editable params"
+  bool_key = next(k for k, m in editable.items() if m["data_type"] == "bool" and not m["requires_offroad"])
+
+  params = FakeParams(IsOffroad=True)
+  protocol = CompanionProtocol(params, clock=lambda: 0)
+
+  written = _call(protocol, {"id": "w", "op": "set_params", "key": bool_key, "value": True})
+  assert written["ok"] and written["data"] == {"key": bool_key, "applied": True}
+  assert params.values[bool_key] is True
+
+  read = _call(protocol, {"id": "r", "op": "get_params", "keys": [bool_key]})
+  assert read["ok"] and read["data"][bool_key] is True
+
+
+def test_companion_rejects_non_editable_and_bad_reads():
+  protocol = CompanionProtocol(FakeParams(IsOffroad=True), clock=lambda: 0)
+
+  rejected = _call(protocol, {"id": "1", "op": "set_params", "key": "NotARealParam", "value": 1})
+  assert not rejected["ok"] and "not editable" in rejected["error"]
+
+  missing_keys = _call(protocol, {"id": "2", "op": "get_params"})
+  assert not missing_keys["ok"] and "keys" in missing_keys["error"]
+
+  too_many = _call(protocol, {"id": "3", "op": "get_params", "keys": [str(i) for i in range(32)]})
+  assert not too_many["ok"] and "at most" in too_many["error"]
+
+
+def test_companion_offroad_gated_write_rejected_onroad():
+  editable = load_editable_params()
+  offroad_only = next((k for k, m in editable.items() if m["requires_offroad"]), None)
+  if offroad_only is None:
+    pytest.skip("no offroad-gated params in catalog")
+
+  params = FakeParams(IsOffroad=False)  # car is on
+  protocol = CompanionProtocol(params, clock=lambda: 0)
+  response = _call(protocol, {"id": "x", "op": "set_params", "key": offroad_only, "value": 1})
+  assert not response["ok"] and "car is off" in response["error"]
+  assert offroad_only not in params.values
+
+
+def test_companion_sets_navigation_destination():
+  params = FakeParams(IsOffroad=True)
+  protocol = CompanionProtocol(params, clock=lambda: 0)
+  response = _call(protocol, {"id": "n", "op": "set_navigation",
+                              "name": "Work", "latitude": 37.42, "longitude": -122.08})
+  assert response["ok"] and response["data"]["name"] == "Work"
+  stored = json.loads(params.values["NavDestination"])
+  assert stored["latitude"] == 37.42 and stored["longitude"] == -122.08
 
 
 class FakeSubMaster(dict):

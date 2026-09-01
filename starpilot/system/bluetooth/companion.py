@@ -1,9 +1,11 @@
 import json
+import math
 import queue
 import threading
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from jeepney import DBusAddress, MatchRule, new_error, new_method_return, new_signal
@@ -64,8 +66,71 @@ def _param_text(params: Params, key: str) -> str:
   return str(value)[:64]
 
 
+# The companion reuses the same settings catalog the Galaxy web UI edits, so both
+# stay consistent without pulling the Flask app into the Bluetooth daemon.
+_SETTINGS_CATALOG_PATH = Path(__file__).resolve().parents[2] / "common" / "assets" / "device_settings_layout.json"
+_EDITABLE_UI_TYPES = {"toggle", "numeric", "dropdown", "color"}
+_cached_editable_params: dict[str, dict[str, Any]] | None = None
+
+
+def load_editable_params(path: Path | None = None) -> dict[str, dict[str, Any]]:
+  """Map catalog key -> {"data_type", "requires_offroad"} for params a bonded
+  phone may read or write. Anything not in this allow-list is rejected."""
+  global _cached_editable_params
+  if path is None and _cached_editable_params is not None:
+    return _cached_editable_params
+
+  editable: dict[str, dict[str, Any]] = {}
+
+  def walk(params: Any) -> None:
+    for param in params or []:
+      if not isinstance(param, dict):
+        continue
+      key = param.get("key")
+      ui_type = param.get("ui_type")
+      data_type = param.get("data_type")
+      if key and ui_type in _EDITABLE_UI_TYPES and data_type:
+        editable[str(key)] = {
+          "data_type": str(data_type),
+          "requires_offroad": bool(param.get("requires_offroad", False)),
+        }
+      walk(param.get("params"))
+
+  try:
+    with (path or _SETTINGS_CATALOG_PATH).open(encoding="utf-8") as catalog_file:
+      catalog = json.load(catalog_file)
+    for section in catalog:
+      if isinstance(section, dict):
+        walk(section.get("params"))
+  except (OSError, ValueError):
+    cloudlog.exception("Unable to load the companion settings catalog")
+
+  if path is None:
+    _cached_editable_params = editable
+  return editable
+
+
+def _coerce_param_value(data_type: str, value: Any) -> Any:
+  """Coerce an incoming JSON value into stored form, mirroring /api/params."""
+  if data_type == "bool":
+    if isinstance(value, bool):
+      return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+  if data_type == "int":
+    return str(int(round(float(value))))
+  if data_type == "float":
+    number = float(value)
+    if not math.isfinite(number):
+      raise ValueError("Value must be a finite number")
+    return repr(number)
+  if data_type == "json":
+    return json.dumps(value, separators=(",", ":"))
+  return str(value)
+
+
 class CompanionProtocol:
-  """Versioned, intentionally read-only protocol exposed to a bonded phone."""
+  """Versioned protocol exposed to a bonded phone: status/live reads plus a
+  narrow, catalog-gated set of parameter and navigation writes."""
 
   def __init__(self, params: Params | None = None, clock=_wall_time, params_memory: Params | None = None,
                publisher_factory=LiveTelemetryPublisher):
@@ -150,6 +215,12 @@ class CompanionProtocol:
       elif operation == "get_live_metadata":
         current = self._publisher.details() if self._publisher is not None and hasattr(self._publisher, "details") else None
         data = live_metadata(self.params, current)
+      elif operation == "get_params":
+        data = self._handle_get_params(request)
+      elif operation == "set_params":
+        data = self._handle_set_params(request)
+      elif operation == "set_navigation":
+        data = self._handle_set_navigation(request)
       else:
         raise ValueError(f"Unsupported companion operation: {operation or '<empty>'}")
       response = {"id": request_id, "ok": True, "op": operation, "data": data}
@@ -178,6 +249,92 @@ class CompanionProtocol:
         "error": "Companion response exceeds the 512-byte GATT limit",
       }, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return encoded
+
+  # Reads are capped so the JSON response stays within the 512-byte GATT limit.
+  MAX_GET_PARAM_KEYS = 16
+
+  def _read_param(self, key: str, data_type: str) -> Any:
+    raw = self.params.get(key, encoding="utf-8")
+    if raw is None:
+      return None
+    if isinstance(raw, bytes):
+      raw = raw.decode("utf-8", errors="ignore")
+    raw = str(raw)
+    if data_type == "bool":
+      return raw.strip().lower() in {"1", "true", "yes", "on"}
+    if data_type == "int":
+      try:
+        return int(float(raw))
+      except ValueError:
+        return raw
+    if data_type == "float":
+      try:
+        return float(raw)
+      except ValueError:
+        return raw
+    return raw
+
+  def _handle_get_params(self, request: dict[str, Any]) -> dict[str, Any]:
+    keys = request.get("keys")
+    if not isinstance(keys, list) or not keys:
+      raise ValueError("get_params requires a non-empty 'keys' list")
+    if len(keys) > self.MAX_GET_PARAM_KEYS:
+      raise ValueError(f"get_params accepts at most {self.MAX_GET_PARAM_KEYS} keys per call")
+    editable = load_editable_params()
+    values: dict[str, Any] = {}
+    for key in keys:
+      meta = editable.get(str(key))
+      if meta is None:
+        continue
+      value = self._read_param(str(key), meta["data_type"])
+      if value is not None:
+        values[str(key)] = value
+    return values
+
+  def _handle_set_params(self, request: dict[str, Any]) -> dict[str, Any]:
+    key = str(request.get("key", ""))
+    if not key:
+      raise ValueError("set_params requires a 'key'")
+    if "value" not in request:
+      raise ValueError("set_params requires a 'value'")
+    meta = load_editable_params().get(key)
+    if meta is None:
+      raise ValueError(f"Parameter '{key}' is not editable")
+    if meta["requires_offroad"] and not self.params.get_bool("IsOffroad"):
+      raise ValueError(f"'{key}' can only be changed while the car is off")
+    try:
+      stored = _coerce_param_value(meta["data_type"], request["value"])
+    except (TypeError, ValueError):
+      raise ValueError(f"Invalid value for '{key}'")
+    if isinstance(stored, bool):
+      self.params.put_bool(key, stored)
+    else:
+      self.params.put(key, stored)
+    self._refresh_toggles()
+    return {"key": key, "applied": True}
+
+  def _handle_set_navigation(self, request: dict[str, Any]) -> dict[str, Any]:
+    # Deferred import keeps this off the daemon's startup path; the module is
+    # dependency-free (json/hashlib/math only).
+    from openpilot.starpilot.navigation.destination_store import (
+      normalize_destination_payload,
+      update_recent_destinations,
+    )
+    destination = normalize_destination_payload(request.get("destination", request))
+    if destination is None:
+      raise ValueError("Invalid destination payload")
+    recent = update_recent_destinations(self.params.get("ApiCache_NavDestinations", encoding="utf-8") or "", destination)
+    self.params.put("NavDestination", json.dumps(destination))
+    self.params.put("ApiCache_NavDestinations", recent)
+    return {"name": destination.get("name", "")}
+
+  @staticmethod
+  def _refresh_toggles() -> None:
+    try:
+      from openpilot.starpilot.common.starpilot_variables import update_starpilot_toggles
+      update_starpilot_toggles()
+    except Exception:
+      cloudlog.exception("Unable to refresh StarPilot toggles after a companion write")
 
 
 class CompanionGattApplication:
