@@ -13,6 +13,7 @@ from jeepney.low_level import HeaderFields
 
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
+from openpilot.selfdrive.ui.lib.starpilot_version import STARPILOT_DISPLAY_VERSION
 from openpilot.starpilot.system.bluetooth.live import (
   LIVE_FRAME_RATE_HZ,
   LIVE_FRAME_SIZE,
@@ -147,7 +148,9 @@ class CompanionProtocol:
     return {
       "protocol_version": COMPANION_PROTOCOL_VERSION,
       "device": "StarPilot",
-      "version": _param_text(self.params, "Version"),
+      # Report the StarPilot fork version (what the on-device UI shows), not the
+      # base openpilot "Version" param.
+      "version": STARPILOT_DISPLAY_VERSION,
       "branch": _param_text(self.params, "GitBranch"),
       "onroad": not self.params.get_bool("IsOffroad"),
       "live": {
