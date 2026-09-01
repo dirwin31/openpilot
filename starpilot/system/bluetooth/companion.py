@@ -54,24 +54,6 @@ COMPANION_PROTOCOL_VERSION = 2
 MAX_COMPANION_COMMAND_BYTES = 512
 MAX_COMPANION_RESPONSE_BYTES = 512
 
-# Fixed ATT handles for the companion service and its characteristics. Pinning
-# them keeps a bonded iPhone's cached GATT valid across comma reboots (BlueZ
-# would otherwise reassign handles, and iOS never refreshes without a Service
-# Changed indication). BlueZ requires a service's attributes to be CONTIGUOUS, so
-# these are packed with no gaps: each characteristic value is preceded by its
-# declaration (value-1), and the notifying live characteristic is followed by its
-# CCC descriptor. Layout (above BlueZ's built-in GAP/GATT services):
-#   0x0080 service decl
-#   0x0081 status decl   / 0x0082 status value
-#   0x0083 command decl  / 0x0084 command value
-#   0x0085 response decl / 0x0086 response value
-#   0x0087 live decl     / 0x0088 live value / 0x0089 live CCC
-COMPANION_SERVICE_HANDLE = 0x0080
-COMPANION_STATUS_HANDLE = 0x0082
-COMPANION_COMMAND_HANDLE = 0x0084
-COMPANION_RESPONSE_HANDLE = 0x0086
-COMPANION_LIVE_HANDLE = 0x0088
-
 
 def _wall_time() -> float:
   return datetime.now(UTC).timestamp()
@@ -366,8 +348,6 @@ class CompanionGattApplication:
     self.protocol = protocol or CompanionProtocol()
     self._adapter_path = ""
     self._registered = False
-    # Cleared if BlueZ rejects pinned handles so we fall back to auto-assigned ones.
-    self._use_fixed_handles = True
     self._responses: dict[str, bytes] = {}
     self._notifying = False
     self._notify_lock = threading.Lock()
@@ -385,38 +365,42 @@ class CompanionGattApplication:
     return self._registered
 
   def managed_objects(self) -> dict[str, dict[str, dict[str, tuple[str, Any]]]]:
-    # Fixed handles are applied unless a previous registration rejected them.
-    use_handles = getattr(self, "_use_fixed_handles", True)
-
-    def characteristic(uuid: str, flags: list[str], handle: int,
-                       extra: dict[str, tuple[str, Any]] | None = None) -> dict[str, dict[str, tuple[str, Any]]]:
-      props: dict[str, tuple[str, Any]] = {
-        "UUID": ("s", uuid),
-        "Service": ("o", COMPANION_SERVICE_PATH),
-        "Flags": ("as", flags),
-      }
-      if extra:
-        props.update(extra)
-      if use_handles:
-        props["Handle"] = ("q", handle)
-      return {GATT_CHARACTERISTIC_IFACE: props}
-
-    service_props: dict[str, tuple[str, Any]] = {
-      "UUID": ("s", COMPANION_SERVICE_UUID),
-      "Primary": ("b", True),
-    }
-    if use_handles:
-      service_props["Handle"] = ("q", COMPANION_SERVICE_HANDLE)
-
     return {
-      COMPANION_SERVICE_PATH: {GATT_SERVICE_IFACE: service_props},
-      COMPANION_STATUS_PATH: characteristic(COMPANION_STATUS_UUID, ["encrypt-authenticated-read"], COMPANION_STATUS_HANDLE),
-      COMPANION_COMMAND_PATH: characteristic(COMPANION_COMMAND_UUID, ["encrypt-authenticated-write"], COMPANION_COMMAND_HANDLE),
-      COMPANION_RESPONSE_PATH: characteristic(COMPANION_RESPONSE_UUID, ["encrypt-authenticated-read"], COMPANION_RESPONSE_HANDLE),
-      COMPANION_LIVE_PATH: characteristic(
-        COMPANION_LIVE_UUID, ["encrypt-authenticated-read", "notify"], COMPANION_LIVE_HANDLE,
-        {"Notifying": ("b", bool(getattr(self, "_notifying", False)))},
-      ),
+      COMPANION_SERVICE_PATH: {
+        GATT_SERVICE_IFACE: {
+          "UUID": ("s", COMPANION_SERVICE_UUID),
+          "Primary": ("b", True),
+        },
+      },
+      COMPANION_STATUS_PATH: {
+        GATT_CHARACTERISTIC_IFACE: {
+          "UUID": ("s", COMPANION_STATUS_UUID),
+          "Service": ("o", COMPANION_SERVICE_PATH),
+          "Flags": ("as", ["encrypt-authenticated-read"]),
+        },
+      },
+      COMPANION_COMMAND_PATH: {
+        GATT_CHARACTERISTIC_IFACE: {
+          "UUID": ("s", COMPANION_COMMAND_UUID),
+          "Service": ("o", COMPANION_SERVICE_PATH),
+          "Flags": ("as", ["encrypt-authenticated-write"]),
+        },
+      },
+      COMPANION_RESPONSE_PATH: {
+        GATT_CHARACTERISTIC_IFACE: {
+          "UUID": ("s", COMPANION_RESPONSE_UUID),
+          "Service": ("o", COMPANION_SERVICE_PATH),
+          "Flags": ("as", ["encrypt-authenticated-read"]),
+        },
+      },
+      COMPANION_LIVE_PATH: {
+        GATT_CHARACTERISTIC_IFACE: {
+          "UUID": ("s", COMPANION_LIVE_UUID),
+          "Service": ("o", COMPANION_SERVICE_PATH),
+          "Flags": ("as", ["encrypt-authenticated-read", "notify"]),
+          "Notifying": ("b", bool(getattr(self, "_notifying", False))),
+        },
+      },
     }
 
   def advertisement_properties(self) -> dict[str, tuple[str, Any]]:
@@ -430,17 +414,7 @@ class CompanionGattApplication:
     if self._registered:
       return
     self._adapter_path = adapter_path
-    try:
-      self._bluez_call(adapter_path, GATT_MANAGER_IFACE, "RegisterApplication", "oa{sv}", (COMPANION_APP_PATH, {}))
-    except Exception:
-      # Some BlueZ builds reject pinned handles ("Failed to create entry in
-      # database"). Fall back to auto-assigned handles so pairing still works;
-      # the reboot cache issue is only mitigated when fixed handles are accepted.
-      if not self._use_fixed_handles:
-        raise
-      cloudlog.exception("Companion GATT registration with fixed handles failed; retrying with auto handles")
-      self._use_fixed_handles = False
-      self._bluez_call(adapter_path, GATT_MANAGER_IFACE, "RegisterApplication", "oa{sv}", (COMPANION_APP_PATH, {}))
+    self._bluez_call(adapter_path, GATT_MANAGER_IFACE, "RegisterApplication", "oa{sv}", (COMPANION_APP_PATH, {}))
     try:
       self._bluez_call(adapter_path, ADVERTISEMENT_MANAGER_IFACE, "RegisterAdvertisement", "oa{sv}",
                        (COMPANION_ADVERTISEMENT_PATH, {}))

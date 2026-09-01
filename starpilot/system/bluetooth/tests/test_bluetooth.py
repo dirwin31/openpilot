@@ -448,24 +448,6 @@ def test_companion_gatt_contract_requires_authenticated_characteristics():
   assert objects[COMPANION_LIVE_PATH]["org.bluez.GattCharacteristic1"]["Flags"] == ("as", ["encrypt-authenticated-read", "notify"])
 
 
-def test_companion_gatt_pins_fixed_handles():
-  # Fixed handles keep a bonded iPhone's cached GATT valid across comma reboots.
-  app = object.__new__(CompanionGattApplication)
-  objects = app.managed_objects()
-
-  handles = [
-    objects[COMPANION_SERVICE_PATH]["org.bluez.GattService1"]["Handle"],
-    objects[COMPANION_STATUS_PATH]["org.bluez.GattCharacteristic1"]["Handle"],
-    objects[COMPANION_COMMAND_PATH]["org.bluez.GattCharacteristic1"]["Handle"],
-    objects[COMPANION_RESPONSE_PATH]["org.bluez.GattCharacteristic1"]["Handle"],
-    objects[COMPANION_LIVE_PATH]["org.bluez.GattCharacteristic1"]["Handle"],
-  ]
-  values = [handle[1] for handle in handles]
-  assert all(signature == "q" for signature, _ in handles)   # uint16
-  assert values == sorted(values) and len(set(values)) == len(values)  # distinct, ascending
-  assert values[0] < values[1]                                # characteristics sit after the service
-
-
 def test_companion_live_characteristic_reads_and_notifies():
   class FakeFilter:
     def __init__(self):
