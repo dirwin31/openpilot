@@ -54,6 +54,17 @@ COMPANION_PROTOCOL_VERSION = 2
 MAX_COMPANION_COMMAND_BYTES = 512
 MAX_COMPANION_RESPONSE_BYTES = 512
 
+# Fixed ATT handles for the companion service and its characteristics. Pinning
+# them keeps a bonded iPhone's cached GATT valid across comma reboots (BlueZ
+# would otherwise reassign handles, and iOS never refreshes without a Service
+# Changed indication). Values sit well above BlueZ's built-in services (GAP/GATT)
+# and leave a gap after each characteristic value for its declaration/CCC.
+COMPANION_SERVICE_HANDLE = 0x0080
+COMPANION_STATUS_HANDLE = 0x0082
+COMPANION_COMMAND_HANDLE = 0x0086
+COMPANION_RESPONSE_HANDLE = 0x008A
+COMPANION_LIVE_HANDLE = 0x008E
+
 
 def _wall_time() -> float:
   return datetime.now(UTC).timestamp()
@@ -370,6 +381,11 @@ class CompanionGattApplication:
         GATT_SERVICE_IFACE: {
           "UUID": ("s", COMPANION_SERVICE_UUID),
           "Primary": ("b", True),
+          # Pin fixed handles so a comma reboot does not reassign them. iOS caches
+          # a bonded peripheral's handles for the life of the bond and only
+          # refreshes on a "Service Changed" indication (which does not survive the
+          # reboot here); stable handles keep its cache valid instead.
+          "Handle": ("q", COMPANION_SERVICE_HANDLE),
         },
       },
       COMPANION_STATUS_PATH: {
@@ -377,6 +393,7 @@ class CompanionGattApplication:
           "UUID": ("s", COMPANION_STATUS_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
           "Flags": ("as", ["encrypt-authenticated-read"]),
+          "Handle": ("q", COMPANION_STATUS_HANDLE),
         },
       },
       COMPANION_COMMAND_PATH: {
@@ -384,6 +401,7 @@ class CompanionGattApplication:
           "UUID": ("s", COMPANION_COMMAND_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
           "Flags": ("as", ["encrypt-authenticated-write"]),
+          "Handle": ("q", COMPANION_COMMAND_HANDLE),
         },
       },
       COMPANION_RESPONSE_PATH: {
@@ -391,6 +409,7 @@ class CompanionGattApplication:
           "UUID": ("s", COMPANION_RESPONSE_UUID),
           "Service": ("o", COMPANION_SERVICE_PATH),
           "Flags": ("as", ["encrypt-authenticated-read"]),
+          "Handle": ("q", COMPANION_RESPONSE_HANDLE),
         },
       },
       COMPANION_LIVE_PATH: {
@@ -399,6 +418,7 @@ class CompanionGattApplication:
           "Service": ("o", COMPANION_SERVICE_PATH),
           "Flags": ("as", ["encrypt-authenticated-read", "notify"]),
           "Notifying": ("b", bool(getattr(self, "_notifying", False))),
+          "Handle": ("q", COMPANION_LIVE_HANDLE),
         },
       },
     }
