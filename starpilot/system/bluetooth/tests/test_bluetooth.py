@@ -1282,7 +1282,7 @@ def test_companion_advertisement_rearms_when_saved_phone_disconnects():
   assert companions[-1].rearmed == 1
 
 
-def test_companion_refreshes_services_when_saved_phone_reconnects():
+def test_companion_reconnect_does_not_reregister_gatt_services():
   address = "00:11:22:33:44:55"
   params = TypedJsonFakeParams(
     IsOffroad=True,
@@ -1298,21 +1298,25 @@ def test_companion_refreshes_services_when_saved_phone_reconnects():
     companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
   )
 
-  # First time the phone is seen connected: refresh so a rebooted comma's new
-  # handles are re-discovered (BlueZ sends "Service Changed").
+  # Seeing an already-connected phone must not unregister/re-register the GATT
+  # application: BlueZ auto-allocation would move it to a new handle range.
   controller._maintain_companion_advertisement(controller.status())
-  assert companions[-1].refreshed == 1
+  assert companions[-1].refreshed == 0
 
-  # Staying connected must not keep re-registering the services.
+  # Staying connected also leaves both the service and advertisement alone.
   controller._maintain_companion_advertisement(controller.status())
-  assert companions[-1].refreshed == 1
+  assert companions[-1].refreshed == 0
+  assert companions[-1].rearmed == 0
 
-  # Drop and reconnect: refresh once more.
+  # A disconnect re-arms only the advertisement. Reconnecting must leave the
+  # GATT service at the same handles assigned during daemon startup.
   client.device["connected"] = False
   controller._maintain_companion_advertisement(controller.status())
+  assert companions[-1].rearmed == 1
   client.device["connected"] = True
   controller._maintain_companion_advertisement(controller.status())
-  assert companions[-1].refreshed == 2
+  assert companions[-1].refreshed == 0
+  assert companions[-1].rearmed == 1
 
 
 def test_companion_advertisement_ignores_disconnect_of_unsaved_device():

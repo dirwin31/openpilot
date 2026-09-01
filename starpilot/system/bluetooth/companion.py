@@ -446,24 +446,6 @@ class CompanionGattApplication:
     self._bluez_call(adapter_path, ADVERTISEMENT_MANAGER_IFACE, "RegisterAdvertisement", "oa{sv}",
                      (COMPANION_ADVERTISEMENT_PATH, {}))
 
-  def refresh_services(self) -> None:
-    # Re-register the GATT application so BlueZ emits a "Service Changed"
-    # indication to the bonded phone. iOS caches our attribute handles for the
-    # life of its bond and only refreshes on this signal; a comma reboot can
-    # reassign handles, so a reconnecting phone would otherwise read stale ones.
-    with self._close_lock:
-      if self._closed or not self._registered:
-        return
-      adapter_path = self._adapter_path
-    if not adapter_path:
-      return
-    try:
-      self._bluez_call(adapter_path, GATT_MANAGER_IFACE, "UnregisterApplication", "o", (COMPANION_APP_PATH,))
-    except Exception:
-      cloudlog.exception("Unable to unregister companion GATT app for a service refresh")
-      return
-    self._bluez_call(adapter_path, GATT_MANAGER_IFACE, "RegisterApplication", "oa{sv}", (COMPANION_APP_PATH, {}))
-
   def close(self) -> None:
     with self._close_lock:
       if self._closed:

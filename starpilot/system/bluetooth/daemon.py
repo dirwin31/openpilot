@@ -559,16 +559,8 @@ class BluetoothController:
       for device in status["devices"]
       if device.get("connected") and str(device.get("address", "")).upper() in known
     }
-    newly_connected = connected - self._connected_companions
     dropped = self._connected_companions - connected
     self._connected_companions = connected
-    # A reconnecting phone may hold stale GATT handles from before a comma reboot;
-    # re-registering the app makes BlueZ send "Service Changed" so it re-discovers.
-    if newly_connected:
-      try:
-        companion.refresh_services()
-      except Exception:
-        cloudlog.exception("Unable to refresh companion GATT services after a phone reconnect")
     if not dropped:
       return
     try:
