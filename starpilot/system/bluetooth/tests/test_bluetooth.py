@@ -745,6 +745,32 @@ def test_bluez_disconnect_accepts_removed_device_as_disconnected():
   client.disconnect("00:11:22:33:44:55")
 
 
+def test_bluez_companion_lookup_requires_persisted_bond():
+  client = object.__new__(BlueZClient)
+  path = "/org/bluez/hci0/dev_phone"
+  props = {
+    "Address": "00:11:22:33:44:55",
+    "Name": "iPhone",
+    "Paired": True,
+    "Bonded": False,
+    "Trusted": False,
+    "Connected": True,
+  }
+  client.managed_objects = lambda: {path: {"org.bluez.Device1": props}}
+
+  assert client.paired_device_for_path(path) is None
+  props["Bonded"] = True
+  assert client.paired_device_for_path(path) == {
+    "path": path,
+    "address": "00:11:22:33:44:55",
+    "name": "iPhone",
+    "paired": True,
+    "bonded": True,
+    "trusted": False,
+    "connected": True,
+  }
+
+
 def test_bluez_start_discovery_is_idempotent_when_already_discovering():
   client = object.__new__(BlueZClient)
   client.adapter = lambda: ("/org/bluez/hci0", {"Discovering": True})

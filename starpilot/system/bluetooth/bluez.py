@@ -354,13 +354,18 @@ class BlueZClient:
   def paired_device_for_path(self, path: str) -> dict[str, Any] | None:
     interfaces = self.managed_objects().get(path, {})
     props = interfaces.get(DEVICE_IFACE)
-    if props is None or not props.get("Paired", False):
+    # Paired may describe encryption for only the current connection. Bonded is
+    # the durable state: BlueZ has persisted key material for a later reboot.
+    # Older BlueZ releases without Bonded retain the previous Paired behavior.
+    bonded = bool(props.get("Bonded", props.get("Paired", False))) if props is not None else False
+    if props is None or not bonded:
       return None
     return {
       "path": path,
       "address": str(props.get("Address", "")),
       "name": str(props.get("Alias") or props.get("Name") or props.get("Address") or "Bluetooth device"),
       "paired": True,
+      "bonded": True,
       "trusted": bool(props.get("Trusted", False)),
       "connected": bool(props.get("Connected", False)),
     }
