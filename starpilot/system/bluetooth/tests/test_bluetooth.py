@@ -972,7 +972,8 @@ def test_companion_pairing_window_and_bond_authorization():
   assert companions[0].started == "/org/bluez/hci0"
   status = controller.status()
   assert status["companion_pairing"] and 115 <= status["companion_pairing_remaining"] <= 120
-  assert client.actions[-1] == ("pairing_mode", True)
+  assert ("pairing_mode", True) in client.actions
+  assert companions[0].rearmed == 1
 
   assert companions[0].authorize("/org/bluez/hci0/dev_phone")
   assert params.get("BluetoothCompanionDevices") == ["00:11:22:33:44:55"]

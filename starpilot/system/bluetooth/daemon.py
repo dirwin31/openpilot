@@ -450,6 +450,13 @@ class BluetoothController:
         client = self._enable_companion()
         client.set_pairing_mode(True)
         self._companion_pairing_deadline = time.monotonic() + COMPANION_PAIRING_DURATION
+        companion = self._companion
+      # An unbonded app connection can consume the current advertisement before
+      # authentication fails. Re-register only the advertisement so StarPilot is
+      # visible in iOS Settings for the system-owned bond; leave GATT registered
+      # at its existing handles.
+      if companion is not None:
+        companion.rearm_advertisement()
     elif command == "stop_companion_pairing":
       if not self.params.get_bool("BluetoothEnabled"):
         raise RuntimeError("Enable Bluetooth first")
