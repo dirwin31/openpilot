@@ -168,12 +168,16 @@ class FakeCompanion:
     self.started = ""
     self.closed = False
     self.rearmed = 0
+    self.refreshed = 0
 
   def start(self, adapter_path):
     self.started = adapter_path
 
   def rearm_advertisement(self):
     self.rearmed += 1
+
+  def refresh_services(self):
+    self.refreshed += 1
 
   def close(self):
     self.closed = True
@@ -1276,6 +1280,39 @@ def test_companion_advertisement_rearms_when_saved_phone_disconnects():
   # A phone that stays disconnected does not keep re-registering the advertisement.
   controller._maintain_companion_advertisement(controller.status())
   assert companions[-1].rearmed == 1
+
+
+def test_companion_refreshes_services_when_saved_phone_reconnects():
+  address = "00:11:22:33:44:55"
+  params = TypedJsonFakeParams(
+    IsOffroad=True,
+    BluetoothEnabled=True,
+    BluetoothCompanionEnabled=True,
+    BluetoothCompanionDevices=[address],
+  )
+  client = FakeBlueZ()
+  client.device.update({"name": "iPhone", "audio": False, "controller": False, "connected": True})
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
+
+  # First time the phone is seen connected: refresh so a rebooted comma's new
+  # handles are re-discovered (BlueZ sends "Service Changed").
+  controller._maintain_companion_advertisement(controller.status())
+  assert companions[-1].refreshed == 1
+
+  # Staying connected must not keep re-registering the services.
+  controller._maintain_companion_advertisement(controller.status())
+  assert companions[-1].refreshed == 1
+
+  # Drop and reconnect: refresh once more.
+  client.device["connected"] = False
+  controller._maintain_companion_advertisement(controller.status())
+  client.device["connected"] = True
+  controller._maintain_companion_advertisement(controller.status())
+  assert companions[-1].refreshed == 2
 
 
 def test_companion_advertisement_ignores_disconnect_of_unsaved_device():
