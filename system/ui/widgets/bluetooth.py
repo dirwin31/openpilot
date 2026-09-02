@@ -262,12 +262,17 @@ class BluetoothManagerUI(Widget):
 
   def _sync_companion(self, status: BluetoothStatus) -> None:
     if (self._pending_companion_pairing is not None and
-        (status.companion_pairing == self._pending_companion_pairing or status.companion_devices)):
+        status.companion_pairing == self._pending_companion_pairing):
       self._pending_companion_pairing = None
 
     pairing_pending = self._pending_companion_pairing
     pairing = status.companion_pairing if pairing_pending is None else pairing_pending
-    label = tr("Stop pairing") if pairing else tr("Pair phone")
+    if pairing:
+      label = tr("Stop pairing")
+    elif status.companion_devices:
+      label = tr("Repair phone")
+    else:
+      label = tr("Pair phone")
     if status.companion_pairing and pairing_pending is None:
       label += f" ({status.companion_pairing_remaining}s)"
     self._companion_pair_button.set_text(label)

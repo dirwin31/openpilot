@@ -192,8 +192,10 @@ class BluetoothController:
         return False
       if self._companion_pairing_deadline <= 0.0 or time.monotonic() >= self._companion_pairing_deadline:
         return False
-      if device_path:
-        self._pending_companion_paths.add(device_path)
+      # Do not save a device merely because Agent1 saw a bond. The adapter is
+      # dual-mode, so this can be a BR/EDR-only phone paired in iOS Settings.
+      # CompanionGattApplication adds the path to the pending set only after a
+      # GATT request explicitly reports link=LE.
       return True
 
   def _maintain_pending_companions(self) -> None:
@@ -257,6 +259,11 @@ class BluetoothController:
     # path is safe to wait for only when our user-opened companion window has
     # already auto-accepted it; arbitrary GATT clients still fail immediately.
     device = None
+    with self._lock:
+      pairing_window_open = (not self._pairing_address and self._companion_pairing_deadline > 0.0 and
+                             time.monotonic() < self._companion_pairing_deadline)
+      if device_path and pairing_window_open:
+        self._pending_companion_paths.add(device_path)
     for attempt in range(COMPANION_BOND_SETTLE_ATTEMPTS):
       with self._lock:
         client = self._bluez

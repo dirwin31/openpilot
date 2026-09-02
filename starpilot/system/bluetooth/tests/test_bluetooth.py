@@ -488,7 +488,7 @@ def test_companion_live_characteristic_reads_and_notifies():
   app = CompanionGattApplication(router, lambda *_args: (), lambda path: path == "/phone/one", protocol)
   app._registered = True
 
-  read = message("ReadValue", "a{sv}", ({"device": ("o", "/phone/one")},))
+  read = message("ReadValue", "a{sv}", ({"device": ("o", "/phone/one"), "link": ("s", "LE")},))
   assert len(app._dispatch(read).body[0]) == LIVE_FRAME_SIZE
 
   app._dispatch(message("StartNotify"))
@@ -610,15 +610,25 @@ def test_companion_gatt_rejects_unbonded_access_and_scopes_responses_by_phone():
     request.header.serial = 1
     return request
 
-  unbonded = message(COMPANION_STATUS_PATH, "ReadValue", "a{sv}", ({"device": ("o", "/phone/two")},))
-  with pytest.raises(PermissionError, match="bonded"):
+  unbonded = message(COMPANION_STATUS_PATH, "ReadValue", "a{sv}", (
+    {"device": ("o", "/phone/two"), "link": ("s", "LE")},
+  ))
+  with pytest.raises(PermissionError, match="LE bonded"):
     app._dispatch(unbonded)
 
+  classic = message(COMPANION_STATUS_PATH, "ReadValue", "a{sv}", (
+    {"device": ("o", "/phone/one"), "link": ("s", "BR/EDR")},
+  ))
+  with pytest.raises(PermissionError, match="LE bonded"):
+    app._dispatch(classic)
+
   write = message(COMPANION_COMMAND_PATH, "WriteValue", "aya{sv}", (
-    b'{"id":"one","op":"ping"}', {"device": ("o", "/phone/one")},
+    b'{"id":"one","op":"ping"}', {"device": ("o", "/phone/one"), "link": ("s", "LE")},
   ))
   app._dispatch(write)
-  read = message(COMPANION_RESPONSE_PATH, "ReadValue", "a{sv}", ({"device": ("o", "/phone/one")},))
+  read = message(COMPANION_RESPONSE_PATH, "ReadValue", "a{sv}", (
+    {"device": ("o", "/phone/one"), "link": ("s", "LE")},
+  ))
   response = json.loads(app._dispatch(read).body[0])
   assert response["id"] == "one" and response["ok"]
   assert "/phone/two" not in app._responses
@@ -1024,12 +1034,20 @@ def test_companion_pairing_window_and_bond_authorization():
   assert params.get("BluetoothCompanionDevices") == []
 
 
-def test_companion_bond_auto_accepts_and_registers_without_prompt():
-  params = TypedJsonFakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionEnabled=False)
+def test_companion_bond_auto_accepts_but_waits_for_le_gatt_authorization():
+  params = TypedJsonFakeParams(
+    IsOffroad=True,
+    BluetoothEnabled=True,
+    BluetoothCompanionEnabled=False,
+    BluetoothCompanionDevices=[],
+  )
   client = FakeBlueZ()
   client.device.update({"name": "Phone", "audio": False, "trusted": False})
-  controller = BluetoothController(params, lambda: client, FakeRadio(),
-                                   companion_factory=lambda *args: FakeCompanion(*args))
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
   controller.handle({"command": "start_companion_pairing"})
 
   # The agent handler the controller installed accepts the phone bond silently.
@@ -1040,7 +1058,13 @@ def test_companion_bond_auto_accepts_and_registers_without_prompt():
   assert not client.agent.auto_accept_handler("/org/bluez/hci0/dev_other")
   controller._pairing_address = ""
 
+  # Agent1 alone cannot distinguish a classic phone bond from an LE bond.
+  # Do not save it until the GATT server observes an explicit LE request.
   controller._maintain_pending_companions()
+  assert params.get("BluetoothCompanionDevices") == []
+  assert controller.status()["companion_pairing"]
+
+  assert companions[0].authorize("/org/bluez/hci0/dev_phone")
   assert params.get("BluetoothCompanionDevices") == ["00:11:22:33:44:55"]
   assert ("property", "00:11:22:33:44:55", "Trusted", "b", True) in client.actions
   status = controller.status()
@@ -1165,16 +1189,16 @@ def test_phone_pair_forget_repair_and_reconnect_workflow():
 
   client.bond_phone()
   assert client.agent.auto_accept_handler("/org/bluez/hci0/dev_phone")
-  controller._maintain_pending_companions()
+  assert companions[0].authorize("/org/bluez/hci0/dev_phone")
   paired = BluetoothStatus.from_dict(controller.status())
   assert paired.companion_devices == (client.device["address"],)
   assert paired.companion_connected and not paired.companion_pairing
-  assert not companion_setup_visible(paired)
+  assert companion_setup_visible(paired)
 
   client.device["connected"] = False
   disconnected = BluetoothStatus.from_dict(controller.status())
   assert not disconnected.companion_connected
-  assert not companion_setup_visible(disconnected)
+  assert companion_setup_visible(disconnected)
   assert controller._companion is companions[0] and not companions[0].closed
   assert client.agent.auto_accept_handler("/org/bluez/hci0/dev_phone")
 
@@ -1196,10 +1220,10 @@ def test_phone_pair_forget_repair_and_reconnect_workflow():
   assert len(companions) == 2 and not companions[1].closed
   client.bond_phone()
   assert client.agent.auto_accept_handler("/org/bluez/hci0/dev_phone")
-  controller._maintain_pending_companions()
+  assert companions[1].authorize("/org/bluez/hci0/dev_phone")
   repaired = BluetoothStatus.from_dict(controller.status())
   assert repaired.companion_devices == (client.device["address"],)
-  assert repaired.companion_connected and not companion_setup_visible(repaired)
+  assert repaired.companion_connected and companion_setup_visible(repaired)
 
 
 def test_phone_is_not_saved_until_bluez_trust_succeeds():
@@ -1223,6 +1247,8 @@ def test_phone_is_not_saved_until_bluez_trust_succeeds():
   controller.handle({"command": "start_companion_pairing"})
   assert client.agent.auto_accept_handler("/org/bluez/hci0/dev_phone")
 
+  with pytest.raises(RuntimeError, match="unable to trust"):
+    controller._companion.authorize("/org/bluez/hci0/dev_phone")
   controller._maintain_pending_companions()
   assert params.get("BluetoothCompanionDevices") == []
   assert controller.status()["companion_pairing"]
@@ -1284,7 +1310,7 @@ def test_saved_phone_service_returns_after_bluetooth_power_cycle():
     companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
   )
   before = BluetoothStatus.from_dict(controller.status())
-  assert not companion_setup_visible(before)
+  assert companion_setup_visible(before)
   assert companions[0].started == "/org/bluez/hci0"
 
   controller.handle({"command": "set_power", "enabled": False})
@@ -1297,7 +1323,7 @@ def test_saved_phone_service_returns_after_bluetooth_power_cycle():
   assert len(clients) == 2 and len(companions) == 2
   assert companions[1].started == "/org/bluez/hci0" and not companions[1].closed
   assert after.companion_devices == (address,)
-  assert not companion_setup_visible(after)
+  assert companion_setup_visible(after)
 
 
 def test_reconnect_maintenance_connects_audio_and_controllers_but_not_phone_centrals():

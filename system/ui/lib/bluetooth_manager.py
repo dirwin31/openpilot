@@ -6,7 +6,10 @@ from openpilot.starpilot.system.bluetooth import BluetoothClient, BluetoothStatu
 
 
 def companion_setup_visible(status: BluetoothStatus) -> bool:
-  return not status.companion_devices
+  # Keep the explicit pairing window reachable even when a stale or
+  # classic-only phone record says a companion exists. It is also the recovery
+  # path when one side has lost its LE bond.
+  return True
 
 
 class BluetoothManager:

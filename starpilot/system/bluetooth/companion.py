@@ -486,9 +486,17 @@ class CompanionGattApplication:
     return {key: value[1] if isinstance(value, tuple) and len(value) == 2 else value for key, value in raw.items()}
 
   def _require_bonded_phone(self, message) -> str:
-    device_path = str(self._options(message).get("device", ""))
+    options = self._options(message)
+    # BlueZ exposes this GATT database over both ATT transports on a dual-mode
+    # adapter. A phone paired in iOS Settings can therefore reach it over
+    # BR/EDR with only a classic LinkKey. Saving that Device1 as a companion
+    # leaves no LE LTK for CoreBluetooth to restore after the comma reboots.
+    # Fail closed when an older/invalid caller omits the server-side link type.
+    if str(options.get("link", "")).upper() != "LE":
+      raise PermissionError("An LE bonded phone is required")
+    device_path = str(options.get("device", ""))
     if not device_path or not self._authorize(device_path):
-      raise PermissionError("A bonded phone is required")
+      raise PermissionError("An LE bonded phone is required")
     return device_path
 
   @staticmethod
