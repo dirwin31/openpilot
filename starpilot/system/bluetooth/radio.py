@@ -5,6 +5,8 @@ from pathlib import Path
 
 
 RADIO_HELPER = "/usr/comma/bluetooth-radio"
+L2CAP_DEBUG_PATH = "/sys/kernel/debug/bluetooth/l2cap"
+SMP_FIXED_CID = "0x0006"
 
 
 class BluetoothRadio:
@@ -27,6 +29,58 @@ class BluetoothRadio:
     while not self.ready:
       if time.monotonic() >= deadline:
         raise RuntimeError("Bluetooth radio did not become ready")
+      time.sleep(0.1)
+    self.ensure_le_security_manager()
+
+  @staticmethod
+  def _le_security_manager_registered(timeout: float = 2.0) -> bool | None:
+    """Return whether the kernel registered the LE SMP fixed channel.
+
+    Older StarPilot AGNOS images powered hci0 before bluetoothd owned the
+    controller. On the comma 4 kernel that can leave L2CAP CID 0x0006 absent,
+    making every encrypted GATT request fail before BlueZ can pair or bond.
+    Debugfs is root-only on-device, so distinguish a missing CID from an
+    unavailable diagnostic and leave unknown platforms alone.
+    """
+    result = subprocess.run(
+      ["sudo", "-n", "grep", "-q", SMP_FIXED_CID, L2CAP_DEBUG_PATH],
+      check=False,
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL,
+      timeout=timeout,
+    )
+    if result.returncode == 0:
+      return True
+    if result.returncode == 1:
+      return False
+    return None
+
+  def ensure_le_security_manager(self, timeout: float = 10.0) -> None:
+    """Repair the old AGNOS Bluetooth power-ordering failure when detected."""
+    if self._le_security_manager_registered() is not False:
+      return
+
+    # bluetoothd is running once starpilot-bluetooth-radio.service is active.
+    # Cycle power through BlueZ so the kernel recreates its fixed L2CAP
+    # channels under the same ordering used by corrected AGNOS images.
+    for state in ("off", "on"):
+      subprocess.run(
+        ["bluetoothctl", "power", state],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=timeout,
+      )
+
+    deadline = time.monotonic() + timeout
+    while True:
+      registered = self._le_security_manager_registered()
+      if registered is True:
+        return
+      if registered is None:
+        raise RuntimeError("Unable to verify the Bluetooth LE security manager")
+      if time.monotonic() >= deadline:
+        raise RuntimeError("Bluetooth LE security manager did not initialize")
       time.sleep(0.1)
 
   def stop(self, timeout: float = 10.0) -> None:

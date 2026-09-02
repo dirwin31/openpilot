@@ -28,6 +28,7 @@ from openpilot.starpilot.system.bluetooth.live import (
 )
 from openpilot.starpilot.system.bluetooth.protocol import (A2DP_SINK_UUID, HID_UUID, BluetoothClient, BluetoothDevice, BluetoothStatus,
                                                            device_capabilities, show_pairing_device)
+from openpilot.starpilot.system.bluetooth.radio import BluetoothRadio
 from openpilot.system import hardware
 from openpilot.system.ui.lib.bluetooth_manager import BluetoothManager, companion_setup_visible
 
@@ -247,6 +248,30 @@ class FakeProcess:
 
   def kill(self):
     self.stopped = True
+
+
+@pytest.mark.parametrize("registered", [True, None])
+def test_radio_le_security_check_leaves_ready_or_unknown_platform_alone(monkeypatch, registered):
+  calls = []
+  monkeypatch.setattr(BluetoothRadio, "_le_security_manager_registered", staticmethod(lambda: registered))
+  monkeypatch.setattr("openpilot.starpilot.system.bluetooth.radio.subprocess.run", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+  BluetoothRadio().ensure_le_security_manager()
+
+  assert calls == []
+
+
+def test_radio_repairs_missing_le_security_manager_through_bluez(monkeypatch):
+  checks = iter((False, False, True))
+  calls = []
+  monkeypatch.setattr(BluetoothRadio, "_le_security_manager_registered", staticmethod(lambda: next(checks)))
+  monkeypatch.setattr("openpilot.starpilot.system.bluetooth.radio.subprocess.run",
+                      lambda args, **_kwargs: calls.append(args) or SimpleNamespace(returncode=0))
+  monkeypatch.setattr("openpilot.starpilot.system.bluetooth.radio.time.sleep", lambda _seconds: None)
+
+  BluetoothRadio().ensure_le_security_manager()
+
+  assert calls == [["bluetoothctl", "power", "off"], ["bluetoothctl", "power", "on"]]
 
 
 def test_protocol_round_trip_and_capabilities():
