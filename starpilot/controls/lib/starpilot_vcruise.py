@@ -769,6 +769,14 @@ class StarPilotVCruise:
       self._applied_slc_control_target = slc_control_target if slc_control_target > 0.0 else 0.0
       if slc_control_target > 0.0:
         targets.append(slc_control_target)
+
+      # Uniden Radar Auto-Slowdown (drops cruise target strictly to raw posted speed limit without offset)
+      if self.slc_target > 0.0 and self.starpilot_planner.params_memory.get_bool("UnidenRadarAlertActive"):
+        if self.starpilot_planner.params.get_bool("UnidenAutoSlowdown"):
+          slc_control_target = self.slc_target
+          self._applied_slc_control_target = slc_control_target
+          targets.append(slc_control_target)
+
       if self.nav_turn_target > 0.0:
         targets.append(self.nav_turn_target)
 

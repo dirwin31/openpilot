@@ -117,7 +117,7 @@ function launch {
   # handle pythonpath
   ln -sfn $(pwd) /data/pythonpath
   export BASEDIR="$DIR"
-  export PYTHONPATH="$DIR/starpilot/third_party:$PWD"
+  export PYTHONPATH="/data/python_packages:$DIR/starpilot/third_party:$PWD"
   sp_launch_timing "pythonpath_done"
 
   # hardware specific init

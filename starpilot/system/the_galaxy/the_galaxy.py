@@ -10731,6 +10731,31 @@ def setup(app):
         )
     return {"error": "Video not found"}, 404
 
+  # Uniden R4 Radar Detector Endpoints
+  @app.route("/api/uniden/settings", methods=["GET"])
+  def uniden_get_settings():
+    from starpilot.system.uniden_r4 import get_all_settings
+    return jsonify(get_all_settings())
+
+  @app.route("/api/uniden/settings", methods=["POST"])
+  def uniden_update_settings():
+    from starpilot.system.uniden_r4 import update_settings
+    data = request.get_json(silent=True) or {}
+    updated = update_settings(data)
+    return jsonify({"success": True, "settings": updated})
+
+  @app.route("/api/uniden/status", methods=["GET"])
+  def uniden_get_status():
+    from starpilot.system.uniden_r4 import get_connection_status
+    return jsonify(get_connection_status())
+
+  @app.route("/api/uniden/action/<action>", methods=["POST"])
+  def uniden_action(action):
+    from starpilot.system.uniden_r4 import trigger_action
+    result = trigger_action(action)
+    return jsonify(result)
+
+
 def main():
   while not _ensure_galaxy_web_deps():
     print(f"The Galaxy waiting for Flask dependency ({_GALAXY_WEB_DEPS_ERROR}); retrying in 60s.")
@@ -10739,6 +10764,14 @@ def main():
   app = Flask(__name__, static_folder="assets", static_url_path="/assets")
   setup(app)
   threading.Thread(target=_testing_ground_custom_reserved_worker, daemon=True).start()
+
+  # Start Uniden Radar Detector background BLE monitor in a daemon thread
+  try:
+    from starpilot.system.uniden_radar_d import main as uniden_main
+    threading.Thread(target=uniden_main, name="uniden_radar_thread", daemon=True).start()
+  except Exception as e:
+    print(f"Failed to start Uniden radar background monitor: {e}")
+
 
   # Desktop-only debug mode. On-device must stay on 8082 to match Galaxy FRP routing.
   on_device = _is_comma_device_runtime()

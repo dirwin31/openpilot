@@ -10,6 +10,8 @@ export VECLIB_MAXIMUM_THREADS=1
 if [ -x /usr/local/venv/bin/python3 ]; then
   export PATH="/usr/local/venv/bin:${PATH}"
 fi
+export PYTHONPATH="/data/python_packages:${PYTHONPATH}"
+
 
 # models get lower priority than ui
 # - ui is ~5ms
