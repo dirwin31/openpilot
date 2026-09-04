@@ -116,11 +116,23 @@ class AlertRenderer(Widget):
                   alert_type=ss.alertType)
     else:
       starpilot_ss = sm["starpilotSelfdriveState"]
-      if starpilot_ss.alertSize == custom.StarPilotSelfdriveState.AlertSize.none:
-        return None
-      ret = Alert(text1=starpilot_ss.alertText1, text2=starpilot_ss.alertText2,
-                  size=starpilot_ss.alertSize.raw, status=starpilot_ss.alertStatus.raw,
-                  alert_type=starpilot_ss.alertType)
+      if starpilot_ss.alertSize != custom.StarPilotSelfdriveState.AlertSize.none:
+        ret = Alert(text1=starpilot_ss.alertText1, text2=starpilot_ss.alertText2,
+                    size=starpilot_ss.alertSize.raw, status=starpilot_ss.alertStatus.raw,
+                    alert_type=starpilot_ss.alertType)
+      else:
+        # Check for active Uniden Radar alert banner
+        try:
+          from openpilot.starpilot.system.uniden_shm import get_shm_param
+          if get_shm_param("UnidenRadarAlertActive", False):
+            band = str(get_shm_param("UnidenRadarAlertBand", "") or "").upper()
+            strength = get_shm_param("UnidenRadarAlertStrength", 0)
+            ret = Alert(text1=f"RADAR: {band} BAND", text2=f"Signal Strength: {strength}/8",
+                        size=AlertSize.mid, status=AlertStatus.userPrompt, alert_type="unidenRadar")
+          else:
+            return None
+        except Exception:
+          return None
 
     if ret.status == AlertStatus.normal and ui_state.starpilot_toggles.get("hide_alerts", False):
       return None
