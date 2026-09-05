@@ -115,7 +115,7 @@ from openpilot.starpilot.common.testing_grounds import (
 )
 from openpilot.starpilot.navigation.destination_store import normalize_destination_payload, update_recent_destinations
 from openpilot.starpilot.system.the_galaxy.factory_reset import remove_path as _run_factory_reset_delete
-from openpilot.starpilot.system.the_galaxy import flm_workspace, utilities
+from openpilot.starpilot.system.the_galaxy import cpu_capture, flm_workspace, utilities
 from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interrupted_update, public_recovery_status, recover_interrupted_update
 from openpilot.starpilot.system.bluetooth import BluetoothClient
 from openpilot.starpilot.system.wheel_controls import (
@@ -227,19 +227,7 @@ def _is_comma_device_runtime() -> bool:
   `PC` is derived from `/TICI`, which can be missing in edge boot/update states.
   For Galaxy routing we must keep on-device Galaxy on 8082.
   """
-  if not PC:
-    return True
-
-  if os.path.isfile("/TICI") or os.path.isfile("/AGNOS"):
-    return True
-
-  model_path = "/sys/firmware/devicetree/base/model"
-  try:
-    with open(model_path) as f:
-      model = f.read().strip("\x00").lower()
-    return "comma " in model
-  except Exception:
-    return False
+  return cpu_capture._is_comma_device_runtime()
 
 
 def _get_param_key_type(params_obj, key):
@@ -9094,6 +9082,26 @@ def setup(app):
       if "theme_path" in locals() and theme_path.parent.exists():
         delete_file(theme_path.parent)
 
+  @app.route("/api/cpu_captures/status", methods=["GET"])
+  def cpu_capture_status():
+    return jsonify(cpu_capture.capture_status()), 200
+
+  @app.route("/api/cpu_captures/download", methods=["GET"])
+  def download_cpu_capture():
+    capture_file = cpu_capture.CAPTURE_FILE
+    if not capture_file.exists():
+      return jsonify({"error": "No CPU capture available yet."}), 404
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    download_name = f"{capture_file.stem}_{timestamp}{capture_file.suffix}"
+    return send_from_directory(str(capture_file.parent), capture_file.name, as_attachment=True, download_name=download_name)
+
+  @app.route("/api/cpu_captures", methods=["DELETE"])
+  def delete_cpu_capture():
+    capture_file = cpu_capture.CAPTURE_FILE
+    if capture_file.exists():
+      delete_file(capture_file)
+    return jsonify({"message": "CPU capture cleared!"}), 200
+
   @app.route("/api/tmux_log/capture", methods=["POST"])
   def capture_tmux_log_route():
     TMUX_LOGS_PATH.mkdir(parents=True, exist_ok=True)
@@ -9498,6 +9506,11 @@ def main():
 
   # Desktop-only debug mode. On-device must stay on 8082 to match Galaxy FRP routing.
   on_device = _is_comma_device_runtime()
+
+  # Capture CPU telemetry to a rolling file for offline analysis. Only on-device,
+  # where deviceState/procLog are published over msgq.
+  if on_device:
+    threading.Thread(target=cpu_capture.run_capture_loop, name="galaxy-cpu-capture", daemon=True).start()
   debug = False if on_device else os.getenv("SP_GALAXY_DEBUG", "1").lower() in {"1", "true", "yes", "on"}
   port = 8082 if on_device else int(os.getenv("SP_GALAXY_PORT", "8083"))
   host = "0.0.0.0" if on_device else os.getenv("SP_GALAXY_HOST", "0.0.0.0")

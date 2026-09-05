@@ -8,6 +8,7 @@ const HOME_STATE = {
   initialized: false,
   refreshTimer: null,
 };
+const DASHBOARD_REFRESH_INTERVAL_MS = 5000;
 
 const FAVORITE_COLORS = ["#5ec8c8", "#8b6cc5", "#d4a060", "#e05577", "#6cc56e", "#8aa3ff"];
 const TOP_MODEL_LIMIT = 3;
@@ -151,7 +152,7 @@ function fallbackDashboard(data, unit) {
       longestUndistractedDrive: { value: "0.0 hours", detail: "No clean drives" },
       cleanDriveStreak: { value: "0 drives", detail: "No clean drives" },
     },
-    device: { status: "Parked", online: true, uptimeSeconds: null, cpuTempC: null, gpuTempC: null },
+    device: { status: "Parked", online: true, uptimeSeconds: null, cpuTempC: null, cpuUsagePercent: null, gpuTempC: null, cpuCapture: { exists: false } },
     storage: {
       freeBytes: 0,
       usedBytes: 0,
@@ -189,8 +190,8 @@ function clearDashboardRefreshTimer() {
 
 function scheduleDashboardRefresh(dashboard) {
   clearDashboardRefreshTimer();
-  if (!dashboardShouldAutoRefresh(dashboard)) return;
-  HOME_STATE.refreshTimer = setTimeout(() => initializeHome(false), 3500);
+  const delay = dashboardShouldAutoRefresh(dashboard) ? 3500 : DASHBOARD_REFRESH_INTERVAL_MS;
+  HOME_STATE.refreshTimer = setTimeout(() => initializeHome(false), delay);
 }
 
 function renderAnalysisStatus(dashboard) {
@@ -425,8 +426,9 @@ function renderStorage(storage) {
 
 function renderVitals(device) {
   const uptime = device.uptimeSeconds == null ? "unknown" : formatDuration(device.uptimeSeconds);
-  const cpu = device.cpuTempC == null ? "unknown" : `${formatInt(device.cpuTempC)} C`;
-  const gpu = device.gpuTempC == null ? "unknown" : `${formatInt(device.gpuTempC)} C`;
+  const cpuTemp = device.cpuTempC == null ? "unknown" : `${formatInt(device.cpuTempC)} C`;
+  const cpuUsage = device.cpuUsagePercent == null ? "unknown" : formatPercent(device.cpuUsagePercent);
+  const gpuTemp = device.gpuTempC == null ? "unknown" : `${formatInt(device.gpuTempC)} C`;
   const lanIp = device.lanIp || "unknown";
   const networkName = device.networkName || "No wireless connectivity";
   return `
@@ -437,10 +439,28 @@ function renderVitals(device) {
         <div><span>LAN IP</span><strong>${escapeHtml(lanIp)}</strong></div>
         <div><span>Network</span><strong>${escapeHtml(networkName)}</strong></div>
         <div><span>Uptime</span><strong>${escapeHtml(uptime)}</strong></div>
-        <div><span>CPU temp</span><strong>${escapeHtml(cpu)}</strong></div>
-        <div><span>GPU temp</span><strong>${escapeHtml(gpu)}</strong></div>
+        <div><span>CPU temp / usage</span><strong>${escapeHtml(`${cpuTemp} / ${cpuUsage}`)}</strong></div>
+        <div><span>GPU temp</span><strong>${escapeHtml(gpuTemp)}</strong></div>
       </div>
+      ${renderCpuCapture(device.cpuCapture)}
     </section>
+  `;
+}
+
+function renderCpuCapture(capture) {
+  if (!capture || !capture.exists) {
+    return `<div class="dashboard-cpu-capture"><span>CPU capture</span><em>No capture recorded yet</em></div>`;
+  }
+  const rows = capture.rows == null ? "?" : capture.rows;
+  const size = capture.sizeBytes == null ? "" : ` (${formatBytes(capture.sizeBytes)})`;
+  return `
+    <div class="dashboard-cpu-capture">
+      <span>CPU capture</span>
+      <strong>${escapeHtml(`${rows} samples${size}`)}</strong>
+      <a class="dashboard-cpu-capture-download" href="/api/cpu_captures/download" download>
+        <i class="bi bi-download"></i> Download CSV
+      </a>
+    </div>
   `;
 }
 

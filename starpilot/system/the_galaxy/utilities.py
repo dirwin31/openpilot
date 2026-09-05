@@ -2833,6 +2833,38 @@ def _read_uptime_seconds():
     return None
 
 
+_DEVICE_STATE_SM = None
+_DEVICE_STATE_SM_LOCK = threading.Lock()
+_CPU_USAGE_VALUE = None
+
+
+def _read_cpu_usage_percent():
+  """Average per-core CPU usage from the published ``deviceState`` message.
+
+  This mirrors the CPU metric exposed by the "CPU Metrics" (``ShowCPU``)
+  developer toggle: ``hardwared`` publishes ``deviceState.cpuUsagePercent``
+  from ``psutil.cpu_percent(percpu=True)`` and the onroad overlay averages that
+  per-core list. We consume that same canonical value instead of re-deriving
+  usage from ``/proc/stat``. Returns the last known value (or ``None`` if we
+  have never seen one) when ``deviceState`` is unavailable -- e.g. off-device
+  or before the first message is received.
+  """
+  global _DEVICE_STATE_SM, _CPU_USAGE_VALUE
+  with _DEVICE_STATE_SM_LOCK:
+    try:
+      if _DEVICE_STATE_SM is None:
+        from cereal import messaging  # lazy: native msgq extension isn't importable everywhere
+        _DEVICE_STATE_SM = messaging.SubMaster(["deviceState"])
+      _DEVICE_STATE_SM.update(0)  # non-blocking: read the latest conflated message
+      if _DEVICE_STATE_SM.valid.get("deviceState", False):
+        cpu_list = list(_DEVICE_STATE_SM["deviceState"].cpuUsagePercent)
+        if cpu_list:
+          _CPU_USAGE_VALUE = int(sum(cpu_list) / len(cpu_list))
+    except Exception:
+      pass
+    return _CPU_USAGE_VALUE
+
+
 def _normalize_temp_c(value):
   try:
     raw = float(value)
@@ -2912,6 +2944,7 @@ def _build_device_summary(params_obj):
   uptime_seconds = _read_uptime_seconds()
   cpu_temp_c = _read_cpu_temp_c()
   gpu_temp_c = _read_gpu_temp_c()
+  cpu_usage_percent = _read_cpu_usage_percent()
   lan_ip = get_current_lan_ip()
   network_name = get_current_network_name()
   return {
@@ -2920,9 +2953,19 @@ def _build_device_summary(params_obj):
     "uptimeSeconds": uptime_seconds,
     "cpuTempC": cpu_temp_c,
     "gpuTempC": gpu_temp_c,
+    "cpuUsagePercent": cpu_usage_percent,
+    "cpuCapture": _cpu_capture_status(),
     "lanIp": lan_ip,
     "networkName": network_name,
   }
+
+
+def _cpu_capture_status():
+  try:
+    from openpilot.starpilot.system.the_galaxy import cpu_capture
+    return cpu_capture.capture_status()
+  except Exception:
+    return {"exists": False}
 
 
 def _build_favorite_models(params_obj, persistent_stats=None):
