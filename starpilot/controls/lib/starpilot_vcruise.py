@@ -792,11 +792,11 @@ class StarPilotVCruise:
           offset_mph = 0
           strength = int(get_shm_param("UnidenRadarAlertStrength", 0) or 0)
           if 1 <= strength <= 2:
-            offset_mph = int(get_shm_param("UnidenSlowdownOffset1_2", 10) or 0)
+            offset_mph = int(get_shm_param("UnidenSlowdownOffset1_2", 14) or 0)
           elif 3 <= strength <= 5:
-            offset_mph = int(get_shm_param("UnidenSlowdownOffset3_5", 5) or 0)
+            offset_mph = int(get_shm_param("UnidenSlowdownOffset3_5", 9) or 0)
           elif strength >= 6:
-            offset_mph = int(get_shm_param("UnidenSlowdownOffset6_8", 0) or 0)
+            offset_mph = int(get_shm_param("UnidenSlowdownOffset6_8", 5) or 0)
           else:
             offset_mph = 0
 
