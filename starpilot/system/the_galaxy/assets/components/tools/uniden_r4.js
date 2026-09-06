@@ -26,6 +26,9 @@ const state = reactive({
     UnidenSlowdownOffset1_2: 14,
     UnidenSlowdownOffset3_5: 9,
     UnidenSlowdownOffset6_8: 5,
+    UnidenSoundSignal1_2: "prompt.wav",
+    UnidenSoundSignal3_5: "warning_soft.wav",
+    UnidenSoundSignal6_8: "warning_immediate.wav",
   }
 })
 
@@ -321,6 +324,32 @@ export function UnidenR4View() {
 
           <div class="uniden-setting-row">
             <div class="uniden-setting-info">
+              <span class="uniden-setting-label">Signal 1–2 Alert Sound</span>
+              <span class="uniden-setting-desc">Audio played by openpilot when Signal 1–2 radar alert is detected</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <select class="uniden-select" 
+                      value="${() => String(state.settings.UnidenSoundSignal1_2 || 'prompt.wav')}"
+                      @change="${(e) => { const el = e && (e.currentTarget || e.target); if (el) updateSetting('UnidenSoundSignal1_2', el.value); }}">
+                <option value="disabled" selected="${() => state.settings.UnidenSoundSignal1_2 === 'disabled'}">Disabled (Mute)</option>
+                <option value="prompt.wav" selected="${() => state.settings.UnidenSoundSignal1_2 === 'prompt.wav'}">Prompt (Chime)</option>
+                <option value="pre_alert.wav" selected="${() => state.settings.UnidenSoundSignal1_2 === 'pre_alert.wav'}">Pre-Alert (Double Beep)</option>
+                <option value="warning_soft.wav" selected="${() => state.settings.UnidenSoundSignal1_2 === 'warning_soft.wav'}">Warning Soft (Soft Chime)</option>
+                <option value="warning_immediate.wav" selected="${() => state.settings.UnidenSoundSignal1_2 === 'warning_immediate.wav'}">Warning Immediate (Urgent)</option>
+                <option value="engage.wav" selected="${() => state.settings.UnidenSoundSignal1_2 === 'engage.wav'}">Engage Tone</option>
+                <option value="disengage.wav" selected="${() => state.settings.UnidenSoundSignal1_2 === 'disengage.wav'}">Disengage Tone</option>
+                <option value="refuse.wav" selected="${() => state.settings.UnidenSoundSignal1_2 === 'refuse.wav'}">Refuse Tone</option>
+              </select>
+              ${() => state.settings.UnidenSoundSignal1_2 && state.settings.UnidenSoundSignal1_2 !== 'disabled' ? html`
+                <button class="uniden-btn uniden-btn-secondary" style="padding: 6px 10px; font-size: 0.85rem;" title="Test Sound" @click="${() => sendAction(`play_sound:${state.settings.UnidenSoundSignal1_2}`)}">
+                  <i class="bi bi-play-fill"></i>
+                </button>
+              ` : ''}
+            </div>
+          </div>
+
+          <div class="uniden-setting-row">
+            <div class="uniden-setting-info">
               <span class="uniden-setting-label">Signal 3–5 Target Speed (Medium Alert)</span>
               <span class="uniden-setting-desc">Cruise speed limit offset when approaching moderate radar signal</span>
             </div>
@@ -336,6 +365,32 @@ export function UnidenR4View() {
 
           <div class="uniden-setting-row">
             <div class="uniden-setting-info">
+              <span class="uniden-setting-label">Signal 3–5 Alert Sound</span>
+              <span class="uniden-setting-desc">Audio played by openpilot when Signal 3–5 radar alert is detected</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <select class="uniden-select" 
+                      value="${() => String(state.settings.UnidenSoundSignal3_5 || 'warning_soft.wav')}"
+                      @change="${(e) => { const el = e && (e.currentTarget || e.target); if (el) updateSetting('UnidenSoundSignal3_5', el.value); }}">
+                <option value="disabled" selected="${() => state.settings.UnidenSoundSignal3_5 === 'disabled'}">Disabled (Mute)</option>
+                <option value="prompt.wav" selected="${() => state.settings.UnidenSoundSignal3_5 === 'prompt.wav'}">Prompt (Chime)</option>
+                <option value="pre_alert.wav" selected="${() => state.settings.UnidenSoundSignal3_5 === 'pre_alert.wav'}">Pre-Alert (Double Beep)</option>
+                <option value="warning_soft.wav" selected="${() => state.settings.UnidenSoundSignal3_5 === 'warning_soft.wav'}">Warning Soft (Soft Chime)</option>
+                <option value="warning_immediate.wav" selected="${() => state.settings.UnidenSoundSignal3_5 === 'warning_immediate.wav'}">Warning Immediate (Urgent)</option>
+                <option value="engage.wav" selected="${() => state.settings.UnidenSoundSignal3_5 === 'engage.wav'}">Engage Tone</option>
+                <option value="disengage.wav" selected="${() => state.settings.UnidenSoundSignal3_5 === 'disengage.wav'}">Disengage Tone</option>
+                <option value="refuse.wav" selected="${() => state.settings.UnidenSoundSignal3_5 === 'refuse.wav'}">Refuse Tone</option>
+              </select>
+              ${() => state.settings.UnidenSoundSignal3_5 && state.settings.UnidenSoundSignal3_5 !== 'disabled' ? html`
+                <button class="uniden-btn uniden-btn-secondary" style="padding: 6px 10px; font-size: 0.85rem;" title="Test Sound" @click="${() => sendAction(`play_sound:${state.settings.UnidenSoundSignal3_5}`)}">
+                  <i class="bi bi-play-fill"></i>
+                </button>
+              ` : ''}
+            </div>
+          </div>
+
+          <div class="uniden-setting-row">
+            <div class="uniden-setting-info">
               <span class="uniden-setting-label">Signal 6–8 Target Speed (High Alert)</span>
               <span class="uniden-setting-desc">Cruise speed limit offset when close or strong radar signal is detected</span>
             </div>
@@ -347,6 +402,32 @@ export function UnidenR4View() {
               <option value="5" selected="${() => Number(state.settings.UnidenSlowdownOffset6_8) === 5}">Speed Limit + 5 mph</option>
               <option value="-1" selected="${() => Number(state.settings.UnidenSlowdownOffset6_8) === -1}">Disabled (No Slowdown)</option>
             </select>
+          </div>
+
+          <div class="uniden-setting-row">
+            <div class="uniden-setting-info">
+              <span class="uniden-setting-label">Signal 6–8 Alert Sound</span>
+              <span class="uniden-setting-desc">Audio played by openpilot when Signal 6–8 radar alert is detected</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <select class="uniden-select" 
+                      value="${() => String(state.settings.UnidenSoundSignal6_8 || 'warning_immediate.wav')}"
+                      @change="${(e) => { const el = e && (e.currentTarget || e.target); if (el) updateSetting('UnidenSoundSignal6_8', el.value); }}">
+                <option value="disabled" selected="${() => state.settings.UnidenSoundSignal6_8 === 'disabled'}">Disabled (Mute)</option>
+                <option value="prompt.wav" selected="${() => state.settings.UnidenSoundSignal6_8 === 'prompt.wav'}">Prompt (Chime)</option>
+                <option value="pre_alert.wav" selected="${() => state.settings.UnidenSoundSignal6_8 === 'pre_alert.wav'}">Pre-Alert (Double Beep)</option>
+                <option value="warning_soft.wav" selected="${() => state.settings.UnidenSoundSignal6_8 === 'warning_soft.wav'}">Warning Soft (Soft Chime)</option>
+                <option value="warning_immediate.wav" selected="${() => state.settings.UnidenSoundSignal6_8 === 'warning_immediate.wav'}">Warning Immediate (Urgent)</option>
+                <option value="engage.wav" selected="${() => state.settings.UnidenSoundSignal6_8 === 'engage.wav'}">Engage Tone</option>
+                <option value="disengage.wav" selected="${() => state.settings.UnidenSoundSignal6_8 === 'disengage.wav'}">Disengage Tone</option>
+                <option value="refuse.wav" selected="${() => state.settings.UnidenSoundSignal6_8 === 'refuse.wav'}">Refuse Tone</option>
+              </select>
+              ${() => state.settings.UnidenSoundSignal6_8 && state.settings.UnidenSoundSignal6_8 !== 'disabled' ? html`
+                <button class="uniden-btn uniden-btn-secondary" style="padding: 6px 10px; font-size: 0.85rem;" title="Test Sound" @click="${() => sendAction(`play_sound:${state.settings.UnidenSoundSignal6_8}`)}">
+                  <i class="bi bi-play-fill"></i>
+                </button>
+              ` : ''}
+            </div>
           </div>
         </div>
 

@@ -30,6 +30,9 @@ DEFAULTS = {
     "UnidenSlowdownOffset1_2": 14,
     "UnidenSlowdownOffset3_5": 9,
     "UnidenSlowdownOffset6_8": 5,
+    "UnidenSoundSignal1_2": "prompt.wav",
+    "UnidenSoundSignal3_5": "warning_soft.wav",
+    "UnidenSoundSignal6_8": "warning_immediate.wav",
 }
 
 # Mapping for Uniden R-series BLE command protocol (SETC IDs verified via Android R/TACH trace)
@@ -296,5 +299,16 @@ def trigger_action(action):
             return {"status": "ok" if ok else "error", "message": "Mute command sent." if ok else "Failed to send mute command"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    elif action.startswith("play_sound:"):
+        sound_name = action.split(":", 1)[1].strip()
+        sound_path = f"/data/openpilot/selfdrive/assets/sounds/{sound_name}"
+        if os.path.exists(sound_path) and sound_name.endswith(".wav"):
+            try:
+                subprocess.Popen(["aplay", "-q", sound_path])
+                return {"status": "ok", "message": f"Playing {sound_name}"}
+            except Exception as e:
+                return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Sound file {sound_name} not found"}
             
     return {"status": "error", "message": "Unknown action"}
