@@ -172,6 +172,7 @@ from openpilot.starpilot.navigation.destination_store import normalize_destinati
 from openpilot.starpilot.system.the_galaxy.factory_reset import remove_path as _run_factory_reset_delete
 from openpilot.starpilot.system.the_galaxy import cpu_capture, flm_workspace, utilities
 from openpilot.starpilot.system.the_galaxy.bonjour import GalaxyBonjourAdvertiser
+from openpilot.starpilot.system.the_galaxy.tls import GALAXY_TLS_PORT, serve_tls
 from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interrupted_update, public_recovery_status, recover_interrupted_update
 from openpilot.starpilot.system.bluetooth import BluetoothClient
 from openpilot.starpilot.system.wheel_controls import (
@@ -10476,9 +10477,20 @@ def main():
   bonjour = GalaxyBonjourAdvertiser(utilities.get_current_lan_ip, port=port) if on_device else None
   if bonjour is not None:
     bonjour.start()
+  tls_server = None
+  tls_enabled = os.getenv("SP_GALAXY_TLS", "1").lower() in {"1", "true", "yes", "on"}
+  # With Flask's desktop reloader, only the serving child may own the TLS port.
+  tls_process = not use_reloader or os.getenv("WERKZEUG_RUN_MAIN") == "true"
+  if tls_enabled and tls_process:
+    try:
+      tls_server = serve_tls(app, host=host, port=GALAXY_TLS_PORT)
+    except Exception:
+      cloudlog.exception("Galaxy HTTPS listener failed; HTTP remains available")
   try:
     app.run(host=host, port=port, debug=debug, use_reloader=use_reloader, threaded=True)
   finally:
+    if tls_server is not None:
+      tls_server.shutdown()
     if bonjour is not None:
       bonjour.close()
 

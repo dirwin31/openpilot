@@ -20,6 +20,7 @@ import { TestingGround } from "./views/TestingGround.js"
 import { ThemeMaker } from "./views/ThemeMaker.js"
 import { ModelLaboratory } from "./views/ModelLaboratory.js"
 import { Cameras } from "./views/Cameras.js"
+import { Dashboard } from "./views/Dashboard.js"
 import { store, initRouter, navigate } from "./store.js"
 import { showSnackbar } from "./api.js"
 
@@ -56,6 +57,7 @@ const VIEWS = {
   "/theme_maker": ThemeMaker,
   "/model_laboratory": ModelLaboratory,
   "/cameras": Cameras,
+  "/dashboard": Dashboard,
 }
 
 function resolveView(path) {

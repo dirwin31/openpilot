@@ -1,0 +1,266 @@
+import { LiveReassembler, LiveSessionStats } from "./live_frames.js"
+
+export const COMPANION_UUIDS = Object.freeze({
+  service: "9b6d1000-6f7a-4a5b-8c3d-2e1f0a9b8c7d",
+  status: "9b6d1001-6f7a-4a5b-8c3d-2e1f0a9b8c7d",
+  command: "9b6d1002-6f7a-4a5b-8c3d-2e1f0a9b8c7d",
+  response: "9b6d1003-6f7a-4a5b-8c3d-2e1f0a9b8c7d",
+  live: "9b6d1004-6f7a-4a5b-8c3d-2e1f0a9b8c7d",
+})
+
+const LAST_DEVICE_KEY = "galaxy-live-ble-device"
+const PAIRING_MESSAGE = "Pair the device first: open the 120-second companion pairing window in the device Bluetooth settings, then reconnect."
+
+function errorText(error) {
+  return String(error?.message || error || "Bluetooth connection failed")
+}
+
+function isPairingError(error) {
+  const value = `${error?.name || ""} ${errorText(error)}`.toLowerCase()
+  return /authentication|authorization|encrypt|security|bond|pair|gatt operation not permitted/.test(value)
+}
+
+function decodeJSON(value) {
+  const bytes = value instanceof DataView || ArrayBuffer.isView(value)
+    ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+    : new Uint8Array(value)
+  return JSON.parse(new TextDecoder().decode(bytes))
+}
+
+export class LiveBLEClient {
+  constructor(callbacks = {}) {
+    this.callbacks = callbacks
+    this.reassembler = new LiveReassembler()
+    this.session = new LiveSessionStats()
+    this.state = "idle"
+    this.message = ""
+    this.device = null
+    this.characteristics = {}
+    this.pendingFrame = null
+    this.lastPublishedAt = 0
+    this.uiTimer = null
+    this.reconnectTimer = null
+    this.reconnectAttempt = 0
+    this.closed = false
+    this.manualDisconnect = false
+    this.metadataPending = false
+    this.connectionGeneration = 0
+    this.lastMetadataRevision = null
+    this.lastAlertID = null
+    this._commandTail = Promise.resolve()
+    this._onDisconnected = () => this._handleDisconnected()
+    this._onNotification = (event) => this._handleNotification(event)
+  }
+
+  _setState(state, message = "") {
+    this.state = state
+    this.message = message
+    this.callbacks.onState?.({ state, message, deviceName: this.device?.name || "Galaxy device" })
+  }
+
+  async reconnectRemembered() {
+    if (!navigator.bluetooth?.getDevices || this.closed) return false
+    try {
+      const devices = await navigator.bluetooth.getDevices()
+      let savedID = null
+      try { savedID = localStorage.getItem(LAST_DEVICE_KEY) } catch (error) { /* Storage is optional. */ }
+      const device = devices.find((candidate) => candidate.id === savedID) || (devices.length === 1 ? devices[0] : null)
+      if (!device) return false
+      await this._connectDevice(device, true)
+      return true
+    } catch (error) {
+      this._handleError(error)
+      return false
+    }
+  }
+
+  async connect() {
+    this.closed = false
+    this.manualDisconnect = false
+    try {
+      const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [COMPANION_UUIDS.service] }] })
+      await this._connectDevice(device, false)
+    } catch (error) {
+      if (error?.name === "NotFoundError") {
+        this._setState("idle", "No device selected")
+        return
+      }
+      this._handleError(error)
+      throw error
+    }
+  }
+
+  async reconnect() {
+    if (this.device) return this._connectDevice(this.device, true)
+    return this.connect()
+  }
+
+  async _connectDevice(device, reconnecting) {
+    clearTimeout(this.reconnectTimer)
+    this.device = device
+    this.manualDisconnect = false
+    device.removeEventListener("gattserverdisconnected", this._onDisconnected)
+    device.addEventListener("gattserverdisconnected", this._onDisconnected)
+    this._setState(reconnecting ? "reconnecting" : "connecting", reconnecting ? "Reconnecting…" : "Connecting…")
+    try {
+      const server = await device.gatt.connect()
+      const service = await server.getPrimaryService(COMPANION_UUIDS.service)
+      const [status, command, response, live] = await Promise.all([
+        service.getCharacteristic(COMPANION_UUIDS.status),
+        service.getCharacteristic(COMPANION_UUIDS.command),
+        service.getCharacteristic(COMPANION_UUIDS.response),
+        service.getCharacteristic(COMPANION_UUIDS.live),
+      ])
+      this.characteristics = { status, command, response, live }
+      this.callbacks.onCapabilities?.(decodeJSON(await status.readValue()))
+      live.removeEventListener("characteristicvaluechanged", this._onNotification)
+      live.addEventListener("characteristicvaluechanged", this._onNotification)
+      await live.startNotifications()
+      this.connectionGeneration += 1
+      this.reconnectAttempt = 0
+      this.reassembler.reset()
+      this.session.reset()
+      try { localStorage.setItem(LAST_DEVICE_KEY, device.id) } catch (error) { /* Storage is optional. */ }
+      this._setState("connected", `Connected to ${device.name || "Galaxy device"}`)
+      void this._refreshMetadata()
+    } catch (error) {
+      this._handleError(error)
+      if (reconnecting && !this.closed && !this.manualDisconnect) this._scheduleReconnect()
+      throw error
+    }
+  }
+
+  _handleNotification(event) {
+    const frame = this.reassembler.consume(event.target?.value)
+    if (!frame) return
+    if (frame.kind === "health") {
+      this.callbacks.onHealth?.(frame, Date.now())
+      return
+    }
+
+    this.session.consume(frame)
+    this.pendingFrame = frame
+    this._scheduleLiveUIUpdate()
+    if (this.lastMetadataRevision !== frame.metadataRevision || this.lastAlertID !== frame.alertID) {
+      void this._refreshMetadata(frame.metadataRevision, frame.alertID)
+    }
+  }
+
+  _scheduleLiveUIUpdate() {
+    const elapsed = Date.now() - this.lastPublishedAt
+    if (this.lastPublishedAt === 0 || elapsed >= 200) {
+      this._publishLiveUIUpdate()
+    } else if (this.uiTimer === null) {
+      this.uiTimer = setTimeout(() => {
+        this.uiTimer = null
+        this._publishLiveUIUpdate()
+      }, 200 - elapsed)
+    }
+  }
+
+  _publishLiveUIUpdate() {
+    if (!this.pendingFrame) return
+    const frame = this.pendingFrame
+    this.pendingFrame = null
+    this.lastPublishedAt = Date.now()
+    this.callbacks.onLive?.(frame, this.session.snapshot(), this.lastPublishedAt)
+  }
+
+  async command(op, payload = {}) {
+    const task = this._commandTail.then(async () => {
+      const { command, response } = this.characteristics
+      if (!command || !response || !this.device?.gatt?.connected) throw new Error("Bluetooth is not connected")
+      const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
+      const encoded = new TextEncoder().encode(JSON.stringify({ ...payload, id, op }))
+      if (encoded.byteLength > 512) throw new Error("Command exceeds 512 bytes")
+      if (command.writeValueWithResponse) await command.writeValueWithResponse(encoded)
+      else await command.writeValue(encoded)
+      const envelope = decodeJSON(await response.readValue())
+      if (!envelope.ok) throw new Error(envelope.error || "Companion command failed")
+      if (envelope.id && envelope.id !== id) throw new Error("Companion response did not match the request")
+      return envelope.data
+    })
+    this._commandTail = task.catch(() => {})
+    return task
+  }
+
+  async _refreshMetadata(revision = null, alertID = null) {
+    if (this.metadataPending || !this.characteristics.command) return
+    this.metadataPending = true
+    const generation = this.connectionGeneration
+    try {
+      const metadata = await this.command("get_live_metadata")
+      if (generation !== this.connectionGeneration || !this.device?.gatt?.connected) return
+      this.lastMetadataRevision = revision
+      this.lastAlertID = alertID
+      this.callbacks.onMetadata?.(metadata)
+    } catch (error) {
+      if (isPairingError(error)) this._handleError(error)
+    } finally {
+      this.metadataPending = false
+    }
+  }
+
+  _handleDisconnected() {
+    this.characteristics = {}
+    this.reassembler.reset()
+    this._clearTelemetry()
+    clearTimeout(this.uiTimer)
+    this.uiTimer = null
+    if (this.closed || this.manualDisconnect) {
+      this._setState("idle", "Disconnected")
+      return
+    }
+    this._setState("reconnecting", "Bluetooth disconnected; reconnecting…")
+    this._scheduleReconnect()
+  }
+
+  _scheduleReconnect() {
+    clearTimeout(this.reconnectTimer)
+    const delay = Math.min(10000, 1000 * (2 ** Math.min(this.reconnectAttempt, 3)))
+    this.reconnectAttempt += 1
+    this.reconnectTimer = setTimeout(async () => {
+      if (!this.device || this.closed || this.manualDisconnect) return
+      try {
+        await this._connectDevice(this.device, true)
+      } catch (error) { /* _connectDevice schedules the next attempt. */ }
+    }, delay)
+  }
+
+  _handleError(error) {
+    if (isPairingError(error)) this._setState("needs-pairing", PAIRING_MESSAGE)
+    else this._setState("error", errorText(error))
+  }
+
+  _clearTelemetry() {
+    this.connectionGeneration += 1
+    this.pendingFrame = null
+    this.lastPublishedAt = 0
+    this.lastMetadataRevision = null
+    this.lastAlertID = null
+    this.session.reset()
+    this.callbacks.onLive?.(null, this.session.snapshot(), null)
+    this.callbacks.onHealth?.(null, null)
+    this.callbacks.onMetadata?.(null)
+  }
+
+  disconnect() {
+    this.manualDisconnect = true
+    clearTimeout(this.reconnectTimer)
+    this.device?.gatt?.disconnect()
+    this._clearTelemetry()
+    this._setState("idle", "Disconnected")
+  }
+
+  close() {
+    this.closed = true
+    this.manualDisconnect = true
+    clearTimeout(this.reconnectTimer)
+    clearTimeout(this.uiTimer)
+    this.device?.removeEventListener("gattserverdisconnected", this._onDisconnected)
+    this.characteristics.live?.removeEventListener("characteristicvaluechanged", this._onNotification)
+    if (this.device?.gatt?.connected) this.device.gatt.disconnect()
+    this._clearTelemetry()
+    this.characteristics = {}
+  }
+}

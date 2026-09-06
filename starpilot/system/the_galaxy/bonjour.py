@@ -12,6 +12,7 @@ from openpilot.common.swaglog import cloudlog
 
 GALAXY_SERVICE_TYPE = "_galaxy._tcp.local."
 GALAXY_SERVICE_PORT = 8082
+GALAXY_HTTPS_PORT = 8443
 ADDRESS_POLL_INTERVAL_SECONDS = 5.0
 
 
@@ -20,6 +21,11 @@ def _service_label(identifier: str | None = None) -> str:
   safe = "".join(character if character.isalnum() or character == "-" else "-" for character in raw)
   safe = safe.strip("-")[:40] or "comma"
   return f"StarPilot {safe}"
+
+
+def _service_hostname(identifier: str | None = None) -> str:
+  """Return the stable mDNS hostname shared by Bonjour and Galaxy TLS."""
+  return f"{_service_label(identifier).lower().replace(' ', '-')}.local"
 
 
 def _valid_ipv4(value: str | None) -> str | None:
@@ -86,7 +92,7 @@ class GalaxyBonjourAdvertiser:
     # the app's legacy LAN scan until its managed dependencies are refreshed.
     from zeroconf import IPVersion, InterfaceChoice, ServiceInfo, Zeroconf
 
-    hostname = f"{self._label.lower().replace(' ', '-')}.local."
+    hostname = f"{_service_hostname(self._label.removeprefix('StarPilot '))}."
     service_info = ServiceInfo(
       GALAXY_SERVICE_TYPE,
       f"{self._label}.{GALAXY_SERVICE_TYPE}",
@@ -97,6 +103,7 @@ class GalaxyBonjourAdvertiser:
         "api": "1",
         "path": "/",
         "port": str(self._port),
+        "https_port": str(GALAXY_HTTPS_PORT),
       },
       server=hostname,
     )
