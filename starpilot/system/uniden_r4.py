@@ -305,7 +305,7 @@ def trigger_action(action):
         sound_path = f"/data/openpilot/selfdrive/assets/sounds/{sound_name}"
         if os.path.exists(sound_path) and sound_name.endswith(".wav"):
             try:
-                subprocess.Popen(["aplay", "-q", sound_path])
+                subprocess.Popen(["aplay", "-D", "plughw:0,0", "-q", sound_path])
                 return {"status": "ok", "message": f"Playing {sound_name}"}
             except Exception as e:
                 return {"status": "error", "message": str(e)}

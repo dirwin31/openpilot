@@ -210,7 +210,7 @@ async def run_uniden_daemon():
                                     sound_file = f"/data/openpilot/selfdrive/assets/sounds/{sound_choice}"
                                     if os.path.exists(sound_file):
                                         try:
-                                            subprocess.Popen(["aplay", "-q", sound_file])
+                                            subprocess.Popen(["aplay", "-D", "plughw:0,0", "-q", sound_file])
                                         except Exception as err:
                                             print(f"[uniden_radar_d] Error playing alert audio: {err}")
                     else:
