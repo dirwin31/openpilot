@@ -27,9 +27,9 @@ DEFAULTS = {
     "UnidenR4AlertVolume": 5,
     "UnidenAutoSlowdown": True,
     "UnidenAutoSlowdownBands": "KA,K,LASER,MRCD,POP",
-    "UnidenSlowdownOffset1_2": 10,
-    "UnidenSlowdownOffset3_5": 5,
-    "UnidenSlowdownOffset6_8": 0,
+    "UnidenSlowdownOffset1_2": 14,
+    "UnidenSlowdownOffset3_5": 9,
+    "UnidenSlowdownOffset6_8": 5,
 }
 
 # Mapping for Uniden R-series BLE command protocol (SETC IDs verified via Android R/TACH trace)
