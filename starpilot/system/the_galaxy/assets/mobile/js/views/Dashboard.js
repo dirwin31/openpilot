@@ -1,4 +1,4 @@
-import { api } from "../api.js"
+import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "../components/GxNotice.js"
 import { store } from "../store.js"
@@ -37,6 +37,7 @@ export const Dashboard = {
   data() {
     return {
       isLandscape: false,
+      isFullscreen: false,
       capability: "checking",
       bleState: "idle",
       bleMessage: "",
@@ -196,6 +197,27 @@ export const Dashboard = {
       return value.toFixed(Math.abs(value) < 1 ? 2 : 1)
     },
     healthTint(value) { return value === undefined || value === null ? "var(--text-muted)" : value >= 85 ? "var(--error)" : value >= 70 ? "var(--warning)" : "var(--on-surface)" },
+    syncFullscreen() {
+      this.isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement)
+    },
+    async toggleFullscreen() {
+      const active = document.fullscreenElement || document.webkitFullscreenElement
+      try {
+        if (active) {
+          const exit = document.exitFullscreen || document.webkitExitFullscreen
+          if (exit) await exit.call(document)
+        } else {
+          const target = document.documentElement
+          const enter = target.requestFullscreen || target.webkitRequestFullscreen
+          if (!enter) throw new Error("Fullscreen is not supported by this browser")
+          await enter.call(target, { navigationUI: "hide" })
+        }
+      } catch (error) {
+        showSnackbar("Unable to enter fullscreen: " + (error?.message || error), "error")
+      } finally {
+        this.syncFullscreen()
+      }
+    },
     async connect() {
       this.connecting = true
       try {
@@ -218,6 +240,10 @@ export const Dashboard = {
     this.orientation = window.matchMedia("(orientation: landscape)")
     this.isLandscape = this.orientation.matches
     this.orientation.addEventListener?.("change", this.setOrientation)
+    this.onFullscreenChange = () => this.syncFullscreen()
+    document.addEventListener("fullscreenchange", this.onFullscreenChange)
+    document.addEventListener("webkitfullscreenchange", this.onFullscreenChange)
+    this.syncFullscreen()
     this.clock = setInterval(() => { this.now = Date.now() }, 1000)
     void this.loadParams()
     this.devicePoll = usePolling(() => this.loadDeviceStatus(), { interval: 5000 })
@@ -238,6 +264,8 @@ export const Dashboard = {
   },
   beforeUnmount() {
     this.orientation?.removeEventListener?.("change", this.setOrientation)
+    document.removeEventListener("fullscreenchange", this.onFullscreenChange)
+    document.removeEventListener("webkitfullscreenchange", this.onFullscreenChange)
     clearInterval(this.clock)
     this.devicePoll?.destroy()
     this.ble?.close()
@@ -278,6 +306,10 @@ export const Dashboard = {
           <section class="dash-center" :style="{ '--mode-color': modeColor }">
             <div class="dash-center__connection">
               <span>{{ statusLabel }} · {{ deviceStatusLabel }}</span>
+              <button class="dash-fullscreen-button" type="button" :aria-label="isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'"
+                :title="isFullscreen ? 'Exit fullscreen' : 'Hide browser controls'" :aria-pressed="isFullscreen" @click="toggleFullscreen">
+                <i class="bi" :class="isFullscreen ? 'bi-fullscreen-exit' : 'bi-arrows-fullscreen'"></i>
+              </button>
               <button v-if="connected" type="button" @click="disconnect">Disconnect</button>
               <button v-else type="button" :disabled="!canConnect || connecting" @click="connect">{{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
             </div>

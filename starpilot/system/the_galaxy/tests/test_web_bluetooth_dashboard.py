@@ -45,6 +45,10 @@ def test_dashboard_has_security_gate_controls_and_complete_layouts():
   assert "LEAD VEHICLE" in dashboard
   assert "CURVE TARGET" in dashboard
   assert "STOP SIGNAL" in dashboard
+  assert "requestFullscreen" in dashboard
+  assert 'navigationUI: "hide"' in dashboard
+  assert "fullscreenchange" in dashboard
+  assert "bi-fullscreen-exit" in dashboard
   assert "demo" not in dashboard.lower()
 
 

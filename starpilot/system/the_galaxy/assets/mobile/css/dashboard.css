@@ -182,9 +182,10 @@
 .dash-tile--landscape .dash-tile__value { font-size: 15px; white-space: normal; }
 .dash-center { display: flex; flex-direction: column; min-width: 340px; padding: 14px; position: relative; }
 .dash-center__connection { align-items: center; display: flex; font-size: 10px; gap: 6px; left: 14px; position: absolute; right: 14px; top: 7px; z-index: 1; }
-.dash-center__connection span { color: var(--text-muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dash-center__connection button { background: transparent; border: 0; color: var(--primary); cursor: pointer; font: inherit; font-weight: var(--fw-bold); margin-left: auto; padding: 2px 4px; }
+.dash-center__connection span { color: var(--text-muted); margin-right: auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-center__connection button { background: transparent; border: 0; color: var(--primary); cursor: pointer; font: inherit; font-weight: var(--fw-bold); padding: 2px 4px; }
 .dash-center__connection button:disabled { color: var(--text-muted); }
+.dash-center__connection .dash-fullscreen-button { align-items: center; display: inline-flex; font-size: 14px; justify-content: center; min-height: 24px; min-width: 28px; }
 .dash-speed-row { align-items: flex-start; display: grid; gap: 12px; grid-template-columns: 86px minmax(0, 1fr) 86px; height: 124px; padding-top: 13px; }
 .dash-speed-row .dash-target-sign { flex-basis: 86px; height: 60px; width: 86px; }
 .dash-limit-slot { display: flex; height: 60px; justify-content: center; width: 86px; }
