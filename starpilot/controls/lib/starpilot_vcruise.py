@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import json
 import math
+import time
 
 from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 
 from openpilot.starpilot.common.starpilot_variables import CRUISING_SPEED
+from openpilot.starpilot.system.uniden_shm import get_shm_param, set_shm_param
 from openpilot.starpilot.controls.lib.curve_speed_controller import (
   CSC_ACTIVE_OFF_DELTA,
   CSC_GLOW_HOLD_TIME,
@@ -770,12 +772,40 @@ class StarPilotVCruise:
       if slc_control_target > 0.0:
         targets.append(slc_control_target)
 
-      # Uniden Radar Auto-Slowdown (drops cruise target strictly to raw posted speed limit without offset)
-      if self.slc_target > 0.0 and self.starpilot_planner.params_memory.get_bool("UnidenRadarAlertActive"):
-        if self.starpilot_planner.params.get_bool("UnidenAutoSlowdown"):
-          slc_control_target = self.slc_target
-          self._applied_slc_control_target = slc_control_target
-          targets.append(slc_control_target)
+      # Uniden Radar Auto-Slowdown (tiered offsets applied to the posted speed limit)
+      now_mono = time.monotonic()
+      radar_heartbeat = float(get_shm_param("UnidenRadarHeartbeat", 0.0) or 0.0)
+      radar_alive = (now_mono - radar_heartbeat) <= 3.0 if radar_heartbeat > 0 else True
+      uniden_slowdown = get_shm_param("UnidenAutoSlowdown", True) and get_shm_param("UnidenRadarAlertActive", False) and radar_alive
+
+      # Check for manual gas pedal override: hold until slowdown ends or gas is applied
+      gas_pressed = bool(sm["carState"].gasPressed or self.slc.overridden_speed > 0.0)
+      if uniden_slowdown:
+        if gas_pressed:
+          set_shm_param("RoadAlertGasOverride", True)
+      else:
+        set_shm_param("RoadAlertGasOverride", False)
+
+      gas_override = get_shm_param("RoadAlertGasOverride", False)
+      if uniden_slowdown and not gas_override:
+        if self.slc_target > 0.0:
+          offset_mph = 0
+          strength = int(get_shm_param("UnidenRadarAlertStrength", 0) or 0)
+          if 1 <= strength <= 2:
+            offset_mph = int(get_shm_param("UnidenSlowdownOffset1_2", 10) or 0)
+          elif 3 <= strength <= 5:
+            offset_mph = int(get_shm_param("UnidenSlowdownOffset3_5", 5) or 0)
+          elif strength >= 6:
+            offset_mph = int(get_shm_param("UnidenSlowdownOffset6_8", 0) or 0)
+          else:
+            offset_mph = 0
+
+          # If offset is negative (-1), slowdown for this tier is disabled
+          if offset_mph >= 0:
+            radar_target = self.slc_target + (offset_mph * CV.MPH_TO_MS)
+            slc_control_target = radar_target
+            self._applied_slc_control_target = slc_control_target
+            targets.append(slc_control_target)
 
       if self.nav_turn_target > 0.0:
         targets.append(self.nav_turn_target)
