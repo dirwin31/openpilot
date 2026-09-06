@@ -23,6 +23,9 @@ const state = reactive({
     UnidenR4MuteMemory: true,
     UnidenR4AlertVolume: 5,
     UnidenAutoSlowdown: true,
+    UnidenSlowdownOffset1_2: 10,
+    UnidenSlowdownOffset3_5: 5,
+    UnidenSlowdownOffset6_8: 0,
   }
 })
 
@@ -291,7 +294,7 @@ export function UnidenR4View() {
           <div class="uniden-setting-row">
             <div class="uniden-setting-info">
               <span class="uniden-setting-label">Auto-Slowdown on Radar Alert</span>
-              <span class="uniden-setting-desc">Automatically drop cruise speed to the active road speed limit when police radar is detected</span>
+              <span class="uniden-setting-desc">Automatically drop cruise speed relative to the speed limit when police radar is detected</span>
             </div>
             <label class="uniden-switch">
               <input type="checkbox" 
@@ -299,6 +302,58 @@ export function UnidenR4View() {
                      @change="${(e) => { const el = e && (e.currentTarget || e.target); if (el) updateSetting('UnidenAutoSlowdown', el.checked); }}" />
               <span class="uniden-slider"></span>
             </label>
+          </div>
+
+          <div class="uniden-setting-row">
+            <div class="uniden-setting-info">
+              <span class="uniden-setting-label">Signal 1–2 Target Speed (Low Alert)</span>
+              <span class="uniden-setting-desc">Cruise speed limit offset when distant or weak radar signal is detected</span>
+            </div>
+            <select class="uniden-select" 
+                    value="${() => String(state.settings.UnidenSlowdownOffset1_2 !== undefined ? state.settings.UnidenSlowdownOffset1_2 : 10)}"
+                    @change="${(e) => { const el = e && (e.currentTarget || e.target); if (el) updateSetting('UnidenSlowdownOffset1_2', parseInt(el.value, 10)); }}">
+              <option value="15" selected="${() => Number(state.settings.UnidenSlowdownOffset1_2) === 15}">Speed Limit + 15 mph</option>
+              <option value="10" selected="${() => Number(state.settings.UnidenSlowdownOffset1_2) === 10}">Speed Limit + 10 mph</option>
+              <option value="7" selected="${() => Number(state.settings.UnidenSlowdownOffset1_2) === 7}">Speed Limit + 7 mph</option>
+              <option value="5" selected="${() => Number(state.settings.UnidenSlowdownOffset1_2) === 5}">Speed Limit + 5 mph</option>
+              <option value="3" selected="${() => Number(state.settings.UnidenSlowdownOffset1_2) === 3}">Speed Limit + 3 mph</option>
+              <option value="0" selected="${() => Number(state.settings.UnidenSlowdownOffset1_2) === 0}">Exact Speed Limit (+0 mph)</option>
+              <option value="-1" selected="${() => Number(state.settings.UnidenSlowdownOffset1_2) === -1}">Disabled (No Slowdown)</option>
+            </select>
+          </div>
+
+          <div class="uniden-setting-row">
+            <div class="uniden-setting-info">
+              <span class="uniden-setting-label">Signal 3–5 Target Speed (Medium Alert)</span>
+              <span class="uniden-setting-desc">Cruise speed limit offset when approaching moderate radar signal</span>
+            </div>
+            <select class="uniden-select" 
+                    value="${() => String(state.settings.UnidenSlowdownOffset3_5 !== undefined ? state.settings.UnidenSlowdownOffset3_5 : 5)}"
+                    @change="${(e) => { const el = e && (e.currentTarget || e.target); if (el) updateSetting('UnidenSlowdownOffset3_5', parseInt(el.value, 10)); }}">
+              <option value="10" selected="${() => Number(state.settings.UnidenSlowdownOffset3_5) === 10}">Speed Limit + 10 mph</option>
+              <option value="7" selected="${() => Number(state.settings.UnidenSlowdownOffset3_5) === 7}">Speed Limit + 7 mph</option>
+              <option value="5" selected="${() => Number(state.settings.UnidenSlowdownOffset3_5) === 5}">Speed Limit + 5 mph</option>
+              <option value="3" selected="${() => Number(state.settings.UnidenSlowdownOffset3_5) === 3}">Speed Limit + 3 mph</option>
+              <option value="0" selected="${() => Number(state.settings.UnidenSlowdownOffset3_5) === 0}">Exact Speed Limit (+0 mph)</option>
+              <option value="-1" selected="${() => Number(state.settings.UnidenSlowdownOffset3_5) === -1}">Disabled (No Slowdown)</option>
+            </select>
+          </div>
+
+          <div class="uniden-setting-row">
+            <div class="uniden-setting-info">
+              <span class="uniden-setting-label">Signal 6–8 Target Speed (High Alert)</span>
+              <span class="uniden-setting-desc">Cruise speed limit offset when close or strong radar signal is detected</span>
+            </div>
+            <select class="uniden-select" 
+                    value="${() => String(state.settings.UnidenSlowdownOffset6_8 !== undefined ? state.settings.UnidenSlowdownOffset6_8 : 0)}"
+                    @change="${(e) => { const el = e && (e.currentTarget || e.target); if (el) updateSetting('UnidenSlowdownOffset6_8', parseInt(el.value, 10)); }}">
+              <option value="10" selected="${() => Number(state.settings.UnidenSlowdownOffset6_8) === 10}">Speed Limit + 10 mph</option>
+              <option value="7" selected="${() => Number(state.settings.UnidenSlowdownOffset6_8) === 7}">Speed Limit + 7 mph</option>
+              <option value="5" selected="${() => Number(state.settings.UnidenSlowdownOffset6_8) === 5}">Speed Limit + 5 mph</option>
+              <option value="3" selected="${() => Number(state.settings.UnidenSlowdownOffset6_8) === 3}">Speed Limit + 3 mph</option>
+              <option value="0" selected="${() => Number(state.settings.UnidenSlowdownOffset6_8) === 0}">Exact Speed Limit (+0 mph)</option>
+              <option value="-1" selected="${() => Number(state.settings.UnidenSlowdownOffset6_8) === -1}">Disabled (No Slowdown)</option>
+            </select>
           </div>
         </div>
 
