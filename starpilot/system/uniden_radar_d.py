@@ -1,5 +1,6 @@
 import asyncio
 import os
+import subprocess
 import sys
 import time
 
@@ -88,6 +89,8 @@ async def run_uniden_daemon():
     
     params = Params()
     last_alert_time = 0.0
+    last_sound_time = 0.0
+    last_sound_tier = 0
     was_onroad = False
     onroad_start_time = 0.0
     manual_window_start = 0.0
@@ -163,7 +166,7 @@ async def run_uniden_daemon():
             update_heartbeat()
 
             def on_alert_received(sender, data):
-                nonlocal last_alert_time
+                nonlocal last_alert_time, last_sound_time, last_sound_tier
                 try:
                     update_heartbeat()
                     alerts = parse_alerts(data)
@@ -174,14 +177,46 @@ async def run_uniden_daemon():
                     threats = [a for a in alerts if a.band.upper() in allowed_bands and (a.strength or 0) > 0]
                     if threats:
                         primary = max(threats, key=lambda a: a.strength or 0)
-                        last_alert_time = time.monotonic()
+                        now = time.monotonic()
+                        last_alert_time = now
                         set_shm_param("UnidenRadarAlertActive", True)
                         set_shm_param("UnidenRadarAlertBand", primary.band)
                         set_shm_param("UnidenRadarAlertStrength", primary.strength or 0)
                         set_shm_param("UnidenRadarAlertDescription", primary.description or primary.band)
+
+                        # Audio alert sound handling
+                        strength_val = primary.strength or 0
+                        tier = 0
+                        sound_param = None
+                        if 1 <= strength_val <= 2:
+                            tier = 1
+                            sound_param = "UnidenSoundSignal1_2"
+                        elif 3 <= strength_val <= 5:
+                            tier = 2
+                            sound_param = "UnidenSoundSignal3_5"
+                        elif strength_val >= 6:
+                            tier = 3
+                            sound_param = "UnidenSoundSignal6_8"
+
+                        if tier > 0 and sound_param:
+                            sound_choice = get_param(sound_param, DEFAULTS.get(sound_param, "disabled"))
+                            if sound_choice and sound_choice.lower() not in ("disabled", "none", "off"):
+                                # Escalation trigger or repeat interval debounce (4.0s)
+                                tier_escalated = tier > last_sound_tier
+                                repeat_due = (now - last_sound_time) >= 4.0
+                                if tier_escalated or repeat_due:
+                                    last_sound_time = now
+                                    last_sound_tier = tier
+                                    sound_file = f"/data/openpilot/selfdrive/assets/sounds/{sound_choice}"
+                                    if os.path.exists(sound_file):
+                                        try:
+                                            subprocess.Popen(["aplay", "-q", sound_file])
+                                        except Exception as err:
+                                            print(f"[uniden_radar_d] Error playing alert audio: {err}")
                     else:
                         if time.monotonic() - last_alert_time > 1.5:
                             clear_active_alert()
+                            last_sound_tier = 0
                 except Exception as e:
                     print(f"[uniden_radar_d] Error parsing alert packet: {e}")
 
