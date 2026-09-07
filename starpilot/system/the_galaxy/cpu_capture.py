@@ -12,8 +12,10 @@ extension. ``run_capture_loop`` imports ``messaging`` lazily for the same reason
 """
 
 import csv
+import json
 import os
 import time
+import uuid
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
@@ -54,7 +56,7 @@ CPU_CAPTURES_PATH = _DATA_ROOT / "cpu_captures"
 CAPTURE_INTERVAL_S = 3.0
 # Number of hottest processes recorded per row.
 TOP_PROCS = 8
-# Rolling file cap. At ~3s cadence this holds many hours of driving.
+# Rolling file cap, including the detailed process records.
 MAX_CAPTURE_BYTES = 5 * 1024 * 1024
 # After a trim, keep roughly this fraction of the cap so trims are infrequent.
 TRIM_TARGET_RATIO = 0.8
@@ -62,7 +64,8 @@ TRIM_TARGET_RATIO = 0.8
 CAPTURE_FILENAME = "cpu_capture.csv"
 CAPTURE_FILE = CPU_CAPTURES_PATH / CAPTURE_FILENAME
 
-CSV_HEADER = "timestamp,cpu_pct,cpu_cores,cpu_temp_c,gpu_temp_c,mem_pct,state,top_procs"
+LEGACY_CSV_HEADER = "timestamp,cpu_pct,cpu_cores,cpu_temp_c,gpu_temp_c,mem_pct,state,top_procs"
+CSV_HEADER = LEGACY_CSV_HEADER + ",device_type,git_commit,capture_session,monotonic_s,proc_sample_ns,proc_interval_s,processes"
 DRIVE_MARKER_STATE = "drive_start"
 
 
@@ -77,11 +80,11 @@ def _max_temp(values):
 
 
 def compute_process_cpu(procs, prev_totals, dt, max_pct=None):
-  """Return (sorted [(name, pct)], {pid: cpu_seconds}) from a procLog snapshot.
+  """Return sorted process records and CPU totals keyed by (PID, start time).
 
-  ``pct`` is single-core style (Δcpu_seconds / Δt * 100), matching ``top``; a
-  multi-threaded process can exceed 100. The first sample has no previous
-  totals to diff against, so it yields an empty list but still seeds totals.
+  CPU is own user + system time, with 100% meaning one busy core. ``dt`` must
+  span the two procLog timestamps, not the CSV write times. Keep mapd records
+  even when idle or newly observed (unknown CPU is None, not zero).
   """
   totals = {}
   usage = []
@@ -90,33 +93,46 @@ def compute_process_cpu(procs, prev_totals, dt, max_pct=None):
       pid = int(getattr(proc, "pid", 0) or 0)
     except (TypeError, ValueError):
       continue
-    name = str(getattr(proc, "name", "") or "").strip() or f"pid{pid}"
+    cmdline = list(getattr(proc, "cmdline", []) or [])
+    name = " ".join(cmdline) or str(getattr(proc, "exe", "") or getattr(proc, "name", "") or f"pid{pid}")
+    start_time = float(getattr(proc, "startTime", 0.0))
+    identity = (pid, start_time)
     total = float(getattr(proc, "cpuUser", 0.0) or 0.0) + float(getattr(proc, "cpuSystem", 0.0) or 0.0)
-    totals[pid] = total
+    totals[identity] = total
 
-    if not dt or dt <= 0:
+    prev = prev_totals.get(identity)
+    value = None
+    if dt and dt > 0 and prev is not None and total >= prev:
+      value = (total - prev) / dt * 100.0
+      if max_pct is not None:
+        value = min(value, max_pct)
+    is_mapd = getattr(proc, "name", "") == "mapd" or any(
+      Path(arg).name in ("mapd", "mapd_wrapper.py", "starpilot.navigation.mapd_wrapper", "openpilot.starpilot.navigation.mapd_wrapper")
+      for arg in cmdline
+    )
+    if not value and not is_mapd:
       continue
-    prev = prev_totals.get(pid)
-    if prev is None:
-      continue
-    used = total - prev
-    if used <= 0:
-      continue
-    value = used / dt * 100.0
-    if max_pct is not None:
-      value = min(value, max_pct)
-    usage.append((name, value))
+    usage.append({
+      "pid": pid, "start_time_s": start_time, "name": name,
+      "cpu_pct": round(value, 2) if value is not None else None,
+      "rss_bytes": int(getattr(proc, "memRss", 0)),
+      "threads": int(getattr(proc, "numThreads", 0)),
+      "processor": int(getattr(proc, "processor", 0)),
+      "ppid": int(getattr(proc, "ppid", 0)), "mapd": is_mapd,
+    })
 
-  usage.sort(key=lambda item: item[1], reverse=True)
+  usage.sort(key=lambda item: item["cpu_pct"] or 0, reverse=True)
   return usage, totals
 
 
 def format_top_procs(usage, top_n=TOP_PROCS):
-  """Format ``[(name, pct)]`` as ``"name:pct name:pct ..."`` (space separated)."""
+  """Format full commands and PIDs as space-separated name[pid]:pct entries."""
   parts = []
-  for name, value in usage[:top_n]:
-    clean = str(name).replace(" ", "_").replace(":", "").replace(",", "")
-    parts.append(f"{clean}:{round(value)}")
+  for proc in usage[:top_n]:
+    if not proc["cpu_pct"]:
+      continue
+    clean = "_".join(proc["name"].split()).replace(":", "").replace(",", "")
+    parts.append(f"{clean}[{proc['pid']}]:{round(proc['cpu_pct'])}")
   return " ".join(parts)
 
 
@@ -191,6 +207,18 @@ def _append_raw(text, path, header, max_bytes):
   path = Path(path)
   path.parent.mkdir(parents=True, exist_ok=True)
   write_header = not path.exists() or path.stat().st_size == 0
+  if not write_header and header == CSV_HEADER:
+    # Preserve old captures when adding columns; their new fields are unknown.
+    with open(path, encoding="utf-8", newline="") as f:
+      if f.readline().rstrip("\r\n") == LEGACY_CSV_HEADER:
+        tmp = path.with_name(path.name + ".tmp")
+        columns = header.split(",")
+        with open(tmp, "w", encoding="utf-8", newline="") as out:
+          writer = csv.writer(out, lineterminator="\n")
+          writer.writerow(columns)
+          for row in csv.reader(f):
+            writer.writerow(row + [""] * (len(columns) - len(row)))
+        os.replace(tmp, path)
   with open(path, "a", encoding="utf-8", newline="") as f:
     if write_header:
       f.write(header + "\n")
@@ -200,13 +228,13 @@ def _append_raw(text, path, header, max_bytes):
 
 def append_capture_row(fields, path=CAPTURE_FILE, header=CSV_HEADER, max_bytes=MAX_CAPTURE_BYTES):
   """Append a row to the rolling capture file, trimming oldest rows if capped."""
-  _append_raw(_csv_line(fields), path, header, max_bytes)
+  _append_raw(_csv_line(fields + [""] * (len(header.split(",")) - len(fields))), path, header, max_bytes)
 
 
 def append_drive_marker(now, path=CAPTURE_FILE, header=CSV_HEADER, max_bytes=MAX_CAPTURE_BYTES):
   """Append a valid CSV row marking the start of a new drive."""
   timestamp = now.isoformat(timespec="seconds") if isinstance(now, datetime) else str(now)
-  _append_raw(_csv_line([timestamp, "", "", "", "", "", DRIVE_MARKER_STATE, ""]), path, header, max_bytes)
+  append_capture_row([timestamp, "", "", "", "", "", DRIVE_MARKER_STATE, ""], path, header, max_bytes)
 
 
 def capture_status(path=CAPTURE_FILE):
@@ -248,6 +276,8 @@ def run_capture_loop(stop_event=None, path=CAPTURE_FILE, interval_s=CAPTURE_INTE
   captures the whole drive without a live connection to the device.
   """
   from cereal import messaging  # lazy: native msgq extension isn't importable everywhere
+  from openpilot.common.basedir import BASEDIR
+  from openpilot.common.git import get_commit
 
   sm = messaging.SubMaster(["deviceState", "procLog"])
   num_cores = os.cpu_count() or 8
@@ -256,6 +286,8 @@ def run_capture_loop(stop_event=None, path=CAPTURE_FILE, interval_s=CAPTURE_INTE
   prev_totals = {}
   prev_ts = None
   prev_started = None
+  capture_session = uuid.uuid4().hex
+  git_commit = get_commit(BASEDIR)
   next_emit = time.monotonic()
 
   cloudlog.info(f"cpu_capture writing to {path} every {interval_s}s")
@@ -280,16 +312,28 @@ def run_capture_loop(stop_event=None, path=CAPTURE_FILE, interval_s=CAPTURE_INTE
       prev_started = started
 
       top_procs = ""
+      proc_sample_ns = ""
+      proc_interval_s = ""
+      processes = ""
       if sm.valid.get("procLog") and sm.alive.get("procLog"):
-        dt = None if prev_ts is None else max(0.0, now - prev_ts)
-        usage, prev_totals = compute_process_cpu(sm["procLog"].procs, prev_totals, dt, max_pct)
-        prev_ts = now
-        top_procs = format_top_procs(usage)
+        sample_ns = sm.logMonoTime["procLog"]
+        if prev_ts is None or sample_ns != prev_ts:
+          dt = None if prev_ts is None or sample_ns < prev_ts else (sample_ns - prev_ts) / 1e9
+          usage, prev_totals = compute_process_cpu(sm["procLog"].procs, prev_totals, dt, max_pct)
+          prev_ts = sample_ns
+          proc_sample_ns = sample_ns
+          proc_interval_s = dt if dt is not None else ""
+          top_procs = format_top_procs(usage)
+          selected = [proc for i, proc in enumerate(usage) if i < TOP_PROCS or proc["mapd"]]
+          processes = json.dumps(selected, separators=(",", ":"))
       else:
         prev_totals = {}
         prev_ts = None
 
-      append_capture_row(build_capture_fields(datetime.now(), device_state, top_procs), path=path)
+      fields = build_capture_fields(datetime.now(), device_state, top_procs)
+      fields += [str(getattr(device_state, "deviceType", "")), git_commit, capture_session,
+                 round(now, 3), proc_sample_ns, proc_interval_s, processes]
+      append_capture_row(fields, path=path)
     except Exception:
       cloudlog.exception("cpu_capture iteration failed")
       time.sleep(interval_s)
