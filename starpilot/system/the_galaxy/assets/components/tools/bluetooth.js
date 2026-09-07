@@ -261,6 +261,7 @@ function deviceCapabilities(device) {
   const capabilities = []
   if (device.audio) capabilities.push("Audio")
   if (device.controller) capabilities.push("Controller")
+  if (device.uniden) capabilities.push("Radar detector")
   return capabilities.join(" · ") || "Bluetooth device"
 }
 
@@ -445,7 +446,7 @@ export function Bluetooth() {
           <i class="bi bi-bluetooth" aria-hidden="true"></i>
           <div>
           <h2>Bluetooth</h2>
-          <p>Connect speakers, headphones, media controls, and controllers.</p>
+          <p>Connect phones, Uniden detectors, speakers, and controllers.</p>
           </div>
         </div>
         <label class="bluetoothSwitch">

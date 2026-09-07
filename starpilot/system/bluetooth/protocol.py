@@ -44,6 +44,8 @@ class BluetoothDevice:
   uuids: tuple[str, ...] = ()
   audio: bool = False
   controller: bool = False
+  uniden: bool = False
+  services_resolved: bool = False
 
   @classmethod
   def from_dict(cls, value: dict[str, Any]) -> "BluetoothDevice":
@@ -58,6 +60,8 @@ class BluetoothDevice:
       uuids=tuple(str(uuid).lower() for uuid in value.get("uuids", ())),
       audio=bool(value.get("audio", False)),
       controller=bool(value.get("controller", False)),
+      uniden=bool(value.get("uniden", False)),
+      services_resolved=bool(value.get("services_resolved", False)),
     )
 
 
@@ -110,13 +114,18 @@ def device_capabilities(uuids: list[str] | tuple[str, ...], bluetooth_class: int
   return audio, controller
 
 
+def is_uniden_device(name: str) -> bool:
+  # Advertisement names used by the collaborator's Uniden integration.
+  return name.strip().upper().startswith(("R4@", "R8@", "R9@", "UNIDEN"))
+
+
 def show_pairing_device(address: str, name: str, paired: bool, trusted: bool, connected: bool, blocked: bool,
-                        audio: bool, controller: bool, discovering: bool = False) -> bool:
+                        audio: bool, controller: bool, discovering: bool = False, uniden: bool = False) -> bool:
   known = paired or trusted or connected
   normalized_address = "".join(character for character in address.upper() if character.isalnum())
   normalized_name = "".join(character for character in name.upper() if character.isalnum())
   named = bool(name) and name != "Unknown device" and normalized_name != normalized_address
-  return known or (named and not blocked and (audio or controller))
+  return known or (named and not blocked and (audio or controller or uniden or is_uniden_device(name)))
 
 
 class _DesktopFakeBluetooth:

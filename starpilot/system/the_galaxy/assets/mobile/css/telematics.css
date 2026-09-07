@@ -8,6 +8,11 @@
   max-width: 620px;
 }
 
+.telematics-bluetooth-setup { color: var(--text-muted); line-height: 1.5; }
+.telematics-bluetooth-setup ol { padding-left: 24px; }
+.telematics-bluetooth-setup li { margin-bottom: 16px; }
+.telematics-bluetooth-setup code { display: block; margin: 8px 0; overflow-wrap: anywhere; user-select: text; }
+
 .telematics-gate .gx-btn {
   display: flex;
   justify-content: center;

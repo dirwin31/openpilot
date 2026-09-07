@@ -1,6 +1,7 @@
 import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "../components/GxNotice.js"
+import { GalaxyModal } from "../components/GalaxyModal.js"
 import { store } from "../store.js"
 import { isIOSDevice } from "../browser.js"
 import { getLiveBLEClient } from "../ble/live_ble.js"
@@ -34,7 +35,7 @@ export const RoadPill = {
 
 export const Telematics = {
   name: "Telematics",
-  components: { TelematicsTile, RoadPill, GxNotice },
+  components: { TelematicsTile, RoadPill, GxNotice, GalaxyModal },
   data() {
     return {
       isLandscape: false,
@@ -53,6 +54,8 @@ export const Telematics = {
       deviceStatus: null,
       now: Date.now(),
       connecting: false,
+      showBluetoothSetup: false,
+      bluetoothSetupSkipped: false,
     }
   },
   computed: {
@@ -220,12 +223,30 @@ export const Telematics = {
       }
     },
     async connect() {
+      if (!this.bluetoothSetupSkipped && !this.ble.device && /Android/i.test(navigator.userAgent) && typeof navigator.bluetooth?.getDevices !== "function") {
+        this.showBluetoothSetup = true
+        return
+      }
       this.connecting = true
       try {
         if (["error", "needs-pairing"].includes(this.bleState)) await this.ble.reconnect()
         else await this.ble.connect()
       } catch (error) { /* State includes the actionable error. */ }
       finally { this.connecting = false }
+    },
+    continueBluetoothPairing() {
+      this.showBluetoothSetup = false
+      this.bluetoothSetupSkipped = true
+      // Keep the device chooser in the button's user activation.
+      return this.connect()
+    },
+    async copyBluetoothSetting(flag) {
+      try {
+        await navigator.clipboard.writeText(`chrome://flags/#${flag}`)
+        showSnackbar("Copied. Paste into Chrome's address bar.")
+      } catch (error) {
+        showSnackbar("Unable to copy. Select and copy the address shown below the setting.", "error")
+      }
     },
     disconnect() { this.ble?.disconnect() },
     async loadParams() {
@@ -290,6 +311,26 @@ export const Telematics = {
   },
   template: `
     <div class="telematics-page" :class="{ 'telematics-page--landscape': isLandscape }">
+      <GalaxyModal v-model="showBluetoothSetup" title="Reconnect after page reload" confirm-label="Continue pairing" cancel-label="Close" @confirm="continueBluetoothPairing">
+        <div class="telematics-bluetooth-setup">
+          <p>This browser cannot restore Bluetooth access after a page reload. You can still pair normally and tap Connect again after reloading.</p>
+          <p>To try automatic reconnect in Chrome on Android, enable these experimental settings. This page cannot open or change Chrome settings.</p>
+          <ol>
+            <li>
+              <strong>Experimental Web Platform features</strong>
+              <code>chrome://flags/#enable-experimental-web-platform-features</code>
+              <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-experimental-web-platform-features')">Copy address</button>
+            </li>
+            <li>
+              <strong>Web Bluetooth new permissions backend</strong>
+              <code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</code>
+              <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-web-bluetooth-new-permissions-backend')">Copy address</button>
+            </li>
+          </ol>
+          <p>Paste each address into Chrome's address bar and select Enabled. After changing both, relaunch Chrome, return to this same HTTPS page, and tap Connect to grant access again.</p>
+          <p>If either setting is unavailable, continue pairing. Automatic reconnect after reload may remain unavailable.</p>
+        </div>
+      </GalaxyModal>
       <div v-if="capability === 'insecure'" class="telematics-gate">
         <GxNotice tone="warn" icon="bi-shield-lock-fill" title="HTTPS required">
           Web Bluetooth needs a secure page. Open the HTTPS Galaxy listener, accept its one-time certificate warning, then connect. Prefer the stable https://starpilot-&lt;device&gt;.local:8443 address.

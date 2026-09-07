@@ -43,6 +43,8 @@ class BluetoothController:
     self._bluez_factory = bluez_factory
     self._radio = radio or BluetoothRadio()
     self._lock = threading.RLock()
+    self._connection_locks: dict[str, Any] = {}
+    self._reconnect_thread: threading.Thread | None = None
     self._bluez: BlueZClient | None = None
     self._companion: CompanionGattApplication | None = None
     self._companion_factory = companion_factory
@@ -291,6 +293,10 @@ class BluetoothController:
   def _offroad(self) -> bool:
     return self.params.get_bool("IsOffroad")
 
+  def _connection_lock(self, address: str):
+    with self._lock:
+      return self._connection_locks.setdefault(address.upper(), threading.Lock())
+
   def status(self) -> dict[str, Any]:
     # Status lazily initializes the radio, so serialize it with power changes.
     with self._lock:
@@ -325,7 +331,7 @@ class BluetoothController:
           for device in result["devices"]
         )
         prompt = result.get("prompt")
-        if prompt is not None and self._pairing_address:
+        if prompt is not None and self._pairing_address and not prompt.get("address"):
           prompt["address"] = self._pairing_address
           device = next((item for item in result["devices"] if item["address"].upper() == self._pairing_address.upper()), None)
           prompt["name"] = device["name"] if device else self._pairing_address
@@ -340,9 +346,14 @@ class BluetoothController:
       raise RuntimeError("Bluetooth settings can only be changed offroad")
 
   def _pair_worker(self, address: str) -> None:
+    client = None
     try:
-      self._client().pair(address)
-      status = self._client().device_for_address(address)
+      client = self._client()
+      with self._connection_lock(address):
+        client.pair(address)
+        status = client.device_for_address(address)
+        if status.get("uniden"):
+          client.connect(address)
       if status.get("audio") and not self.params.get("BluetoothAudioAddress", encoding="utf-8"):
         self.params.put("BluetoothAudioAddress", address)
       self._pairing_error = ""
@@ -351,7 +362,8 @@ class BluetoothController:
       cloudlog.exception("Bluetooth pairing failed")
     finally:
       try:
-        self._client().stop_discovery()
+        if client is not None:
+          client.stop_discovery()
       except Exception:
         pass
       self._pairing_address = ""
@@ -480,7 +492,7 @@ class BluetoothController:
       normalized_address = address.upper()
       self._reconnect_backoff.pop(normalized_address, None)
       self._manual_disconnect_until.pop(normalized_address, None)
-      with self._lock:
+      with self._connection_lock(normalized_address):
         self._connect(normalized_address)
     elif command == "disconnect":
       normalized_address = address.upper()
@@ -491,14 +503,15 @@ class BluetoothController:
       self._policy_disconnected.discard(normalized_address)
       self._policy_disconnect_retry_after.pop(normalized_address, None)
       try:
-        with self._lock:
+        with self._connection_lock(normalized_address):
           self._client().disconnect(normalized_address)
       except RuntimeError as error:
         if "notconnected" not in str(error).replace(" ", "").lower():
           self._manual_disconnect_until.pop(normalized_address, None)
           raise
     elif command == "forget":
-      self._client().remove(address)
+      with self._connection_lock(address):
+        self._client().remove(address)
       self._reconnect_backoff.pop(address.upper(), None)
       self._manual_disconnect_until.pop(address.upper(), None)
       self._policy_disconnected.discard(address.upper())
@@ -576,7 +589,7 @@ class BluetoothController:
       self._policy_disconnected.add(address)
       self._policy_disconnect_retry_after[address] = now + RECONNECT_INTERVAL_SECONDS
       try:
-        with self._lock:
+        with self._connection_lock(address):
           self._client().disconnect(address)
       except RuntimeError as error:
         if "notconnected" not in str(error).replace(" ", "").lower():
@@ -596,7 +609,7 @@ class BluetoothController:
         self._companion_pairing_deadline = 0.0
         self._pending_companion_paths.clear()
 
-  def _maintain_reconnects(self, status: dict[str, Any], now: float, suspend_controller_reconnect: bool) -> None:
+  def _maintain_reconnects(self, status: dict[str, Any], now: float, suspend_controller_reconnect: bool = False) -> None:
     devices = status["devices"]
     devices_by_address = {device["address"].upper(): device for device in devices}
     for address in list(self._policy_disconnected):
@@ -624,7 +637,7 @@ class BluetoothController:
     self._last_reconnect = now
     candidate_addresses = {device["address"].upper() for device in candidates}
     for address in list(self._manual_disconnect_until):
-      if address not in candidate_addresses or now >= self._manual_disconnect_until[address]:
+      if now >= self._manual_disconnect_until[address]:
         self._manual_disconnect_until.pop(address, None)
     for address in list(self._reconnect_backoff):
       if address not in candidate_addresses:
@@ -632,8 +645,10 @@ class BluetoothController:
     for device in candidates:
       # Initiate reconnects only for devices where the comma is the central.
       address = device["address"].upper()
+      if address in self._companion_addresses():
+        continue
       controller = device["controller"] or address in self._policy_disconnected
-      if not device["audio"] and not controller:
+      if not device["audio"] and not controller and not device.get("uniden", False):
         continue
       if suspend_controller_reconnect and controller:
         continue
@@ -643,8 +658,13 @@ class BluetoothController:
       if now < retry_after:
         continue
       try:
-        with self._lock:
-          self._client().connect(address, timeout=CONTROLLER_RECONNECT_INTERVAL_SECONDS if controller else 30.0)
+        with self._connection_lock(address):
+          if time.monotonic() < self._manual_disconnect_until.get(address, 0.0):
+            continue
+          if controller:
+            self._client().connect(address, timeout=CONTROLLER_RECONNECT_INTERVAL_SECONDS)
+          else:
+            self._client().connect(address)
         self._reconnect_backoff.pop(address, None)
       except Exception:
         attempts += 1
@@ -698,7 +718,11 @@ class BluetoothController:
         self._maintain_companion_pairing(now, status["offroad"])
         self._maintain_companion_advertisement(status)
         suspend_controller_reconnect = self._maintain_controller_offroad_policy(status, now)
-        self._maintain_reconnects(status, now, suspend_controller_reconnect)
+        if self._reconnect_thread is None or not self._reconnect_thread.is_alive():
+          self._reconnect_thread = threading.Thread(
+            target=self._maintain_reconnects, args=(status, now, suspend_controller_reconnect), daemon=True,
+          )
+          self._reconnect_thread.start()
       except Exception:
         cloudlog.exception("Bluetooth connection maintenance failed")
 

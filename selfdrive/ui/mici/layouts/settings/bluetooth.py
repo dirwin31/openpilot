@@ -63,6 +63,8 @@ class BluetoothDeviceButton(BigButton):
         capabilities.append("audio")
       if self.device.controller:
         capabilities.append("controller")
+      if self.device.uniden:
+        capabilities.append("radar detector")
       self.set_value("connected" + (f" / {' / '.join(capabilities)}" if capabilities else ""))
       self.set_enabled(True)
     elif self.device.paired:
@@ -74,6 +76,8 @@ class BluetoothDeviceButton(BigButton):
         capabilities.append("audio")
       if self.device.controller:
         capabilities.append("controller")
+      if self.device.uniden:
+        capabilities.append("radar detector")
       self.set_value("pair" + (f" / {' / '.join(capabilities)}" if capabilities else ""))
       self.set_enabled(self._offroad)
 

@@ -1149,16 +1149,26 @@ def test_bluez_companion_lookup_requires_persisted_bond():
   }
 
 
-def test_bluez_start_discovery_is_idempotent_when_already_discovering():
+def test_bluez_start_discovery_acquires_own_session_when_another_client_is_scanning():
   client = object.__new__(BlueZClient)
+  client._request_lock = threading.RLock()
+  client._discovery_path = None
   client.adapter = lambda: ("/org/bluez/hci0", {"Discovering": True})
-  client._call = lambda *_args, **_kwargs: pytest.fail("StartDiscovery should not be repeated")
+  calls = []
+  client._call = lambda *args: calls.append(args)
 
   client.start_discovery()
+  client.start_discovery()
+  client.stop_discovery()
+  client.stop_discovery()
+
+  assert [call[2] for call in calls] == ["StartDiscovery", "StopDiscovery"]
 
 
 def test_bluez_start_discovery_accepts_in_progress_race():
   client = object.__new__(BlueZClient)
+  client._request_lock = threading.RLock()
+  client._discovery_path = None
   client.adapter = lambda: ("/org/bluez/hci0", {"Discovering": False})
   client._call = lambda *_args, **_kwargs: (_ for _ in ()).throw(
     BlueZError("org.bluez.Error.InProgress", "Operation already in progress"),
@@ -1169,6 +1179,8 @@ def test_bluez_start_discovery_accepts_in_progress_race():
 
 def test_bluez_start_discovery_preserves_other_errors():
   client = object.__new__(BlueZClient)
+  client._request_lock = threading.RLock()
+  client._discovery_path = None
   client.adapter = lambda: ("/org/bluez/hci0", {"Discovering": False})
   client._call = lambda *_args, **_kwargs: (_ for _ in ()).throw(
     BlueZError("org.bluez.Error.Failed", "Discovery failed"),
@@ -1176,6 +1188,222 @@ def test_bluez_start_discovery_preserves_other_errors():
 
   with pytest.raises(RuntimeError, match="Discovery failed"):
     client.start_discovery()
+
+
+@pytest.mark.parametrize("name", ["R4@1234", "R8@1234", "R9@1234", "Uniden R4"])
+def test_uniden_discovery_preserves_phone_and_audio_classification(name):
+  client = object.__new__(BlueZClient)
+  objects = {
+    "/detector": {"org.bluez.Device1": {"Address": "00:11:22:33:44:55", "Name": name, "Alias": "My detector"}},
+    "/phone": {"org.bluez.Device1": {"Address": "00:11:22:33:44:66", "Name": "iPhone"}},
+    "/speaker": {"org.bluez.Device1": {"Address": "00:11:22:33:44:77", "Name": "Speaker", "UUIDs": [A2DP_SINK_UUID]}},
+  }
+  devices = client.devices(objects, include_discovering=True)
+  assert {device["name"] for device in devices} == {"My detector", "Speaker"}
+  detector = next(device for device in devices if device["uniden"])
+  assert not detector["audio"] and not detector["controller"]
+  assert BluetoothDevice.from_dict(detector).uniden
+  objects["/detector"]["org.bluez.Device1"]["Blocked"] = True
+  assert not any(device["uniden"] for device in client.devices(objects))
+
+
+def test_bluez_status_delivers_prompt_while_pair_reply_is_pending():
+  from jeepney.low_level import HeaderFields, MessageType
+  client = object.__new__(BlueZClient)
+  client._request_lock = threading.RLock()
+  client.agent = PairingAgent()
+  pending, release, status_done = threading.Event(), threading.Event(), threading.Event()
+  objects = {
+    "/adapter": {"org.bluez.Adapter1": {"Powered": True}},
+    "/device": {"org.bluez.Device1": {"Address": "00:11:22:33:44:55", "Name": "Keyboard"}},
+  }
+
+  def reply(message, timeout):
+    if message.header.fields[HeaderFields.member] == "Pair":
+      client.agent.display("display_passkey", "/device", "123456")
+      pending.set()
+      release.wait(2)
+    return SimpleNamespace(header=SimpleNamespace(message_type=MessageType.method_return), body=(objects,))
+
+  client.router = SimpleNamespace(send_and_get_reply=reply)
+  pair_worker = threading.Thread(target=lambda: client._call("/device", "org.bluez.Device1", "Pair"))
+  results = []
+  status_worker = threading.Thread(target=lambda: (results.append(client.status()), status_done.set()))
+  pair_worker.start()
+  try:
+    assert pending.wait(1)
+    status_worker.start()
+    assert status_done.wait(1), "Status must not wait for Pair to finish"
+    assert results[0]["prompt"]["value"] == "123456"
+  finally:
+    release.set()
+    pair_worker.join(timeout=3)
+    if status_worker.ident is not None:
+      status_worker.join(timeout=3)
+
+
+def test_uniden_connect_waits_for_services(monkeypatch):
+  client = object.__new__(BlueZClient)
+  states = iter((False, False, True))
+  client.device_for_address = lambda _address: {
+    "path": "/detector", "connected": True, "uniden": True, "services_resolved": next(states),
+  }
+  client._call = lambda *_args, **_kwargs: None
+  sleeps = []
+  monkeypatch.setattr("openpilot.starpilot.system.bluetooth.bluez.time.sleep", sleeps.append)
+  client.connect("00:11:22:33:44:55")
+  assert sleeps == [0.1]
+
+
+def test_uniden_failed_service_resolution_releases_link_for_retry(monkeypatch):
+  client = object.__new__(BlueZClient)
+  device = {"path": "/detector", "connected": True, "uniden": True, "services_resolved": False}
+  client.device_for_address = lambda _address: dict(device)
+  calls = []
+
+  def call(_path, _interface, method, **_kwargs):
+    calls.append(method)
+    if method == "Disconnect":
+      device["connected"] = False
+
+  client._call = call
+  monkeypatch.setattr("openpilot.starpilot.system.bluetooth.bluez.DEVICE_STATE_TIMEOUT", 0.0)
+  with pytest.raises(RuntimeError, match="Uniden Bluetooth services"):
+    client.connect("00:11:22:33:44:55")
+  assert calls == ["Connect", "Disconnect"]
+  assert not device["connected"]
+
+
+def test_phone_prompt_identity_is_preserved_during_detector_pairing():
+  client = FakeBlueZ()
+  phone = "00:11:22:33:44:66"
+  client.status = lambda: {"powered": True, "devices": [client.device], "prompt": {"address": phone, "name": "iPhone"}}
+  controller = BluetoothController(FakeParams(IsOffroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  controller._pairing_address = client.device["address"]
+  assert controller.status()["prompt"] == {"address": phone, "name": "iPhone"}
+
+
+def test_uniden_pair_connect_keeps_companion_service_and_audio_selection():
+  phone = "00:11:22:33:44:66"
+  params = FakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionDevices=[phone], BluetoothAudioAddress="speaker")
+  client = FakeBlueZ()
+  client.device.update(name="R4@1234", audio=False, uniden=True)
+  companions = []
+  controller = BluetoothController(params, lambda: client, FakeRadio(), FakeParams(),
+                                   companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1])
+  controller.status()
+  client.actions.clear()
+  controller._pair_worker(client.device["address"])
+  assert client.actions == [("pair", client.device["address"]), ("connect", client.device["address"]), ("stop_scan", "")]
+  assert len(companions) == 1 and not companions[0].closed
+  assert params.get("BluetoothCompanionDevices") == [phone]
+  assert params.get("BluetoothAudioAddress") == "speaker"
+
+
+def test_uniden_reconnect_shares_backoff_and_disconnect_suppression_with_other_devices():
+  phones = ["00:11:22:33:44:66", "00:11:22:33:44:77"]
+  params = FakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionDevices=phones)
+  client = FakeBlueZ()
+  controller = BluetoothController(params, lambda: client, FakeRadio(), FakeParams(), companion_factory=FakeCompanion)
+  status = controller.status()
+  detector = dict(client.device, audio=False, uniden=True)
+  status["devices"] = [detector] + [dict(client.device, address=address, name=name) for address, name in zip(phones, ["iPhone", "Android"], strict=True)]
+  attempts = []
+
+  def fail_connect(address):
+    attempts.append(address)
+    raise RuntimeError("detector is off")
+
+  client.connect = fail_connect
+  now = time.monotonic()
+  controller._maintain_reconnects(status, now)
+  assert attempts == [detector["address"]]  # Saved phones must initiate their companion connections.
+  assert controller._reconnect_backoff[detector["address"]] == (1, now + 15)
+  controller._maintain_reconnects(status, now + 15)
+  assert controller._reconnect_backoff[detector["address"]] == (2, now + 45)
+  controller.handle({"command": "disconnect", "address": detector["address"]})
+  controller._maintain_reconnects({**status, "devices": []}, now + 30)
+  assert detector["address"] in controller._manual_disconnect_until
+  controller._maintain_reconnects(status, now + 45)
+  assert attempts == [detector["address"], detector["address"]]
+
+
+def test_reconnect_does_not_block_phone_status():
+  client = FakeBlueZ()
+  client.device.update(audio=False, uniden=True)
+  controller = BluetoothController(FakeParams(IsOffroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  status = controller.status()
+  pending, release, status_done = threading.Event(), threading.Event(), threading.Event()
+  client.connect = lambda _address: (pending.set(), release.wait(2))
+  worker = threading.Thread(target=lambda: controller._maintain_reconnects(status, time.monotonic()))
+  status_worker = threading.Thread(target=lambda: (controller.status(), status_done.set()))
+  worker.start()
+  try:
+    assert pending.wait(1)
+    status_worker.start()
+    assert status_done.wait(1), "An unavailable detector must not block phone status"
+  finally:
+    release.set()
+    worker.join(timeout=3)
+    if status_worker.ident is not None:
+      status_worker.join(timeout=3)
+
+
+def test_slow_detector_reconnect_does_not_block_other_device_disconnect():
+  client = FakeBlueZ()
+  client.device.update(audio=False, uniden=True)
+  controller = BluetoothController(FakeParams(IsOffroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  status = controller.status()
+  pending, release, disconnected = threading.Event(), threading.Event(), threading.Event()
+  client.connect = lambda _address: (pending.set(), release.wait(2))
+  phone = "00:11:22:33:44:66"
+  worker = threading.Thread(target=lambda: controller._maintain_reconnects(status, time.monotonic()))
+  disconnect_worker = threading.Thread(target=lambda: (controller.handle({"command": "disconnect", "address": phone}), disconnected.set()))
+  worker.start()
+  try:
+    assert pending.wait(1)
+    disconnect_worker.start()
+    assert disconnected.wait(1)
+    assert ("disconnect", phone) in client.actions
+  finally:
+    release.set()
+    worker.join(timeout=3)
+    if disconnect_worker.ident is not None:
+      disconnect_worker.join(timeout=3)
+
+
+def test_companion_maintenance_continues_during_detector_reconnect(monkeypatch):
+  client = FakeBlueZ()
+  client.device.update(audio=False, uniden=True)
+  controller = BluetoothController(FakeParams(IsOffroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  controller.status()
+  pending, release = threading.Event(), threading.Event()
+  client.connect = lambda _address: (pending.set(), release.wait(2))
+  maintenance_calls = []
+  controller._maintain_companion_advertisement = lambda _status: maintenance_calls.append(True)
+
+  class StopMaintenance(Exception):
+    pass
+
+  sleeps = 0
+  def sleep(_delay):
+    nonlocal sleeps
+    sleeps += 1
+    if sleeps == 2:
+      assert pending.wait(1)
+    if sleeps == 3:
+      raise StopMaintenance
+
+  monkeypatch.setattr("openpilot.starpilot.system.bluetooth.daemon.time.sleep", sleep)
+  try:
+    with pytest.raises(StopMaintenance):
+      controller.maintain_connections()
+    assert maintenance_calls == [True, True]
+    assert controller._reconnect_thread.is_alive()
+  finally:
+    release.set()
+    if controller._reconnect_thread is not None:
+      controller._reconnect_thread.join(timeout=3)
 
 
 def test_disabled_status_does_not_start_radio_or_bluez():

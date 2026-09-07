@@ -88,9 +88,68 @@ def test_ble_client_uses_companion_service_and_coalesces_updates():
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
 def test_telematics_javascript_modules_parse(tmp_path):
-  for relative in ("js/ble/live_frames.js", "js/ble/live_ble.js", "js/views/Telematics.js"):
+  for relative in ("js/ble/live_frames.js", "js/ble/live_ble.js", "js/views/Telematics.js", "js/components/GalaxyModal.js"):
     source = UI_ROOT / relative
     target = tmp_path / (source.stem + ".mjs")
     target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     result = subprocess.run([shutil.which("node"), "--check", str(target)], capture_output=True, text=True)
     assert result.returncode == 0, f"{relative} failed to parse:\n{result.stderr}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
+def test_android_setup_preserves_pairing_and_existing_connections():
+  script = r'''
+import assert from "node:assert/strict"
+import fs from "node:fs"
+const notices = []
+globalThis.showSnackbar = (...args) => notices.push(args)
+const source = fs.readFileSync("js/views/Telematics.js", "utf8").replace(/^import .*$/gm, "")
+const moduleURL = (code) => `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
+const { Telematics } = await import(moduleURL("const GxNotice = {}, GalaxyModal = {};\n" + source))
+const bluetooth = {}
+Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Android", bluetooth } })
+let connects = 0
+let reconnects = 0
+const makeView = () => Object.assign(Telematics.data(), Telematics.methods, {
+  ble: { connect() { connects++ }, reconnect() { reconnects++ } },
+})
+const view = makeView()
+await view.connect()
+assert.equal(view.showBluetoothSetup, true)
+assert.equal(connects, 0, "Opening setup must not open the chooser")
+assert.equal(view.connecting, false)
+const pairing = view.continueBluetoothPairing()
+assert.equal(connects, 1, "Continue must invoke pairing before yielding user activation")
+await pairing
+assert.equal(view.showBluetoothSetup, false)
+await view.connect()
+assert.equal(connects, 2, "Skipping setup must allow subsequent pairing attempts")
+
+bluetooth.getDevices = async () => []
+const supported = makeView()
+await supported.connect()
+assert.equal(supported.showBluetoothSetup, false)
+assert.equal(connects, 3)
+delete bluetooth.getDevices
+const existing = makeView()
+existing.ble.device = { id: "remembered-in-this-page" }
+existing.bleState = "error"
+await existing.connect()
+assert.equal(existing.showBluetoothSetup, false)
+assert.equal(reconnects, 1, "Existing device reconnect must not require setup")
+navigator.userAgent = "Macintosh"
+const desktop = makeView()
+await desktop.connect()
+assert.equal(desktop.showBluetoothSetup, false)
+assert.equal(connects, 4)
+
+let copied
+navigator.clipboard = { async writeText(value) { copied = value } }
+await view.copyBluetoothSetting("enable-web-bluetooth-new-permissions-backend")
+assert.equal(copied, "chrome://flags/#enable-web-bluetooth-new-permissions-backend")
+delete navigator.clipboard
+await view.copyBluetoothSetting("enable-experimental-web-platform-features")
+assert.equal(notices.at(-1)[1], "error", "Clipboard failure must offer manual copying")
+'''
+  result = subprocess.run([shutil.which("node"), "--input-type=module", "-e", script], cwd=UI_ROOT, capture_output=True, text=True)
+  assert result.returncode == 0, result.stderr

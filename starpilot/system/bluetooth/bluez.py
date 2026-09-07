@@ -10,7 +10,7 @@ from jeepney.io.threading import DBusRouter, open_dbus_connection
 from jeepney.low_level import HeaderFields, MessageType
 from jeepney.wrappers import Properties
 
-from openpilot.starpilot.system.bluetooth.protocol import device_capabilities, show_pairing_device
+from openpilot.starpilot.system.bluetooth.protocol import device_capabilities, is_uniden_device, show_pairing_device
 
 
 BLUEZ = "org.bluez"
@@ -131,6 +131,7 @@ class BlueZClient:
   def __init__(self):
     self.router = DBusRouter(open_dbus_connection(bus="SYSTEM"))
     self._request_lock = threading.RLock()
+    self._discovery_path: str | None = None
     self._closed = threading.Event()
     self.agent = PairingAgent()
     self._agent_filter = self.router.filter(MatchRule(type="method_call", interface=AGENT_IFACE, path=AGENT_PATH), bufsize=20)
@@ -160,8 +161,9 @@ class BlueZClient:
   def _call(self, path: str, interface: str, member: str, signature: str | None = None, body: tuple = (), timeout: float = 15.0):
     address = DBusAddress(path, bus_name=BLUEZ, interface=interface)
     message = new_method_call(address, member, signature, body) if signature is not None else new_method_call(address, member)
-    with self._request_lock:
-      reply = self.router.send_and_get_reply(message, timeout=timeout)
+    # The threaded router matches concurrent replies. Waiting under a shared
+    # lock prevents status and pairing prompts from progressing during Pair.
+    reply = self.router.send_and_get_reply(message, timeout=timeout)
     if reply.header.message_type == MessageType.error:
       error_name = reply.header.fields.get(HeaderFields.error_name, "org.bluez.Error.Failed")
       detail = reply.body[0] if reply.body else error_name
@@ -275,9 +277,11 @@ class BlueZClient:
         "uuids": uuids,
         "audio": audio,
         "controller": controller,
+        "services_resolved": bool(props.get("ServicesResolved", False)),
       }
+      device["uniden"] = is_uniden_device(str(props.get("Name") or device["name"]))
       if include_hidden or show_pairing_device(device["address"], device["name"], device["paired"], device["trusted"], device["connected"],
-                                               device["blocked"], audio, controller, include_discovering):
+                                               device["blocked"], audio, controller, include_discovering, device["uniden"]):
         devices.append(device)
     return sorted(devices, key=lambda device: (not device["connected"], not device["paired"], -(device["rssi"] or -127), device["name"].lower()))
 
@@ -345,20 +349,26 @@ class BlueZClient:
       raise RuntimeError(str(reply.body[0] if reply.body else "Unable to change Bluetooth discoverability"))
 
   def start_discovery(self) -> None:
-    path, props = self.adapter()
-    if props.get("Discovering", False):
-      return
-    try:
-      self._call(path, ADAPTER_IFACE, "StartDiscovery")
-    except BlueZError as error:
-      # A concurrent scan already reached the desired state.
-      if error.name != "org.bluez.Error.InProgress":
-        raise
+    with self._request_lock:
+      path, props = self.adapter()
+      if self._discovery_path == path and props.get("Discovering", False):
+        return
+      self._discovery_path = None
+      try:
+        self._call(path, ADAPTER_IFACE, "StartDiscovery")
+      except BlueZError as error:
+        if error.name != "org.bluez.Error.InProgress":
+          raise
+      self._discovery_path = path
 
   def stop_discovery(self) -> None:
-    path, props = self.adapter()
-    if props.get("Discovering", False):
-      self._call(path, ADAPTER_IFACE, "StopDiscovery")
+    with self._request_lock:
+      if self._discovery_path is None:
+        return
+      path, props = self.adapter()
+      if path == self._discovery_path and props.get("Discovering", False):
+        self._call(path, ADAPTER_IFACE, "StopDiscovery")
+      self._discovery_path = None
 
   def device_for_address(self, address: str) -> dict[str, Any]:
     normalized = address.upper()
@@ -406,7 +416,15 @@ class BlueZClient:
   def connect(self, address: str, timeout: float = 30.0) -> None:
     device = self.device_for_address(address)
     self._call(device["path"], DEVICE_IFACE, "Connect", timeout=timeout)
-    self._wait_for_connection_state(address, True)
+    try:
+      self._wait_for_connection_state(address, True)
+    except Exception:
+      if device.get("uniden"):
+        try:
+          self.disconnect(address)
+        except Exception:
+          pass
+      raise
 
   def disconnect(self, address: str) -> None:
     device = self.device_for_address(address)
@@ -417,13 +435,17 @@ class BlueZClient:
     deadline = time.monotonic() + DEVICE_STATE_TIMEOUT
     while True:
       try:
-        if self.device_for_address(address).get("connected", False) == connected:
+        device = self.device_for_address(address)
+        if (device.get("connected", False) == connected and
+            (not connected or not device.get("uniden") or device.get("services_resolved", False))):
           return
       except RuntimeError as error:
         if not connected and "was not found" in str(error):
           return
         raise
       if time.monotonic() >= deadline:
+        if connected and device.get("connected") and device.get("uniden"):
+          raise RuntimeError("Uniden Bluetooth services did not become ready")
         state = "connect" if connected else "disconnect"
         raise RuntimeError(f"Bluetooth device did not {state}")
       time.sleep(0.1)
