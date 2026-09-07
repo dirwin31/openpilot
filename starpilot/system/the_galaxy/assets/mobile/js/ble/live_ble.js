@@ -14,6 +14,10 @@ const SECURITY_READ_RETRIES = 2
 const SECURITY_READ_RETRY_MS = 750
 const NOTIFICATION_RETRIES = 2
 const NOTIFICATION_RETRY_MS = 400
+// Android Chrome's gatt.connect() can hang indefinitely when the peripheral is
+// mid-teardown or briefly out of range. Bound it so a stuck attempt rejects and
+// the reconnect backoff can try again instead of leaving the view stuck.
+const CONNECT_TIMEOUT_MS = 12000
 
 class PairingRequiredError extends Error {
   constructor(cause) {
@@ -59,8 +63,12 @@ export class LiveBLEClient {
     this.manualDisconnect = false
     this.metadataPending = false
     this.connectionGeneration = 0
+    this.connectAttempt = 0
     this.lastMetadataRevision = null
     this.lastAlertID = null
+    this.lastLive = null
+    this.lastHealth = null
+    this.lastMetadata = undefined
     this._commandTail = Promise.resolve()
     this._onDisconnected = () => this._handleDisconnected()
     this._onNotification = (event) => this._handleNotification(event)
@@ -70,6 +78,50 @@ export class LiveBLEClient {
     this.state = state
     this.message = message
     this.callbacks.onState?.({ state, message, deviceName: this.device?.name || "Galaxy device" })
+  }
+
+  setCallbacks(callbacks = {}) {
+    this.callbacks = callbacks
+    this.closed = false
+  }
+
+  detach() {
+    this.callbacks = {}
+  }
+
+  isActive() {
+    if (["connecting", "reconnecting"].includes(this.state)) return true
+    return this.state === "connected" && this.device?.gatt?.connected === true
+  }
+
+  emitCurrent() {
+    this.callbacks.onState?.({ state: this.state, message: this.message, deviceName: this.device?.name || "Galaxy device" })
+    if (this.lastLive) this.callbacks.onLive?.(this.lastLive.frame, this.lastLive.session, this.lastLive.at)
+    if (this.lastHealth) this.callbacks.onHealth?.(this.lastHealth.frame, this.lastHealth.at)
+    if (this.lastMetadata !== undefined) this.callbacks.onMetadata?.(this.lastMetadata)
+  }
+
+  async _withTimeout(promise, ms, message, { onTimeout = null, onResolve = null } = {}) {
+    let timer = null
+    let timedOut = false
+    const observed = Promise.resolve(promise).then((value) => {
+      // A Web Bluetooth connect promise cannot be cancelled. Observe a late
+      // resolution so the caller can tear down a link that outlived its attempt.
+      onResolve?.({ timedOut })
+      return value
+    })
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true
+        onTimeout?.()
+        reject(new Error(message))
+      }, ms)
+    })
+    try {
+      return await Promise.race([observed, timeout])
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   async reconnectRemembered() {
@@ -111,22 +163,41 @@ export class LiveBLEClient {
 
   async _connectDevice(device, reconnecting) {
     clearTimeout(this.reconnectTimer)
+    const attempt = ++this.connectAttempt
     this.device = device
     this.manualDisconnect = false
     device.removeEventListener("gattserverdisconnected", this._onDisconnected)
     device.addEventListener("gattserverdisconnected", this._onDisconnected)
     this._setState(reconnecting ? "reconnecting" : "connecting", reconnecting ? "Reconnecting…" : "Connecting…")
     try {
-      const server = await device.gatt.connect()
+      const server = await this._withTimeout(
+        device.gatt.connect(),
+        CONNECT_TIMEOUT_MS,
+        "Bluetooth connection timed out",
+        {
+          onTimeout: () => {
+            if (attempt !== this.connectAttempt) return
+            try { device.gatt.disconnect() } catch (error) { /* The timed-out link is already gone. */ }
+          },
+          onResolve: ({ timedOut }) => {
+            if (!timedOut && attempt === this.connectAttempt) return
+            try { device.gatt.disconnect() } catch (error) { /* The stale link is already gone. */ }
+          },
+        },
+      )
+      if (attempt !== this.connectAttempt) return
       const service = await server.getPrimaryService(COMPANION_UUIDS.service)
+      if (attempt !== this.connectAttempt) return
       const [status, command, response, live] = await Promise.all([
         service.getCharacteristic(COMPANION_UUIDS.status),
         service.getCharacteristic(COMPANION_UUIDS.command),
         service.getCharacteristic(COMPANION_UUIDS.response),
         service.getCharacteristic(COMPANION_UUIDS.live),
       ])
+      if (attempt !== this.connectAttempt) return
       this.characteristics = { status, command, response, live }
       this.callbacks.onCapabilities?.(await this._readAuthenticatedStatus(status))
+      if (attempt !== this.connectAttempt) return
       live.removeEventListener("characteristicvaluechanged", this._onNotification)
       live.addEventListener("characteristicvaluechanged", this._onNotification)
       await this._startNotifications(live)
@@ -138,6 +209,7 @@ export class LiveBLEClient {
       this._setState("connected", `Connected to ${device.name || "Galaxy device"}`)
       void this._refreshMetadata()
     } catch (error) {
+      if (attempt !== this.connectAttempt) return
       this._handleError(error)
       if (reconnecting && !this.closed && !this.manualDisconnect) this._scheduleReconnect()
       throw error
@@ -178,7 +250,9 @@ export class LiveBLEClient {
     const frame = this.reassembler.consume(event.target?.value)
     if (!frame) return
     if (frame.kind === "health") {
-      this.callbacks.onHealth?.(frame, Date.now())
+      const at = Date.now()
+      this.lastHealth = { frame, at }
+      this.callbacks.onHealth?.(frame, at)
       return
     }
 
@@ -207,7 +281,9 @@ export class LiveBLEClient {
     const frame = this.pendingFrame
     this.pendingFrame = null
     this.lastPublishedAt = Date.now()
-    this.callbacks.onLive?.(frame, this.session.snapshot(), this.lastPublishedAt)
+    const session = this.session.snapshot()
+    this.lastLive = { frame, session, at: this.lastPublishedAt }
+    this.callbacks.onLive?.(frame, session, this.lastPublishedAt)
   }
 
   async command(op, payload = {}) {
@@ -237,6 +313,7 @@ export class LiveBLEClient {
       if (generation !== this.connectionGeneration || !this.device?.gatt?.connected) return
       this.lastMetadataRevision = revision
       this.lastAlertID = alertID
+      this.lastMetadata = metadata
       this.callbacks.onMetadata?.(metadata)
     } catch (error) {
       if (isPairingError(error)) this._handleError(error)
@@ -282,6 +359,9 @@ export class LiveBLEClient {
     this.lastPublishedAt = 0
     this.lastMetadataRevision = null
     this.lastAlertID = null
+    this.lastLive = null
+    this.lastHealth = null
+    this.lastMetadata = undefined
     this.session.reset()
     this.callbacks.onLive?.(null, this.session.snapshot(), null)
     this.callbacks.onHealth?.(null, null)
@@ -289,6 +369,7 @@ export class LiveBLEClient {
   }
 
   disconnect() {
+    this.connectAttempt += 1
     this.manualDisconnect = true
     clearTimeout(this.reconnectTimer)
     this.device?.gatt?.disconnect()
@@ -297,6 +378,7 @@ export class LiveBLEClient {
   }
 
   close() {
+    this.connectAttempt += 1
     this.closed = true
     this.manualDisconnect = true
     clearTimeout(this.reconnectTimer)
@@ -307,4 +389,9 @@ export class LiveBLEClient {
     this._clearTelemetry()
     this.characteristics = {}
   }
+}
+let sharedLiveBLEClient = null
+export function getLiveBLEClient() {
+  if (!sharedLiveBLEClient) sharedLiveBLEClient = new LiveBLEClient()
+  return sharedLiveBLEClient
 }

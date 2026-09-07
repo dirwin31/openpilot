@@ -2,6 +2,7 @@ import { store, navigate, goBack, toolHref, toggleTheme } from "../store.js"
 import { api } from "../api.js"
 import { usePolling } from "../composables.js"
 import { languageState, setLanguage, t } from "../i18n.js"
+import { isIOSDevice } from "../browser.js"
 
 const NAV = {
   recordings: [
@@ -35,7 +36,7 @@ const BOTTOM_NAV = [
 export const AppShell = {
   name: "AppShell",
   data() {
-    return { store, BOTTOM_NAV, NAV, telematicsLandscape: false }
+    return { store, BOTTOM_NAV, NAV, isIOS: isIOSDevice(), telematicsLandscape: false }
   },
   computed: {
     online() { return store.online },
@@ -169,10 +170,12 @@ export const AppShell = {
         </div>
         <div v-for="(links, section) in NAV" :key="section" class="gx-nav-section">
           <div class="gx-nav-section__title">{{ tr(section === 'recordings' ? 'Recordings' : 'Tools') }}</div>
-          <a v-for="link in links" :key="link.link" class="gx-nav-item"
-            :class="{ active: isActive(link.link) }" @click.prevent="navTo(link.link)">
-            <i class="bi" :class="link.icon"></i><span>{{ tr(link.name, link.name) }}</span>
-          </a>
+          <template v-for="link in links" :key="link.link">
+            <a v-if="!isIOS || link.link !== '/telematics'" class="gx-nav-item"
+              :class="{ active: isActive(link.link) }" @click.prevent="navTo(link.link)">
+              <i class="bi" :class="link.icon"></i><span>{{ tr(link.name, link.name) }}</span>
+            </a>
+          </template>
         </div>
       </aside>
 

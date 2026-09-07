@@ -2,7 +2,8 @@ import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "../components/GxNotice.js"
 import { store } from "../store.js"
-import { LiveBLEClient } from "../ble/live_ble.js"
+import { isIOSDevice } from "../browser.js"
+import { getLiveBLEClient } from "../ble/live_ble.js"
 import { hasFlag, LIVE_FLAGS } from "../ble/live_frames.js"
 
 const flag = (frame, name) => !!frame && hasFlag(frame.flags, LIVE_FLAGS[name])
@@ -237,6 +238,13 @@ export const Telematics = {
     setOrientation(event) { this.isLandscape = event.matches },
   },
   mounted() {
+    if (isIOSDevice()) {
+      const homeURL = new URL(window.location.href)
+      homeURL.hash = "/"
+      window.location.replace(homeURL.toString())
+      return
+    }
+
     if (window.location.protocol !== "https:") {
       this.capability = "insecure"
       window.location.replace(this.secureURL)
@@ -259,13 +267,15 @@ export const Telematics = {
     else if (!navigator.bluetooth) this.capability = "unsupported"
     else {
       this.capability = "ready"
-      this.ble = new LiveBLEClient({
+      this.ble = getLiveBLEClient()
+      this.ble.setCallbacks({
         onState: ({ state, message, deviceName }) => { this.bleState = state; this.bleMessage = message; this.deviceName = deviceName },
         onLive: (frame, session, updatedAt) => { this.frame = frame; this.session = session; this.liveUpdatedAt = updatedAt },
         onHealth: (frame, updatedAt) => { this.health = frame; this.healthUpdatedAt = updatedAt },
         onMetadata: (metadata) => { this.metadata = metadata },
       })
-      void this.ble.reconnectRemembered()
+      this.ble.emitCurrent()
+      if (!this.ble.manualDisconnect && !this.ble.isActive()) void this.ble.reconnectRemembered()
     }
   },
   beforeUnmount() {
@@ -276,7 +286,7 @@ export const Telematics = {
     }
     clearInterval(this.clock)
     this.devicePoll?.destroy()
-    this.ble?.close()
+    this.ble?.detach()
   },
   template: `
     <div class="telematics-page" :class="{ 'telematics-page--landscape': isLandscape }">

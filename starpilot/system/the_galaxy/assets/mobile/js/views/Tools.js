@@ -1,4 +1,5 @@
 import { navigate, toolHref } from "../store.js"
+import { isIOSDevice } from "../browser.js"
 
 const TOOLS = [
   { name: "Bluetooth", link: "/bluetooth", icon: "bi-bluetooth", desc: "Pair devices, controllers, & audio" },
@@ -17,7 +18,10 @@ const TOOLS = [
 
 export const Tools = {
   name: "Tools",
-  data() { return { TOOLS } },
+  data() { return { TOOLS, isIOS: isIOSDevice() } },
+  computed: {
+    visibleTools() { return this.isIOS ? TOOLS.filter((tool) => tool.link !== "/telematics") : TOOLS },
+  },
   methods: {
     open(t) {
       navigate(toolHref(t.link))
@@ -27,7 +31,7 @@ export const Tools = {
     <div>
       <h2 style="margin-top:0;">Tools</h2>
       <div class="gx-grid">
-        <button v-for="t in TOOLS" :key="t.link" type="button" class="gx-tile" @click="open(t)">
+        <button v-for="t in visibleTools" :key="t.link" type="button" class="gx-tile" @click="open(t)">
           <i class="bi" :class="t.icon"></i>
           <span>{{ t.name }}</span>
           <small style="color: var(--text-muted);">{{ t.desc }}</small>

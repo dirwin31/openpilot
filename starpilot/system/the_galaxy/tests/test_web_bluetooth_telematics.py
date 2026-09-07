@@ -28,6 +28,8 @@ def test_telematics_route_navigation_and_styles_are_wired():
   assert '"/dashboard"' not in shell
   assert 'name: "Telematics", link: "/telematics"' in shell
   assert 'name: "Telematics", link: "/telematics"' in tools
+  assert "isIOSDevice" in shell and "isIOSDevice" in tools
+  assert "visibleTools" in tools
   assert ':class="{ active: isActive(link.link) }"' in shell
   assert "fullScreenTelematics" in shell
   assert 'matchMedia("(orientation: landscape)")' in shell
@@ -39,6 +41,8 @@ def test_telematics_route_navigation_and_styles_are_wired():
 def test_telematics_has_security_gate_controls_and_complete_layouts():
   telematics = _read("js/views/Telematics.js")
   assert "window.isSecureContext" in telematics
+  assert "isIOSDevice" in telematics
+  assert "homeURL.hash = \"/\"" in telematics
   assert 'window.location.protocol !== "https:"' in telematics
   assert "window.location.replace(this.secureURL)" in telematics
   assert "navigator.bluetooth" in telematics
@@ -75,6 +79,9 @@ def test_ble_client_uses_companion_service_and_coalesces_updates():
   assert "SECURITY_READ_RETRIES" in client
   assert "_readAuthenticatedStatus" in client
   assert "_startNotifications" in client
+  assert "CONNECT_TIMEOUT_MS" in client
+  assert "device.gatt.disconnect()" in client
+  assert "this.device?.gatt?.connected === true" in client
   assert "allowGenericGattError" in client
   assert "demo" not in client.lower()
 
