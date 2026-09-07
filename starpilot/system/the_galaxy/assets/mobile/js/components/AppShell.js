@@ -10,7 +10,7 @@ const NAV = {
   tools: [
     { name: "Bluetooth", link: "/bluetooth", icon: "bi-bluetooth" },
     { name: "Cameras & Monitoring", link: "/cameras", icon: "bi-camera-video" },
-    { name: "Dashboard", link: "/dashboard", icon: "bi-speedometer2" },
+    { name: "Telematics", link: "/telematics", icon: "bi-speedometer2" },
     { name: "Galaxy", link: "/galaxy", icon: "bi-globe2" },
     { name: "Logs & Diagnostics", link: "/logs", icon: "bi-exclamation-triangle" },
     { name: "Model Manager", link: "/manage_models", icon: "bi-cpu" },
@@ -35,7 +35,7 @@ const BOTTOM_NAV = [
 export const AppShell = {
   name: "AppShell",
   data() {
-    return { store, BOTTOM_NAV, NAV, dashboardLandscape: false }
+    return { store, BOTTOM_NAV, NAV, telematicsLandscape: false }
   },
   computed: {
     online() { return store.online },
@@ -46,7 +46,7 @@ export const AppShell = {
       set(v) { store.drawerOpen = v },
     },
     activePath() { return store.route },
-    fullScreenDashboard() { return store.route === "/dashboard" && this.dashboardLandscape },
+    fullScreenTelematics() { return store.route === "/telematics" && this.telematicsLandscape },
     search: {
       get() { return store.search },
       set(v) { store.search = v },
@@ -102,20 +102,20 @@ export const AppShell = {
   },
   created() {
     this.loadLanguage()
-    this.dashboardMedia = window.matchMedia("(orientation: landscape)")
-    this.onDashboardOrientation = (event) => { this.dashboardLandscape = event.matches }
-    this.dashboardLandscape = this.dashboardMedia.matches
-    this.dashboardMedia.addEventListener?.("change", this.onDashboardOrientation)
+    this.telematicsMedia = window.matchMedia("(orientation: landscape)")
+    this.onTelematicsOrientation = (event) => { this.telematicsLandscape = event.matches }
+    this.telematicsLandscape = this.telematicsMedia.matches
+    this.telematicsMedia.addEventListener?.("change", this.onTelematicsOrientation)
     this.statusPoll = usePolling(() => this.refreshStatus(), { interval: 5000 })
     this.statusPoll.start()
   },
   beforeUnmount() {
-    this.dashboardMedia?.removeEventListener?.("change", this.onDashboardOrientation)
+    this.telematicsMedia?.removeEventListener?.("change", this.onTelematicsOrientation)
     this.statusPoll?.destroy()
   },
   template: `
-    <div class="gx-app" :class="{ 'gx-app--dashboard-landscape': fullScreenDashboard }">
-      <header v-if="!fullScreenDashboard" class="gx-appbar">
+    <div class="gx-app" :class="{ 'gx-app--telematics-landscape': fullScreenTelematics }">
+      <header v-if="!fullScreenTelematics" class="gx-appbar">
         <button type="button" class="gx-icon-btn gx-appbar__back gx-back-btn" :aria-label="tr('Back')" @click="back">
           <i class="bi bi-arrow-left"></i>
         </button>
@@ -169,7 +169,8 @@ export const AppShell = {
         </div>
         <div v-for="(links, section) in NAV" :key="section" class="gx-nav-section">
           <div class="gx-nav-section__title">{{ tr(section === 'recordings' ? 'Recordings' : 'Tools') }}</div>
-          <a v-for="link in links" :key="link.link" class="gx-nav-item" @click.prevent="navTo(link.link)">
+          <a v-for="link in links" :key="link.link" class="gx-nav-item"
+            :class="{ active: isActive(link.link) }" @click.prevent="navTo(link.link)">
             <i class="bi" :class="link.icon"></i><span>{{ tr(link.name, link.name) }}</span>
           </a>
         </div>
@@ -179,7 +180,7 @@ export const AppShell = {
         <slot />
       </main>
 
-      <nav v-if="!fullScreenDashboard" class="liquid-glass-nav">
+      <nav v-if="!fullScreenTelematics" class="liquid-glass-nav">
         <button v-for="item in BOTTOM_NAV" :key="item.link" type="button"
           class="nav-item" :class="{ active: isActive(item.link) }"
           @click="bottomNavTo(item)">

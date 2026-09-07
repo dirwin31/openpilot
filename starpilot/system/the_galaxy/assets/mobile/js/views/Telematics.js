@@ -9,13 +9,13 @@ const flag = (frame, name) => !!frame && hasFlag(frame.flags, LIVE_FLAGS[name])
 const finite = (value) => Number.isFinite(Number(value)) ? Number(value) : null
 const signed = (value, digits, suffix = "") => value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(digits)}${suffix}`
 
-export const DashTile = {
-  name: "DashTile",
+export const TelematicsTile = {
+  name: "TelematicsTile",
   props: { title: String, value: String, tint: { type: String, default: "var(--primary)" }, landscape: Boolean },
   template: `
-    <div class="dash-tile" :class="{ 'dash-tile--landscape': landscape }" :style="{ '--tile-tint': tint }">
-      <span class="dash-tile__title">{{ title }}</span>
-      <strong class="dash-tile__value">{{ value }}</strong>
+    <div class="telematics-tile" :class="{ 'telematics-tile--landscape': landscape }" :style="{ '--tile-tint': tint }">
+      <span class="telematics-tile__title">{{ title }}</span>
+      <strong class="telematics-tile__value">{{ value }}</strong>
     </div>
   `,
 }
@@ -24,16 +24,16 @@ export const RoadPill = {
   name: "RoadPill",
   props: { icon: String, title: String, value: String, tint: String },
   template: `
-    <div class="dash-road-pill" :style="{ '--pill-tint': tint }">
-      <div class="dash-road-pill__label"><i class="bi" :class="icon"></i><span>{{ title }}</span></div>
+    <div class="telematics-road-pill" :style="{ '--pill-tint': tint }">
+      <div class="telematics-road-pill__label"><i class="bi" :class="icon"></i><span>{{ title }}</span></div>
       <strong>{{ value }}</strong>
     </div>
   `,
 }
 
-export const Dashboard = {
-  name: "Dashboard",
-  components: { DashTile, RoadPill, GxNotice },
+export const Telematics = {
+  name: "Telematics",
+  components: { TelematicsTile, RoadPill, GxNotice },
   data() {
     return {
       isLandscape: false,
@@ -57,7 +57,7 @@ export const Dashboard = {
   computed: {
     connected() { return this.bleState === "connected" },
     canConnect() { return this.capability === "ready" && !["connecting", "reconnecting"].includes(this.bleState) },
-    insecureURL() {
+    secureURL() {
       const target = new URL(window.location.href)
       target.protocol = "https:"
       target.port = "8443"
@@ -94,7 +94,7 @@ export const Dashboard = {
     },
     driveStateDetail() {
       const frame = this.frame
-      if (!frame) return "Connect to the device over Bluetooth to populate the dashboard."
+      if (!frame) return "Connect to the device over Bluetooth to populate telematics."
       if (!flag(frame, "started")) return "Vehicle offroad"
       if (!flag(frame, "telemetryValid")) return "Waiting for valid vehicle state"
       if (flag(frame, "conditionalChill") && flag(frame, "longitudinalActive")) return ["Auto", "Vehicle Ahead", "Speed Threshold", "Manual"][frame.conditionalChillReason] || "Auto"
@@ -237,6 +237,12 @@ export const Dashboard = {
     setOrientation(event) { this.isLandscape = event.matches },
   },
   mounted() {
+    if (window.location.protocol !== "https:") {
+      this.capability = "insecure"
+      window.location.replace(this.secureURL)
+      return
+    }
+
     this.orientation = window.matchMedia("(orientation: landscape)")
     this.isLandscape = this.orientation.matches
     this.orientation.addEventListener?.("change", this.setOrientation)
@@ -264,105 +270,107 @@ export const Dashboard = {
   },
   beforeUnmount() {
     this.orientation?.removeEventListener?.("change", this.setOrientation)
-    document.removeEventListener("fullscreenchange", this.onFullscreenChange)
-    document.removeEventListener("webkitfullscreenchange", this.onFullscreenChange)
+    if (this.onFullscreenChange) {
+      document.removeEventListener("fullscreenchange", this.onFullscreenChange)
+      document.removeEventListener("webkitfullscreenchange", this.onFullscreenChange)
+    }
     clearInterval(this.clock)
     this.devicePoll?.destroy()
     this.ble?.close()
   },
   template: `
-    <div class="dash-page" :class="{ 'dash-page--landscape': isLandscape }">
-      <div v-if="capability === 'insecure'" class="dash-gate">
+    <div class="telematics-page" :class="{ 'telematics-page--landscape': isLandscape }">
+      <div v-if="capability === 'insecure'" class="telematics-gate">
         <GxNotice tone="warn" icon="bi-shield-lock-fill" title="HTTPS required">
           Web Bluetooth needs a secure page. Open the HTTPS Galaxy listener, accept its one-time certificate warning, then connect. Prefer the stable https://starpilot-&lt;device&gt;.local:8443 address.
         </GxNotice>
-        <a class="gx-btn gx-btn--block" :href="insecureURL">Open secure dashboard</a>
+        <a class="gx-btn gx-btn--block" :href="secureURL">Open secure telematics</a>
       </div>
-      <div v-else-if="capability === 'unsupported'" class="dash-gate">
+      <div v-else-if="capability === 'unsupported'" class="telematics-gate">
         <GxNotice tone="info" icon="bi-phone" title="Chrome on Android required">
-          This browser does not provide Web Bluetooth. Open this dashboard in Chrome on Android (or another browser with Web Bluetooth support).
+          This browser does not provide Web Bluetooth. Open this telematics page in Chrome on Android (or another browser with Web Bluetooth support).
         </GxNotice>
       </div>
       <template v-else>
-        <div v-if="!isLandscape" class="dash-connect-bar">
-          <span class="dash-status"><i :style="{ background: freshnessTint }"></i>{{ statusLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }}</small></span>
+        <div v-if="!isLandscape" class="telematics-connect-bar">
+          <span class="telematics-status"><i :style="{ background: freshnessTint }"></i>{{ statusLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }}</small></span>
           <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Disconnect</button>
           <button v-else class="gx-btn" type="button" :disabled="!canConnect || connecting" @click="connect"><i class="bi bi-bluetooth"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
         </div>
-        <GxNotice v-if="bleState === 'needs-pairing'" class="dash-pairing" tone="warn" icon="bi-bluetooth" title="Pair the device first" :text="bleMessage" />
-        <GxNotice v-else-if="bleState === 'error'" class="dash-pairing" tone="danger" icon="bi-exclamation-circle-fill" title="Bluetooth error" :text="bleMessage" />
+        <GxNotice v-if="bleState === 'needs-pairing'" class="telematics-pairing" tone="warn" icon="bi-bluetooth" title="Pair the device first" :text="bleMessage" />
+        <GxNotice v-else-if="bleState === 'error'" class="telematics-pairing" tone="danger" icon="bi-exclamation-circle-fill" title="Bluetooth error" :text="bleMessage" />
 
-        <div v-if="isLandscape" class="dash-landscape">
-          <aside class="dash-side dash-side--left">
-            <button class="dash-menu-button" type="button" aria-label="Open menu" @click="openMenu"><i class="bi bi-list"></i></button>
-            <DashTile landscape title="TEMP" :value="tempText" :tint="tempTint" />
-            <DashTile landscape title="CPU" :value="cpuText" :tint="cpuTint" />
-            <DashTile landscape title="MEMORY" :value="memoryText" :tint="memoryTint" />
-            <DashTile landscape title="MODEL" :value="modelText.toUpperCase()" :tint="flag(frame, 'bigModel') ? 'var(--primary)' : 'var(--text-muted)'" />
-            <DashTile landscape title="LATERAL" :value="lateralState.toUpperCase()" :tint="flag(frame, 'lateralActive') ? 'var(--success)' : 'var(--text-muted)'" />
-            <div class="dash-logo"><img src="/assets/images/main_logo.png" alt="Galaxy" /></div>
+        <div v-if="isLandscape" class="telematics-landscape">
+          <aside class="telematics-side telematics-side--left">
+            <button class="telematics-menu-button" type="button" aria-label="Open menu" @click="openMenu"><i class="bi bi-list"></i></button>
+            <TelematicsTile landscape title="TEMP" :value="tempText" :tint="tempTint" />
+            <TelematicsTile landscape title="CPU" :value="cpuText" :tint="cpuTint" />
+            <TelematicsTile landscape title="MEMORY" :value="memoryText" :tint="memoryTint" />
+            <TelematicsTile landscape title="MODEL" :value="modelText.toUpperCase()" :tint="flag(frame, 'bigModel') ? 'var(--primary)' : 'var(--text-muted)'" />
+            <TelematicsTile landscape title="LATERAL" :value="lateralState.toUpperCase()" :tint="flag(frame, 'lateralActive') ? 'var(--success)' : 'var(--text-muted)'" />
+            <div class="telematics-logo"><img src="/assets/images/main_logo.png" alt="Galaxy" /></div>
           </aside>
 
-          <section class="dash-center" :style="{ '--mode-color': modeColor }">
-            <div class="dash-center__connection">
+          <section class="telematics-center" :style="{ '--mode-color': modeColor }">
+            <div class="telematics-center__connection">
               <span>{{ statusLabel }} · {{ deviceStatusLabel }}</span>
-              <button class="dash-fullscreen-button" type="button" :aria-label="isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'"
+              <button class="telematics-fullscreen-button" type="button" :aria-label="isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'"
                 :title="isFullscreen ? 'Exit fullscreen' : 'Hide browser controls'" :aria-pressed="isFullscreen" @click="toggleFullscreen">
                 <i class="bi" :class="isFullscreen ? 'bi-fullscreen-exit' : 'bi-arrows-fullscreen'"></i>
               </button>
               <button v-if="connected" type="button" @click="disconnect">Disconnect</button>
               <button v-else type="button" :disabled="!canConnect || connecting" @click="connect">{{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
             </div>
-            <div class="dash-speed-row">
-              <div class="dash-target-sign"><span>MAX</span><strong>{{ setSpeedText }}</strong></div>
-              <div class="dash-hero">
-                <div class="dash-brand">Galaxy <i class="bi bi-stars"></i></div>
+            <div class="telematics-speed-row">
+              <div class="telematics-target-sign"><span>MAX</span><strong>{{ setSpeedText }}</strong></div>
+              <div class="telematics-hero">
+                <div class="telematics-brand">Galaxy <i class="bi bi-stars"></i></div>
                 <template v-if="connected && frame && flag(frame, 'standstill')">
-                  <strong class="dash-stopped-main">{{ stoppedMinutes }} minute{{ stoppedMinutes === 1 ? '' : 's' }}</strong>
-                  <span class="dash-stopped-detail">{{ stoppedSecondsPart }} second{{ stoppedSecondsPart === 1 ? '' : 's' }} stopped</span>
+                  <strong class="telematics-stopped-main">{{ stoppedMinutes }} minute{{ stoppedMinutes === 1 ? '' : 's' }}</strong>
+                  <span class="telematics-stopped-detail">{{ stoppedSecondsPart }} second{{ stoppedSecondsPart === 1 ? '' : 's' }} stopped</span>
                 </template>
                 <template v-else-if="connected">
-                  <div class="dash-current-speed"><strong>{{ currentSpeedText }}</strong><span>{{ speedUnit }}</span></div>
-                  <span class="dash-drive-title" :style="{ color: modeColor }">{{ driveStateTitle }}</span>
+                  <div class="telematics-current-speed"><strong>{{ currentSpeedText }}</strong><span>{{ speedUnit }}</span></div>
+                  <span class="telematics-drive-title" :style="{ color: modeColor }">{{ driveStateTitle }}</span>
                 </template>
-                <strong v-else class="dash-not-connected">Not connected</strong>
+                <strong v-else class="telematics-not-connected">Not connected</strong>
               </div>
-              <div class="dash-limit-slot"><div v-if="hasSpeedLimit" class="dash-limit-sign"><span>SPEED<br>LIMIT</span><strong>{{ speedLimitText }}</strong></div></div>
+              <div class="telematics-limit-slot"><div v-if="hasSpeedLimit" class="telematics-limit-sign"><span>SPEED<br>LIMIT</span><strong>{{ speedLimitText }}</strong></div></div>
             </div>
-            <div class="dash-status-slot">
-              <div v-if="experimentalInfo" class="dash-mode-pill" :style="{ '--pill-tint': experimentalInfo.tint }"><span>{{ experimentalInfo.text }}</span><i class="bi" :class="experimentalInfo.icon"></i></div>
+            <div class="telematics-status-slot">
+              <div v-if="experimentalInfo" class="telematics-mode-pill" :style="{ '--pill-tint': experimentalInfo.tint }"><span>{{ experimentalInfo.text }}</span><i class="bi" :class="experimentalInfo.icon"></i></div>
             </div>
-            <div class="dash-alert-slot"><div v-if="alertText" class="dash-alert"><i class="bi bi-exclamation-triangle-fill"></i><span>{{ alertText }}</span></div></div>
-            <div class="dash-road-list"><RoadPill v-for="pill in roadPills" :key="pill.title" v-bind="pill" /></div>
+            <div class="telematics-alert-slot"><div v-if="alertText" class="telematics-alert"><i class="bi bi-exclamation-triangle-fill"></i><span>{{ alertText }}</span></div></div>
+            <div class="telematics-road-list"><RoadPill v-for="pill in roadPills" :key="pill.title" v-bind="pill" /></div>
           </section>
 
-          <aside class="dash-side dash-side--right">
-            <DashTile landscape title="STEER DELAY" :value="param('SteerDelay')" />
-            <DashTile landscape title="LAT ACCEL" :value="param('SteerLatAccel')" />
-            <DashTile landscape title="STEER RATIO" :value="param('SteerRatio')" />
-            <DashTile landscape title="STEER ANGLE" :value="angle(frame?.steeringAngle)" tint="var(--success)" />
-            <DashTile landscape title="DRIVER TORQUE" :value="torqueText" tint="var(--success)" />
-            <DashTile landscape title="FRICTION" :value="param('SteerFriction')" />
-            <DashTile landscape title="LATERAL %" :value="percent(session.lateralPercent)" tint="var(--success)" />
+          <aside class="telematics-side telematics-side--right">
+            <TelematicsTile landscape title="STEER DELAY" :value="param('SteerDelay')" />
+            <TelematicsTile landscape title="LAT ACCEL" :value="param('SteerLatAccel')" />
+            <TelematicsTile landscape title="STEER RATIO" :value="param('SteerRatio')" />
+            <TelematicsTile landscape title="STEER ANGLE" :value="angle(frame?.steeringAngle)" tint="var(--success)" />
+            <TelematicsTile landscape title="DRIVER TORQUE" :value="torqueText" tint="var(--success)" />
+            <TelematicsTile landscape title="FRICTION" :value="param('SteerFriction')" />
+            <TelematicsTile landscape title="LATERAL %" :value="percent(session.lateralPercent)" tint="var(--success)" />
           </aside>
         </div>
 
-        <div v-else class="dash-portrait">
-          <section class="dash-instrument" :style="{ '--mode-color': modeColor }">
-            <div class="dash-portrait-top">
-              <div class="dash-target-sign"><span>MAX</span><strong>{{ setSpeedText }}</strong></div>
-              <div class="dash-portrait-title"><strong>Galaxy <i class="bi bi-stars"></i></strong><span>{{ connected ? driveStateDetail : 'Not connected' }}</span></div>
-              <div v-if="hasSpeedLimit" class="dash-limit-sign dash-limit-sign--portrait"><span>SPEED<br>LIMIT</span><strong>{{ speedLimitText }}</strong></div>
-              <div class="dash-speed-badge"><span>{{ speedUnit.toUpperCase() }}</span><strong>{{ currentSpeedText }}</strong></div>
+        <div v-else class="telematics-portrait">
+          <section class="telematics-instrument" :style="{ '--mode-color': modeColor }">
+            <div class="telematics-portrait-top">
+              <div class="telematics-target-sign"><span>MAX</span><strong>{{ setSpeedText }}</strong></div>
+              <div class="telematics-portrait-title"><strong>Galaxy <i class="bi bi-stars"></i></strong><span>{{ connected ? driveStateDetail : 'Not connected' }}</span></div>
+              <div v-if="hasSpeedLimit" class="telematics-limit-sign telematics-limit-sign--portrait"><span>SPEED<br>LIMIT</span><strong>{{ speedLimitText }}</strong></div>
+              <div class="telematics-speed-badge"><span>{{ speedUnit.toUpperCase() }}</span><strong>{{ currentSpeedText }}</strong></div>
             </div>
-            <div class="dash-status-slot"><div v-if="experimentalInfo" class="dash-mode-pill" :style="{ '--pill-tint': experimentalInfo.tint }"><span>{{ experimentalInfo.text }}</span><i class="bi" :class="experimentalInfo.icon"></i></div></div>
-            <div v-if="connected && frame && flag(frame, 'standstill')" class="dash-stopped-line"><i class="bi bi-stopwatch"></i> {{ stoppedText }}</div>
-            <div class="dash-road-list"><RoadPill v-for="pill in roadPills" :key="pill.title" v-bind="pill" /></div>
-            <div v-if="alertText" class="dash-alert"><i class="bi bi-exclamation-triangle-fill"></i><span>{{ alertText }}</span></div>
+            <div class="telematics-status-slot"><div v-if="experimentalInfo" class="telematics-mode-pill" :style="{ '--pill-tint': experimentalInfo.tint }"><span>{{ experimentalInfo.text }}</span><i class="bi" :class="experimentalInfo.icon"></i></div></div>
+            <div v-if="connected && frame && flag(frame, 'standstill')" class="telematics-stopped-line"><i class="bi bi-stopwatch"></i> {{ stoppedText }}</div>
+            <div class="telematics-road-list"><RoadPill v-for="pill in roadPills" :key="pill.title" v-bind="pill" /></div>
+            <div v-if="alertText" class="telematics-alert"><i class="bi bi-exclamation-triangle-fill"></i><span>{{ alertText }}</span></div>
           </section>
-          <section class="dash-steering">
+          <section class="telematics-steering">
             <h2><i class="bi bi-speedometer2"></i> Steering and control</h2>
-            <div class="dash-tile-grid"><DashTile v-for="tile in portraitTiles" :key="tile[0]" :title="tile[0]" :value="tile[1]" /></div>
+            <div class="telematics-tile-grid"><TelematicsTile v-for="tile in portraitTiles" :key="tile[0]" :title="tile[0]" :value="tile[1]" /></div>
           </section>
         </div>
       </template>

@@ -1,0 +1,223 @@
+.telematics-page {
+  min-height: 100%;
+  width: 100%;
+}
+
+.telematics-gate {
+  margin: min(12vh, 80px) auto;
+  max-width: 620px;
+}
+
+.telematics-gate .gx-btn {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+  text-decoration: none;
+}
+
+.telematics-connect-bar {
+  align-items: center;
+  background: var(--surface-container);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 0 auto 12px;
+  max-width: 760px;
+  padding: 10px 12px;
+}
+
+.telematics-connect-bar .gx-btn { min-height: 40px; padding: 8px 14px; }
+.telematics-status { align-items: center; display: flex; font-size: 14px; font-weight: var(--fw-bold); gap: 8px; min-width: 0; }
+.telematics-status > i { background: var(--text-muted); border-radius: 50%; height: 8px; width: 8px; }
+.telematics-status small { color: var(--text-muted); font-weight: var(--fw-normal); }
+.telematics-pairing { margin: 0 auto 10px; max-width: 760px; }
+
+.telematics-portrait { margin: 0 auto; max-width: 760px; }
+.telematics-instrument, .telematics-center {
+  background: linear-gradient(145deg, var(--surface-container-high), var(--surface-container), var(--background));
+  border: 3.5px solid var(--mode-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elev-1);
+}
+
+.telematics-instrument { padding: 14px; }
+.telematics-portrait-top { align-items: center; display: flex; gap: 8px; min-width: 0; }
+.telematics-target-sign, .telematics-speed-badge {
+  align-items: center;
+  background: color-mix(in srgb, var(--background) 85%, transparent);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex: 0 0 78px;
+  flex-direction: column;
+  height: 64px;
+  justify-content: center;
+}
+
+.telematics-target-sign span, .telematics-speed-badge span { color: var(--text-muted); font-size: 10px; font-weight: var(--fw-bold); }
+.telematics-target-sign strong, .telematics-speed-badge strong { font-size: 27px; font-variant-numeric: tabular-nums; line-height: 1.05; }
+.telematics-speed-badge { border-color: var(--primary); }
+.telematics-speed-badge span { color: var(--primary); }
+.telematics-portrait-title { align-items: center; display: flex; flex: 1; flex-direction: column; min-width: 0; text-align: center; }
+.telematics-portrait-title strong { font-size: 22px; }
+.telematics-portrait-title i { color: var(--primary); font-size: 16px; }
+.telematics-portrait-title span { color: var(--text-muted); display: -webkit-box; font-size: 12px; font-weight: var(--fw-bold); -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+
+.telematics-limit-sign {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.96);
+  border: 2px solid #111;
+  border-radius: 6px;
+  color: #090909;
+  display: flex;
+  flex-direction: column;
+  height: 60px;
+  justify-content: center;
+  width: 64px;
+}
+
+.telematics-limit-sign span { font-size: 8px; font-weight: 800; line-height: 0.85; text-align: center; }
+.telematics-limit-sign strong { font-size: 26px; font-variant-numeric: tabular-nums; line-height: 1; }
+.telematics-limit-sign--portrait { flex: 0 0 54px; height: 64px; width: 54px; }
+.telematics-limit-sign--portrait strong { font-size: 22px; }
+
+.telematics-status-slot { align-items: center; display: flex; height: 42px; margin-top: 4px; }
+.telematics-mode-pill {
+  align-items: center;
+  background: color-mix(in srgb, var(--pill-tint) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pill-tint) 40%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--on-surface);
+  display: flex;
+  font-size: 15px;
+  font-weight: var(--fw-bold);
+  height: 32px;
+  justify-content: center;
+  padding: 0 12px 0 32px;
+  position: relative;
+  text-align: center;
+  width: 100%;
+}
+
+.telematics-mode-pill i { color: var(--pill-tint); margin-left: auto; width: 20px; }
+.telematics-mode-pill span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.telematics-stopped-line { color: var(--warning); font-size: 13px; font-weight: var(--fw-bold); margin-bottom: 8px; text-align: center; }
+.telematics-road-list { display: grid; gap: 6px; }
+.telematics-road-pill {
+  align-items: center;
+  background: color-mix(in srgb, var(--background) 75%, transparent);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: 12px;
+  height: 38px;
+  justify-content: space-between;
+  padding: 0 12px;
+}
+
+.telematics-road-pill__label { align-items: center; color: var(--text-muted); display: flex; font-size: 11px; font-weight: var(--fw-bold); gap: 8px; white-space: nowrap; }
+.telematics-road-pill__label i { color: var(--pill-tint); font-size: 15px; width: 20px; }
+.telematics-road-pill strong { font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.telematics-alert {
+  align-items: center;
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 50%, transparent);
+  border-radius: var(--radius-sm);
+  display: flex;
+  font-size: 13px;
+  font-weight: var(--fw-bold);
+  gap: 8px;
+  min-height: 38px;
+  padding: 7px 12px;
+}
+
+.telematics-alert i { color: var(--warning); }
+.telematics-instrument > .telematics-alert { margin-top: 8px; }
+.telematics-steering {
+  background: var(--surface-container);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  margin-top: 10px;
+  padding: 14px;
+}
+
+.telematics-steering h2 { align-items: center; display: flex; font-size: 16px; gap: 8px; margin: 0 0 10px; }
+.telematics-steering h2 i { color: var(--primary); }
+.telematics-tile-grid { display: grid; gap: 6px 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.telematics-tile {
+  background: var(--surface-container-high);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  min-height: 52px;
+  overflow: hidden;
+  padding: 6px 10px 6px 13px;
+  position: relative;
+}
+
+.telematics-tile::before { background: var(--tile-tint); bottom: 3px; content: ""; left: 0; position: absolute; top: 3px; width: 3px; }
+.telematics-tile__title { color: var(--text-muted); font-size: 10px; font-weight: var(--fw-bold); white-space: nowrap; }
+.telematics-tile__value { font-size: 17px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.telematics-landscape { display: grid; gap: 8px; grid-template-columns: clamp(165px, 20.5vw, 185px) minmax(340px, 1fr) clamp(165px, 20.5vw, 185px); min-height: max(355px, calc(100dvh - 16px)); padding: 8px; }
+.telematics-side { display: grid; gap: 5px; grid-auto-rows: minmax(34px, 1fr); }
+.telematics-menu-button, .telematics-logo {
+  align-items: center;
+  background: var(--surface-container);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  color: var(--on-surface);
+  display: flex;
+  justify-content: center;
+}
+
+.telematics-menu-button { cursor: pointer; min-height: 34px; }
+.telematics-menu-button i { font-size: 20px; }
+.telematics-logo img { height: 28px; object-fit: contain; width: 28px; }
+.telematics-tile--landscape { align-items: center; justify-content: center; min-height: 34px; padding: 3px 7px 3px 10px; text-align: center; }
+.telematics-tile--landscape .telematics-tile__title { font-size: 9.5px; }
+.telematics-tile--landscape .telematics-tile__value { font-size: 15px; white-space: normal; }
+.telematics-center { display: flex; flex-direction: column; min-width: 340px; padding: 14px; position: relative; }
+.telematics-center__connection { align-items: center; display: flex; font-size: 10px; gap: 6px; left: 14px; position: absolute; right: 14px; top: 7px; z-index: 1; }
+.telematics-center__connection span { color: var(--text-muted); margin-right: auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.telematics-center__connection button { background: transparent; border: 0; color: var(--primary); cursor: pointer; font: inherit; font-weight: var(--fw-bold); padding: 2px 4px; }
+.telematics-center__connection button:disabled { color: var(--text-muted); }
+.telematics-center__connection .telematics-fullscreen-button { align-items: center; display: inline-flex; font-size: 14px; justify-content: center; min-height: 24px; min-width: 28px; }
+.telematics-speed-row { align-items: flex-start; display: grid; gap: 12px; grid-template-columns: 86px minmax(0, 1fr) 86px; height: 124px; padding-top: 13px; }
+.telematics-speed-row .telematics-target-sign { flex-basis: 86px; height: 60px; width: 86px; }
+.telematics-limit-slot { display: flex; height: 60px; justify-content: center; width: 86px; }
+.telematics-hero { align-items: center; display: flex; flex-direction: column; height: 111px; min-width: 0; }
+.telematics-brand { font-size: 17px; font-weight: var(--fw-bold); }
+.telematics-brand i { color: var(--primary); font-size: 15px; }
+.telematics-current-speed { align-items: baseline; display: flex; gap: 4px; line-height: 1; }
+.telematics-current-speed strong { font-size: clamp(45px, 7vw, 60px); font-variant-numeric: tabular-nums; }
+.telematics-current-speed span { color: var(--text-muted); font-size: 16px; font-weight: var(--fw-bold); }
+.telematics-drive-title { font-size: 18px; font-weight: var(--fw-bold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.telematics-not-connected { color: var(--text-muted); font-size: 16px; margin-top: 30px; }
+.telematics-stopped-main { color: var(--success); font-size: clamp(26px, 4vw, 36px); margin-top: 7px; white-space: nowrap; }
+.telematics-stopped-detail { font-size: 18px; font-weight: var(--fw-bold); white-space: nowrap; }
+.telematics-center .telematics-status-slot { margin-top: 4px; }
+.telematics-alert-slot { height: 42px; margin-top: auto; }
+.telematics-alert-slot .telematics-alert { height: 38px; overflow: hidden; }
+.telematics-center .telematics-road-list { margin-top: 0; }
+
+.gx-app--telematics-landscape { height: 100dvh; min-height: 355px; overflow: auto; }
+.gx-app--telematics-landscape > .gx-content { contain: none; margin: 0; padding: 0; }
+
+@media (max-width: 520px) {
+  .telematics-connect-bar { align-items: stretch; }
+  .telematics-status { align-items: flex-start; flex: 1; flex-direction: column; gap: 2px; }
+  .telematics-status > i { display: none; }
+  .telematics-portrait-top { gap: 5px; }
+  .telematics-target-sign, .telematics-speed-badge { flex-basis: 66px; width: 66px; }
+  .telematics-portrait-title strong { font-size: 18px; }
+  .telematics-limit-sign--portrait { flex-basis: 48px; width: 48px; }
+}
+
+@media (orientation: landscape) {
+  .telematics-page--landscape { min-height: 355px; }
+  .telematics-page--landscape > .telematics-pairing { left: 205px; position: fixed; right: 205px; top: 8px; z-index: 10; }
+}

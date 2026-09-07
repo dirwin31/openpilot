@@ -714,6 +714,10 @@ def test_companion_live_characteristic_reads_and_notifies():
 
   app._dispatch(message("StartNotify"))
   assert publishers[0].started
+  # Refresh/reconnect races may repeat StartNotify before the previous page's
+  # StopNotify arrives. This must reuse the active publisher without an error.
+  app._dispatch(message("StartNotify"))
+  assert len(publishers) == 1 and publishers[0].started
   frame = LiveSnapshot().pack(7, 100)
   protocol._publish_live(frame)
   notification_values = [signal.body[1]["Value"][1] for signal in router.sent[-LIVE_NOTIFICATION_FRAGMENT_COUNT:]]

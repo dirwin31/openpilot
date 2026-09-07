@@ -10,15 +10,29 @@ export const COMPANION_UUIDS = Object.freeze({
 
 const LAST_DEVICE_KEY = "galaxy-live-ble-device"
 const PAIRING_MESSAGE = "Pair the device first: open the 120-second companion pairing window in the device Bluetooth settings, then reconnect."
+const SECURITY_READ_RETRIES = 2
+const SECURITY_READ_RETRY_MS = 750
+const NOTIFICATION_RETRIES = 2
+const NOTIFICATION_RETRY_MS = 400
+
+class PairingRequiredError extends Error {
+  constructor(cause) {
+    super(PAIRING_MESSAGE, { cause })
+    this.name = "PairingRequiredError"
+  }
+}
 
 function errorText(error) {
   return String(error?.message || error || "Bluetooth connection failed")
 }
 
-function isPairingError(error) {
+function isPairingError(error, allowGenericGattError = false) {
   const value = `${error?.name || ""} ${errorText(error)}`.toLowerCase()
-  return /authentication|authorization|encrypt|security|bond|pair|gatt operation not permitted/.test(value)
+  return /authentication|authorization|encrypt|security|bond|pair/.test(value)
+    || (allowGenericGattError && /gatt operation not permitted/.test(value))
 }
+
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 
 function decodeJSON(value) {
   const bytes = value instanceof DataView || ArrayBuffer.isView(value)
@@ -112,10 +126,10 @@ export class LiveBLEClient {
         service.getCharacteristic(COMPANION_UUIDS.live),
       ])
       this.characteristics = { status, command, response, live }
-      this.callbacks.onCapabilities?.(decodeJSON(await status.readValue()))
+      this.callbacks.onCapabilities?.(await this._readAuthenticatedStatus(status))
       live.removeEventListener("characteristicvaluechanged", this._onNotification)
       live.addEventListener("characteristicvaluechanged", this._onNotification)
-      await live.startNotifications()
+      await this._startNotifications(live)
       this.connectionGeneration += 1
       this.reconnectAttempt = 0
       this.reassembler.reset()
@@ -128,6 +142,36 @@ export class LiveBLEClient {
       if (reconnecting && !this.closed && !this.manualDisconnect) this._scheduleReconnect()
       throw error
     }
+  }
+
+  async _readAuthenticatedStatus(characteristic) {
+    let failure = null
+    for (let attempt = 0; attempt <= SECURITY_READ_RETRIES; attempt += 1) {
+      try {
+        return decodeJSON(await characteristic.readValue())
+      } catch (error) {
+        if (!isPairingError(error, true)) throw error
+        failure = error
+        if (attempt < SECURITY_READ_RETRIES) await wait(SECURITY_READ_RETRY_MS)
+      }
+    }
+    throw new PairingRequiredError(failure)
+  }
+
+  async _startNotifications(characteristic) {
+    let failure = null
+    for (let attempt = 0; attempt <= NOTIFICATION_RETRIES; attempt += 1) {
+      try {
+        return await characteristic.startNotifications()
+      } catch (error) {
+        failure = error
+        const value = `${error?.name || ""} ${errorText(error)}`.toLowerCase()
+        const transient = /network|gatt|operation|in progress|already/.test(value) && !isPairingError(error)
+        if (!transient || attempt === NOTIFICATION_RETRIES) throw error
+        await wait(NOTIFICATION_RETRY_MS)
+      }
+    }
+    throw failure
   }
 
   _handleNotification(event) {
@@ -228,7 +272,7 @@ export class LiveBLEClient {
   }
 
   _handleError(error) {
-    if (isPairingError(error)) this._setState("needs-pairing", PAIRING_MESSAGE)
+    if (error instanceof PairingRequiredError || isPairingError(error)) this._setState("needs-pairing", PAIRING_MESSAGE)
     else this._setState("error", errorText(error))
   }
 

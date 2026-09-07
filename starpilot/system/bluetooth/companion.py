@@ -645,8 +645,9 @@ class CompanionGattApplication:
         raise RuntimeError("Companion application is closed")
       with self._notify_lock:
         if self._notifying == notifying:
-          if notifying:
-            raise RuntimeError("Notifications are already enabled")
+          # A browser refresh can reconnect before BlueZ delivers StopNotify for
+          # the old page. Treat the repeated StartNotify as the same subscription
+          # transition instead of failing the new client and prompting a re-pair.
           return
 
       if notifying:

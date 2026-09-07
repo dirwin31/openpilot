@@ -3,7 +3,7 @@ import { navigate, toolHref } from "../store.js"
 const TOOLS = [
   { name: "Bluetooth", link: "/bluetooth", icon: "bi-bluetooth", desc: "Pair devices, controllers, & audio" },
   { name: "Cameras & Monitoring", link: "/cameras", icon: "bi-camera-video", desc: "Sentry, PiP side camera, & V-ASM spot monitor" },
-  { name: "Dashboard", link: "/dashboard", icon: "bi-speedometer2", desc: "Live driving telemetry over Bluetooth" },
+  { name: "Telematics", link: "/telematics", icon: "bi-speedometer2", desc: "Live driving telemetry over Bluetooth" },
   { name: "Galaxy & App Install", link: "/galaxy", icon: "bi-globe2", desc: "Remote access, pairing, & app install" },  
   { name: "Logs & Diagnostics", link: "/logs", icon: "bi-exclamation-triangle", desc: "Error logs, tmux, troubleshoot" },
   { name: "Model Manager", link: "/manage_models", icon: "bi-cpu", desc: "Install/swap models" },
