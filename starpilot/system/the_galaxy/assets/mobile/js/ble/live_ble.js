@@ -18,6 +18,15 @@ const NOTIFICATION_RETRY_MS = 400
 // mid-teardown or briefly out of range. Bound it so a stuck attempt rejects and
 // the reconnect backoff can try again instead of leaving the view stuck.
 const CONNECT_TIMEOUT_MS = 12000
+// A device handed back by getDevices() after a page reload carries no scan
+// result, so Android Chrome rejects the first gatt.connect() with "no longer in
+// range" even though the peripheral is sitting right there. watchAdvertisements()
+// is how a page asks Chrome to look again; the connect only works once an
+// advertisement has arrived. It needs the experimental web platform features
+// flag on Android, so treat its absence as a setup problem, not a dead device.
+const ADVERTISEMENT_TIMEOUT_MS = 20000
+const OUT_OF_RANGE_MESSAGE = "Waiting for the device to advertise. Keep the phone near it with the companion running; this retries on its own."
+const ADVERTISEMENT_UNSUPPORTED_MESSAGE = "Chrome cannot rescan for this device after a reload. Enable chrome://flags/#enable-experimental-web-platform-features, then reload this page."
 
 class PairingRequiredError extends Error {
   constructor(cause) {
@@ -28,6 +37,10 @@ class PairingRequiredError extends Error {
 
 function errorText(error) {
   return String(error?.message || error || "Bluetooth connection failed")
+}
+
+function isOutOfRangeError(error) {
+  return /no longer in range|not in range/i.test(errorText(error))
 }
 
 function isPairingError(error, allowGenericGattError = false) {
@@ -64,6 +77,7 @@ export class LiveBLEClient {
     this.metadataPending = false
     this.connectionGeneration = 0
     this.connectAttempt = 0
+    this.advertisementTimeoutMs = ADVERTISEMENT_TIMEOUT_MS
     this.lastMetadataRevision = null
     this.lastAlertID = null
     this.lastLive = null
@@ -170,21 +184,7 @@ export class LiveBLEClient {
     device.addEventListener("gattserverdisconnected", this._onDisconnected)
     this._setState(reconnecting ? "reconnecting" : "connecting", reconnecting ? "Reconnecting…" : "Connecting…")
     try {
-      const server = await this._withTimeout(
-        device.gatt.connect(),
-        CONNECT_TIMEOUT_MS,
-        "Bluetooth connection timed out",
-        {
-          onTimeout: () => {
-            if (attempt !== this.connectAttempt) return
-            try { device.gatt.disconnect() } catch (error) { /* The timed-out link is already gone. */ }
-          },
-          onResolve: ({ timedOut }) => {
-            if (!timedOut && attempt === this.connectAttempt) return
-            try { device.gatt.disconnect() } catch (error) { /* The stale link is already gone. */ }
-          },
-        },
-      )
+      const server = await this._connectGATT(device, attempt)
       if (attempt !== this.connectAttempt) return
       const service = await server.getPrimaryService(COMPANION_UUIDS.service)
       if (attempt !== this.connectAttempt) return
@@ -213,6 +213,61 @@ export class LiveBLEClient {
       this._handleError(error)
       if (reconnecting && !this.closed && !this.manualDisconnect) this._scheduleReconnect()
       throw error
+    }
+  }
+
+  // Chrome will not connect to a device it has not seen advertise since the page
+  // loaded, which is every remembered device after a refresh. Take the rejection
+  // as the cue to scan for the peripheral, then connect to the fresh sighting.
+  async _connectGATT(device, attempt) {
+    try {
+      return await this._openGATT(device, attempt)
+    } catch (error) {
+      if (!isOutOfRangeError(error) || attempt !== this.connectAttempt) throw error
+      if (typeof device.watchAdvertisements !== "function") throw error
+      this._setState(this.state, "Looking for the device…")
+      const seen = await this._awaitAdvertisement(device)
+      if (!seen || attempt !== this.connectAttempt) throw error
+      return await this._openGATT(device, attempt)
+    }
+  }
+
+  _openGATT(device, attempt) {
+    return this._withTimeout(
+      device.gatt.connect(),
+      CONNECT_TIMEOUT_MS,
+      "Bluetooth connection timed out",
+      {
+        onTimeout: () => {
+          if (attempt !== this.connectAttempt) return
+          try { device.gatt.disconnect() } catch (error) { /* The timed-out link is already gone. */ }
+        },
+        onResolve: ({ timedOut }) => {
+          if (!timedOut && attempt === this.connectAttempt) return
+          try { device.gatt.disconnect() } catch (error) { /* The stale link is already gone. */ }
+        },
+      },
+    )
+  }
+
+  // Resolves true once Chrome sees the peripheral advertise. The scan is stopped
+  // on every exit: an abandoned watch keeps the phone's radio busy for nothing.
+  async _awaitAdvertisement(device) {
+    if (device.watchingAdvertisements) return false
+    const controller = new AbortController()
+    let timer = null
+    try {
+      const advertised = new Promise((resolve, reject) => {
+        device.addEventListener("advertisementreceived", () => resolve(true), { once: true, signal: controller.signal })
+        timer = setTimeout(() => reject(new Error("Bluetooth device did not advertise")), this.advertisementTimeoutMs)
+      })
+      await device.watchAdvertisements({ signal: controller.signal })
+      return await advertised
+    } catch (error) {
+      return false
+    } finally {
+      clearTimeout(timer)
+      controller.abort()
     }
   }
 
@@ -350,6 +405,10 @@ export class LiveBLEClient {
 
   _handleError(error) {
     if (error instanceof PairingRequiredError || isPairingError(error)) this._setState("needs-pairing", PAIRING_MESSAGE)
+    else if (isOutOfRangeError(error)) {
+      const rescannable = typeof this.device?.watchAdvertisements === "function"
+      this._setState("error", rescannable ? OUT_OF_RANGE_MESSAGE : ADVERTISEMENT_UNSUPPORTED_MESSAGE)
+    }
     else this._setState("error", errorText(error))
   }
 

@@ -100,7 +100,107 @@ def test_ble_client_uses_companion_service_and_coalesces_updates():
   assert "device.gatt.disconnect()" in client
   assert "this.device?.gatt?.connected === true" in client
   assert "allowGenericGattError" in client
+  # a remembered device carries no scan result after a reload, so connecting to
+  # it needs a fresh advertisement first
+  assert "watchAdvertisements" in client
+  assert "advertisementreceived" in client
+  assert "ADVERTISEMENT_TIMEOUT_MS" in client
+  assert "enable-experimental-web-platform-features" in client
   assert "demo" not in client.lower()
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
+def test_remembered_reconnect_rescans_when_chrome_reports_out_of_range(tmp_path):
+  for relative in ("js/ble/live_frames.js", "js/ble/live_ble.js"):
+    source = UI_ROOT / relative
+    body = source.read_text(encoding="utf-8").replace('"./live_frames.js"', '"./live_frames.mjs"')
+    (tmp_path / (source.stem + ".mjs")).write_text(body, encoding="utf-8")
+
+  script = r'''
+import assert from "node:assert/strict"
+import { LiveBLEClient, COMPANION_UUIDS } from "./live_ble.mjs"
+
+const outOfRange = () => Object.assign(new Error("Bluetooth Device is no longer in range."), { name: "NetworkError" })
+const characteristic = (uuid) => ({
+  readValue: async () => new TextEncoder().encode(JSON.stringify(uuid === COMPANION_UUIDS.status ? { ok: true } : {})),
+  addEventListener() {}, removeEventListener() {}, startNotifications: async () => {},
+})
+
+const makeDevice = ({ advertises = true, watchable = true } = {}) => {
+  const listeners = {}
+  const device = {
+    id: "remembered", name: "Galaxy device", seen: false, watchingAdvertisements: false, watches: 0, connects: 0,
+    addEventListener(type, handler) { (listeners[type] ||= []).push(handler) },
+    removeEventListener(type, handler) { listeners[type] = (listeners[type] || []).filter((entry) => entry !== handler) },
+    gatt: {
+      connected: false,
+      disconnect() { this.connected = false },
+      async connect() {
+        device.connects += 1
+        // Chrome only connects to a peripheral it has seen advertise since load.
+        if (!device.seen) throw outOfRange()
+        this.connected = true
+        return {
+          getPrimaryService: async () => ({ getCharacteristic: async (uuid) => characteristic(uuid) }),
+        }
+      },
+    },
+  }
+  if (watchable) {
+    device.watchAdvertisements = async ({ signal }) => {
+      device.watches += 1
+      device.watchingAdvertisements = true
+      signal?.addEventListener?.("abort", () => { device.watchingAdvertisements = false })
+      if (!advertises) return
+      setTimeout(() => {
+        device.seen = true
+        for (const handler of listeners.advertisementreceived || []) handler({})
+      }, 5)
+    }
+  }
+  return device
+}
+
+const states = []
+const clientFor = (devices) => {
+  const bluetooth = { getDevices: async () => devices }
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { bluetooth } })
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => null, setItem() {} } })
+  const client = new LiveBLEClient({ onState: ({ state, message }) => states.push([state, message]) })
+  client.advertisementTimeoutMs = 50
+  return client
+}
+
+// A refresh: the remembered device reads as out of range until it advertises.
+const device = makeDevice()
+const client = clientFor([device])
+assert.equal(await client.reconnectRemembered(), true, "a rescan must recover the remembered device")
+assert.equal(client.state, "connected")
+assert.equal(device.connects, 2, "the connect must be retried after the advertisement")
+assert.equal(device.watches, 1)
+assert.equal(device.watchingAdvertisements, false, "the scan must stop once the device is seen")
+assert.ok(states.some(([, message]) => message === "Looking for the device…"))
+client.close()
+
+// A device that never advertises must surface guidance, not Chrome raw text.
+const silent = makeDevice({ advertises: false })
+const waiting = clientFor([silent])
+assert.equal(await waiting.reconnectRemembered(), false)
+assert.equal(waiting.state, "error")
+assert.match(waiting.message, /Waiting for the device to advertise/)
+waiting.close()
+
+// Without the experimental flag no rescan is possible, so name the missing flag.
+const unwatchable = makeDevice({ watchable: false })
+const blocked = clientFor([unwatchable])
+assert.equal(await blocked.reconnectRemembered(), false)
+assert.equal(unwatchable.connects, 1, "no rescan is possible, so no retry")
+assert.match(blocked.message, /enable-experimental-web-platform-features/)
+blocked.close()
+'''
+  result = subprocess.run(
+    [shutil.which("node"), "--input-type=module", "-e", script], cwd=tmp_path, capture_output=True, text=True)
+  assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
