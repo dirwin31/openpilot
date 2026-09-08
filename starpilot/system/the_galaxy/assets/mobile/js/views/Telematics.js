@@ -8,6 +8,9 @@ import { getLiveBLEClient } from "../ble/live_ble.js"
 import { hasFlag, LIVE_FLAGS } from "../ble/live_frames.js"
 
 const flag = (frame, name) => !!frame && hasFlag(frame.flags, LIVE_FLAGS[name])
+// getDevices() only exists once the new Web Bluetooth permissions backend flag is on,
+// so its absence is the signal that a page reload will drop the pairing.
+const supportsBluetoothRestore = () => typeof navigator.bluetooth?.getDevices === "function"
 const finite = (value) => Number.isFinite(Number(value)) ? Number(value) : null
 const signed = (value, digits, suffix = "") => value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(digits)}${suffix}`
 
@@ -56,6 +59,7 @@ export const Telematics = {
       connecting: false,
       showBluetoothSetup: false,
       bluetoothSetupSkipped: false,
+      bluetoothSetupMode: "gate",
     }
   },
   computed: {
@@ -67,6 +71,11 @@ export const Telematics = {
       target.port = "8443"
       return target.toString()
     },
+    secureHost() {
+      try { return new URL(this.secureURL).hostname } catch (error) { return "this device" }
+    },
+    canRestoreBluetooth() { return supportsBluetoothRestore() },
+    bluetoothSetupConfirmLabel() { return this.bluetoothSetupMode === "info" ? "Done" : "Continue pairing" },
     statusLabel() {
       if (this.bleState === "connected") return this.deviceName
       if (this.bleState === "connecting") return "Connecting"
@@ -223,7 +232,8 @@ export const Telematics = {
       }
     },
     async connect() {
-      if (!this.bluetoothSetupSkipped && !this.ble.device && /Android/i.test(navigator.userAgent) && typeof navigator.bluetooth?.getDevices !== "function") {
+      if (!this.bluetoothSetupSkipped && !this.ble.device && /Android/i.test(navigator.userAgent) && !supportsBluetoothRestore()) {
+        this.bluetoothSetupMode = "gate"
         this.showBluetoothSetup = true
         return
       }
@@ -233,6 +243,16 @@ export const Telematics = {
         else await this.ble.connect()
       } catch (error) { /* State includes the actionable error. */ }
       finally { this.connecting = false }
+    },
+    // Reachable any time from the connect bar, so the flag instructions are not a
+    // one-shot interstitial the user can never get back to.
+    openBluetoothSetup() {
+      this.bluetoothSetupMode = "info"
+      this.showBluetoothSetup = true
+    },
+    confirmBluetoothSetup() {
+      if (this.bluetoothSetupMode === "info") return
+      return this.continueBluetoothPairing()
     },
     continueBluetoothPairing() {
       this.showBluetoothSetup = false
@@ -266,9 +286,10 @@ export const Telematics = {
       return
     }
 
+    // Deliberately no automatic redirect to :8443. The jump is invisible and lands the
+    // user on a certificate interstitial with no idea why, so explain it and let them tap.
     if (window.location.protocol !== "https:") {
       this.capability = "insecure"
-      window.location.replace(this.secureURL)
       return
     }
 
@@ -311,7 +332,7 @@ export const Telematics = {
   },
   template: `
     <div class="telematics-page" :class="{ 'telematics-page--landscape': isLandscape }">
-      <GalaxyModal v-model="showBluetoothSetup" title="Reconnect after page reload" confirm-label="Continue pairing" cancel-label="Close" @confirm="continueBluetoothPairing">
+      <GalaxyModal v-model="showBluetoothSetup" title="Reconnect after page reload" :confirm-label="bluetoothSetupConfirmLabel" cancel-label="Close" @confirm="confirmBluetoothSetup">
         <div class="telematics-bluetooth-setup">
           <p>This browser cannot restore Bluetooth access after a page reload. You can still pair normally and tap Connect again after reloading.</p>
           <p>To try automatic reconnect in Chrome on Android, enable these experimental settings. This page cannot open or change Chrome settings.</p>
@@ -332,10 +353,25 @@ export const Telematics = {
         </div>
       </GalaxyModal>
       <div v-if="capability === 'insecure'" class="telematics-gate">
-        <GxNotice tone="warn" icon="bi-shield-lock-fill" title="HTTPS required">
-          Web Bluetooth needs a secure page. Open the HTTPS Galaxy listener, accept its one-time certificate warning, then connect. Prefer the stable https://starpilot-&lt;device&gt;.local:8443 address.
+        <GxNotice tone="warn" icon="bi-shield-lock-fill" title="Bluetooth pairing needs the HTTPS page">
+          Chrome only allows Web Bluetooth on a secure page, and this one is plain HTTP. Galaxy runs a second listener on port 8443 for it. Nothing happens automatically — open it yourself when you have read the steps below.
         </GxNotice>
-        <a class="gx-btn gx-btn--block" :href="secureURL">Open secure telematics</a>
+        <ol class="telematics-gate__steps">
+          <li>Open <code>{{ secureURL }}</code> with the button at the bottom of this page.</li>
+          <li>
+            Chrome will warn <strong>&ldquo;Your connection is not private&rdquo;</strong> (<code>NET::ERR_CERT_AUTHORITY_INVALID</code>).
+            That is expected. The certificate is generated on the device and signed by the device itself, so no public authority vouches for it.
+            The connection is still encrypted and never leaves your local network.
+          </li>
+          <li>Tap <strong>Advanced</strong>, then <strong>Proceed to {{ secureHost }} (unsafe)</strong>. Chrome remembers the exception, so this is a one-time step per phone.</li>
+          <li>The telematics page reloads over HTTPS. Tap <strong>Connect</strong> and accept the Android Bluetooth pairing prompt.</li>
+        </ol>
+        <p class="telematics-gate__tip">
+          <i class="bi bi-lightbulb-fill"></i>
+          Reach the device by name (<code>https://starpilot-&lt;device&gt;.local:8443</code>) rather than by IP address where you can.
+          The certificate exception is remembered per address, so a new DHCP lease would make you accept the warning all over again.
+        </p>
+        <a class="gx-btn gx-btn--block" :href="secureURL" rel="noopener">Open the secure telematics page</a>
       </div>
       <div v-else-if="capability === 'unsupported'" class="telematics-gate">
         <GxNotice tone="info" icon="bi-phone" title="Chrome on Android required">
@@ -345,11 +381,17 @@ export const Telematics = {
       <template v-else>
         <div v-if="!isLandscape" class="telematics-connect-bar">
           <span class="telematics-status"><i :style="{ background: freshnessTint }"></i>{{ statusLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }}</small></span>
+          <button class="telematics-setup-button" type="button" title="Chrome setup for Bluetooth reconnect"
+            aria-label="Chrome setup for Bluetooth reconnect" @click="openBluetoothSetup"><i class="bi bi-gear-fill"></i></button>
           <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Disconnect</button>
           <button v-else class="gx-btn" type="button" :disabled="!canConnect || connecting" @click="connect"><i class="bi bi-bluetooth"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
         </div>
         <GxNotice v-if="bleState === 'needs-pairing'" class="telematics-pairing" tone="warn" icon="bi-bluetooth" title="Pair the device first" :text="bleMessage" />
         <GxNotice v-else-if="bleState === 'error'" class="telematics-pairing" tone="danger" icon="bi-exclamation-circle-fill" title="Bluetooth error" :text="bleMessage" />
+        <GxNotice v-else-if="!canRestoreBluetooth && !isLandscape" class="telematics-pairing" tone="info" icon="bi-gear-fill" title="Chrome forgets this pairing on reload">
+          Two Chrome flags let this page reconnect on its own instead of asking you to pick the device every time.
+          <button class="telematics-setup-link" type="button" @click="openBluetoothSetup">Show me how</button>
+        </GxNotice>
 
         <div v-if="isLandscape" class="telematics-landscape">
           <aside class="telematics-side telematics-side--left">
@@ -365,6 +407,8 @@ export const Telematics = {
           <section class="telematics-center" :style="{ '--mode-color': modeColor }">
             <div class="telematics-center__connection">
               <span>{{ statusLabel }} · {{ deviceStatusLabel }}</span>
+              <button class="telematics-fullscreen-button" type="button" title="Chrome setup for Bluetooth reconnect"
+                aria-label="Chrome setup for Bluetooth reconnect" @click="openBluetoothSetup"><i class="bi bi-gear-fill"></i></button>
               <button class="telematics-fullscreen-button" type="button" :aria-label="isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'"
                 :title="isFullscreen ? 'Exit fullscreen' : 'Hide browser controls'" :aria-pressed="isFullscreen" @click="toggleFullscreen">
                 <i class="bi" :class="isFullscreen ? 'bi-fullscreen-exit' : 'bi-arrows-fullscreen'"></i>

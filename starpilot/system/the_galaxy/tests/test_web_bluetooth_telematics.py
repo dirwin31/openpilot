@@ -44,12 +44,20 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert "isIOSDevice" in telematics
   assert "homeURL.hash = \"/\"" in telematics
   assert 'window.location.protocol !== "https:"' in telematics
-  assert "window.location.replace(this.secureURL)" in telematics
+  # the insecure gate must explain the jump instead of silently redirecting to :8443
+  assert "window.location.replace(this.secureURL)" not in telematics
+  assert ":href=\"secureURL\"" in telematics
+  assert "NET::ERR_CERT_AUTHORITY_INVALID" in telematics
+  assert "Proceed to {{ secureHost }} (unsafe)" in telematics
   assert "navigator.bluetooth" in telematics
   assert "Chrome on Android required" in telematics
   assert 'target.port = "8443"' in telematics
   assert "reconnectRemembered" in telematics
   assert "Pair the device first" in telematics
+  # the Chrome flag instructions must stay reachable, not be a one-shot interstitial
+  assert '@click="openBluetoothSetup"' in telematics
+  assert "canRestoreBluetooth" in telematics
+  assert "Show me how" in telematics
   assert "telematics-landscape" in telematics
   assert "telematics-portrait" in telematics
   assert "STEER DELAY" in telematics
@@ -142,6 +150,13 @@ const desktop = makeView()
 await desktop.connect()
 assert.equal(desktop.showBluetoothSetup, false)
 assert.equal(connects, 4)
+
+const manual = makeView()
+manual.openBluetoothSetup()
+assert.equal(manual.showBluetoothSetup, true, "Setup must be reachable without tapping Connect")
+assert.equal(Telematics.computed.bluetoothSetupConfirmLabel.call(manual), "Done")
+await manual.confirmBluetoothSetup()
+assert.equal(connects, 4, "Dismissing the reference view must not open the chooser")
 
 let copied
 navigator.clipboard = { async writeText(value) { copied = value } }

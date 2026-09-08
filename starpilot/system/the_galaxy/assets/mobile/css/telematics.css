@@ -8,6 +8,31 @@
   max-width: 620px;
 }
 
+.telematics-gate__steps {
+  color: var(--text-muted);
+  line-height: 1.55;
+  margin: 16px 0 0;
+  padding-left: 22px;
+}
+
+.telematics-gate__steps li { margin-bottom: 12px; }
+.telematics-gate__steps strong { color: var(--on-surface); }
+.telematics-gate code, .telematics-gate__tip code {
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.telematics-gate__tip {
+  align-items: flex-start;
+  color: var(--text-muted);
+  display: flex;
+  gap: 10px;
+  line-height: 1.5;
+  margin: 4px 0 0;
+}
+
+.telematics-gate__tip > i { color: var(--warning); flex: none; margin-top: 2px; }
+
 .telematics-bluetooth-setup { color: var(--text-muted); line-height: 1.5; }
 .telematics-bluetooth-setup ol { padding-left: 24px; }
 .telematics-bluetooth-setup li { margin-bottom: 16px; }
@@ -37,6 +62,34 @@
 .telematics-status { align-items: center; display: flex; font-size: 14px; font-weight: var(--fw-bold); gap: 8px; min-width: 0; }
 .telematics-status > i { background: var(--text-muted); border-radius: 50%; height: 8px; width: 8px; }
 .telematics-status small { color: var(--text-muted); font-weight: var(--fw-normal); }
+.telematics-setup-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: none;
+  font-size: 16px;
+  justify-content: center;
+  min-height: 40px;
+  min-width: 40px;
+}
+
+.telematics-setup-button:hover { color: var(--on-surface); }
+
+.telematics-setup-link {
+  background: transparent;
+  border: 0;
+  color: var(--primary);
+  cursor: pointer;
+  font: inherit;
+  font-weight: var(--fw-bold);
+  padding: 0;
+  text-decoration: underline;
+}
+
 .telematics-pairing { margin: 0 auto 10px; max-width: 760px; }
 
 .telematics-portrait { margin: 0 auto; max-width: 760px; }
