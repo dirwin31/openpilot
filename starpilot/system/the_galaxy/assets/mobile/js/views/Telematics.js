@@ -36,9 +36,56 @@ export const RoadPill = {
   `,
 }
 
+// Shared status header for both orientations: set speed on the left, what the
+// system is doing in the centre, speed limit on the right. `compact` is portrait.
+// The left sign shows cruise speed with current vehicle speed as a badge beneath
+// it; the right sign shows the posted limit with its active offset the same way.
+export const TelematicsHeader = {
+  name: "TelematicsHeader",
+  props: {
+    compact: Boolean,
+    setSpeedText: String,
+    currentSpeedBadge: { type: String, default: null },
+    hasSpeedLimit: Boolean,
+    speedLimitText: String,
+    speedLimitOffsetText: { type: String, default: null },
+    speedUnit: String,
+    status: Object,
+  },
+  template: `
+    <div class="telematics-status-header" :class="{ 'telematics-status-header--compact': compact }">
+      <div class="telematics-speed-sign">
+        <span class="telematics-speed-sign__title">MAX</span>
+        <strong class="telematics-speed-sign__value">{{ setSpeedText }}</strong>
+        <span v-if="currentSpeedBadge" class="telematics-speed-sign__badge telematics-speed-sign__badge--accent"
+          :aria-label="'Current speed ' + currentSpeedBadge + ' ' + speedUnit">{{ currentSpeedBadge }}</span>
+      </div>
+
+      <div class="telematics-hero-status">
+        <div class="telematics-hero-status__title-row">
+          <i class="bi" :class="status.icon" :style="{ color: status.tint }"></i>
+          <strong :style="{ color: status.tint }">{{ status.title }}</strong>
+        </div>
+        <span v-if="status.detail" class="telematics-hero-status__detail">{{ status.detail }}</span>
+      </div>
+
+      <!-- Reserved slot: the sign renders only when a limit is detected, but the
+           width is always held so the hero stays centred and nothing shifts. -->
+      <div class="telematics-speed-sign" :class="{ 'telematics-speed-sign--empty': !hasSpeedLimit }">
+        <template v-if="hasSpeedLimit">
+          <span class="telematics-speed-sign__title">LIMIT</span>
+          <strong class="telematics-speed-sign__value">{{ speedLimitText }}</strong>
+          <span v-if="speedLimitOffsetText" class="telematics-speed-sign__badge telematics-speed-sign__badge--warn"
+            :aria-label="'Speed limit offset ' + speedLimitOffsetText + ' ' + speedUnit">{{ speedLimitOffsetText }}</span>
+        </template>
+      </div>
+    </div>
+  `,
+}
+
 export const Telematics = {
   name: "Telematics",
-  components: { TelematicsTile, RoadPill, GxNotice, GalaxyModal },
+  components: { TelematicsTile, RoadPill, TelematicsHeader, GxNotice, GalaxyModal },
   data() {
     return {
       isLandscape: false,
@@ -77,7 +124,7 @@ export const Telematics = {
       try { return new URL(this.secureURL).hostname } catch (error) { return "this device" }
     },
     canRestoreBluetooth() { return supportsBluetoothRestore() },
-    bluetoothSetupConfirmLabel() { return this.bluetoothSetupMode === "info" ? "Done" : "Continue pairing" },
+    bluetoothSetupConfirmLabel() { return this.bluetoothSetupMode === "info" ? "Done" : "Pair now" },
     // Only the permissions backend is detectable; Chrome never exposes chrome://flags
     // state, so every row here is a real capability probe rather than a flag reading.
     bluetoothChecks() {
@@ -133,12 +180,20 @@ export const Telematics = {
     },
     usesMetric() { return flag(this.frame, "metric") },
     speedUnit() { return this.usesMetric ? "km/h" : "mph" },
-    currentSpeedText() { return this.frame ? String(Math.round(Math.max(0, this.convertedSpeed(this.frame.vehicleSpeed)))) : "—" },
+    // Badge under the MAX sign. Null (not "—") when there is no frame, so the
+    // badge slot disappears instead of showing a placeholder.
+    currentSpeedBadge() { return this.frame ? String(Math.round(Math.max(0, this.convertedSpeed(this.frame.vehicleSpeed)))) : null },
     setSpeedText() {
       return flag(this.frame, "cruiseEnabled") && this.frame.setSpeed > 0 ? String(Math.round(this.convertedSpeed(this.frame.setSpeed))) : "—"
     },
     hasSpeedLimit() { return flag(this.frame, "speedLimitActive") && this.frame.speedLimit > 0 },
     speedLimitText() { return this.hasSpeedLimit ? String(Math.round(this.convertedSpeed(this.frame.speedLimit))) : "—" },
+    // Badge under the LIMIT sign: the active offset from the posted limit.
+    speedLimitOffsetText() {
+      if (!this.hasSpeedLimit) return null
+      const offset = Math.round(this.convertedSpeed(this.frame.speedLimitOffset))
+      return `${offset >= 0 ? "+" : ""}${offset}`
+    },
     modeColor() {
       if (!this.frame) return "var(--outline)"
       const color = this.frame.borderColor
@@ -149,38 +204,25 @@ export const Telematics = {
       if (flag(this.frame, "conditionalChill") && flag(this.frame, "longitudinalActive")) return "Conditional Chill"
       return ["System off", "Ready", "Engaged", "Steering assist", "Speed control only", "Driver override", "Experimental", "Conditional override", "Switchback", "Traffic mode", "Pulse and glide"][this.frame.borderState] || "Galaxy"
     },
-    driveStateDetail() {
-      const frame = this.frame
-      if (!frame) return "Connect to the device over Bluetooth to populate telematics."
-      if (!flag(frame, "started")) return "Vehicle offroad"
-      if (!flag(frame, "telemetryValid")) return "Waiting for valid vehicle state"
-      if (flag(frame, "conditionalChill") && flag(frame, "longitudinalActive")) return ["Auto", "Vehicle Ahead", "Speed Threshold", "Manual"][frame.conditionalChillReason] || "Auto"
-      if (flag(frame, "redLight") && flag(frame, "forcingStop")) return "Stopping for a detected stop signal"
-      if (flag(frame, "trackingLead")) return "Following the tracked vehicle ahead"
-      if (flag(frame, "lateralPaused")) return "Steering paused; speed control remains active"
-      if (flag(frame, "gasPressed")) return "Accelerator input is overriding control"
-      if (flag(frame, "brakePressed")) return "Brake input is overriding control"
-      return flag(frame, "engaged") ? "Assistance is engaged" : "Assistance is ready"
-    },
     alertText() {
       if (!flag(this.frame, "alertPresent")) return ""
       return [this.metadata?.alert?.text1, this.metadata?.alert?.text2].filter(Boolean).join(" — ")
     },
-    experimentalInfo() {
+    // The dashboard headline: the active mode, with the transient reason for it
+    // (a lead, a curve, a stop signal, driver input…) centered underneath. The
+    // mode stays prominent while the reason is what's actually changing moment
+    // to moment.
+    heroStatus() {
       const frame = this.frame
-      if (!this.connected || !frame || flag(frame, "standstill")) return null
-      const experimental = flag(frame, "experimentalMode")
-      if (flag(frame, "redLight") && flag(frame, "forcingStop")) return { text: experimental ? "Stopping at red light / stop sign" : "Stop signal detected · slowing down", icon: "bi-sign-stop-fill", tint: "var(--error)" }
-      if (flag(frame, "forcingStop")) return { text: experimental ? "Stopping for intersection" : "Intersection stop active", icon: "bi-hand-index-thumb-fill", tint: "var(--warning)" }
-      if (flag(frame, "leadPresent") && flag(frame, "trackingLead") && frame.leadDistance < 18) {
-        const verb = flag(frame, "stopping") ? "Stopping for" : (frame.leadRelativeSpeed < -0.5 || frame.targetAcceleration < -0.3) ? "Slowing for" : "Following"
-        return { text: `${verb} lead vehicle (${this.distance(frame.leadDistance)})`, icon: "bi-car-front-fill", tint: "var(--warning)" }
+      if (!frame) {
+        return this.connected
+          ? { title: "Waiting", detail: "Waiting for telemetry", icon: "bi-hourglass-split", tint: "var(--text-muted)" }
+          : { title: "Not connected", detail: "Connect to the device over Bluetooth to populate telematics.", icon: "bi-broadcast-pin", tint: "var(--text-muted)" }
       }
-      if (flag(frame, "curveControlActive") && frame.curveTargetSpeed > 0) return { text: "Slowing for curve", icon: "bi-sign-turn-right-fill", tint: "var(--warning)" }
-      if (experimental && flag(frame, "longitudinalActive")) return { text: "End-to-end longitudinal active", icon: "bi-stars", tint: "var(--warning)" }
-      if (flag(frame, "conditionalChill") && flag(frame, "longitudinalActive")) return { text: ["Auto", "Vehicle Ahead", "Speed Threshold", "Manual"][frame.conditionalChillReason] || "Auto", icon: "bi-snow", tint: "var(--primary)" }
-      if (flag(frame, "engaged")) return { text: "Assistance engaged", icon: "bi-speedometer2", tint: "var(--success)" }
-      return { text: "Assistance ready", icon: "bi-stars", tint: "var(--text-muted)" }
+      if (!flag(frame, "started")) return { title: "Vehicle offroad", detail: null, icon: "bi-car-front", tint: "var(--text-muted)" }
+      if (!flag(frame, "telemetryValid")) return { title: "Waiting", detail: "Waiting for valid vehicle state", icon: "bi-hourglass-split", tint: "var(--text-muted)" }
+      const mode = this.modeStatus(frame)
+      return { title: mode.title, detail: this.reasonText(frame), icon: mode.icon, tint: mode.tint }
     },
     leadText() {
       if (!flag(this.frame, "leadPresent")) return "No tracked lead"
@@ -209,8 +251,6 @@ export const Telematics = {
       const seconds = Math.floor(this.session.stoppedSeconds || 0)
       return `Stopped ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
     },
-    stoppedMinutes() { return Math.floor((this.session.stoppedSeconds || 0) / 60) },
-    stoppedSecondsPart() { return Math.floor(this.session.stoppedSeconds || 0) % 60 },
     freshness() {
       if (!this.connected) return "Not connected"
       if (!this.liveUpdatedAt) return "Waiting"
@@ -239,6 +279,43 @@ export const Telematics = {
   methods: {
     flag(frame, name) { return flag(frame, name) },
     openMenu() { store.drawerOpen = true },
+    // heroStatus's mode half: which state names the header, independent of
+    // whatever transient reason is currently shown underneath it.
+    modeStatus(frame) {
+      if (flag(frame, "conditionalChill") && flag(frame, "longitudinalActive")) {
+        return { title: "Conditional Chill", icon: "bi-snow", tint: this.modeColor }
+      }
+      if (flag(frame, "experimentalMode") && flag(frame, "longitudinalActive")) {
+        return { title: "Experimental", icon: "bi-stars", tint: "var(--warning)" }
+      }
+      // Always-On Lateral can report Steering Assist without the fully-engaged
+      // flag. Keep its header and icon tied to the panel border like the rest.
+      if (frame.borderState === 3) return { title: "Steering assist", icon: "bi-speedometer2", tint: this.modeColor }
+      if (flag(frame, "engaged")) return { title: this.driveStateTitle, icon: "bi-speedometer2", tint: this.modeColor }
+      return { title: this.driveStateTitle, icon: "bi-stars", tint: "var(--text-muted)" }
+    },
+    // heroStatus's reason half: the most urgent transient reason wins, in the
+    // same priority order regardless of which mode is currently active.
+    reasonText(frame) {
+      if (flag(frame, "standstill")) return this.stoppedText
+      if (flag(frame, "redLight") && flag(frame, "forcingStop")) {
+        return flag(frame, "experimentalMode") ? "Red light or stop sign ahead" : "Stop signal detected"
+      }
+      if (flag(frame, "forcingStop")) return flag(frame, "experimentalMode") ? "Intersection ahead" : "Intersection stop active"
+      if (flag(frame, "leadPresent") && flag(frame, "trackingLead") && frame.leadDistance < 18) {
+        if (flag(frame, "stopping")) return "Stopping for lead"
+        if (frame.leadRelativeSpeed < -0.5 || frame.targetAcceleration < -0.3) return "Slowing for lead"
+        return "Following lead"
+      }
+      if (flag(frame, "curveControlActive") && frame.curveTargetSpeed > 0) return "Slowing for curve"
+      if (flag(frame, "conditionalChill") && flag(frame, "longitudinalActive")) {
+        return ["Auto", "Vehicle Ahead", "Speed Threshold", "Manual"][frame.conditionalChillReason] || "Auto"
+      }
+      if (flag(frame, "experimentalMode") && flag(frame, "longitudinalActive")) return "End-to-end longitudinal active"
+      if (flag(frame, "gasPressed") || flag(frame, "brakePressed")) return flag(frame, "gasPressed") ? "Accelerator input" : "Brake input"
+      if (flag(frame, "lateralPaused")) return "Speed control remains active"
+      return flag(frame, "engaged") ? "Assistance engaged" : "Assistance ready"
+    },
     convertedSpeed(value) { return value * (this.usesMetric ? 3.6 : 2.23693629) },
     distance(meters) {
       if (this.usesMetric) return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`
@@ -276,7 +353,7 @@ export const Telematics = {
       }
     },
     async connect() {
-      if (!this.bluetoothSetupSkipped && !this.ble.device && /Android/i.test(navigator.userAgent) && !supportsBluetoothRestore()) {
+      if (!this.bluetoothSetupSkipped && !this.ble.device && /Android/i.test(navigator.userAgent) && !(this.rememberedDevices > 0)) {
         this.bluetoothSetupMode = "gate"
         this.showBluetoothSetup = true
         return
@@ -409,19 +486,6 @@ export const Telematics = {
             <i class="bi bi-stars"></i> Everything needed is in place. This page will reconnect on its own after a reload.
           </p>
 
-          <template v-if="!connected">
-            <p class="telematics-setup__heading">Pairing a phone</p>
-            <ol>
-              <li>On the comma screen open <strong class="telematics-inline">Settings &rarr; Bluetooth</strong> and tap <strong class="telematics-inline">pair a phone</strong>. It counts down <strong class="telematics-inline">discoverable / 120s</strong>; the device only accepts a new phone inside that window, and only while parked.</li>
-              <li>Tap <strong class="telematics-inline">{{ bluetoothSetupMode === 'info' ? 'Connect' : 'Continue pairing' }}</strong> and pick the device from Chrome's list.</li>
-              <li>Accept Android's pairing prompt if one appears.</li>
-            </ol>
-            <GxNotice tone="warn" icon="bi-phone-fill" title="Do not pair from Android's Bluetooth settings">
-              The comma appears on that screen while the window is open, but pairing there only creates a system bond. It grants this page nothing, Chrome still will not list the device, and the leftover bond is what makes pairing here fail afterwards. Start from this page every time; use Android's Bluetooth settings only to forget a device.
-            </GxNotice>
-            <p class="telematics-check__hint">Chrome shows no devices, or pairing fails? Either the 120 second window has closed &mdash; tap <strong class="telematics-inline">pair a phone</strong> again &mdash; or the device was paired from Android's settings and needs forgetting in both places first.</p>
-          </template>
-
           <template v-if="!canRestoreBluetooth">
             <p>Chrome can remember the device across reloads, but the setting is off by default. This page cannot read or change Chrome's settings, so you have to do it once by hand.</p>
             <ol>
@@ -436,6 +500,19 @@ export const Telematics = {
               <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-experimental-web-platform-features')">Copy address</button>
             </p>
             <p>None of this blocks pairing. You can connect right now; you will just have to pick the device again after each reload.</p>
+          </template>
+
+          <template v-if="!connected">
+            <p class="telematics-setup__heading">Pairing a phone</p>
+            <ol>
+              <li>On the comma screen open <strong class="telematics-inline">Settings &rarr; Bluetooth</strong> and tap <strong class="telematics-inline">pair a phone</strong>. It counts down <strong class="telematics-inline">discoverable / 120s</strong>; the device only accepts a new phone inside that window, and only while parked.</li>
+              <li>Tap <strong class="telematics-inline">{{ bluetoothSetupMode === 'info' ? 'Connect' : 'Pair now' }}</strong> at the bottom of this panel, then pick the device from Chrome's list.</li>
+              <li>Accept Android's pairing prompt if one appears.</li>
+            </ol>
+            <GxNotice tone="warn" icon="bi-phone-fill" title="Do not pair from Android's Bluetooth settings">
+              The comma appears on that screen while the window is open, but pairing there only creates a system bond. It grants this page nothing, Chrome still will not list the device, and the leftover bond is what makes pairing here fail afterwards. Start from this page every time; use Android's Bluetooth settings only to forget a device.
+            </GxNotice>
+            <p class="telematics-check__hint">Chrome shows no devices, or pairing fails? Either the 120 second window has closed &mdash; tap <strong class="telematics-inline">pair a phone</strong> again &mdash; or the device was paired from Android's settings and needs forgetting in both places first.</p>
           </template>
 
           <details v-if="rememberedDevices > 0" class="telematics-setup__more">
@@ -524,25 +601,10 @@ export const Telematics = {
               <button v-if="connected" type="button" @click="disconnect">Disconnect</button>
               <button v-else type="button" :disabled="!canConnect || connecting" @click="connect">{{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
             </div>
-            <div class="telematics-speed-row">
-              <div class="telematics-target-sign"><span>MAX</span><strong>{{ setSpeedText }}</strong></div>
-              <div class="telematics-hero">
-                <div class="telematics-brand">Galaxy <i class="bi bi-stars"></i></div>
-                <template v-if="connected && frame && flag(frame, 'standstill')">
-                  <strong class="telematics-stopped-main">{{ stoppedMinutes }} minute{{ stoppedMinutes === 1 ? '' : 's' }}</strong>
-                  <span class="telematics-stopped-detail">{{ stoppedSecondsPart }} second{{ stoppedSecondsPart === 1 ? '' : 's' }} stopped</span>
-                </template>
-                <template v-else-if="connected">
-                  <div class="telematics-current-speed"><strong>{{ currentSpeedText }}</strong><span>{{ speedUnit }}</span></div>
-                  <span class="telematics-drive-title" :style="{ color: modeColor }">{{ driveStateTitle }}</span>
-                </template>
-                <strong v-else class="telematics-not-connected">Not connected</strong>
-              </div>
-              <div class="telematics-limit-slot"><div v-if="hasSpeedLimit" class="telematics-limit-sign"><span>SPEED<br>LIMIT</span><strong>{{ speedLimitText }}</strong></div></div>
-            </div>
-            <div class="telematics-status-slot">
-              <div v-if="experimentalInfo" class="telematics-mode-pill" :style="{ '--pill-tint': experimentalInfo.tint }"><span>{{ experimentalInfo.text }}</span><i class="bi" :class="experimentalInfo.icon"></i></div>
-            </div>
+            <TelematicsHeader
+              :set-speed-text="setSpeedText" :current-speed-badge="currentSpeedBadge"
+              :has-speed-limit="hasSpeedLimit" :speed-limit-text="speedLimitText" :speed-limit-offset-text="speedLimitOffsetText"
+              :speed-unit="speedUnit" :status="heroStatus" />
             <div class="telematics-alert-slot"><div v-if="alertText" class="telematics-alert"><i class="bi bi-exclamation-triangle-fill"></i><span>{{ alertText }}</span></div></div>
             <div class="telematics-road-list"><RoadPill v-for="pill in roadPills" :key="pill.title" v-bind="pill" /></div>
           </section>
@@ -560,16 +622,12 @@ export const Telematics = {
 
         <div v-else class="telematics-portrait">
           <section class="telematics-instrument" :style="{ '--mode-color': modeColor }">
-            <div class="telematics-portrait-top">
-              <div class="telematics-target-sign"><span>MAX</span><strong>{{ setSpeedText }}</strong></div>
-              <div class="telematics-portrait-title"><strong>Galaxy <i class="bi bi-stars"></i></strong><span>{{ connected ? driveStateDetail : 'Not connected' }}</span></div>
-              <div v-if="hasSpeedLimit" class="telematics-limit-sign telematics-limit-sign--portrait"><span>SPEED<br>LIMIT</span><strong>{{ speedLimitText }}</strong></div>
-              <div class="telematics-speed-badge"><span>{{ speedUnit.toUpperCase() }}</span><strong>{{ currentSpeedText }}</strong></div>
-            </div>
-            <div class="telematics-status-slot"><div v-if="experimentalInfo" class="telematics-mode-pill" :style="{ '--pill-tint': experimentalInfo.tint }"><span>{{ experimentalInfo.text }}</span><i class="bi" :class="experimentalInfo.icon"></i></div></div>
-            <div v-if="connected && frame && flag(frame, 'standstill')" class="telematics-stopped-line"><i class="bi bi-stopwatch"></i> {{ stoppedText }}</div>
-            <div class="telematics-road-list"><RoadPill v-for="pill in roadPills" :key="pill.title" v-bind="pill" /></div>
+            <TelematicsHeader compact
+              :set-speed-text="setSpeedText" :current-speed-badge="currentSpeedBadge"
+              :has-speed-limit="hasSpeedLimit" :speed-limit-text="speedLimitText" :speed-limit-offset-text="speedLimitOffsetText"
+              :speed-unit="speedUnit" :status="heroStatus" />
             <div v-if="alertText" class="telematics-alert"><i class="bi bi-exclamation-triangle-fill"></i><span>{{ alertText }}</span></div>
+            <div class="telematics-road-list"><RoadPill v-for="pill in roadPills" :key="pill.title" v-bind="pill" /></div>
           </section>
           <section class="telematics-steering">
             <h2><i class="bi bi-speedometer2"></i> Steering and control</h2>

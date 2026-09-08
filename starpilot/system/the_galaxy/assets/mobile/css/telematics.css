@@ -262,68 +262,64 @@
   box-shadow: var(--elev-1);
 }
 
-.telematics-instrument { padding: 14px; }
-.telematics-portrait-top { align-items: center; display: flex; gap: 8px; min-width: 0; }
-.telematics-target-sign, .telematics-speed-badge {
+.telematics-instrument { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+
+/* Shared status header — set speed left, active mode + reason centre, speed
+   limit right. Same box style for both signs; only the badge tint differs. */
+.telematics-status-header { align-items: flex-start; display: flex; gap: 12px; height: 120px; }
+.telematics-status-header--compact { gap: 8px; height: 92px; }
+
+.telematics-speed-sign {
   align-items: center;
   background: color-mix(in srgb, var(--background) 85%, transparent);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--glass-border);
+  border-radius: var(--radius-md);
   display: flex;
-  flex: 0 0 78px;
+  flex: 0 0 74px;
   flex-direction: column;
-  height: 64px;
+  height: 86px;
   justify-content: center;
+  padding: 6px;
 }
 
-.telematics-target-sign span, .telematics-speed-badge span { color: var(--text-muted); font-size: 10px; font-weight: var(--fw-bold); }
-.telematics-target-sign strong, .telematics-speed-badge strong { font-size: 27px; font-variant-numeric: tabular-nums; line-height: 1.05; }
-.telematics-speed-badge { border-color: var(--primary); }
-.telematics-speed-badge span { color: var(--primary); }
-.telematics-portrait-title { align-items: center; display: flex; flex: 1; flex-direction: column; min-width: 0; text-align: center; }
-.telematics-portrait-title strong { font-size: 22px; }
-.telematics-portrait-title i { color: var(--primary); font-size: 16px; }
-.telematics-portrait-title span { color: var(--text-muted); display: -webkit-box; font-size: 12px; font-weight: var(--fw-bold); -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-
-.telematics-limit-sign {
-  align-items: center;
-  background: rgba(255, 255, 255, 0.96);
-  border: 2px solid #111;
-  border-radius: 6px;
-  color: #090909;
-  display: flex;
-  flex-direction: column;
-  height: 60px;
-  justify-content: center;
-  width: 64px;
+.telematics-status-header--compact .telematics-speed-sign { flex-basis: 68px; }
+.telematics-speed-sign--empty { visibility: hidden; }
+.telematics-speed-sign__title { color: var(--text-muted); font-size: 11px; font-weight: var(--fw-bold); }
+.telematics-speed-sign__value { font-size: 30px; font-variant-numeric: tabular-nums; line-height: 1.05; }
+.telematics-speed-sign__badge {
+  border-radius: 999px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-bold);
+  height: 16px;
+  line-height: 16px;
+  margin-top: 2px;
+  padding: 0 7px;
 }
 
-.telematics-limit-sign span { font-size: 8px; font-weight: 800; line-height: 0.85; text-align: center; }
-.telematics-limit-sign strong { font-size: 26px; font-variant-numeric: tabular-nums; line-height: 1; }
-.telematics-limit-sign--portrait { flex: 0 0 54px; height: 64px; width: 54px; }
-.telematics-limit-sign--portrait strong { font-size: 22px; }
+.telematics-speed-sign__badge--accent { background: color-mix(in srgb, var(--primary) 16%, transparent); border: 0.75px solid color-mix(in srgb, var(--primary) 55%, transparent); color: var(--primary); }
+.telematics-speed-sign__badge--warn { background: color-mix(in srgb, var(--warning) 16%, transparent); border: 0.75px solid color-mix(in srgb, var(--warning) 55%, transparent); color: var(--warning); }
 
-.telematics-status-slot { align-items: center; display: flex; height: 42px; margin-top: 4px; }
-.telematics-mode-pill {
-  align-items: center;
-  background: color-mix(in srgb, var(--pill-tint) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--pill-tint) 40%, transparent);
-  border-radius: var(--radius-sm);
-  color: var(--on-surface);
-  display: flex;
+.telematics-hero-status { align-items: center; display: flex; flex: 1; flex-direction: column; gap: 5px; justify-content: center; min-width: 0; }
+.telematics-status-header--compact .telematics-hero-status { gap: 3px; }
+.telematics-hero-status__title-row { align-items: center; display: flex; gap: 8px; min-width: 0; }
+.telematics-hero-status__title-row i { flex: none; font-size: 24px; }
+.telematics-status-header--compact .telematics-hero-status__title-row i { font-size: 19px; }
+.telematics-hero-status__title-row strong { font-size: 33px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.telematics-status-header--compact .telematics-hero-status__title-row strong { font-size: 25px; }
+.telematics-hero-status__detail {
+  color: var(--text-muted);
+  display: -webkit-box;
   font-size: 15px;
   font-weight: var(--fw-bold);
-  height: 32px;
-  justify-content: center;
-  padding: 0 12px 0 32px;
-  position: relative;
+  overflow: hidden;
   text-align: center;
-  width: 100%;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.telematics-mode-pill i { color: var(--pill-tint); margin-left: auto; width: 20px; }
-.telematics-mode-pill span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.telematics-stopped-line { color: var(--warning); font-size: 13px; font-weight: var(--fw-bold); margin-bottom: 8px; text-align: center; }
+.telematics-status-header--compact .telematics-hero-status__detail { font-size: 12.5px; -webkit-line-clamp: 3; }
+
 .telematics-road-list { display: grid; gap: 6px; }
 .telematics-road-pill {
   align-items: center;
@@ -342,19 +338,22 @@
 .telematics-road-pill strong { font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .telematics-alert {
   align-items: center;
-  background: color-mix(in srgb, var(--warning) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--warning) 50%, transparent);
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+  border: 1.25px solid color-mix(in srgb, var(--warning) 75%, transparent);
   border-radius: var(--radius-sm);
   display: flex;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: var(--fw-bold);
-  gap: 8px;
-  min-height: 38px;
-  padding: 7px 12px;
+  gap: 10px;
+  height: 48px;
+  justify-content: center;
+  padding: 5px 14px;
+  text-align: center;
+  text-transform: uppercase;
 }
 
-.telematics-alert i { color: var(--warning); }
-.telematics-instrument > .telematics-alert { margin-top: 8px; }
+.telematics-alert i { color: var(--warning); flex: none; font-size: 18px; }
+.telematics-alert span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .telematics-steering {
   background: var(--surface-container);
   border: 1px solid var(--glass-border);
@@ -406,23 +405,13 @@
 .telematics-center__connection button { background: transparent; border: 0; color: var(--primary); cursor: pointer; font: inherit; font-weight: var(--fw-bold); padding: 2px 4px; }
 .telematics-center__connection button:disabled { color: var(--text-muted); }
 .telematics-center__connection .telematics-fullscreen-button { align-items: center; display: inline-flex; font-size: 14px; justify-content: center; min-height: 24px; min-width: 28px; }
-.telematics-speed-row { align-items: flex-start; display: grid; gap: 12px; grid-template-columns: 86px minmax(0, 1fr) 86px; height: 124px; padding-top: 13px; }
-.telematics-speed-row .telematics-target-sign { flex-basis: 86px; height: 60px; width: 86px; }
-.telematics-limit-slot { display: flex; height: 60px; justify-content: center; width: 86px; }
-.telematics-hero { align-items: center; display: flex; flex-direction: column; height: 111px; min-width: 0; }
-.telematics-brand { font-size: 17px; font-weight: var(--fw-bold); }
-.telematics-brand i { color: var(--primary); font-size: 15px; }
-.telematics-current-speed { align-items: baseline; display: flex; gap: 4px; line-height: 1; }
-.telematics-current-speed strong { font-size: clamp(45px, 7vw, 60px); font-variant-numeric: tabular-nums; }
-.telematics-current-speed span { color: var(--text-muted); font-size: 16px; font-weight: var(--fw-bold); }
-.telematics-drive-title { font-size: 18px; font-weight: var(--fw-bold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.telematics-not-connected { color: var(--text-muted); font-size: 16px; margin-top: 30px; }
-.telematics-stopped-main { color: var(--success); font-size: clamp(26px, 4vw, 36px); margin-top: 7px; white-space: nowrap; }
-.telematics-stopped-detail { font-size: 18px; font-weight: var(--fw-bold); white-space: nowrap; }
-.telematics-center .telematics-status-slot { margin-top: 4px; }
-.telematics-alert-slot { height: 42px; margin-top: auto; }
-.telematics-alert-slot .telematics-alert { height: 38px; overflow: hidden; }
-.telematics-center .telematics-road-list { margin-top: 0; }
+/* Clears the absolutely-positioned connection bar pinned to the panel's top edge. */
+.telematics-center > .telematics-status-header { padding-top: 13px; }
+.telematics-alert-slot { height: 48px; }
+.telematics-alert-slot .telematics-alert { height: 100%; }
+/* Road pills grow to fill whatever the header and alert slot leave behind,
+   rather than sitting in a block against the bottom edge with a void above. */
+.telematics-center .telematics-road-list { align-content: start; flex: 1; margin-top: 0; min-height: 0; }
 
 .gx-app--telematics-landscape { height: 100dvh; min-height: 355px; overflow: auto; }
 .gx-app--telematics-landscape > .gx-content { contain: none; margin: 0; padding: 0; }
@@ -431,10 +420,9 @@
   .telematics-connect-bar { align-items: stretch; }
   .telematics-status { align-items: flex-start; flex: 1; flex-direction: column; gap: 2px; }
   .telematics-status > i { display: none; }
-  .telematics-portrait-top { gap: 5px; }
-  .telematics-target-sign, .telematics-speed-badge { flex-basis: 66px; width: 66px; }
-  .telematics-portrait-title strong { font-size: 18px; }
-  .telematics-limit-sign--portrait { flex-basis: 48px; width: 48px; }
+  .telematics-status-header--compact { gap: 6px; }
+  .telematics-status-header--compact .telematics-speed-sign { flex-basis: 58px; }
+  .telematics-status-header--compact .telematics-hero-status__title-row strong { font-size: 21px; }
 }
 
 @media (orientation: landscape) {

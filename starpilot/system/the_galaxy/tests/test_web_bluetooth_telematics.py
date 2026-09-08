@@ -68,6 +68,9 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   # the device side of pairing is invisible from the phone, so the panel must spell it out
   assert "pair a phone" in telematics
   assert "discoverable / 120s" in telematics
+  # the briefing ends at the real pair button
+  assert '"Pair now"' in telematics
+  assert "at the bottom of this panel" in telematics
   # pairing from Android's settings is the common wrong turn; warn against it
   assert "Do not pair from Android's Bluetooth settings" in telematics
   assert "only creates a system bond" in telematics
@@ -255,10 +258,19 @@ assert.equal(view.showBluetoothSetup, false)
 await view.connect()
 assert.equal(connects, 2, "Skipping setup must allow subsequent pairing attempts")
 
+// The reconnect flag being on is no longer enough to skip the briefing: a first
+// pair always sees the flags and the "pair a phone" steps before the chooser.
 bluetooth.getDevices = async () => []
 const supported = makeView()
 await supported.connect()
-assert.equal(supported.showBluetoothSetup, false)
+assert.equal(supported.showBluetoothSetup, true, "a first pair must see the setup panel")
+assert.equal(connects, 2, "the briefing must not open the chooser yet")
+
+// Once Chrome remembers a device, Connect goes straight to pairing.
+const returning = makeView()
+returning.rememberedDevices = 1
+await returning.connect()
+assert.equal(returning.showBluetoothSetup, false, "a remembered device must not be briefed again")
 assert.equal(connects, 3)
 delete bluetooth.getDevices
 const existing = makeView()
@@ -277,6 +289,8 @@ const manual = makeView()
 await manual.openBluetoothSetup()
 assert.equal(manual.showBluetoothSetup, true, "Setup must be reachable without tapping Connect")
 assert.equal(Telematics.computed.bluetoothSetupConfirmLabel.call(manual), "Done")
+assert.equal(Telematics.computed.bluetoothSetupConfirmLabel.call(
+  Object.assign(makeView(), { bluetoothSetupMode: "gate" })), "Pair now", "the gate confirms by pairing")
 await manual.confirmBluetoothSetup()
 assert.equal(connects, 4, "Dismissing the status panel must not open the chooser")
 
