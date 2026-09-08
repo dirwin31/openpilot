@@ -68,6 +68,9 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   # the device side of pairing is invisible from the phone, so the panel must spell it out
   assert "pair a phone" in telematics
   assert "discoverable / 120s" in telematics
+  # pairing from Android's settings is the common wrong turn; warn against it
+  assert "Do not pair from Android's Bluetooth settings" in telematics
+  assert "only creates a system bond" in telematics
   assert 'v-if="!connected"' in telematics
   # Disconnect cannot revoke the Chrome permission, so say how to do it by hand
   assert "Make Chrome forget this device" in telematics

@@ -416,7 +416,10 @@ export const Telematics = {
               <li>Tap <strong class="telematics-inline">{{ bluetoothSetupMode === 'info' ? 'Connect' : 'Continue pairing' }}</strong> and pick the device from Chrome's list.</li>
               <li>Accept Android's pairing prompt if one appears.</li>
             </ol>
-            <p class="telematics-check__hint">Chrome shows no devices, or pairing fails? The 120 second window has almost certainly closed. Tap <strong class="telematics-inline">pair a phone</strong> again and retry.</p>
+            <GxNotice tone="warn" icon="bi-phone-fill" title="Do not pair from Android's Bluetooth settings">
+              The comma appears on that screen while the window is open, but pairing there only creates a system bond. It grants this page nothing, Chrome still will not list the device, and the leftover bond is what makes pairing here fail afterwards. Start from this page every time; use Android's Bluetooth settings only to forget a device.
+            </GxNotice>
+            <p class="telematics-check__hint">Chrome shows no devices, or pairing fails? Either the 120 second window has closed &mdash; tap <strong class="telematics-inline">pair a phone</strong> again &mdash; or the device was paired from Android's settings and needs forgetting in both places first.</p>
           </template>
 
           <template v-if="!canRestoreBluetooth">
