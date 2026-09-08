@@ -57,7 +57,12 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   # the Chrome flag instructions must stay reachable, not be a one-shot interstitial
   assert '@click="openBluetoothSetup"' in telematics
   assert "canRestoreBluetooth" in telematics
-  assert "Show me how" in telematics
+  # the banner must be driven by a real fault so it disappears when nothing is wrong
+  assert "Chrome forgets this pairing on reload" in telematics
+  assert 'v-else-if="bluetoothBanner && !isLandscape"' in telematics
+  assert "getAvailability" in telematics
+  assert "bluetoothChecks" in telematics
+  assert "bluetoothNeedsAttention" in telematics
   assert "telematics-landscape" in telematics
   assert "telematics-portrait" in telematics
   assert "STEER DELAY" in telematics
@@ -152,11 +157,56 @@ assert.equal(desktop.showBluetoothSetup, false)
 assert.equal(connects, 4)
 
 const manual = makeView()
-manual.openBluetoothSetup()
+await manual.openBluetoothSetup()
 assert.equal(manual.showBluetoothSetup, true, "Setup must be reachable without tapping Connect")
 assert.equal(Telematics.computed.bluetoothSetupConfirmLabel.call(manual), "Done")
 await manual.confirmBluetoothSetup()
-assert.equal(connects, 4, "Dismissing the reference view must not open the chooser")
+assert.equal(connects, 4, "Dismissing the status panel must not open the chooser")
+
+const checks = (view) => Telematics.computed.bluetoothChecks.call(
+  Object.assign(view, { canRestoreBluetooth: Telematics.computed.canRestoreBluetooth.call(view) }))
+
+// Radio off and no permissions backend: both rows fail and the gear must flag it.
+bluetooth.getAvailability = async () => false
+const unhealthy = makeView()
+await unhealthy.refreshBluetoothStatus()
+assert.equal(unhealthy.bluetoothRadio, "unavailable")
+assert.equal(checks(unhealthy)[0].ok, false)
+assert.equal(checks(unhealthy)[1].value, "Not enabled")
+assert.equal(checks(unhealthy)[2].value, "Needs the setting above", "Remembered device is a consequence, not its own fix")
+assert.equal(Telematics.computed.bluetoothNeedsAttention.call(unhealthy), true)
+assert.equal(Telematics.computed.bluetoothBanner.call(
+  Object.assign(unhealthy, { canRestoreBluetooth: false })).title, "Bluetooth is off",
+  "A dead radio must outrank the reconnect advice")
+
+// Everything on, one device already granted: no attention needed anywhere.
+bluetooth.getAvailability = async () => true
+bluetooth.getDevices = async () => [{ id: "remembered" }]
+const healthy = makeView()
+await healthy.refreshBluetoothStatus()
+assert.equal(healthy.rememberedDevices, 1)
+assert.deepEqual(checks(healthy).map((check) => check.ok), [true, true, true])
+assert.equal(Telematics.computed.bluetoothSetupReady.call(
+  Object.assign(healthy, { bluetoothChecks: checks(healthy) })), true)
+assert.equal(Telematics.computed.bluetoothNeedsAttention.call(healthy), false)
+assert.equal(Telematics.computed.bluetoothBanner.call(
+  Object.assign(healthy, { canRestoreBluetooth: true })), null, "No banner when everything is fine")
+
+// Radio fine, backend missing: the reconnect banner, not the radio one.
+const reconnectOnly = Object.assign(makeView(), { bluetoothRadio: "available", canRestoreBluetooth: false })
+assert.equal(Telematics.computed.bluetoothBanner.call(reconnectOnly).action, "Show me how")
+
+// Not yet paired is normal, not a fault: nothing may appear for it.
+const unpaired = Object.assign(makeView(), { bluetoothRadio: "available", canRestoreBluetooth: true, rememberedDevices: 0 })
+assert.equal(Telematics.computed.bluetoothBanner.call(unpaired), null, "An unpaired device must not raise a banner")
+
+// A browser that cannot report radio state must read as unknown, never as broken.
+delete bluetooth.getAvailability
+delete bluetooth.getDevices
+const opaque = makeView()
+await opaque.refreshBluetoothStatus()
+assert.equal(opaque.bluetoothRadio, "unknown")
+assert.equal(checks(opaque)[0].ok, undefined, "Unknown radio state must not render as a failure")
 
 let copied
 navigator.clipboard = { async writeText(value) { copied = value } }

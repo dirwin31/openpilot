@@ -60,6 +60,8 @@ export const Telematics = {
       showBluetoothSetup: false,
       bluetoothSetupSkipped: false,
       bluetoothSetupMode: "gate",
+      bluetoothRadio: "unknown",
+      rememberedDevices: null,
     }
   },
   computed: {
@@ -76,6 +78,48 @@ export const Telematics = {
     },
     canRestoreBluetooth() { return supportsBluetoothRestore() },
     bluetoothSetupConfirmLabel() { return this.bluetoothSetupMode === "info" ? "Done" : "Continue pairing" },
+    // Only the permissions backend is detectable; Chrome never exposes chrome://flags
+    // state, so every row here is a real capability probe rather than a flag reading.
+    bluetoothChecks() {
+      const radio = {
+        available: { value: "On", ok: true },
+        unavailable: { value: "Off or blocked", ok: false, hint: "Turn Bluetooth on in Android settings, then reopen this page." },
+        unknown: { value: "Cannot tell", hint: "This browser does not report radio state. Tap Connect and see what Chrome says." },
+      }[this.bluetoothRadio]
+      return [
+        { label: "Bluetooth radio", ...radio },
+        this.canRestoreBluetooth
+          ? { label: "Reconnect after reload", value: "Enabled", ok: true }
+          : { label: "Reconnect after reload", value: "Not enabled", ok: false, hint: "Chrome makes you pick the device again after every reload. The settings below fix that." },
+        !this.canRestoreBluetooth
+          ? { label: "Remembered device", value: "Needs the setting above" }
+          : this.rememberedDevices > 0
+            ? { label: "Remembered device", value: this.rememberedDevices === 1 ? "1 saved" : `${this.rememberedDevices} saved`, ok: true }
+            : { label: "Remembered device", value: "None yet", ok: false, hint: "Pair once with Connect and Chrome will restore it by itself next time." },
+      ]
+    },
+    bluetoothSetupReady() { return this.bluetoothChecks.every((check) => check.ok) },
+    // Drives both the dot on the status button and the banner below the connect bar.
+    bluetoothNeedsAttention() { return !this.canRestoreBluetooth || this.bluetoothRadio === "unavailable" },
+    // Null whenever everything is fine, so the banner disappears instead of nagging.
+    // A device not yet paired is not a fault, so it never raises one.
+    bluetoothBanner() {
+      if (this.bluetoothRadio === "unavailable") {
+        return {
+          tone: "warn", icon: "bi-bluetooth", title: "Bluetooth is off",
+          text: "Turn Bluetooth on in Android settings, then come back to this page.",
+          action: "Check status",
+        }
+      }
+      if (!this.canRestoreBluetooth) {
+        return {
+          tone: "info", icon: "bi-arrow-repeat", title: "Chrome forgets this pairing on reload",
+          text: "You can pair right now, but Chrome will ask you to pick the device again every time the page reloads. One setting fixes that.",
+          action: "Show me how",
+        }
+      }
+      return null
+    },
     statusLabel() {
       if (this.bleState === "connected") return this.deviceName
       if (this.bleState === "connecting") return "Connecting"
@@ -242,13 +286,27 @@ export const Telematics = {
         if (["error", "needs-pairing"].includes(this.bleState)) await this.ble.reconnect()
         else await this.ble.connect()
       } catch (error) { /* State includes the actionable error. */ }
-      finally { this.connecting = false }
+      finally {
+        this.connecting = false
+        // Pairing is what creates the remembered device, so the panel is stale until now.
+        void this.refreshBluetoothStatus()
+      }
+    },
+    async refreshBluetoothStatus() {
+      try {
+        const available = await navigator.bluetooth?.getAvailability?.()
+        this.bluetoothRadio = available === undefined ? "unknown" : available ? "available" : "unavailable"
+      } catch (error) { this.bluetoothRadio = "unknown" }
+      try {
+        this.rememberedDevices = supportsBluetoothRestore() ? (await navigator.bluetooth.getDevices()).length : null
+      } catch (error) { this.rememberedDevices = null }
     },
     // Reachable any time from the connect bar, so the flag instructions are not a
     // one-shot interstitial the user can never get back to.
     openBluetoothSetup() {
       this.bluetoothSetupMode = "info"
       this.showBluetoothSetup = true
+      return this.refreshBluetoothStatus()
     },
     confirmBluetoothSetup() {
       if (this.bluetoothSetupMode === "info") return
@@ -317,6 +375,7 @@ export const Telematics = {
         onMetadata: (metadata) => { this.metadata = metadata },
       })
       this.ble.emitCurrent()
+      void this.refreshBluetoothStatus()
       if (!this.ble.manualDisconnect && !this.ble.isActive()) void this.ble.reconnectRemembered()
     }
   },
@@ -332,24 +391,39 @@ export const Telematics = {
   },
   template: `
     <div class="telematics-page" :class="{ 'telematics-page--landscape': isLandscape }">
-      <GalaxyModal v-model="showBluetoothSetup" title="Reconnect after page reload" :confirm-label="bluetoothSetupConfirmLabel" cancel-label="Close" @confirm="confirmBluetoothSetup">
+      <GalaxyModal v-model="showBluetoothSetup" title="Bluetooth status" :confirm-label="bluetoothSetupConfirmLabel" cancel-label="Close" @confirm="confirmBluetoothSetup">
         <div class="telematics-bluetooth-setup">
-          <p>This browser cannot restore Bluetooth access after a page reload. You can still pair normally and tap Connect again after reloading.</p>
-          <p>To try automatic reconnect in Chrome on Android, enable these experimental settings. This page cannot open or change Chrome settings.</p>
-          <ol>
-            <li>
-              <strong>Experimental Web Platform features</strong>
-              <code>chrome://flags/#enable-experimental-web-platform-features</code>
+          <ul class="telematics-checks">
+            <li v-for="check in bluetoothChecks" :key="check.label" class="telematics-check"
+              :class="check.ok ? 'telematics-check--ok' : check.ok === false ? 'telematics-check--bad' : 'telematics-check--unknown'">
+              <i class="bi" :class="check.ok ? 'bi-check-circle-fill' : check.ok === false ? 'bi-x-circle-fill' : 'bi-dash-circle-fill'"></i>
+              <div>
+                <span class="telematics-check__label">{{ check.label }}</span>
+                <span class="telematics-check__value">{{ check.value }}</span>
+                <p v-if="check.hint" class="telematics-check__hint">{{ check.hint }}</p>
+              </div>
+            </li>
+          </ul>
+
+          <p v-if="bluetoothSetupReady" class="telematics-setup-done">
+            <i class="bi bi-stars"></i> Everything needed is in place. This page will reconnect on its own after a reload.
+          </p>
+
+          <template v-if="!canRestoreBluetooth">
+            <p>Chrome can remember the device across reloads, but the setting is off by default. This page cannot read or change Chrome's settings, so you have to do it once by hand.</p>
+            <ol>
+              <li>
+                <strong>Web Bluetooth new permissions backend</strong>
+                <code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</code>
+                <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-web-bluetooth-new-permissions-backend')">Copy address</button>
+              </li>
+            </ol>
+            <p>Paste it into Chrome's address bar, set it to <strong class="telematics-inline">Enabled</strong>, relaunch Chrome, then come back here. This panel will show <strong class="telematics-inline">Enabled</strong> once it has worked.</p>
+            <p class="telematics-check__hint">Still not enabled after relaunching? Some Chrome versions also gate it behind <code>chrome://flags/#enable-experimental-web-platform-features</code>. Only try that one if the row above stays red.
               <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-experimental-web-platform-features')">Copy address</button>
-            </li>
-            <li>
-              <strong>Web Bluetooth new permissions backend</strong>
-              <code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</code>
-              <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-web-bluetooth-new-permissions-backend')">Copy address</button>
-            </li>
-          </ol>
-          <p>Paste each address into Chrome's address bar and select Enabled. After changing both, relaunch Chrome, return to this same HTTPS page, and tap Connect to grant access again.</p>
-          <p>If either setting is unavailable, continue pairing. Automatic reconnect after reload may remain unavailable.</p>
+            </p>
+            <p>None of this blocks pairing. You can connect right now; you will just have to pick the device again after each reload.</p>
+          </template>
         </div>
       </GalaxyModal>
       <div v-if="capability === 'insecure'" class="telematics-gate">
@@ -381,16 +455,19 @@ export const Telematics = {
       <template v-else>
         <div v-if="!isLandscape" class="telematics-connect-bar">
           <span class="telematics-status"><i :style="{ background: freshnessTint }"></i>{{ statusLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }}</small></span>
-          <button class="telematics-setup-button" type="button" title="Chrome setup for Bluetooth reconnect"
-            aria-label="Chrome setup for Bluetooth reconnect" @click="openBluetoothSetup"><i class="bi bi-gear-fill"></i></button>
+          <button class="telematics-setup-button" type="button" :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
+            :title="bluetoothNeedsAttention ? 'Bluetooth status — needs attention' : 'Bluetooth status'"
+            :aria-label="bluetoothNeedsAttention ? 'Bluetooth status, needs attention' : 'Bluetooth status'"
+            @click="openBluetoothSetup"><i class="bi bi-bluetooth"></i></button>
           <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Disconnect</button>
           <button v-else class="gx-btn" type="button" :disabled="!canConnect || connecting" @click="connect"><i class="bi bi-bluetooth"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
         </div>
         <GxNotice v-if="bleState === 'needs-pairing'" class="telematics-pairing" tone="warn" icon="bi-bluetooth" title="Pair the device first" :text="bleMessage" />
         <GxNotice v-else-if="bleState === 'error'" class="telematics-pairing" tone="danger" icon="bi-exclamation-circle-fill" title="Bluetooth error" :text="bleMessage" />
-        <GxNotice v-else-if="!canRestoreBluetooth && !isLandscape" class="telematics-pairing" tone="info" icon="bi-gear-fill" title="Chrome forgets this pairing on reload">
-          Two Chrome flags let this page reconnect on its own instead of asking you to pick the device every time.
-          <button class="telematics-setup-link" type="button" @click="openBluetoothSetup">Show me how</button>
+        <GxNotice v-else-if="bluetoothBanner && !isLandscape" class="telematics-pairing" :tone="bluetoothBanner.tone"
+          :icon="bluetoothBanner.icon" :title="bluetoothBanner.title">
+          {{ bluetoothBanner.text }}
+          <button class="telematics-setup-link" type="button" @click="openBluetoothSetup">{{ bluetoothBanner.action }}</button>
         </GxNotice>
 
         <div v-if="isLandscape" class="telematics-landscape">
@@ -407,8 +484,11 @@ export const Telematics = {
           <section class="telematics-center" :style="{ '--mode-color': modeColor }">
             <div class="telematics-center__connection">
               <span>{{ statusLabel }} · {{ deviceStatusLabel }}</span>
-              <button class="telematics-fullscreen-button" type="button" title="Chrome setup for Bluetooth reconnect"
-                aria-label="Chrome setup for Bluetooth reconnect" @click="openBluetoothSetup"><i class="bi bi-gear-fill"></i></button>
+              <button class="telematics-fullscreen-button telematics-setup-button--inline" type="button"
+                :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
+                :title="bluetoothNeedsAttention ? 'Bluetooth status — needs attention' : 'Bluetooth status'"
+                :aria-label="bluetoothNeedsAttention ? 'Bluetooth status, needs attention' : 'Bluetooth status'"
+                @click="openBluetoothSetup"><i class="bi bi-bluetooth"></i></button>
               <button class="telematics-fullscreen-button" type="button" :aria-label="isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'"
                 :title="isFullscreen ? 'Exit fullscreen' : 'Hide browser controls'" :aria-pressed="isFullscreen" @click="toggleFullscreen">
                 <i class="bi" :class="isFullscreen ? 'bi-fullscreen-exit' : 'bi-arrows-fullscreen'"></i>

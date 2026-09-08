@@ -28,23 +28,26 @@ export const GalaxyModal = {
       this.close()
     },
   },
+
   template: `
-    <transition name="gx-fade">
-      <div v-if="modelValue" class="gx-scrim" @click.self="cancel">
-        <transition name="gx-slide" appear>
-          <div class="gx-sheet" role="dialog" :aria-label="title">
-            <h3 class="gx-sheet__title">{{ title }}</h3>
-            <p v-if="message" style="color: var(--text-muted); line-height: 1.5;">{{ message }}</p>
-            <input v-if="input" ref="input" v-model="value" class="gx-field gx-field--full" type="text"
-              :placeholder="inputPlaceholder" @keyup.enter="confirm" />
-            <div class="gx-dialog__actions">
-              <button type="button" class="gx-btn gx-btn--text" @click="cancel">{{ cancelLabel }}</button>
-              <button type="button" class="gx-btn" :disabled="input && inputRequired && !String(value || '').trim()" :style="danger ? 'background: var(--error); color: var(--on-error);' : ''" @click="confirm">{{ confirmLabel }}</button>
+    <Teleport to="body">
+      <transition name="gx-fade">
+        <div v-if="modelValue" class="gx-scrim" @click.self="cancel">
+          <transition name="gx-slide" appear>
+            <div class="gx-sheet" role="dialog" :aria-label="title">
+              <h3 class="gx-sheet__title">{{ title }}</h3>
+              <p v-if="message" style="color: var(--text-muted); line-height: 1.5;">{{ message }}</p>
+              <input v-if="input" ref="input" v-model="value" class="gx-field gx-field--full" type="text"
+                :placeholder="inputPlaceholder" @keyup.enter="confirm" />
+              <div class="gx-dialog__actions">
+                <button type="button" class="gx-btn gx-btn--text" @click="cancel">{{ cancelLabel }}</button>
+                <button type="button" class="gx-btn" :disabled="input && inputRequired && !String(value || '').trim()" :style="danger ? 'background: var(--error); color: var(--on-error);' : ''" @click="confirm">{{ confirmLabel }}</button>
+              </div>
             </div>
-          </div>
-        </transition>
-      </div>
-    </transition>
+          </transition>
+        </div>
+      </transition>
+    </Teleport>
   `,
 }
 
@@ -59,7 +62,7 @@ export function GalaxyConfirm({ title, message, confirmLabel = "Confirm", danger
       if (settled) return
       settled = true
       resolve(value)
-      try { app?.unmount?.() } catch (e) {}
+      try { app?.unmount?.() } catch (e) { }
       host.remove()
     }
     app = createApp({
