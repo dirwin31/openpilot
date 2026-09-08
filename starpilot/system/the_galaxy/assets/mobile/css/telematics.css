@@ -57,19 +57,40 @@
   padding: 12px 0;
 }
 
+/* The native disclosure triangle hangs outside the content box, so it sits well
+   left of everything else on the page. Replaced with an inline chevron. */
 .telematics-gate__more summary {
+  align-items: center;
   color: var(--on-surface);
   cursor: pointer;
+  display: flex;
   font-size: 14px;
   font-weight: var(--fw-bold);
-  list-style-position: outside;
+  gap: 10px;
+  list-style: none;
 }
+
+.telematics-gate__more summary::-webkit-details-marker { display: none; }
+
+.telematics-gate__more summary::before {
+  border-bottom: 2px solid var(--text-muted);
+  border-right: 2px solid var(--text-muted);
+  content: "";
+  flex: none;
+  height: 7px;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+  width: 7px;
+}
+
+.telematics-gate__more[open] summary::before { transform: rotate(45deg); }
 
 .telematics-gate__more p {
   color: var(--text-muted);
   font-size: 13.5px;
   line-height: 1.55;
   margin: 10px 0 0;
+  padding-left: 17px;
 }
 
 .telematics-gate__more code {

@@ -463,7 +463,7 @@ export const Telematics = {
           <button class="telematics-setup-button" type="button" :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
             :title="bluetoothNeedsAttention ? 'Bluetooth status — needs attention' : 'Bluetooth status'"
             :aria-label="bluetoothNeedsAttention ? 'Bluetooth status, needs attention' : 'Bluetooth status'"
-            @click="openBluetoothSetup"><i class="bi bi-bluetooth"></i></button>
+            @click="openBluetoothSetup"><i class="bi bi-lightbulb-fill"></i></button>
           <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Disconnect</button>
           <button v-else class="gx-btn" type="button" :disabled="!canConnect || connecting" @click="connect"><i class="bi bi-bluetooth"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
         </div>
@@ -493,7 +493,7 @@ export const Telematics = {
                 :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
                 :title="bluetoothNeedsAttention ? 'Bluetooth status — needs attention' : 'Bluetooth status'"
                 :aria-label="bluetoothNeedsAttention ? 'Bluetooth status, needs attention' : 'Bluetooth status'"
-                @click="openBluetoothSetup"><i class="bi bi-bluetooth"></i></button>
+                @click="openBluetoothSetup"><i class="bi bi-lightbulb-fill"></i></button>
               <button class="telematics-fullscreen-button" type="button" :aria-label="isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'"
                 :title="isFullscreen ? 'Exit fullscreen' : 'Hide browser controls'" :aria-pressed="isFullscreen" @click="toggleFullscreen">
                 <i class="bi" :class="isFullscreen ? 'bi-fullscreen-exit' : 'bi-arrows-fullscreen'"></i>
