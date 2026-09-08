@@ -161,12 +161,25 @@ export const Telematics = {
       if (!this.canRestoreBluetooth) {
         return {
           tone: "info", icon: "bi-arrow-repeat", title: "Chrome forgets this pairing on reload",
-          text: "You can pair right now, but Chrome will ask you to pick the device again every time the page reloads. One setting fixes that.",
-          action: "Show me how",
+          text: "Chrome would make you pick the device again after every reload. One setting fixes that, so set it before pairing.",
+          action: "Show me how", takeover: true,
         }
       }
       return null
     },
+    // Mirrors the banner's place in the notice chain: a pairing or error notice
+    // outranks it, and landscape has no room for it at all.
+    bluetoothBannerVisible() {
+      return !this.isLandscape && !["needs-pairing", "error"].includes(this.bleState) && this.bluetoothBanner !== null
+    },
+    // Every banner carries its own button into the setup panel, so the lightbulb
+    // beside it is a second route to the same place: drop it while one is up.
+    // Connect is a different action and only goes away for the reload banner,
+    // where pairing first would just build a session Chrome is about to forget.
+    bluetoothControlsHidden() { return this.bluetoothBannerVisible && this.bluetoothBanner.takeover === true },
+    // Steps only help when there is a button to press. The gate carries its own
+    // Pair now; otherwise Connect has to be back on the bar first.
+    showPairingSteps() { return !this.connected && (this.canRestoreBluetooth || this.bluetoothSetupMode === "gate") },
     statusLabel() {
       if (this.bleState === "connected") return this.deviceName
       if (this.bleState === "connecting") return "Connecting"
@@ -499,10 +512,10 @@ export const Telematics = {
             <p class="telematics-check__hint">Still not enabled after relaunching? Some Chrome versions also gate it behind <code>chrome://flags/#enable-experimental-web-platform-features</code>. Only try that one if the row above stays red.
               <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-experimental-web-platform-features')">Copy address</button>
             </p>
-            <p>None of this blocks pairing. You can connect right now; you will just have to pick the device again after each reload.</p>
+            <p>Until this is on, the Connect button stays hidden so you do not pair into a session Chrome is about to forget. Set it, relaunch Chrome, and Connect comes back.</p>
           </template>
 
-          <template v-if="!connected">
+          <template v-if="showPairingSteps">
             <p class="telematics-setup__heading">Pairing a phone</p>
             <ol>
               <li>On the comma screen open <strong class="telematics-inline">Settings &rarr; Bluetooth</strong> and tap <strong class="telematics-inline">pair a phone</strong>. It counts down <strong class="telematics-inline">discoverable / 120s</strong>; the device only accepts a new phone inside that window, and only while parked.</li>
@@ -560,16 +573,18 @@ export const Telematics = {
       <template v-else>
         <div v-if="!isLandscape" class="telematics-connect-bar">
           <span class="telematics-status"><i :style="{ background: freshnessTint }"></i>{{ statusLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }}</small></span>
-          <button class="telematics-setup-button" type="button" :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
+          <button v-if="!bluetoothBannerVisible" class="telematics-setup-button" type="button" :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
             :title="bluetoothNeedsAttention ? 'Bluetooth status — needs attention' : 'Bluetooth status'"
             :aria-label="bluetoothNeedsAttention ? 'Bluetooth status, needs attention' : 'Bluetooth status'"
             @click="openBluetoothSetup"><i class="bi bi-lightbulb-fill"></i></button>
-          <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Disconnect</button>
-          <button v-else class="gx-btn" type="button" :disabled="!canConnect || connecting" @click="connect"><i class="bi bi-bluetooth"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
+          <template v-if="!bluetoothControlsHidden">
+            <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Disconnect</button>
+            <button v-else class="gx-btn" type="button" :disabled="!canConnect || connecting" @click="connect"><i class="bi bi-bluetooth"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
+          </template>
         </div>
         <GxNotice v-if="bleState === 'needs-pairing'" class="telematics-pairing" tone="warn" icon="bi-bluetooth" title="Pair the device first" :text="bleMessage" />
         <GxNotice v-else-if="bleState === 'error'" class="telematics-pairing" tone="danger" icon="bi-exclamation-circle-fill" title="Bluetooth error" :text="bleMessage" />
-        <GxNotice v-else-if="bluetoothBanner && !isLandscape" class="telematics-pairing" :tone="bluetoothBanner.tone"
+        <GxNotice v-else-if="bluetoothBannerVisible" class="telematics-pairing" :tone="bluetoothBanner.tone"
           :icon="bluetoothBanner.icon" :title="bluetoothBanner.title">
           {{ bluetoothBanner.text }}
           <button class="telematics-setup-link" type="button" @click="openBluetoothSetup">{{ bluetoothBanner.action }}</button>

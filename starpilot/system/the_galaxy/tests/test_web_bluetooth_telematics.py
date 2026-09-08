@@ -63,8 +63,15 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert "canRestoreBluetooth" in telematics
   # the banner must be driven by a real fault so it disappears when nothing is wrong
   assert "Chrome forgets this pairing on reload" in telematics
-  assert 'v-else-if="bluetoothBanner && !isLandscape"' in telematics
+  assert 'v-else-if="bluetoothBannerVisible"' in telematics
   assert "getAvailability" in telematics
+  # the reload banner replaces the bar's controls rather than sitting beside them
+  assert "bluetoothControlsHidden" in telematics
+  assert "bluetoothBannerVisible" in telematics
+  assert 'v-if="!bluetoothControlsHidden"' in telematics
+  # every banner carries its own way into the panel, so the lightbulb steps aside
+  assert 'v-if="!bluetoothBannerVisible"' in telematics
+  assert "takeover: true" in telematics
   # the device side of pairing is invisible from the phone, so the panel must spell it out
   assert "pair a phone" in telematics
   assert "discoverable / 120s" in telematics
@@ -74,7 +81,7 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   # pairing from Android's settings is the common wrong turn; warn against it
   assert "Do not pair from Android's Bluetooth settings" in telematics
   assert "only creates a system bond" in telematics
-  assert 'v-if="!connected"' in telematics
+  assert 'v-if="showPairingSteps"' in telematics
   # Disconnect cannot revoke the Chrome permission, so say how to do it by hand
   assert "Make Chrome forget this device" in telematics
   assert "Bluetooth devices" in telematics
@@ -326,6 +333,35 @@ assert.equal(Telematics.computed.bluetoothBanner.call(
 // Radio fine, backend missing: the reconnect banner, not the radio one.
 const reconnectOnly = Object.assign(makeView(), { bluetoothRadio: "available", canRestoreBluetooth: false })
 assert.equal(Telematics.computed.bluetoothBanner.call(reconnectOnly).action, "Show me how")
+
+// The reload banner replaces the bar's lightbulb and Connect; nothing else does.
+const controlsHidden = (view) => {
+  const banner = Telematics.computed.bluetoothBanner.call(view)
+  const withBanner = Object.assign(view, { bluetoothBanner: banner })
+  const visible = Telematics.computed.bluetoothBannerVisible.call(withBanner)
+  return Telematics.computed.bluetoothControlsHidden.call(Object.assign(withBanner, { bluetoothBannerVisible: visible }))
+}
+const bar = (extra) => Object.assign(makeView(), { bluetoothRadio: "available", canRestoreBluetooth: false }, extra)
+assert.equal(controlsHidden(bar()), true, "the reload banner owns the bar")
+assert.equal(controlsHidden(bar({ bluetoothRadio: "unavailable" })), false, "a dead radio must still leave Connect reachable")
+assert.equal(controlsHidden(bar({ canRestoreBluetooth: true })), false, "nothing is hidden once the setting is on")
+assert.equal(controlsHidden(bar({ isLandscape: true })), false, "landscape shows no banner, so it keeps its controls")
+assert.equal(controlsHidden(bar({ bleState: "error" })), false, "an error notice outranks the banner")
+
+// The lightbulb answers to the banner alone: any banner replaces it, and it
+// comes back the moment none is showing.
+const bannerUp = (view) => Telematics.computed.bluetoothBannerVisible.call(
+  Object.assign(view, { bluetoothBanner: Telematics.computed.bluetoothBanner.call(view) }))
+assert.equal(bannerUp(bar()), true, "the reload banner replaces the lightbulb")
+assert.equal(bannerUp(bar({ bluetoothRadio: "unavailable" })), true, "so does the radio banner")
+assert.equal(bannerUp(bar({ canRestoreBluetooth: true })), false, "no banner, so the lightbulb stays")
+assert.equal(bannerUp(bar({ bleState: "needs-pairing" })), false, "a pairing notice has no button of its own")
+
+// The steps must not point at a Connect button that is currently hidden.
+const steps = (view) => Telematics.computed.showPairingSteps.call(view)
+assert.equal(steps(Object.assign(makeView(), { connected: false, canRestoreBluetooth: false, bluetoothSetupMode: "info" })), false)
+assert.equal(steps(Object.assign(makeView(), { connected: false, canRestoreBluetooth: false, bluetoothSetupMode: "gate" })), true)
+assert.equal(steps(Object.assign(makeView(), { connected: false, canRestoreBluetooth: true, bluetoothSetupMode: "info" })), true)
 
 // Not yet paired is normal, not a fault: nothing may appear for it.
 const unpaired = Object.assign(makeView(), { bluetoothRadio: "available", canRestoreBluetooth: true, rememberedDevices: 0 })
