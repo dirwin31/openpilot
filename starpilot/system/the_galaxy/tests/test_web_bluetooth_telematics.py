@@ -49,6 +49,10 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert ":href=\"secureURL\"" in telematics
   assert "NET::ERR_CERT_AUTHORITY_INVALID" in telematics
   assert "Proceed to {{ secureHost }} (unsafe)" in telematics
+  # the gate must lead with the notice and action, not bury them under prose
+  assert "telematics-gate__open" in telematics
+  assert telematics.index("GxNotice") < telematics.index("telematics-gate__steps")
+  assert "<details" in telematics
   assert "navigator.bluetooth" in telematics
   assert "Chrome on Android required" in telematics
   assert 'target.port = "8443"' in telematics

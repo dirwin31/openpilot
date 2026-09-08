@@ -428,24 +428,29 @@ export const Telematics = {
       </GalaxyModal>
       <div v-if="capability === 'insecure'" class="telematics-gate">
         <GxNotice tone="warn" icon="bi-shield-lock-fill" title="Bluetooth pairing needs the HTTPS page">
-          Chrome only allows Web Bluetooth on a secure page, and this one is plain HTTP. Galaxy runs a second listener on port 8443 for it. Nothing happens automatically — open it yourself when you have read the steps below.
+          Web Bluetooth only works on a secure page. Galaxy serves one on port 8443.
         </GxNotice>
+
+        <a class="gx-btn gx-btn--block telematics-gate__open" :href="secureURL" rel="noopener">
+          <i class="bi bi-box-arrow-up-right"></i> Open the secure page
+        </a>
+        <p class="telematics-gate__url"><code>{{ secureURL }}</code></p>
+
         <ol class="telematics-gate__steps">
-          <li>Open <code>{{ secureURL }}</code> with the button at the bottom of this page.</li>
-          <li>
-            Chrome will warn <strong>&ldquo;Your connection is not private&rdquo;</strong> (<code>NET::ERR_CERT_AUTHORITY_INVALID</code>).
-            That is expected. The certificate is generated on the device and signed by the device itself, so no public authority vouches for it.
-            The connection is still encrypted and never leaves your local network.
-          </li>
-          <li>Tap <strong>Advanced</strong>, then <strong>Proceed to {{ secureHost }} (unsafe)</strong>. Chrome remembers the exception, so this is a one-time step per phone.</li>
-          <li>The telematics page reloads over HTTPS. Tap <strong>Connect</strong> and accept the Android Bluetooth pairing prompt.</li>
+          <li>Chrome warns <strong>&ldquo;Your connection is not private&rdquo;</strong>. Expected — keep going.</li>
+          <li>Tap <strong>Advanced</strong>, then <strong>Proceed to {{ secureHost }} (unsafe)</strong>.</li>
+          <li>Back on this page, tap <strong>Connect</strong> and accept the Android pairing prompt.</li>
         </ol>
-        <p class="telematics-gate__tip">
-          <i class="bi bi-lightbulb-fill"></i>
-          Reach the device by name (<code>https://starpilot-&lt;device&gt;.local:8443</code>) rather than by IP address where you can.
-          The certificate exception is remembered per address, so a new DHCP lease would make you accept the warning all over again.
-        </p>
-        <a class="gx-btn gx-btn--block" :href="secureURL" rel="noopener">Open the secure telematics page</a>
+        <p class="telematics-gate__once">You do this once per phone.</p>
+
+        <details class="telematics-gate__more">
+          <summary>Why does Chrome call it unsafe?</summary>
+          <p>Chrome shows <code>NET::ERR_CERT_AUTHORITY_INVALID</code> because the certificate is generated on your device and signed by the device itself, so no public authority vouches for it. Traffic is still encrypted and never leaves your local network.</p>
+        </details>
+        <details class="telematics-gate__more">
+          <summary>Warning keeps coming back?</summary>
+          <p>Chrome remembers the exception per address. Reach the device by name — <code>https://starpilot-&lt;device&gt;.local:8443</code> — so a new DHCP lease does not undo it.</p>
+        </details>
       </div>
       <div v-else-if="capability === 'unsupported'" class="telematics-gate">
         <GxNotice tone="info" icon="bi-phone" title="Chrome on Android required">
