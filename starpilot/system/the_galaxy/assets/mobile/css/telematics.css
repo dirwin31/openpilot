@@ -135,7 +135,7 @@
 
 .telematics-bluetooth-setup .gx-btn { margin-top: 2px; min-height: 36px; padding: 6px 14px; }
 
-.telematics-checks { display: grid; gap: 10px; list-style: none; margin: 0 0 16px; padding: 0; }
+.telematics-checks { display: grid; gap: 6px; list-style: none; margin: 0 0 16px; padding: 0; }
 
 .telematics-check {
   align-items: flex-start;

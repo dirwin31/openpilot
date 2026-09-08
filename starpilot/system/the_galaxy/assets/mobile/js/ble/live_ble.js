@@ -25,8 +25,16 @@ const CONNECT_TIMEOUT_MS = 12000
 // advertisement has arrived. It needs the experimental web platform features
 // flag on Android, so treat its absence as a setup problem, not a dead device.
 const ADVERTISEMENT_TIMEOUT_MS = 20000
-const OUT_OF_RANGE_MESSAGE = "Waiting for the device to advertise. Keep the phone near it with the companion running; this retries on its own."
+const OUT_OF_RANGE_MESSAGE = "The device has not advertised yet. Keep the phone near it with the companion running, then try Reconnect. Saved connections also retry automatically."
 const ADVERTISEMENT_UNSUPPORTED_MESSAGE = "Chrome cannot rescan for this device after a reload. Enable chrome://flags/#enable-experimental-web-platform-features, then reload this page."
+
+class AdvertisementError extends Error {
+  constructor(message, retryable = false) {
+    super(message)
+    this.name = "AdvertisementError"
+    this.retryable = retryable
+  }
+}
 
 class PairingRequiredError extends Error {
   constructor(cause) {
@@ -78,6 +86,11 @@ export class LiveBLEClient {
     this.connectionGeneration = 0
     this.connectAttempt = 0
     this.advertisementTimeoutMs = ADVERTISEMENT_TIMEOUT_MS
+    this.advertisementController = null
+    this.restoredDeviceID = null
+    this.savedDeviceAtLoad = null
+    try { this.savedDeviceAtLoad = localStorage.getItem(LAST_DEVICE_KEY) } catch (error) { /* Storage is optional. */ }
+    this.selectedDevices = new Set()
     this.lastMetadataRevision = null
     this.lastAlertID = null
     this.lastLive = null
@@ -91,7 +104,7 @@ export class LiveBLEClient {
   _setState(state, message = "") {
     this.state = state
     this.message = message
-    this.callbacks.onState?.({ state, message, deviceName: this.device?.name || "Galaxy device" })
+    this.callbacks.onState?.({ state, message, deviceName: this.device?.name || "Galaxy device", restoredAfterReload: this.restoredDeviceID !== null && this.restoredDeviceID === this.device?.id })
   }
 
   setCallbacks(callbacks = {}) {
@@ -109,7 +122,7 @@ export class LiveBLEClient {
   }
 
   emitCurrent() {
-    this.callbacks.onState?.({ state: this.state, message: this.message, deviceName: this.device?.name || "Galaxy device" })
+    this._setState(this.state, this.message)
     if (this.lastLive) this.callbacks.onLive?.(this.lastLive.frame, this.lastLive.session, this.lastLive.at)
     if (this.lastHealth) this.callbacks.onHealth?.(this.lastHealth.frame, this.lastHealth.at)
     if (this.lastMetadata !== undefined) this.callbacks.onMetadata?.(this.lastMetadata)
@@ -128,7 +141,7 @@ export class LiveBLEClient {
       timer = setTimeout(() => {
         timedOut = true
         onTimeout?.()
-        reject(new Error(message))
+        reject(new DOMException(message, "TimeoutError"))
       }, ms)
     })
     try {
@@ -140,27 +153,40 @@ export class LiveBLEClient {
 
   async reconnectRemembered() {
     if (!navigator.bluetooth?.getDevices || this.closed) return false
+    const attempt = this.connectAttempt
     try {
       const devices = await navigator.bluetooth.getDevices()
+      if (attempt !== this.connectAttempt || this.closed || this.manualDisconnect) return false
       let savedID = null
       try { savedID = localStorage.getItem(LAST_DEVICE_KEY) } catch (error) { /* Storage is optional. */ }
       const device = devices.find((candidate) => candidate.id === savedID) || (devices.length === 1 ? devices[0] : null)
       if (!device) return false
       await this._connectDevice(device, true)
-      return true
+      return this.state === "connected" && this.device === device
     } catch (error) {
-      this._handleError(error)
+      // _connectDevice owns connection errors; a cancelled attempt must stay idle.
+      if (attempt === this.connectAttempt) this._handleError(error)
       return false
     }
   }
 
   async connect() {
+    // Choosing a device is an explicit replacement of any pending restore/retry.
+    this.disconnect()
+    this.device?.removeEventListener("gattserverdisconnected", this._onDisconnected)
+    this.device = null
+    this.restoredDeviceID = null
     this.closed = false
     this.manualDisconnect = false
+    const attempt = this.connectAttempt
+    this._setState("connecting", "Choose a device in Chrome")
     try {
       const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [COMPANION_UUIDS.service] }] })
+      if (attempt !== this.connectAttempt || this.closed || this.manualDisconnect) return
+      this.selectedDevices.add(device.id)
       await this._connectDevice(device, false)
     } catch (error) {
+      if (attempt !== this.connectAttempt) return
       if (error?.name === "NotFoundError") {
         this._setState("idle", "No device selected")
         return
@@ -177,6 +203,7 @@ export class LiveBLEClient {
 
   async _connectDevice(device, reconnecting) {
     clearTimeout(this.reconnectTimer)
+    this.advertisementController?.abort()
     const attempt = ++this.connectAttempt
     this.device = device
     this.manualDisconnect = false
@@ -186,32 +213,42 @@ export class LiveBLEClient {
     try {
       const server = await this._connectGATT(device, attempt)
       if (attempt !== this.connectAttempt) return
-      const service = await server.getPrimaryService(COMPANION_UUIDS.service)
+      const service = await this._withTimeout(server.getPrimaryService(COMPANION_UUIDS.service), CONNECT_TIMEOUT_MS, "Bluetooth service discovery timed out")
       if (attempt !== this.connectAttempt) return
-      const [status, command, response, live] = await Promise.all([
+      const [status, command, response, live] = await this._withTimeout(Promise.all([
         service.getCharacteristic(COMPANION_UUIDS.status),
         service.getCharacteristic(COMPANION_UUIDS.command),
         service.getCharacteristic(COMPANION_UUIDS.response),
         service.getCharacteristic(COMPANION_UUIDS.live),
-      ])
+      ]), CONNECT_TIMEOUT_MS, "Bluetooth characteristic discovery timed out")
       if (attempt !== this.connectAttempt) return
       this.characteristics = { status, command, response, live }
-      this.callbacks.onCapabilities?.(await this._readAuthenticatedStatus(status))
+      const capabilities = await this._withTimeout(this._readAuthenticatedStatus(status), CONNECT_TIMEOUT_MS, "Bluetooth authentication timed out")
+      if (attempt !== this.connectAttempt) return
+      this.callbacks.onCapabilities?.(capabilities)
       if (attempt !== this.connectAttempt) return
       live.removeEventListener("characteristicvaluechanged", this._onNotification)
       live.addEventListener("characteristicvaluechanged", this._onNotification)
-      await this._startNotifications(live)
+      await this._withTimeout(this._startNotifications(live), CONNECT_TIMEOUT_MS, "Bluetooth notifications timed out")
+      if (attempt !== this.connectAttempt) return
       this.connectionGeneration += 1
       this.reconnectAttempt = 0
       this.reassembler.reset()
       this.session.reset()
       try { localStorage.setItem(LAST_DEVICE_KEY, device.id) } catch (error) { /* Storage is optional. */ }
+      if (reconnecting && device.id === this.savedDeviceAtLoad && !this.selectedDevices.has(device.id)) this.restoredDeviceID = device.id
       this._setState("connected", `Connected to ${device.name || "Galaxy device"}`)
       void this._refreshMetadata()
     } catch (error) {
       if (attempt !== this.connectAttempt) return
       this._handleError(error)
-      if (reconnecting && !this.closed && !this.manualDisconnect) this._scheduleReconnect()
+      const retryable = !(error instanceof AdvertisementError) || error.retryable
+      if (!retryable) {
+        this.manualDisconnect = true
+        clearTimeout(this.reconnectTimer)
+        this.reconnectTimer = null
+      }
+      if (reconnecting && retryable && !this.closed && !this.manualDisconnect) this._scheduleReconnect()
       throw error
     }
   }
@@ -224,10 +261,10 @@ export class LiveBLEClient {
       return await this._openGATT(device, attempt)
     } catch (error) {
       if (!isOutOfRangeError(error) || attempt !== this.connectAttempt) throw error
-      if (typeof device.watchAdvertisements !== "function") throw error
+      if (typeof device.watchAdvertisements !== "function") throw new AdvertisementError(ADVERTISEMENT_UNSUPPORTED_MESSAGE)
       this._setState(this.state, "Looking for the device…")
-      const seen = await this._awaitAdvertisement(device)
-      if (!seen || attempt !== this.connectAttempt) throw error
+      await this._awaitAdvertisement(device)
+      if (attempt !== this.connectAttempt) throw error
       return await this._openGATT(device, attempt)
     }
   }
@@ -244,30 +281,37 @@ export class LiveBLEClient {
         },
         onResolve: ({ timedOut }) => {
           if (!timedOut && attempt === this.connectAttempt) return
+          // The GATT server is shared by attempts on the same BluetoothDevice.
+          // An old promise must not tear down a newer connection to that device.
+          if (attempt !== this.connectAttempt && this.device === device && !this.manualDisconnect && !this.closed) return
           try { device.gatt.disconnect() } catch (error) { /* The stale link is already gone. */ }
         },
       },
     )
   }
 
-  // Resolves true once Chrome sees the peripheral advertise. The scan is stopped
+  // Resolves once Chrome sees the peripheral advertise. The scan is stopped
   // on every exit: an abandoned watch keeps the phone's radio busy for nothing.
   async _awaitAdvertisement(device) {
-    if (device.watchingAdvertisements) return false
     const controller = new AbortController()
+    this.advertisementController = controller
     let timer = null
     try {
       const advertised = new Promise((resolve, reject) => {
         device.addEventListener("advertisementreceived", () => resolve(true), { once: true, signal: controller.signal })
-        timer = setTimeout(() => reject(new Error("Bluetooth device did not advertise")), this.advertisementTimeoutMs)
+        controller.signal.addEventListener("abort", () => reject(new DOMException("Bluetooth scan cancelled", "AbortError")), { once: true })
+        timer = setTimeout(() => reject(new AdvertisementError(OUT_OF_RANGE_MESSAGE, true)), this.advertisementTimeoutMs)
       })
-      await device.watchAdvertisements({ signal: controller.signal })
-      return await advertised
+      // Observe startup and the deadline together: startup itself can hang.
+      const started = Promise.resolve().then(() => device.watchAdvertisements({ signal: controller.signal }))
+      await Promise.race([Promise.all([started, advertised]), advertised])
     } catch (error) {
-      return false
+      if (error instanceof AdvertisementError || controller.signal.aborted) throw error
+      throw new AdvertisementError(`Chrome could not start the Bluetooth scan: ${errorText(error)}. Check Chrome's Bluetooth/Nearby devices permission and the phone's Bluetooth setting, then try Reconnect.`)
     } finally {
       clearTimeout(timer)
       controller.abort()
+      if (this.advertisementController === controller) this.advertisementController = null
     }
   }
 
@@ -404,7 +448,8 @@ export class LiveBLEClient {
   }
 
   _handleError(error) {
-    if (error instanceof PairingRequiredError || isPairingError(error)) this._setState("needs-pairing", PAIRING_MESSAGE)
+    if (error instanceof AdvertisementError || error?.name === "TimeoutError") this._setState("error", error.message)
+    else if (error instanceof PairingRequiredError || isPairingError(error)) this._setState("needs-pairing", PAIRING_MESSAGE)
     else if (isOutOfRangeError(error)) {
       const rescannable = typeof this.device?.watchAdvertisements === "function"
       this._setState("error", rescannable ? OUT_OF_RANGE_MESSAGE : ADVERTISEMENT_UNSUPPORTED_MESSAGE)
@@ -430,8 +475,11 @@ export class LiveBLEClient {
   disconnect() {
     this.connectAttempt += 1
     this.manualDisconnect = true
+    this.advertisementController?.abort()
     clearTimeout(this.reconnectTimer)
-    this.device?.gatt?.disconnect()
+    this.reconnectTimer = null
+    try { this.device?.gatt?.disconnect() } catch (error) { /* Already disconnected. */ }
+    this.characteristics = {}
     this._clearTelemetry()
     this._setState("idle", "Disconnected")
   }
@@ -440,6 +488,7 @@ export class LiveBLEClient {
     this.connectAttempt += 1
     this.closed = true
     this.manualDisconnect = true
+    this.advertisementController?.abort()
     clearTimeout(this.reconnectTimer)
     clearTimeout(this.uiTimer)
     this.device?.removeEventListener("gattserverdisconnected", this._onDisconnected)

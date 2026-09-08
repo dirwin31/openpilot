@@ -62,16 +62,14 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert '@click="openBluetoothSetup"' in telematics
   assert "canRestoreBluetooth" in telematics
   # the banner must be driven by a real fault so it disappears when nothing is wrong
-  assert "Chrome forgets this pairing on reload" in telematics
+  assert "Set up Bluetooth reconnect" in telematics
   assert 'v-else-if="bluetoothBannerVisible"' in telematics
   assert "getAvailability" in telematics
-  # the reload banner replaces the bar's controls rather than sitting beside them
-  assert "bluetoothControlsHidden" in telematics
-  assert "bluetoothBannerVisible" in telematics
-  assert 'v-if="!bluetoothControlsHidden"' in telematics
-  # every banner carries its own way into the panel, so the lightbulb steps aside
-  assert 'v-if="!bluetoothBannerVisible"' in telematics
-  assert "takeover: true" in telematics
+  # Setup may guide pairing, but must never hide Disconnect or Cancel.
+  assert "bluetoothControlsHidden" not in telematics
+  assert telematics.count('v-else-if="connectionPending"') == 2
+  assert '@click="chooseDevice"' in telematics
+  assert ':open="!bluetoothFlagsReady || !restoredAfterReload"' in telematics
   # the device side of pairing is invisible from the phone, so the panel must spell it out
   assert "pair a phone" in telematics
   assert "discoverable / 120s" in telematics
@@ -89,6 +87,11 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert 'v-if="rememberedDevices > 0"' in telematics
   assert "telematics-setup__more" in telematics
   assert "bluetoothChecks" in telematics
+  # both flags are required now, so both get a numbered step and a probed row
+  assert "canWatchAdvertisements" in telematics
+  assert "bluetoothFlagsReady" in telematics
+  assert "Experimental Web Platform features" in telematics
+  assert "Find device after reload" in telematics
   assert "bluetoothNeedsAttention" in telematics
   assert "telematics-landscape" in telematics
   assert "telematics-portrait" in telematics
@@ -185,10 +188,10 @@ const makeDevice = ({ advertises = true, watchable = true } = {}) => {
 }
 
 const states = []
-const clientFor = (devices) => {
+const clientFor = (devices, savedID = null) => {
   const bluetooth = { getDevices: async () => devices }
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: { bluetooth } })
-  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => null, setItem() {} } })
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => savedID, setItem(key, value) { savedID = value } } })
   const client = new LiveBLEClient({ onState: ({ state, message }) => states.push([state, message]) })
   client.advertisementTimeoutMs = 50
   return client
@@ -196,9 +199,10 @@ const clientFor = (devices) => {
 
 // A refresh: the remembered device reads as out of range until it advertises.
 const device = makeDevice()
-const client = clientFor([device])
+const client = clientFor([device], "remembered")
 assert.equal(await client.reconnectRemembered(), true, "a rescan must recover the remembered device")
 assert.equal(client.state, "connected")
+assert.equal(client.restoredDeviceID, "remembered", "Only a saved connection restored after page load is verified")
 assert.equal(device.connects, 2, "the connect must be retried after the advertisement")
 assert.equal(device.watches, 1)
 assert.equal(device.watchingAdvertisements, false, "the scan must stop once the device is seen")
@@ -210,7 +214,7 @@ const silent = makeDevice({ advertises: false })
 const waiting = clientFor([silent])
 assert.equal(await waiting.reconnectRemembered(), false)
 assert.equal(waiting.state, "error")
-assert.match(waiting.message, /Waiting for the device to advertise/)
+assert.match(waiting.message, /device has not advertised/)
 waiting.close()
 
 // Without the experimental flag no rescan is possible, so name the missing flag.
@@ -219,7 +223,150 @@ const blocked = clientFor([unwatchable])
 assert.equal(await blocked.reconnectRemembered(), false)
 assert.equal(unwatchable.connects, 1, "no rescan is possible, so no retry")
 assert.match(blocked.message, /enable-experimental-web-platform-features/)
+assert.equal(blocked.reconnectTimer, null, "A missing API needs setup, not endless retries")
 blocked.close()
+
+// A hung scan startup is bounded by the advertisement deadline, without an
+// unhandled rejection. Abort must run even though startup never settles.
+const hangs = makeDevice({ advertises: false })
+let aborted = false
+hangs.watchAdvertisements = ({ signal }) => {
+  signal.addEventListener("abort", () => { aborted = true })
+  return new Promise(() => {})
+}
+const bounded = clientFor([hangs])
+assert.equal(await bounded.reconnectRemembered(), false)
+assert.equal(aborted, true)
+assert.equal(bounded.state, "error")
+assert.match(bounded.message, /device has not advertised/)
+assert.ok(bounded.reconnectTimer, "An absent advertisement is retryable")
+bounded.close()
+
+// Permission errors preserve the real cause and stop automatic retries.
+const deniedDevice = makeDevice()
+deniedDevice.watchAdvertisements = async () => { throw Object.assign(new Error("Nearby devices permission denied"), { name: "NotAllowedError" }) }
+const denied = clientFor([deniedDevice])
+assert.equal(await denied.reconnectRemembered(), false)
+assert.equal(denied.state, "error")
+assert.match(denied.message, /Nearby devices permission denied/)
+assert.doesNotMatch(denied.message, /not advertised/)
+assert.equal(denied.reconnectTimer, null)
+denied.close()
+
+// Cancel stops a scan immediately and its late completion cannot change state.
+const cancelledDevice = makeDevice({ advertises: false })
+const cancelled = clientFor([cancelledDevice])
+const cancelAttempt = cancelled.reconnectRemembered()
+while (!cancelledDevice.watchingAdvertisements) await new Promise(resolve => setTimeout(resolve, 1))
+cancelled.disconnect()
+assert.equal(await cancelAttempt, false)
+assert.equal(cancelledDevice.watchingAdvertisements, false)
+assert.equal(cancelled.state, "idle")
+assert.equal(cancelled.reconnectTimer, null)
+cancelled.close()
+
+// Replacing a stale device opens the chooser synchronously and drops retries.
+const stale = makeDevice({ watchable: false })
+const replacement = makeDevice()
+replacement.id = "replacement"
+replacement.seen = true
+const choose = clientFor([stale])
+await choose.reconnectRemembered()
+let chooserCalls = 0
+navigator.bluetooth.requestDevice = async () => { chooserCalls++; return replacement }
+const choosing = choose.connect()
+assert.equal(chooserCalls, 1, "requestDevice must retain user activation")
+await choosing
+assert.equal(choose.device, replacement)
+assert.equal(choose.state, "connected")
+assert.equal(choose.reconnectTimer, null)
+assert.equal(choose.restoredDeviceID, null, "A chooser grant is not proof of reload persistence")
+choose.disconnect()
+await choose.reconnect()
+assert.equal(choose.restoredDeviceID, null, "Revisiting a route is not a page reload")
+choose.close()
+
+// Cancelled chooser results and a slow remembered-device lookup cannot connect.
+let finishChooser
+const chooserCancelled = clientFor([])
+navigator.bluetooth.requestDevice = () => new Promise(resolve => { finishChooser = resolve })
+const chooserAttempt = chooserCancelled.connect()
+chooserCancelled.disconnect()
+const ignored = makeDevice()
+ignored.seen = true
+finishChooser(ignored)
+await chooserAttempt
+assert.equal(ignored.connects, 0)
+assert.equal(chooserCancelled.state, "idle")
+chooserCancelled.close()
+
+let finishLookup
+const lookupCancelled = clientFor([])
+navigator.bluetooth.getDevices = () => new Promise(resolve => { finishLookup = resolve })
+const lookupAttempt = lookupCancelled.reconnectRemembered()
+lookupCancelled.disconnect()
+finishLookup([ignored])
+assert.equal(await lookupAttempt, false)
+assert.equal(ignored.connects, 0)
+assert.equal(lookupCancelled.state, "idle")
+lookupCancelled.close()
+
+// Cancelling while enabling notifications must not publish a late connection.
+let finishNotifications
+const notifying = makeDevice()
+notifying.gatt.connect = async () => ({ getPrimaryService: async () => ({
+  getCharacteristic: async uuid => uuid === COMPANION_UUIDS.live
+    ? { ...characteristic(uuid), startNotifications: () => new Promise(resolve => { finishNotifications = resolve }) }
+    : characteristic(uuid),
+}) })
+const notificationClient = clientFor([notifying])
+const notificationAttempt = notificationClient.reconnectRemembered()
+while (!finishNotifications) await new Promise(resolve => setTimeout(resolve, 1))
+notificationClient.disconnect()
+finishNotifications()
+assert.equal(await notificationAttempt, false)
+assert.equal(notificationClient.state, "idle")
+notificationClient.close()
+
+// Bound every post-connect stage, including authentication without a callback.
+for (const stage of ["service", "characteristic", "authentication", "notifications"]) {
+  const stalled = makeDevice()
+  stalled.gatt.connect = async () => ({ getPrimaryService: () => stage === "service" ? new Promise(() => {}) : Promise.resolve({
+    getCharacteristic: uuid => {
+      if (stage === "characteristic") return new Promise(() => {})
+      const value = characteristic(uuid)
+      if (stage === "authentication" && uuid === COMPANION_UUIDS.status) value.readValue = () => new Promise(() => {})
+      if (stage === "notifications" && uuid === COMPANION_UUIDS.live) value.startNotifications = () => new Promise(() => {})
+      return Promise.resolve(value)
+    },
+  }) })
+  const boundedStage = clientFor([stalled])
+  const withTimeout = boundedStage._withTimeout.bind(boundedStage)
+  boundedStage._withTimeout = (promise, ms, ...args) => withTimeout(promise, 10, ...args)
+  assert.equal(await boundedStage.reconnectRemembered(), false)
+  assert.equal(boundedStage.state, "error")
+  assert.match(boundedStage.message, new RegExp(`${stage}.*timed out`))
+  boundedStage.close()
+}
+
+// A stale GATT promise shares its server with a newer attempt on that device.
+let finishGATT, drops = 0
+const late = clientFor([])
+const sameDevice = {
+  gatt: { connect: () => new Promise(resolve => { finishGATT = resolve }), disconnect() { drops++ } },
+}
+late.device = sameDevice
+late.connectAttempt = 1
+const oldGATT = late._openGATT(sameDevice, 1)
+late.disconnect()
+late.connectAttempt++
+late.manualDisconnect = false
+finishGATT({})
+await oldGATT
+assert.equal(drops, 1, "Only the explicit cancellation may drop the link, not the old promise")
+late.device = null
+late.close()
+
 '''
   result = subprocess.run(
     [shutil.which("node"), "--input-type=module", "-e", script], cwd=tmp_path, capture_output=True, text=True)
@@ -248,132 +395,137 @@ const moduleURL = (code) => `data:text/javascript;base64,${Buffer.from(code).toS
 const { Telematics } = await import(moduleURL("const GxNotice = {}, GalaxyModal = {};\n" + source))
 const bluetooth = {}
 Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Android", bluetooth } })
-let connects = 0
-let reconnects = 0
-const makeView = () => Object.assign(Telematics.data(), Telematics.methods, {
-  ble: { connect() { connects++ }, reconnect() { reconnects++ } },
-})
-const view = makeView()
-await view.connect()
-assert.equal(view.showBluetoothSetup, true)
-assert.equal(connects, 0, "Opening setup must not open the chooser")
-assert.equal(view.connecting, false)
-const pairing = view.continueBluetoothPairing()
-assert.equal(connects, 1, "Continue must invoke pairing before yielding user activation")
-await pairing
-assert.equal(view.showBluetoothSetup, false)
-await view.connect()
-assert.equal(connects, 2, "Skipping setup must allow subsequent pairing attempts")
+let connects = 0, reconnects = 0, disconnects = 0
+const makeView = (extra = {}) => {
+  const view = Object.assign(Telematics.data(), Telematics.methods, {
+    ble: { connect() { connects++ }, reconnect() { reconnects++ }, disconnect() { disconnects++ } },
+  }, extra)
+  for (const [name, getter] of Object.entries(Telematics.computed)) {
+    Object.defineProperty(view, name, { get: () => getter.call(view) })
+  }
+  return view
+}
 
-// The reconnect flag being on is no longer enough to skip the briefing: a first
-// pair always sees the flags and the "pair a phone" steps before the chooser.
+// Both orientations brief users before pairing when either API is missing.
+for (const isLandscape of [false, true]) {
+  const initial = connects
+  const view = makeView({ isLandscape })
+  await view.connect()
+  assert.equal(view.showBluetoothSetup, true)
+  assert.equal(connects, initial)
+  assert.equal(view.bluetoothSetupConfirmLabel, "Connect for this session")
+  const pairing = view.continueBluetoothPairing()
+  assert.equal(connects, initial + 1, "Chooser must open synchronously in the button gesture")
+  await pairing
+  assert.equal(view.connecting, false)
+  assert.equal(view.showBluetoothSetup, false)
+}
 bluetooth.getDevices = async () => []
-const supported = makeView()
-await supported.connect()
-assert.equal(supported.showBluetoothSetup, true, "a first pair must see the setup panel")
-assert.equal(connects, 2, "the briefing must not open the chooser yet")
+const halfFlagged = makeView()
+assert.equal(halfFlagged.bluetoothFlagsReady, false)
+assert.equal(halfFlagged.bluetoothBanner.action, "Show me how")
+await halfFlagged.connect()
+assert.equal(halfFlagged.showBluetoothSetup, true)
+globalThis.BluetoothDevice = { prototype: { watchAdvertisements() {} } }
+const firstPair = makeView()
+await firstPair.connect()
+assert.equal(firstPair.showBluetoothSetup, true, "First Android pairing still needs instructions")
+assert.equal(firstPair.bluetoothSetupConfirmLabel, "Pair now")
 
-// Once Chrome remembers a device, Connect goes straight to pairing.
-const returning = makeView()
-returning.rememberedDevices = 1
-await returning.connect()
-assert.equal(returning.showBluetoothSetup, false, "a remembered device must not be briefed again")
-assert.equal(connects, 3)
-delete bluetooth.getDevices
-const existing = makeView()
-existing.ble.device = { id: "remembered-in-this-page" }
-existing.bleState = "error"
-await existing.connect()
-assert.equal(existing.showBluetoothSetup, false)
-assert.equal(reconnects, 1, "Existing device reconnect must not require setup")
-navigator.userAgent = "Macintosh"
-const desktop = makeView()
-await desktop.connect()
-assert.equal(desktop.showBluetoothSetup, false)
-assert.equal(connects, 4)
-
-const manual = makeView()
-await manual.openBluetoothSetup()
-assert.equal(manual.showBluetoothSetup, true, "Setup must be reachable without tapping Connect")
-assert.equal(Telematics.computed.bluetoothSetupConfirmLabel.call(manual), "Done")
-assert.equal(Telematics.computed.bluetoothSetupConfirmLabel.call(
-  Object.assign(makeView(), { bluetoothSetupMode: "gate" })), "Pair now", "the gate confirms by pairing")
-await manual.confirmBluetoothSetup()
-assert.equal(connects, 4, "Dismissing the status panel must not open the chooser")
-
-const checks = (view) => Telematics.computed.bluetoothChecks.call(
-  Object.assign(view, { canRestoreBluetooth: Telematics.computed.canRestoreBluetooth.call(view) }))
-
-// Radio off and no permissions backend: both rows fail and the gear must flag it.
-bluetooth.getAvailability = async () => false
-const unhealthy = makeView()
-await unhealthy.refreshBluetoothStatus()
-assert.equal(unhealthy.bluetoothRadio, "unavailable")
-assert.equal(checks(unhealthy)[0].ok, false)
-assert.equal(checks(unhealthy)[1].value, "Not enabled")
-assert.equal(checks(unhealthy)[2].value, "Needs the setting above", "Remembered device is a consequence, not its own fix")
-assert.equal(Telematics.computed.bluetoothNeedsAttention.call(unhealthy), true)
-assert.equal(Telematics.computed.bluetoothBanner.call(
-  Object.assign(unhealthy, { canRestoreBluetooth: false })).title, "Bluetooth is off",
-  "A dead radio must outrank the reconnect advice")
-
-// Everything on, one device already granted: no attention needed anywhere.
+// API exposure and a current permission do not prove persistence.
 bluetooth.getAvailability = async () => true
 bluetooth.getDevices = async () => [{ id: "remembered" }]
 const healthy = makeView()
 await healthy.refreshBluetoothStatus()
-assert.equal(healthy.rememberedDevices, 1)
-assert.deepEqual(checks(healthy).map((check) => check.ok), [true, true, true])
-assert.equal(Telematics.computed.bluetoothSetupReady.call(
-  Object.assign(healthy, { bluetoothChecks: checks(healthy) })), true)
-assert.equal(Telematics.computed.bluetoothNeedsAttention.call(healthy), false)
-assert.equal(Telematics.computed.bluetoothBanner.call(
-  Object.assign(healthy, { canRestoreBluetooth: true })), null, "No banner when everything is fine")
+assert.equal(healthy.bluetoothFlagsReady, true)
+assert.equal(healthy.bluetoothSetupReady, false)
+assert.equal(healthy.bluetoothChecks.at(-1).value, "Not verified yet")
+healthy.restoredAfterReload = true
+assert.equal(healthy.bluetoothSetupReady, true)
+assert.equal(healthy.bluetoothChecks.at(-1).value, "Verified")
+assert.equal(healthy.bluetoothBanner, null)
 
-// Radio fine, backend missing: the reconnect banner, not the radio one.
-const reconnectOnly = Object.assign(makeView(), { bluetoothRadio: "available", canRestoreBluetooth: false })
-assert.equal(Telematics.computed.bluetoothBanner.call(reconnectOnly).action, "Show me how")
+// Returning users can retry, and Choose device always takes the chooser path.
+const returning = makeView({ rememberedDevices: 1, bleState: "error" })
+returning.ble.device = { id: "stale-permission" }
+const retriesBefore = reconnects
+await returning.connect()
+assert.equal(reconnects, retriesBefore + 1)
+assert.equal(returning.showBluetoothSetup, false)
+await returning.openBluetoothSetup()
+const chooserBefore = connects
+assert.equal(returning.bluetoothSetupConfirmLabel, "Done")
+await returning.confirmBluetoothSetup()
+assert.equal(connects, chooserBefore, "Done must not invoke the chooser")
+await returning.chooseDevice()
+assert.equal(connects, chooserBefore + 1)
+assert.ok(disconnects > 0, "Choosing a replacement stops retries")
+assert.equal(returning.showBluetoothSetup, false)
 
-// The reload banner replaces the bar's lightbulb and Connect; nothing else does.
-const controlsHidden = (view) => {
-  const banner = Telematics.computed.bluetoothBanner.call(view)
-  const withBanner = Object.assign(view, { bluetoothBanner: banner })
-  const visible = Telematics.computed.bluetoothBannerVisible.call(withBanner)
-  return Telematics.computed.bluetoothControlsHidden.call(Object.assign(withBanner, { bluetoothBannerVisible: visible }))
-}
-const bar = (extra) => Object.assign(makeView(), { bluetoothRadio: "available", canRestoreBluetooth: false }, extra)
-assert.equal(controlsHidden(bar()), true, "the reload banner owns the bar")
-assert.equal(controlsHidden(bar({ bluetoothRadio: "unavailable" })), false, "a dead radio must still leave Connect reachable")
-assert.equal(controlsHidden(bar({ canRestoreBluetooth: true })), false, "nothing is hidden once the setting is on")
-assert.equal(controlsHidden(bar({ isLandscape: true })), false, "landscape shows no banner, so it keeps its controls")
-assert.equal(controlsHidden(bar({ bleState: "error" })), false, "an error notice outranks the banner")
+// A cancelled UI request cannot keep buttons busy or clear a newer request.
+let finishOld, finishNew
+returning.ble.reconnect = () => new Promise(resolve => { finishOld = resolve })
+const old = returning.connect()
+assert.equal(returning.connectionPending, true)
+returning.disconnect()
+returning.bleState = "idle"
+assert.equal(returning.connectionPending, false)
+returning.ble.reconnect = () => new Promise(resolve => { finishNew = resolve })
+const newer = returning.connect()
+finishOld()
+await old
+assert.equal(returning.connecting, true)
+finishNew()
+await newer
+assert.equal(returning.connecting, false)
 
-// The lightbulb answers to the banner alone: any banner replaces it, and it
-// comes back the moment none is showing.
-const bannerUp = (view) => Telematics.computed.bluetoothBannerVisible.call(
-  Object.assign(view, { bluetoothBanner: Telematics.computed.bluetoothBanner.call(view) }))
-assert.equal(bannerUp(bar()), true, "the reload banner replaces the lightbulb")
-assert.equal(bannerUp(bar({ bluetoothRadio: "unavailable" })), true, "so does the radio banner")
-assert.equal(bannerUp(bar({ canRestoreBluetooth: true })), false, "no banner, so the lightbulb stays")
-assert.equal(bannerUp(bar({ bleState: "needs-pairing" })), false, "a pairing notice has no button of its own")
-
-// The steps must not point at a Connect button that is currently hidden.
-const steps = (view) => Telematics.computed.showPairingSteps.call(view)
-assert.equal(steps(Object.assign(makeView(), { connected: false, canRestoreBluetooth: false, bluetoothSetupMode: "info" })), false)
-assert.equal(steps(Object.assign(makeView(), { connected: false, canRestoreBluetooth: false, bluetoothSetupMode: "gate" })), true)
-assert.equal(steps(Object.assign(makeView(), { connected: false, canRestoreBluetooth: true, bluetoothSetupMode: "info" })), true)
-
-// Not yet paired is normal, not a fault: nothing may appear for it.
-const unpaired = Object.assign(makeView(), { bluetoothRadio: "available", canRestoreBluetooth: true, rememberedDevices: 0 })
-assert.equal(Telematics.computed.bluetoothBanner.call(unpaired), null, "An unpaired device must not raise a banner")
-
-// A browser that cannot report radio state must read as unknown, never as broken.
-delete bluetooth.getAvailability
+// Radio faults keep actionable setup access, including while a link exists.
+bluetooth.getAvailability = async () => false
 delete bluetooth.getDevices
+delete globalThis.BluetoothDevice
+for (const isLandscape of [false, true]) {
+  const connected = makeView({ isLandscape, bleState: "connected" })
+  await connected.refreshBluetoothStatus()
+  assert.equal(connected.connected, true)
+  assert.equal(connected.bluetoothBanner.title, "Bluetooth is off")
+  assert.equal(connected.bluetoothNeedsAttention, true)
+  connected.bleState = "reconnecting"
+  assert.equal(connected.connectionPending, true)
+  await connected.openBluetoothSetup()
+  assert.equal(connected.showBluetoothSetup, true)
+}
+delete bluetooth.getAvailability
 const opaque = makeView()
 await opaque.refreshBluetoothStatus()
 assert.equal(opaque.bluetoothRadio, "unknown")
-assert.equal(checks(opaque)[0].ok, undefined, "Unknown radio state must not render as a failure")
+assert.equal(opaque.bluetoothChecks[0].ok, undefined)
+const view = makeView()
+// Render the actual Vue template: both orientations retain their exit controls.
+const { compile } = await import(moduleURL(fs.readFileSync("../vendor/vue/vue.esm-browser.js", "utf8")))
+const render = compile(Telematics.template, { decodeEntities: text => text })
+const originalWarn = console.warn
+// Rendering without mounting emits component-resolution warnings; child
+// components are intentionally opaque while we inspect the parent's buttons.
+console.warn = () => {}
+try {
+  for (const isLandscape of [false, true]) {
+    for (const [bleState, expected] of [["idle", "Connect"], ["connecting", "Cancel"], ["reconnecting", "Cancel"], ["connected", "Disconnect"], ["error", "Reconnect"]]) {
+      const rendered = makeView({ capability: "ready", isLandscape, bleState })
+      const buttons = []
+      const walk = node => {
+        if (!node || typeof node !== "object") return
+        if (node.type === "button") {
+          const text = typeof node.children === "string" ? node.children
+            : (node.children || []).map(child => typeof child.children === "string" ? child.children : "").join("")
+          buttons.push([text.trim(), node.props?.disabled])
+        }
+        if (Array.isArray(node.children)) node.children.forEach(walk)
+      }
+      walk(render(rendered, []))
+      assert.ok(buttons.some(([label, disabled]) => label === expected && !disabled), `${isLandscape ? 'landscape' : 'portrait'} ${bleState} must expose ${expected}`)
+    }
+  }
+} finally { console.warn = originalWarn }
 
 let copied
 navigator.clipboard = { async writeText(value) { copied = value } }
