@@ -413,7 +413,7 @@ for (const isLandscape of [false, true]) {
   await view.connect()
   assert.equal(view.showBluetoothSetup, true)
   assert.equal(connects, initial)
-  assert.equal(view.bluetoothSetupConfirmLabel, "Connect for this session")
+  assert.equal(view.bluetoothSetupConfirmLabel, "Connect anyway")
   const pairing = view.continueBluetoothPairing()
   assert.equal(connects, initial + 1, "Chooser must open synchronously in the button gesture")
   await pairing
@@ -439,7 +439,7 @@ const healthy = makeView()
 await healthy.refreshBluetoothStatus()
 assert.equal(healthy.bluetoothFlagsReady, true)
 assert.equal(healthy.bluetoothSetupReady, false)
-assert.equal(healthy.bluetoothChecks.at(-1).value, "Not verified yet")
+assert.equal(healthy.bluetoothChecks.at(-1).value, "Not verified")
 healthy.restoredAfterReload = true
 assert.equal(healthy.bluetoothSetupReady, true)
 assert.equal(healthy.bluetoothChecks.at(-1).value, "Verified")

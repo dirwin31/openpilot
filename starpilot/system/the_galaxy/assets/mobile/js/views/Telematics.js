@@ -134,31 +134,31 @@ export const Telematics = {
     bluetoothFlagsReady() { return this.canRestoreBluetooth && this.canWatchAdvertisements },
     bluetoothSetupConfirmLabel() {
       if (this.bluetoothSetupMode === "info") return "Done"
-      return this.bluetoothFlagsReady ? "Pair now" : "Connect for this session"
+      return this.bluetoothFlagsReady ? "Pair now" : "Connect anyway"
     },
     // Capability probes and observed restoration are separate from flag settings.
     bluetoothChecks() {
       const radio = {
         available: { value: "On", ok: true },
-        unavailable: { value: "Off or blocked", ok: false, hint: "Turn Bluetooth on in Android settings, then reopen this page." },
-        unknown: { value: "Cannot tell", hint: "This browser does not report radio state. Tap Connect and see what Chrome says." },
+        unavailable: { value: "Off or blocked", ok: false, hint: "Turn on Bluetooth in Android settings, then reopen this page." },
+        unknown: { value: "Unknown", hint: "Chrome cannot report the radio state. Tap Connect to check." },
       }[this.bluetoothRadio]
       return [
         { label: "Bluetooth radio", ...radio },
         this.canRestoreBluetooth
           ? { label: "Saved device access", value: "Available", ok: true }
-          : { label: "Saved device access", value: "Not available", ok: false, hint: "Enable both Chrome settings below to allow reconnecting after a reload." },
+          : { label: "Saved device access", value: "Unavailable", ok: false, hint: "Enable both Chrome settings below." },
         this.canWatchAdvertisements
           ? { label: "Find device after reload", value: "Enabled", ok: true }
-          : { label: "Find device after reload", value: "Not enabled", ok: false, hint: "Chrome will remember the device but refuse to connect to it until it sees the device advertise. The second setting below fixes that." },
+          : { label: "Find device after reload", value: "Unavailable", ok: false, hint: "Chrome needs a fresh Bluetooth signal to reconnect. Enable setting 2 below." },
         !this.canRestoreBluetooth
-          ? { label: "Remembered device", value: "Needs the setting above" }
+          ? { label: "Remembered device", value: "Setup needed" }
           : this.rememberedDevices > 0
             ? { label: "Remembered device", value: this.rememberedDevices === 1 ? "1 saved" : `${this.rememberedDevices} saved`, ok: true }
-            : { label: "Remembered device", value: "None yet", ok: false, hint: "Pair once with Connect and Chrome will restore it by itself next time." },
+            : { label: "Remembered device", value: "None yet", ok: false, hint: "Enable both settings, then pair once with Connect." },
         this.restoredAfterReload
           ? { label: "Reconnect after reload", value: "Verified", ok: true }
-          : { label: "Reconnect after reload", value: "Not verified yet", hint: "Enable both settings below, pair once, then reload this page near the comma. This turns green only after the saved device reconnects." },
+          : { label: "Reconnect after reload", value: "Not verified", hint: "After setup and pairing, reload near the comma. Verified means the saved device reconnected." },
       ]
     },
     bluetoothSetupReady() { return this.bluetoothChecks.every((check) => check.ok) },
@@ -510,62 +510,64 @@ export const Telematics = {
             <li v-for="check in bluetoothChecks" :key="check.label" class="telematics-check"
               :class="check.ok ? 'telematics-check--ok' : check.ok === false ? 'telematics-check--bad' : 'telematics-check--unknown'">
               <i class="bi" :class="check.ok ? 'bi-check-circle-fill' : check.ok === false ? 'bi-x-circle-fill' : 'bi-dash-circle-fill'"></i>
-              <div>
+              <div class="telematics-check__body">
+                <div class="telematics-check__row">
                 <span class="telematics-check__label">{{ check.label }}</span>
                 <span class="telematics-check__value">{{ check.value }}</span>
+                </div>
                 <p v-if="check.hint" class="telematics-check__hint">{{ check.hint }}</p>
               </div>
             </li>
           </ul>
 
           <p v-if="bluetoothSetupReady" class="telematics-setup-done">
-            <i class="bi bi-stars"></i> Reconnect verified: this page connected to your saved comma after a reload.
+            <i class="bi bi-check-circle-fill"></i> Your saved comma reconnected after a reload.
           </p>
 
           <details class="telematics-setup__more" :open="!bluetoothFlagsReady || !restoredAfterReload">
             <summary>Chrome settings for reconnect</summary>
-            <p>Enable both settings by hand. This page can check available Bluetooth features, but it cannot read or change Chrome's flags. Features being available does not prove Chrome will save the pairing.</p>
+            <p>Enable both settings in Chrome. This page checks Bluetooth features, but cannot read or change the flags. Available features alone do not prove the pairing is saved.</p>
             <ol>
               <li>
                 <strong>Web Bluetooth new permissions backend</strong>
                 <code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</code>
                 <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-web-bluetooth-new-permissions-backend')">Copy address</button>
-                <p class="telematics-check__hint">Lets Chrome keep the device after a reload instead of asking you to pick it again.</p>
+                <p class="telematics-check__hint">Saves the device so you do not have to pick it after every reload.</p>
               </li>
               <li>
                 <strong>Experimental Web Platform features</strong>
                 <code>chrome://flags/#enable-experimental-web-platform-features</code>
                 <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-experimental-web-platform-features')">Copy address</button>
-                <p class="telematics-check__hint">Lets this page look for the device again after a reload. Without it Chrome keeps the device but refuses to connect, reporting it as out of range.</p>
+                <p class="telematics-check__hint">Finds the saved device after a reload. Without a fresh signal, Chrome may report it as out of range.</p>
               </li>
             </ol>
-            <p>Paste each one into Chrome's address bar, set both to <strong class="telematics-inline">Enabled</strong>, relaunch Chrome, then come back here. After pairing, reload this page near the comma to verify reconnect.</p>
-            <p v-if="!bluetoothFlagsReady">If your browser cannot enable these features, you can still connect for this session. You may need to choose the device again after each reload.</p>
+            <p>Copy each address into Chrome's address bar. Set both to <strong class="telematics-inline">Enabled</strong>, then <strong class="telematics-inline">Relaunch</strong> Chrome and return here. Pair once, then reload near the comma to verify reconnect.</p>
           </details>
 
           <template v-if="showPairingSteps">
             <p class="telematics-setup__heading">Pairing a phone</p>
             <ol>
-              <li>On the comma screen open <strong class="telematics-inline">Settings &rarr; Bluetooth</strong> and tap <strong class="telematics-inline">pair a phone</strong>. It counts down <strong class="telematics-inline">discoverable / 120s</strong>; the device only accepts a new phone inside that window, and only while parked.</li>
+              <li>While parked, open <strong class="telematics-inline">Settings &rarr; Bluetooth &rarr; pair a phone</strong> on the comma. New phones can pair only during the <strong class="telematics-inline">discoverable / 120s</strong> countdown.</li>
               <li v-if="bluetoothSetupMode === 'info'">Tap <strong class="telematics-inline">Choose device</strong> below, then pick the comma from Chrome's list.</li>
-              <li v-else>Tap <strong class="telematics-inline">{{ bluetoothSetupConfirmLabel }}</strong> at the bottom of this panel, then pick the device from Chrome's list.</li>
+              <li v-else>Tap <strong class="telematics-inline">{{ bluetoothSetupConfirmLabel }}</strong> at the bottom of this panel, then choose the comma in Chrome.</li>
               <li>Accept Android's pairing prompt if one appears.</li>
             </ol>
             <GxNotice tone="warn" icon="bi-phone-fill" title="Do not pair from Android's Bluetooth settings">
-              The comma appears on that screen while the window is open, but pairing there only creates a system bond. It grants this page nothing, Chrome still will not list the device, and the leftover bond is what makes pairing here fail afterwards. Start from this page every time; use Android's Bluetooth settings only to forget a device.
+              The comma may appear there during the countdown. Pairing there only creates a system bond, without granting this page access, and can block Chrome pairing. Pair here; use Android settings only to forget the device.
             </GxNotice>
-            <p class="telematics-check__hint">Chrome shows no devices, or pairing fails? Either the 120 second window has closed &mdash; tap <strong class="telematics-inline">pair a phone</strong> again &mdash; or the device was paired from Android's settings and needs forgetting in both places first.</p>
+            <p class="telematics-check__hint"><strong class="telematics-inline">No device or pairing failed?</strong> Restart the 120-second window with <strong class="telematics-inline">pair a phone</strong>. If you paired in Android settings, forget the device in both Chrome and Android first.</p>
           </template>
 
           <details v-if="rememberedDevices > 0" class="telematics-setup__more">
             <summary>Make Chrome forget this device</summary>
-            <p>Disconnect only drops the link. Use Choose device to connect to a different comma. To remove this device's saved permission entirely, follow these steps.</p>
+            <p><strong class="telematics-inline">Disconnect</strong> ends the connection; it does not forget the device. Use <strong class="telematics-inline">Choose device</strong> to switch commas. To remove the saved pairing:</p>
             <ol>
-              <li><strong class="telematics-inline">In Chrome</strong> tap the icon left of the address bar, open <strong class="telematics-inline">Permissions</strong>, and remove the device under <strong class="telematics-inline">Bluetooth devices</strong>. The wording moves around between Chrome versions; <strong class="telematics-inline">Reset permissions</strong> on that same sheet also works, but it clears this page's certificate exception too.</li>
+              <li><strong class="telematics-inline">Chrome:</strong> address-bar icon &rarr; <strong class="telematics-inline">Permissions &rarr; Bluetooth devices</strong> &rarr; remove the comma. Labels vary by Chrome version. <strong class="telematics-inline">Reset permissions</strong> also works; you may need to accept the certificate warning again.</li>
               <li><strong class="telematics-inline">In Android</strong> open <strong class="telematics-inline">Settings &rarr; Connected devices</strong>, tap the gear beside the device, then <strong class="telematics-inline">Forget</strong>.</li>
             </ol>
-            <p>Do both. The Android pairing outlives the Chrome permission, and a leftover one is the usual reason the next pairing attempt fails.</p>
+            <p>Clear both: removing Chrome's permission leaves the Android pairing, which can block pairing again.</p>
           </details>
+          <p v-if="!bluetoothFlagsReady" class="telematics-setup__fallback"><strong class="telematics-inline">Reconnect is not ready.</strong> If you cannot enable the settings, you can still connect now. After a reload, you may need to choose the comma again.</p>
           <button v-if="bluetoothSetupMode === 'info' && capability === 'ready'" class="gx-btn gx-btn--outlined" type="button" @click="chooseDevice">Choose device</button>
         </div>
       </GalaxyModal>
