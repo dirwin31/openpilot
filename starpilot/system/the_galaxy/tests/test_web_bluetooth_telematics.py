@@ -43,7 +43,7 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert "window.isSecureContext" in telematics
   assert "isIOSDevice" in telematics
   assert "homeURL.hash = \"/\"" in telematics
-  assert 'window.location.protocol !== "https:"' in telematics
+  assert 'window.location.protocol === "https:"' in telematics
   # the insecure gate must explain the jump instead of silently redirecting to :8443
   assert "window.location.replace(this.secureURL)" not in telematics
   assert ":href=\"secureURL\"" in telematics
@@ -56,7 +56,7 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert "navigator.bluetooth" in telematics
   assert "Chrome on Android required" in telematics
   assert 'target.port = "8443"' in telematics
-  assert "reconnectRemembered" in telematics
+  assert "reconnectRemembered" in _read("js/lan/connection.js")
   assert "Pair the device first" in telematics
   # the Chrome flag instructions must stay reachable, not be a one-shot interstitial
   assert '@click="openBluetoothSetup"' in telematics
@@ -375,7 +375,7 @@ late.close()
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
 def test_telematics_javascript_modules_parse(tmp_path):
-  for relative in ("js/ble/live_frames.js", "js/ble/live_ble.js", "js/views/Telematics.js", "js/components/GalaxyModal.js"):
+  for relative in ("js/ble/live_frames.js", "js/ble/live_ble.js", "js/views/Telematics.js", "js/components/GalaxyModal.js", "js/lan/live_lan.js", "js/lan/connection.js"):
     source = UI_ROOT / relative
     target = tmp_path / (source.stem + ".mjs")
     target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
@@ -393,15 +393,22 @@ globalThis.showSnackbar = (...args) => notices.push(args)
 const source = fs.readFileSync("js/views/Telematics.js", "utf8").replace(/^import .*$/gm, "")
 const moduleURL = (code) => `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
 const { Telematics } = await import(moduleURL("const GxNotice = {}, GalaxyModal = {};\n" + source))
+globalThis.window = { location: new URL("https://starpilot-comma.local:8443/#/telematics") }
 const bluetooth = {}
 Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Android", bluetooth } })
 let connects = 0, reconnects = 0, disconnects = 0
 const makeView = (extra = {}) => {
   const view = Object.assign(Telematics.data(), Telematics.methods, {
+    identity: "comma", connectionMode: "bluetooth", bluetoothSecure: true, bluetoothAvailable: true,
     ble: { connect() { connects++ }, reconnect() { reconnects++ }, disconnect() { disconnects++ } },
   }, extra)
   for (const [name, getter] of Object.entries(Telematics.computed)) {
     Object.defineProperty(view, name, { get: () => getter.call(view) })
+  }
+  view.connection = {
+    configure() {},
+    connect({ chooseNew } = {}) { return chooseNew ? view.ble.connect() : view.ble.reconnect() },
+    disconnect() { view.ble.disconnect() },
   }
   return view
 }
@@ -526,6 +533,81 @@ try {
     }
   }
 } finally { console.warn = originalWarn }
+
+// HTTP and unsupported Bluetooth must keep both mode selectors and exit controls.
+console.warn = () => {}
+try {
+  for (const isLandscape of [false, true]) {
+    const local = makeView({ capability: "ready", connectionMode: "lan", bluetoothSecure: false, bluetoothAvailable: false, isLandscape })
+    const controls = []
+    const walk = node => {
+      if (!node || typeof node !== "object") return
+      if (["select", "button"].includes(node.type)) controls.push(node)
+      if (Array.isArray(node.children)) node.children.forEach(walk)
+    }
+    walk(render(local, []))
+    assert.ok(controls.some(node => node.type === "select" && node.props["aria-label"] === "Connection method"))
+    assert.ok(controls.some(node => node.props?.["aria-label"] === "Local Wi-Fi settings"))
+    assert.equal(local.canConnect, true)
+    local.bleState = "error"
+    local.setConnectionMode("bluetooth")
+    assert.equal(local.canConnect, true, "Switching from a LAN error must not leave a global gate")
+  }
+} finally { console.warn = originalWarn }
+
+// Restored preferences use comma identity; a local page tries its own origin.
+const frameModule = moduleURL(fs.readFileSync("js/ble/live_frames.js", "utf8"))
+const lanModule = fs.readFileSync("js/lan/live_lan.js", "utf8").replace('"../ble/live_frames.js"', JSON.stringify(frameModule))
+globalThis.localOrigin = (await import(moduleURL(lanModule))).localOrigin
+const saved = new Map([["galaxy-telematics:serial", JSON.stringify({ mode: "lan", address: "http://old.local:8082" })]])
+globalThis.localStorage = { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value) }
+window.location = new URL("http://192.168.1.5:8082/#/telematics")
+globalThis.api = { getDeviceStatus: async () => ({ telematicsDeviceId: "serial", localHostname: "starpilot-comma.local" }) }
+const restored = makeView({ identity: "", connectionMode: "automatic" })
+let starts = 0
+restored.connection.connect = () => { starts++ }
+await restored.loadDeviceStatus()
+assert.equal(restored.identity, "serial")
+assert.equal(restored.connectionMode, "lan")
+assert.equal(restored.localAddress, "http://192.168.1.5:8082")
+assert.equal(starts, 1, "Reload must restore the connection without a chooser")
+await restored.loadDeviceStatus()
+assert.equal(starts, 1, "Ordinary status polling must not reconnect a healthy link")
+let finishIdentity
+api.getDeviceStatus = () => new Promise(resolve => { finishIdentity = resolve })
+const cancelledIdentity = makeView({ identity: "" })
+cancelledIdentity.connection.connect = () => { starts++ }
+const loading = cancelledIdentity.loadDeviceStatus()
+cancelledIdentity.disconnect()
+finishIdentity({ telematicsDeviceId: "serial" })
+await loading
+assert.equal(starts, 1, "Disconnect while identity loads must prevent automatic connection")
+
+// A cached remote page can reconnect the last verified comma while offline.
+window.location = new URL("https://galaxy.link/this-comma/mobile")
+window.isSecureContext = true
+window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
+window.addEventListener = () => {}
+window.removeEventListener = () => {}
+globalThis.document = { addEventListener() {}, removeEventListener() {}, visibilityState: "visible" }
+globalThis.isIOSDevice = () => false
+globalThis.usePolling = () => ({ start() {}, destroy() {} })
+globalThis.getLiveBLEClient = () => ({})
+let cachedStarts = 0
+globalThis.TelematicsConnection = class {
+  configure(value) { this.config = value }
+  connect() { cachedStarts++ }
+  close() {}
+}
+saved.set("galaxy-telematics-page:/this-comma/mobile", "serial")
+saved.set("galaxy-telematics:serial", JSON.stringify({ mode: "bluetooth", address: "http://starpilot-comma.local:8082" }))
+const offline = makeView({ identity: "", connectionMode: "automatic" })
+Telematics.mounted.call(offline)
+assert.equal(cachedStarts, 1)
+assert.equal(offline.connection.config.identity, "serial")
+assert.equal(offline.connection.config.mode, "bluetooth")
+assert.equal(offline.localAddress, "http://starpilot-comma.local:8082")
+Telematics.beforeUnmount.call(offline)
 
 let copied
 navigator.clipboard = { async writeText(value) { copied = value } }

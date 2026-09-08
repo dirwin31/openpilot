@@ -12,6 +12,7 @@ from typing import Any
 from jeepney import DBusAddress, MatchRule, new_error, new_method_return, new_signal
 from jeepney.low_level import HeaderFields
 
+from openpilot.starpilot.system.bluetooth.identity import telemetry_device_id
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.lib.starpilot_version import STARPILOT_DISPLAY_VERSION
@@ -233,6 +234,7 @@ class CompanionProtocol:
     return {
       "protocol_version": COMPANION_PROTOCOL_VERSION,
       "device": "StarPilot",
+      "device_id": telemetry_device_id(self.params),
       "version": STARPILOT_DISPLAY_VERSION,
       "branch": _param_text(self.params, "GitBranch"),
       "onroad": not self.params.get_bool("IsOffroad"),

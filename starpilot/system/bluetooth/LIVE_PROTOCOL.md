@@ -252,17 +252,70 @@ tunnel — its exit can be metered/cellular.
 
 ## Channel responsibilities
 
-The companion is one of three tiers; a client should route requests accordingly:
+The companion has four transport tiers; a client should route requests accordingly:
 
-1. **BLE (this protocol)** — always-on, low-latency, bounded bandwidth. All
-   real-time driving state, device health, and connectivity. Nothing real-time
-   should ever depend on the network.
-2. **Direct LAN / non-metered WiFi (`:8082`)** — where heavy pulls are allowed:
+1. **BLE (this protocol)** — always-on, low-latency, bounded bandwidth. It is
+   the fallback transport for real-time driving state, device health, and
+   connectivity. Nothing safety-critical depends on either companion transport.
+2. **Direct LAN (`/api/telematics/stream`)** — an equivalent live transport for
+   phones on the comma's local network. Galaxy serves the same 64-byte state and
+   health frames as an HTTP server-sent event stream, plus the live metadata
+   object. It is available independently of Bluetooth and is intended for
+   Android and native iOS clients.
+   The stream emits `metadata` events containing the JSON metadata object and
+   `frame` events containing `{ "encoding": "base64", "data": "...",
+   "fresh": true, "source_age_sec": 0.1 }`. The payload bytes are unchanged.
+   Source freshness measures cereal receipt times, independently of the frame
+   generation clock; parked operation requires fresh device health, while
+   driving also requires fresh car state, selfdrive state and car control.
+   Metadata accompanies queued samples and is sent whenever its complete value
+   changes, including alert text and speed-limit source. Each subscriber has a
+   bounded queue; superseded samples cannot discard the latest metadata.
+
+   `/api/telematics/status` reports `device_id` (hardware serial, hostname fallback
+   on development hosts), protocol version, frame types, rates, source freshness,
+   and `monotonic_ms` for detecting buffered old frames. The authenticated BLE
+   status includes the same additive `device_id`. Galaxy's existing scalar
+   `/api/device/status` exposes `telematicsDeviceId` and the advertised
+   `localHostname`, allowing LAN setup without Bluetooth discovery.
+
+   The local page uses its own origin. HTTPS pages at `galaxy.link` and
+   `galaxy.firestar.link` may fetch these two endpoints directly through scoped
+   CORS and Chrome's local-network permission; credentials are omitted. No CORS
+   access is added to other APIs. If the browser denies local access, use
+   **Open local Galaxy**. Preferences are stored per device and per page origin. The page also remembers
+   its last verified device identity so a cached-page reload can recover over
+   LAN/BLE while the tunnel is offline; either transport must match that identity.
+
+   `LanTelemetryAccess` checks the socket peer before Flask handles these paths.
+   A peer is allowed only when it falls inside a subnet currently assigned to an
+   active **local** interface, discovered from `ip -o addr show up` and cached
+   for 15 seconds. Loopback and remote interfaces are excluded — overlay/tunnel
+   networks (`tailscale*`, `wg*`, `tun*`, `zt*`), container plumbing
+   (`docker*`, `br-*`, `veth*`) and the **cellular modem** (`wwan*`, `rmnet*`,
+   `ppp*`; on TICI `hardware.py` reads the built-in modem as `wwan0`), each
+   matched on either side of an `@` parent link and through a dotted
+   subinterface such as `wwan0.1@wwan0` — so a Tailscale, WireGuard, ZeroTier or
+   carrier-side peer is never treated as direct local Wi-Fi. A peer inside the
+   modem's own prefix belongs to the carrier, not to this LAN, and is refused.
+   Wi-Fi (`wlan*`), Ethernet and **USB tethering** (`usb*`, `rndis*`) remain
+   eligible: unusual IPv4 networks, CGNAT and other public ranges,
+   global-unicast IPv6 and link-local neighbours all
+   work, while unspecified, multicast and unparsable peers, and any peer outside
+   those subnets, are refused before discovery even runs. Discovery
+   failure denies every peer. FRP forwards the galaxy.link
+   tunnel to `127.0.0.1:8082`; loopback (including IPv6 and mapped IPv4) receives
+   `403`, regardless of Host or forwarded headers. Localhost development probes
+   must also use a LAN interface. Keep this middleware outside anything that
+   rewrites `REMOTE_ADDR`; a future proxy/listener change must preserve this
+   boundary and its socket test. Existing tunnel APIs remain available.
+   Metered local hotspots are allowed for scalar live data.
+3. **Direct LAN / non-metered WiFi (`:8082`)** — where heavy pulls are allowed:
    camera video, JPEG snapshots, route footage, screen recordings. Require health
    flag **bit 6**, a suitable non-metered local network on the phone, and a
    successful reachability probe to the device's local `:8082`. If any check fails,
    do not use the galaxy.link tunnel for heavy media.
-3. **galaxy.link tunnel** — remote/opportunistic light control and scalar JSON
+4. **galaxy.link tunnel** — remote/opportunistic light control and scalar JSON
    only (params/toggles, navigation destination, status). **No video over the
    tunnel, ever** — its exit can be metered/cellular.
 
@@ -286,13 +339,26 @@ described above. Concretely:
 5. Request `get_live_metadata` after connecting and whenever a **type-1** frame's
    `metadata_revision` changes.
 
-The live transport is independent of the Galaxy web interface and exposes no
-HTTP page.
+The BLE transport is independent of the Galaxy web interface and exposes no
+HTTP page. The LAN transport is hosted by Galaxy.
 
 ## Safety and lifecycle
 
 The API has no operation that engages, accelerates, brakes, steers, or changes a
 driving parameter. BlueZ requires an authenticated bond for reads/writes, and
-notifications are available only over that paired encrypted link. The publisher
+notifications are available only over that paired encrypted link. The BLE publisher
 runs only while a client subscribes to the Live characteristic and stops after
 the final subscription ends or the companion GATT application is removed.
+Galaxy starts one independent LAN publisher lazily on the first stream and
+closes it on server shutdown. Slow or cancelled subscribers do not block it.
+
+The web connection controller owns session statistics and transport recovery.
+Automatic tries LAN with a three-second deadline covering status, stream
+headers and first fresh state; it falls back only to authorized Bluetooth.
+Explicit pairing buttons alone may open Chrome's chooser. Local Wi-Fi and
+Bluetooth modes remain exclusive. Failed attempts back off to 15 seconds;
+a healthy Bluetooth connection is replaced only after a LAN probe remains
+fresh for three seconds. State becomes stale after two seconds, and returning
+from background revalidates the connection. Disconnect cancels both transports
+and retries. Totals survive reconnects to the same comma, excluding gaps and
+duplicate samples; changing device identity starts a new session.

@@ -171,10 +171,13 @@ from openpilot.starpilot.common.testing_grounds import (
 from openpilot.starpilot.navigation.destination_store import normalize_destination_payload, update_recent_destinations
 from openpilot.starpilot.system.the_galaxy.factory_reset import remove_path as _run_factory_reset_delete
 from openpilot.starpilot.system.the_galaxy import cpu_capture, flm_workspace, utilities
-from openpilot.starpilot.system.the_galaxy.bonjour import GalaxyBonjourAdvertiser
+from openpilot.starpilot.system.the_galaxy.bonjour import GalaxyBonjourAdvertiser, _service_hostname
 from openpilot.starpilot.system.the_galaxy.tls import GALAXY_TLS_PORT, serve_tls
 from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interrupted_update, public_recovery_status, recover_interrupted_update
 from openpilot.starpilot.system.bluetooth import BluetoothClient
+from openpilot.starpilot.system.bluetooth.lan import LanTelemetryManager
+from openpilot.starpilot.system.bluetooth.identity import telemetry_device_id
+from openpilot.starpilot.system.the_galaxy.lan_access import LanTelemetryAccess
 from openpilot.starpilot.system.wheel_controls import (
   CONTROLLER_ACTION_OPTIONS,
   CONTROLLER_ACTION_SET_SPEED,
@@ -5158,7 +5161,9 @@ class GalaxySlugMiddleware:
 
 def setup(app):
   if not isinstance(app.wsgi_app, GalaxySlugMiddleware):
-    app.wsgi_app = GalaxySlugMiddleware(app.wsgi_app)
+    app.wsgi_app = GalaxySlugMiddleware(LanTelemetryAccess(app.wsgi_app))
+  lan_telemetry = LanTelemetryManager(params, params_memory)
+  app.extensions["lan_telemetry"] = lan_telemetry
 
   model_status_debug = {
     "last_signature": None,
@@ -5198,7 +5203,8 @@ def setup(app):
       response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
-    if request.path == "/api/bluetooth/status" or request.path.startswith("/api/bluetooth/"):
+    if (request.path == "/api/bluetooth/status" or request.path.startswith("/api/bluetooth/") or
+        request.path.startswith("/api/telematics/")):
       response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
@@ -5256,6 +5262,18 @@ def setup(app):
   @app.route("/mobile/", methods=["GET"])
   def mobile_index():
     return _serve_new_ui()
+
+  @app.route("/api/telematics/status", methods=["GET"])
+  def telematics_status():
+    return _no_store_response(jsonify(lan_telemetry.status()))
+
+  @app.route("/api/telematics/stream", methods=["GET"])
+  def telematics_stream():
+    response = Response(lan_telemetry.stream(), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Connection"] = "keep-alive"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
 
   @app.route("/api/bluetooth/status", methods=["GET"])
   def bluetooth_status():
@@ -8147,6 +8165,8 @@ def setup(app):
       "onroad": not params.get_bool("IsOffroad"),
       "status": "Driving" if params.get_bool("IsOnroad") else "Parked",
       "online": True,
+      "telematicsDeviceId": telemetry_device_id(params),
+      "localHostname": _service_hostname(),
       "lanIp": utilities.get_current_lan_ip(),
       "networkName": utilities.get_current_network_name(),
     }), 200
@@ -10489,6 +10509,9 @@ def main():
   try:
     app.run(host=host, port=port, debug=debug, use_reloader=use_reloader, threaded=True)
   finally:
+    lan_telemetry = app.extensions.get("lan_telemetry")
+    if lan_telemetry is not None:
+      lan_telemetry.close()
     if tls_server is not None:
       tls_server.shutdown()
     if bonjour is not None:

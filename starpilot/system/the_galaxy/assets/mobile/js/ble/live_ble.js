@@ -1,4 +1,4 @@
-import { LiveReassembler, LiveSessionStats } from "./live_frames.js"
+import { LiveReassembler } from "./live_frames.js"
 
 export const COMPANION_UUIDS = Object.freeze({
   service: "9b6d1000-6f7a-4a5b-8c3d-2e1f0a9b8c7d",
@@ -70,7 +70,6 @@ export class LiveBLEClient {
   constructor(callbacks = {}) {
     this.callbacks = callbacks
     this.reassembler = new LiveReassembler()
-    this.session = new LiveSessionStats()
     this.state = "idle"
     this.message = ""
     this.device = null
@@ -155,7 +154,7 @@ export class LiveBLEClient {
     if (!navigator.bluetooth?.getDevices || this.closed) return false
     const attempt = this.connectAttempt
     try {
-      const devices = await navigator.bluetooth.getDevices()
+      const devices = await this._withTimeout(navigator.bluetooth.getDevices(), CONNECT_TIMEOUT_MS, "Saved Bluetooth permissions lookup timed out")
       if (attempt !== this.connectAttempt || this.closed || this.manualDisconnect) return false
       let savedID = null
       try { savedID = localStorage.getItem(LAST_DEVICE_KEY) } catch (error) { /* Storage is optional. */ }
@@ -234,7 +233,6 @@ export class LiveBLEClient {
       this.connectionGeneration += 1
       this.reconnectAttempt = 0
       this.reassembler.reset()
-      this.session.reset()
       try { localStorage.setItem(LAST_DEVICE_KEY, device.id) } catch (error) { /* Storage is optional. */ }
       if (reconnecting && device.id === this.savedDeviceAtLoad && !this.selectedDevices.has(device.id)) this.restoredDeviceID = device.id
       this._setState("connected", `Connected to ${device.name || "Galaxy device"}`)
@@ -355,7 +353,7 @@ export class LiveBLEClient {
       return
     }
 
-    this.session.consume(frame)
+    this.callbacks.onSample?.(frame, Date.now())
     this.pendingFrame = frame
     this._scheduleLiveUIUpdate()
     if (this.lastMetadataRevision !== frame.metadataRevision || this.lastAlertID !== frame.alertID) {
@@ -380,7 +378,7 @@ export class LiveBLEClient {
     const frame = this.pendingFrame
     this.pendingFrame = null
     this.lastPublishedAt = Date.now()
-    const session = this.session.snapshot()
+    const session = null
     this.lastLive = { frame, session, at: this.lastPublishedAt }
     this.callbacks.onLive?.(frame, session, this.lastPublishedAt)
   }
@@ -436,6 +434,7 @@ export class LiveBLEClient {
   }
 
   _scheduleReconnect() {
+    if (this.autoReconnect === false) return
     clearTimeout(this.reconnectTimer)
     const delay = Math.min(10000, 1000 * (2 ** Math.min(this.reconnectAttempt, 3)))
     this.reconnectAttempt += 1
@@ -466,8 +465,7 @@ export class LiveBLEClient {
     this.lastLive = null
     this.lastHealth = null
     this.lastMetadata = undefined
-    this.session.reset()
-    this.callbacks.onLive?.(null, this.session.snapshot(), null)
+    this.callbacks.onLive?.(null, null, null)
     this.callbacks.onHealth?.(null, null)
     this.callbacks.onMetadata?.(null)
   }

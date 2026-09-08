@@ -757,9 +757,14 @@ class LiveTelemetryPublisher:
     self._params_cache_time: float | None = None
     self._details_lock = threading.Lock()
     self._details = build_live_details({})
+    self._source_received_at: float | None = None
+    self._source_valid = False
+
+  def is_running(self) -> bool:
+    return self._thread is not None and self._thread.is_alive()
 
   def start(self) -> None:
-    if self._thread is not None and self._thread.is_alive():
+    if self.is_running():
       return
     self._stop.clear()
     self._thread = threading.Thread(target=self._run, name="ble_live_publisher", daemon=True)
@@ -799,8 +804,15 @@ class LiveTelemetryPublisher:
     snapshot = build_live_snapshot(sm, self._cached_params(monotonic), self.params_memory)
     frame = snapshot.pack(self._sequence, round(monotonic * 1000.0))
     details = build_live_details(sm)
+    # Receipt times come from cereal, not the freshly generated frame clock.
+    services = ("deviceState",) if self._cached_params(monotonic).get("IsOffroad") else ("deviceState", "carState", "selfdriveState", "carControl")
+    received = getattr(sm, "recv_time", {})
+    valid = getattr(sm, "valid", {})
+    oldest = min((received.get(service, 0.0) for service in services), default=0.0)
     with self._details_lock:
       self._details = details
+      self._source_received_at = oldest if oldest > 0 else None
+      self._source_valid = all(valid.get(service, False) for service in services)
     self._emit(frame)
     return frame
 
@@ -810,6 +822,11 @@ class LiveTelemetryPublisher:
     frame = snapshot.pack(self._sequence, round(monotonic * 1000.0))
     self._emit(frame)
     return frame
+
+  def source_status(self) -> dict[str, Any]:
+    with self._details_lock:
+      age = None if self._source_received_at is None else max(0.0, self._monotonic() - self._source_received_at)
+      return {"source_age_sec": age, "fresh": self._source_valid and age is not None and age < 2.0}
 
   def details(self) -> dict[str, Any]:
     with self._details_lock:

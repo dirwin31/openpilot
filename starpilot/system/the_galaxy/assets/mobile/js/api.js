@@ -74,7 +74,7 @@ export const api = {
   saveFavoritesSlots(slots) { return request("/api/favorites/slots", { method: "PUT", data: { slots } }) },
   activateFavoriteAction(key, value) { return request("/api/favorites/action", { method: "POST", data: { key, ...(value == null ? {} : { value }) } }) },
 
-  getDeviceStatus() { return requestOk("/api/device/status") },
+  getDeviceStatus(options) { return requestOk("/api/device/status", options) },
   getStats() { return requestOk("/api/stats") },
   setDriveStats(action, routeNames) { return request(`/api/stats/${action}_drive`, { method: "POST", data: { routeNames } }) },
 

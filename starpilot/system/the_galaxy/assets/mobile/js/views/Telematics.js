@@ -5,6 +5,8 @@ import { GalaxyModal } from "../components/GalaxyModal.js"
 import { store } from "../store.js"
 import { isIOSDevice } from "../browser.js"
 import { getLiveBLEClient } from "../ble/live_ble.js"
+import { LiveLANClient, localOrigin } from "../lan/live_lan.js"
+import { TelematicsConnection } from "../lan/connection.js"
 import { hasFlag, LIVE_FLAGS } from "../ble/live_frames.js"
 
 const flag = (frame, name) => !!frame && hasFlag(frame.flags, LIVE_FLAGS[name])
@@ -114,14 +116,33 @@ export const Telematics = {
       bluetoothSetupMode: "gate",
       bluetoothRadio: "unknown",
       rememberedDevices: null,
+      connectionMode: "automatic",
+      connectionSource: "",
+      connection: null,
+      localAddress: "",
+      showConnectionSetup: false,
+      localTestMessage: "",
+      testingLocal: false,
+      identity: "",
+      bluetoothSecure: false,
+      bluetoothAvailable: false,
+      manuallyDisconnected: false,
     }
   },
   computed: {
     connected() { return this.bleState === "connected" },
     connectionPending() { return this.connecting || ["connecting", "reconnecting"].includes(this.bleState) },
-    canConnect() { return this.capability === "ready" && !["connecting", "reconnecting"].includes(this.bleState) },
+    canConnect() { return this.capability === "ready" && !this.connectionPending },
+    connectionSourceLabel() {
+      return this.connectionSource === "lan" ? "Local Wi-Fi" : this.connectionSource === "bluetooth" ? "Bluetooth" : "—"
+    },
+    bluetoothControlsRelevant() { return this.connectionMode === "bluetooth" || this.connectionSource === "bluetooth" || this.showBluetoothSetup },
+    localGalaxyURL() {
+      try { return `${localOrigin(this.localAddress)}/#/telematics` } catch { return "" }
+    },
     secureURL() {
       const target = new URL(window.location.href)
+      if (target.protocol === "https:") return target.toString()
       target.protocol = "https:"
       target.port = "8443"
       return target.toString()
@@ -163,10 +184,11 @@ export const Telematics = {
     },
     bluetoothSetupReady() { return this.bluetoothChecks.every((check) => check.ok) },
     // Drives both the dot on the status button and the banner below the connect bar.
-    bluetoothNeedsAttention() { return !this.bluetoothFlagsReady || this.bluetoothRadio === "unavailable" },
+    bluetoothNeedsAttention() { return this.bluetoothControlsRelevant && (!this.bluetoothFlagsReady || this.bluetoothRadio === "unavailable") },
     // Null whenever everything is fine, so the banner disappears instead of nagging.
     // A device not yet paired is not a fault, so it never raises one.
     bluetoothBanner() {
+      if (!this.bluetoothControlsRelevant) return null
       if (this.bluetoothRadio === "unavailable") {
         return {
           tone: "warn", icon: "bi-bluetooth", title: "Bluetooth is off",
@@ -190,7 +212,7 @@ export const Telematics = {
     },
     showPairingSteps() { return !this.connected },
     statusLabel() {
-      if (this.bleState === "connected") return this.deviceName
+      if (this.bleState === "connected") return "Connected"
       if (this.bleState === "connecting") return "Connecting"
       if (this.bleState === "reconnecting") return "Reconnecting"
       if (this.bleState === "needs-pairing") return "Pairing required"
@@ -239,7 +261,7 @@ export const Telematics = {
       if (!frame) {
         return this.connected
           ? { title: "Waiting", detail: "Waiting for telemetry", icon: "bi-hourglass-split", tint: "var(--text-muted)" }
-          : { title: "Not connected", detail: "Connect to the device over Bluetooth to populate telematics.", icon: "bi-broadcast-pin", tint: "var(--text-muted)" }
+          : { title: "Not connected", detail: "Connect to the device over Local Wi-Fi or Bluetooth to populate telematics.", icon: "bi-broadcast-pin", tint: "var(--text-muted)" }
       }
       if (!flag(frame, "started")) return { title: "Vehicle offroad", detail: null, icon: "bi-car-front", tint: "var(--text-muted)" }
       if (!flag(frame, "telemetryValid")) return { title: "Waiting", detail: "Waiting for valid vehicle state", icon: "bi-hourglass-split", tint: "var(--text-muted)" }
@@ -279,7 +301,7 @@ export const Telematics = {
       const age = Math.max(0, (this.now - this.liveUpdatedAt) / 1000)
       return age < 1 ? "Live" : `${Math.round(age)} s old`
     },
-    freshnessTint() { return this.connected && this.liveUpdatedAt && this.now - this.liveUpdatedAt < 1500 ? "var(--success)" : "var(--warning)" },
+    freshnessTint() { return this.connected && this.liveUpdatedAt && this.now - this.liveUpdatedAt < 2000 ? "var(--success)" : "var(--warning)" },
     roadPills() {
       return [
         { title: "LEAD VEHICLE", icon: "bi-car-front-fill", value: this.leadText, tint: flag(this.frame, "leadPresent") ? "var(--success)" : "var(--text-muted)" },
@@ -374,29 +396,107 @@ export const Telematics = {
         this.syncFullscreen()
       }
     },
-    async connect({ chooseNew = false } = {}) {
-      const firstPair = !this.ble.device && /Android/i.test(navigator.userAgent) && !(this.rememberedDevices > 0)
-      if (!this.bluetoothSetupSkipped && (!this.bluetoothFlagsReady || firstPair)) {
-        this.bluetoothSetupMode = "gate"
-        this.showBluetoothSetup = true
-        return
-      }
-      this.showBluetoothSetup = false
+    async connect({ chooseNew = false, forceBluetooth = false } = {}) {
       const request = ++this.connectionRequest
+      this.manuallyDisconnected = false
       this.connecting = true
       try {
-        if (!chooseNew && this.ble.device) await this.ble.reconnect()
-        else await this.ble.connect()
-      } catch (error) { /* State includes the actionable error. */ }
-      finally {
+        if (chooseNew || forceBluetooth || this.connectionMode === "bluetooth") {
+          if (!this.ble) {
+            this.bleState = "error"
+            this.bleMessage = "Bluetooth needs Chrome on an HTTPS page. Local Wi-Fi is still available."
+            return
+          }
+          const firstPair = !this.ble.device && /Android/i.test(navigator.userAgent) && !(this.rememberedDevices > 0)
+          if (!this.bluetoothSetupSkipped && (!this.bluetoothFlagsReady || firstPair)) {
+            this.bluetoothSetupMode = "gate"
+            this.showBluetoothSetup = true
+            return
+          }
+        }
+        if (!this.identity) {
+          // A chooser must stay in this click's activation; never await HTTP first.
+          if (chooseNew) throw new Error("Device identity is loading. Try Pair now again in a moment.")
+          await this.loadDeviceStatus()
+        }
+        if (request !== this.connectionRequest) return
+        this.showBluetoothSetup = false
+        this.configureConnection()
+        await this.connection.connect({ chooseNew })
+      } catch (error) {
+        if (request === this.connectionRequest) {
+          this.bleState = "error"
+          this.bleMessage = String(error?.message || error)
+        }
+      } finally {
         if (request === this.connectionRequest) this.connecting = false
-        // Pairing is what creates the remembered device, so the panel is stale until now.
         void this.refreshBluetoothStatus()
       }
     },
     chooseDevice() {
+      this.setConnectionMode("bluetooth", false)
       this.disconnect()
+      this.bluetoothSetupSkipped = true
       return this.connect({ chooseNew: true })
+    },
+    configureConnection() {
+      this.connection?.configure({ mode: this.connectionMode, address: this.localAddress, identity: this.identity })
+    },
+    restoreConnectionSettings(identity, status = {}) {
+      this.identity = identity
+      let saved = {}
+      try { saved = JSON.parse(localStorage.getItem(`galaxy-telematics:${identity}`) || "{}") } catch { /* Storage is optional. */ }
+      if (["automatic", "lan", "bluetooth"].includes(saved.mode)) this.connectionMode = saved.mode
+      try { this.localAddress = localOrigin(window.location.origin) } catch {
+        this.localAddress = saved.address || (status.localHostname ? `http://${status.localHostname}:8082` : "")
+      }
+      this.configureConnection()
+    },
+    saveConnectionSettings() {
+      if (!this.identity) return
+      try { localStorage.setItem(`galaxy-telematics:${this.identity}`, JSON.stringify({ mode: this.connectionMode, address: this.localAddress })) } catch { /* Storage is optional. */ }
+    },
+    setConnectionMode(mode, reconnect = true) {
+      if (!["automatic", "lan", "bluetooth"].includes(mode)) return
+      const running = this.connection?.running || this.connected || this.connectionPending
+      this.disconnect()
+      this.connectionMode = mode
+      if (mode !== "bluetooth") this.showBluetoothSetup = false
+      this.saveConnectionSettings()
+      this.configureConnection()
+      if (reconnect && running) void this.connect()
+    },
+    async testLocalConnection() {
+      this.testClient?.close()
+      const client = new LiveLANClient()
+      this.testClient = client
+      this.testingLocal = true
+      this.localTestMessage = "Checking the comma and live data…"
+      try {
+        if (!this.identity) await this.loadDeviceStatus()
+        if (this.testClient !== client) return
+        const address = localOrigin(this.localAddress)
+        if (!await client.connect({ address, expectedIdentity: this.identity })) return
+        if (this.testClient !== client) return
+        this.localAddress = address
+        this.saveConnectionSettings()
+        this.localTestMessage = "Verified: this comma is sending fresh live data."
+        const running = this.connection?.running
+        this.configureConnection()
+        if (running && (this.connectionMode === "lan" || this.connectionSource === "lan" || !this.connected)) void this.connect()
+      } catch (error) {
+        if (this.testClient === client) this.localTestMessage = String(error.message || error)
+      } finally {
+        client.close()
+        if (this.testClient === client) { this.testingLocal = false; this.testClient = null }
+      }
+    },
+    cancelLocalTest() {
+      if (!this.testClient && !this.testingLocal) return
+      this.testClient?.close()
+      this.testClient = null
+      this.testingLocal = false
+      this.localTestMessage = "Test cancelled."
     },
     async refreshBluetoothStatus() {
       try {
@@ -422,7 +522,7 @@ export const Telematics = {
       this.showBluetoothSetup = false
       this.bluetoothSetupSkipped = true
       // Keep the device chooser in the button's user activation.
-      return this.connect({ chooseNew: true })
+      return this.connect({ chooseNew: true, forceBluetooth: true })
     },
     async copyBluetoothSetting(flag) {
       try {
@@ -433,16 +533,33 @@ export const Telematics = {
       }
     },
     disconnect() {
+      if (this.testClient) this.cancelLocalTest()
+      this.manuallyDisconnected = true
       this.connectionRequest += 1
       this.connecting = false
-      this.ble?.disconnect()
+      this.connection?.disconnect()
     },
     async loadParams() {
       try { this.params = (await api.getParams()) || {} } catch (error) { this.params = {} }
     },
     async loadDeviceStatus() {
-      const value = await api.getDeviceStatus()
-      if (value) this.deviceStatus = value
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 3000)
+      let value
+      try { value = await api.getDeviceStatus({ signal: controller.signal, cache: "no-store" }) }
+      finally { clearTimeout(timer) }
+      if (this.disposed || !value) return
+      this.deviceStatus = value
+      const identity = value.telematicsDeviceId
+      if (identity && identity !== this.identity) {
+        const resume = !this.connecting && (this.connection?.running || (!this.identity && !this.manuallyDisconnected))
+        // Do not cancel a user Connect that is waiting for initial identity.
+        this.connection?.disconnect()
+        this.restoreConnectionSettings(identity, value)
+        this.saveConnectionSettings()
+        try { localStorage.setItem(`galaxy-telematics-page:${window.location.pathname}`, identity) } catch { /* Storage is optional. */ }
+        if (resume) void this.connection?.connect()
+      }
     },
     setOrientation(event) { this.isLandscape = event.matches },
   },
@@ -451,13 +568,6 @@ export const Telematics = {
       const homeURL = new URL(window.location.href)
       homeURL.hash = "/"
       window.location.replace(homeURL.toString())
-      return
-    }
-
-    // Deliberately no automatic redirect to :8443. The jump is invisible and lands the
-    // user on a certificate interstitial with no idea why, so explain it and let them tap.
-    if (window.location.protocol !== "https:") {
-      this.capability = "insecure"
       return
     }
 
@@ -470,27 +580,39 @@ export const Telematics = {
     this.syncFullscreen()
     this.clock = setInterval(() => { this.now = Date.now() }, 1000)
     void this.loadParams()
-    this.devicePoll = usePolling(() => this.loadDeviceStatus(), { interval: 5000 })
-    this.devicePoll.start()
-
-    if (!window.isSecureContext) this.capability = "insecure"
-    else if (!navigator.bluetooth) this.capability = "unsupported"
-    else {
-      this.capability = "ready"
-      this.ble = getLiveBLEClient()
-      this.ble.setCallbacks({
-        onState: ({ state, message, deviceName, restoredAfterReload }) => {
-          this.bleState = state; this.bleMessage = message; this.deviceName = deviceName
-          this.restoredAfterReload = restoredAfterReload
+    this.capability = "ready"
+    this.bluetoothSecure = window.isSecureContext && window.location.protocol === "https:"
+    this.bluetoothAvailable = !!navigator.bluetooth
+    if (this.bluetoothSecure && this.bluetoothAvailable) this.ble = getLiveBLEClient()
+    this.connection = new TelematicsConnection({
+      ble: this.ble,
+      callbacks: {
+        onState: ({ state, message, deviceName, source, restoredAfterReload }) => {
+          this.bleState = state; this.bleMessage = message; this.deviceName = deviceName || "Galaxy device"
+          this.connectionSource = source; this.restoredAfterReload = restoredAfterReload
         },
         onLive: (frame, session, updatedAt) => { this.frame = frame; this.session = session; this.liveUpdatedAt = updatedAt },
         onHealth: (frame, updatedAt) => { this.health = frame; this.healthUpdatedAt = updatedAt },
-        onMetadata: (metadata) => { this.metadata = metadata },
-      })
-      this.ble.emitCurrent()
-      void this.refreshBluetoothStatus()
-      if (!this.ble.manualDisconnect && !this.ble.isActive()) void this.ble.reconnectRemembered()
-    }
+        onMetadata: metadata => { this.metadata = metadata },
+      },
+    })
+    // A cached page can restore its last verified comma even if the tunnel is
+    // offline. Live LAN/BLE status must still match this identity. The page's
+    // scalar status remains authoritative if it reports a different device.
+    try {
+      const identity = localStorage.getItem(`galaxy-telematics-page:${window.location.pathname}`)
+      if (identity) {
+        this.restoreConnectionSettings(identity)
+        void this.connection.connect()
+      }
+    } catch { /* Storage is optional. */ }
+    this.devicePoll = usePolling(() => this.loadDeviceStatus(), { interval: 5000 })
+    this.devicePoll.start()
+    void this.refreshBluetoothStatus()
+    this.onResume = () => { if (document.visibilityState !== "hidden") void this.connection?.resume() }
+    document.addEventListener("visibilitychange", this.onResume)
+    window.addEventListener("pageshow", this.onResume)
+
   },
   beforeUnmount() {
     this.orientation?.removeEventListener?.("change", this.setOrientation)
@@ -500,7 +622,12 @@ export const Telematics = {
     }
     clearInterval(this.clock)
     this.devicePoll?.destroy()
-    this.ble?.detach()
+    this.disposed = true
+    this.connectionRequest += 1
+    document.removeEventListener("visibilitychange", this.onResume)
+    window.removeEventListener("pageshow", this.onResume)
+    this.cancelLocalTest()
+    this.connection?.close()
   },
   template: `
     <div class="telematics-page" :class="{ 'telematics-page--landscape': isLandscape }">
@@ -571,7 +698,19 @@ export const Telematics = {
           <button v-if="bluetoothSetupMode === 'info' && capability === 'ready'" class="gx-btn gx-btn--outlined" type="button" @click="chooseDevice">Choose device</button>
         </div>
       </GalaxyModal>
-      <div v-if="capability === 'insecure'" class="telematics-gate">
+      <GalaxyModal v-model="showConnectionSetup" title="Local Wi-Fi connection" confirm-label="Done" cancel-label="Close" @cancel="cancelLocalTest" @confirm="cancelLocalTest">
+        <p>Connect the phone and comma to the same Wi-Fi or hotspot. From galaxy.link, allow Chrome’s local network permission when asked.</p>
+        <p v-if="identity">Comma: {{ identity }}</p>
+        <label for="telematics-local-address">Comma address</label>
+        <input id="telematics-local-address" v-model="localAddress" class="gx-field" placeholder="starpilot-device.local:8082" autocapitalize="none" spellcheck="false">
+        <p>Use the comma’s .local name when possible; an IP address can change.</p>
+        <button v-if="testingLocal" class="gx-btn gx-btn--outlined" @click="cancelLocalTest">Cancel test</button>
+        <button v-else class="gx-btn gx-btn--outlined" @click="testLocalConnection">Test and save connection</button>
+        <p v-if="localTestMessage" role="status">{{ localTestMessage }}</p>
+        <a v-if="localGalaxyURL" class="gx-btn gx-btn--outlined" :href="localGalaxyURL">Open local Galaxy</a>
+        <p>If Chrome blocks local access, open local Galaxy above. This page and the local page save their settings separately.</p>
+      </GalaxyModal>
+      <div v-if="bluetoothControlsRelevant && !bluetoothSecure" class="telematics-gate">
         <GxNotice tone="warn" icon="bi-shield-lock-fill" title="Bluetooth pairing needs the HTTPS page">
           Web Bluetooth only works on a secure page. Galaxy serves one on port 8443.
         </GxNotice>
@@ -597,24 +736,28 @@ export const Telematics = {
           <p>Chrome remembers the exception per address. Reach the device by name — <code>https://starpilot-&lt;device&gt;.local:8443</code> — so a new DHCP lease does not undo it.</p>
         </details>
       </div>
-      <div v-else-if="capability === 'unsupported'" class="telematics-gate">
+      <div v-else-if="bluetoothControlsRelevant && !bluetoothAvailable" class="telematics-gate">
         <GxNotice tone="info" icon="bi-phone" title="Chrome on Android required">
           This browser does not provide Web Bluetooth. Open this telematics page in Chrome on Android (or another browser with Web Bluetooth support).
         </GxNotice>
       </div>
-      <template v-else>
+      <template v-if="capability === 'ready'">
         <div v-if="!isLandscape" class="telematics-connect-bar">
-          <span class="telematics-status"><i :style="{ background: freshnessTint }"></i>{{ statusLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }}</small></span>
-          <button v-if="!bluetoothBannerVisible" class="telematics-setup-button" type="button" :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
+          <span class="telematics-status" :title="deviceName"><i :style="{ background: freshnessTint }"></i>{{ statusLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }} · {{ connectionSourceLabel }}</small></span>
+          <button class="telematics-setup-button" type="button" aria-label="Local Wi-Fi settings" title="Local Wi-Fi settings" @click="showConnectionSetup = true"><i class="bi bi-wifi"></i></button>
+          <select class="gx-field telematics-connection-select" aria-label="Connection method" :value="connectionMode" @change="setConnectionMode($event.target.value)">
+            <option value="automatic">Automatic</option><option value="lan">Local Wi-Fi</option><option value="bluetooth">Bluetooth</option>
+          </select>
+          <button v-if="connectionMode !== 'lan' && !bluetoothBannerVisible" class="telematics-setup-button" type="button" :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
             :title="bluetoothNeedsAttention ? 'Bluetooth status — needs attention' : 'Bluetooth status'"
             :aria-label="bluetoothNeedsAttention ? 'Bluetooth status, needs attention' : 'Bluetooth status'"
             @click="openBluetoothSetup"><i class="bi bi-lightbulb-fill"></i></button>
           <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Disconnect</button>
           <button v-else-if="connectionPending" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Cancel</button>
-          <button v-else class="gx-btn" type="button" :disabled="!canConnect" @click="connect()"><i class="bi bi-bluetooth"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
+          <button v-else class="gx-btn" type="button" :disabled="!canConnect" @click="connect()"><i class="bi" :class="connectionMode === 'bluetooth' ? 'bi-bluetooth' : 'bi-wifi'"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
         </div>
         <GxNotice v-if="bleState === 'needs-pairing'" class="telematics-pairing" tone="warn" icon="bi-bluetooth" title="Pair the device first" :text="bleMessage" />
-        <GxNotice v-else-if="bleState === 'error'" class="telematics-pairing" tone="danger" icon="bi-exclamation-circle-fill" title="Bluetooth error" :text="bleMessage" />
+        <GxNotice v-else-if="bleState === 'error'" class="telematics-pairing" tone="danger" icon="bi-exclamation-circle-fill" title="Connection error" :text="bleMessage" />
         <GxNotice v-else-if="bluetoothBannerVisible" class="telematics-pairing" :tone="bluetoothBanner.tone"
           :icon="bluetoothBanner.icon" :title="bluetoothBanner.title">
           {{ bluetoothBanner.text }}
@@ -634,8 +777,12 @@ export const Telematics = {
 
           <section class="telematics-center" :style="{ '--mode-color': modeColor }">
             <div class="telematics-center__connection">
-              <span>{{ statusLabel }} · {{ deviceStatusLabel }}</span>
-              <button class="telematics-fullscreen-button telematics-setup-button--inline" type="button"
+              <span :title="deviceName">{{ statusLabel }} · {{ connectionSourceLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }}</small></span>
+              <button class="telematics-setup-button" type="button" aria-label="Local Wi-Fi settings" title="Local Wi-Fi settings" @click="showConnectionSetup = true"><i class="bi bi-wifi"></i></button>
+              <select class="gx-field telematics-connection-select" aria-label="Connection method" :value="connectionMode" @change="setConnectionMode($event.target.value)">
+                <option value="automatic">Automatic</option><option value="lan">Local Wi-Fi</option><option value="bluetooth">Bluetooth</option>
+              </select>
+              <button v-if="connectionMode !== 'lan'" class="telematics-fullscreen-button telematics-setup-button--inline" type="button"
                 :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
                 :title="bluetoothNeedsAttention ? 'Bluetooth status — needs attention' : 'Bluetooth status'"
                 :aria-label="bluetoothNeedsAttention ? 'Bluetooth status, needs attention' : 'Bluetooth status'"

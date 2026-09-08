@@ -297,7 +297,7 @@ def test_protocol_round_trip_and_capabilities():
 
 
 def test_companion_protocol_is_read_only_and_versioned():
-  params = FakeParams(IsOffroad=True, GitBranch="Dom")
+  params = FakeParams(IsOffroad=True, GitBranch="Dom", HardwareSerial="comma-serial")
   protocol = CompanionProtocol(params, clock=lambda: 1234.9)
 
   status = json.loads(protocol.status_bytes())
@@ -308,6 +308,7 @@ def test_companion_protocol_is_read_only_and_versioned():
   assert status == {
     "branch": "Dom",
     "device": "StarPilot",
+    "device_id": "comma-serial",
     "live": {
       "frame_size": LIVE_FRAME_SIZE,
       "protocol_version": LIVE_PROTOCOL_VERSION,

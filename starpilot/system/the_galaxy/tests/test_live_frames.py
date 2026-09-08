@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -21,8 +22,12 @@ def _live_module(monkeypatch):
   monkeypatch.setitem(sys.modules, "cereal", cereal)
   monkeypatch.setitem(sys.modules, "cereal.messaging", cereal.messaging)
   monkeypatch.setitem(sys.modules, "openpilot.common.swaglog", swaglog)
-  sys.modules.pop("openpilot.starpilot.system.bluetooth.live", None)
-  from openpilot.starpilot.system.bluetooth import live
+  # Test the working tree even when macOS native dependencies use a host mirror.
+  name = "openpilot.starpilot.system.bluetooth.live"
+  spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "starpilot/system/bluetooth/live.py")
+  live = importlib.util.module_from_spec(spec)
+  monkeypatch.setitem(sys.modules, name, live)
+  spec.loader.exec_module(live)
   return live
 
 
