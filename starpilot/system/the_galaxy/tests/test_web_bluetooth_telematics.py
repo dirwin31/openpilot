@@ -65,6 +65,16 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert "Chrome forgets this pairing on reload" in telematics
   assert 'v-else-if="bluetoothBanner && !isLandscape"' in telematics
   assert "getAvailability" in telematics
+  # the device side of pairing is invisible from the phone, so the panel must spell it out
+  assert "pair a phone" in telematics
+  assert "discoverable / 120s" in telematics
+  assert 'v-if="!connected"' in telematics
+  # Disconnect cannot revoke the Chrome permission, so say how to do it by hand
+  assert "Make Chrome forget this device" in telematics
+  assert "Bluetooth devices" in telematics
+  assert "Connected devices" in telematics
+  assert 'v-if="rememberedDevices > 0"' in telematics
+  assert "telematics-setup__more" in telematics
   assert "bluetoothChecks" in telematics
   assert "bluetoothNeedsAttention" in telematics
   assert "telematics-landscape" in telematics

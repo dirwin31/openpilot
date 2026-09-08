@@ -52,14 +52,16 @@
   margin: 14px 0 20px;
 }
 
-.telematics-gate__more {
+.telematics-gate__more,
+.telematics-setup__more {
   border-top: 1px solid var(--outline);
   padding: 12px 0;
 }
 
 /* The native disclosure triangle hangs outside the content box, so it sits well
    left of everything else on the page. Replaced with an inline chevron. */
-.telematics-gate__more summary {
+.telematics-gate__more summary,
+.telematics-setup__more summary {
   align-items: center;
   color: var(--on-surface);
   cursor: pointer;
@@ -70,9 +72,11 @@
   list-style: none;
 }
 
-.telematics-gate__more summary::-webkit-details-marker { display: none; }
+.telematics-gate__more summary::-webkit-details-marker,
+.telematics-setup__more summary::-webkit-details-marker { display: none; }
 
-.telematics-gate__more summary::before {
+.telematics-gate__more summary::before,
+.telematics-setup__more summary::before {
   border-bottom: 2px solid var(--text-muted);
   border-right: 2px solid var(--text-muted);
   content: "";
@@ -83,9 +87,11 @@
   width: 7px;
 }
 
-.telematics-gate__more[open] summary::before { transform: rotate(45deg); }
+.telematics-gate__more[open] summary::before,
+.telematics-setup__more[open] summary::before { transform: rotate(45deg); }
 
-.telematics-gate__more p {
+.telematics-gate__more p,
+.telematics-setup__more p {
   color: var(--text-muted);
   font-size: 13.5px;
   line-height: 1.55;
@@ -93,7 +99,8 @@
   padding-left: 17px;
 }
 
-.telematics-gate__more code {
+.telematics-gate__more code,
+.telematics-setup__more code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow-wrap: anywhere;
   user-select: text;
@@ -159,6 +166,23 @@
 }
 
 .telematics-bluetooth-setup .telematics-inline { display: inline; font-size: inherit; margin: 0; }
+
+.telematics-setup__heading {
+  color: var(--on-surface);
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.telematics-setup__more { margin-top: 4px; }
+
+.telematics-setup__more ol {
+  margin: 10px 0 0;
+  padding-left: 39px;
+}
+
+.telematics-setup__more li { margin-bottom: 12px; }
 .telematics-check__hint code { display: inline-block; margin: 6px 0 0; }
 
 .telematics-connect-bar {

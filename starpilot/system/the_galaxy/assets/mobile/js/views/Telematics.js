@@ -409,6 +409,16 @@ export const Telematics = {
             <i class="bi bi-stars"></i> Everything needed is in place. This page will reconnect on its own after a reload.
           </p>
 
+          <template v-if="!connected">
+            <p class="telematics-setup__heading">Pairing a phone</p>
+            <ol>
+              <li>On the comma screen open <strong class="telematics-inline">Settings &rarr; Bluetooth</strong> and tap <strong class="telematics-inline">pair a phone</strong>. It counts down <strong class="telematics-inline">discoverable / 120s</strong>; the device only accepts a new phone inside that window, and only while parked.</li>
+              <li>Tap <strong class="telematics-inline">{{ bluetoothSetupMode === 'info' ? 'Connect' : 'Continue pairing' }}</strong> and pick the device from Chrome's list.</li>
+              <li>Accept Android's pairing prompt if one appears.</li>
+            </ol>
+            <p class="telematics-check__hint">Chrome shows no devices, or pairing fails? The 120 second window has almost certainly closed. Tap <strong class="telematics-inline">pair a phone</strong> again and retry.</p>
+          </template>
+
           <template v-if="!canRestoreBluetooth">
             <p>Chrome can remember the device across reloads, but the setting is off by default. This page cannot read or change Chrome's settings, so you have to do it once by hand.</p>
             <ol>
@@ -424,6 +434,16 @@ export const Telematics = {
             </p>
             <p>None of this blocks pairing. You can connect right now; you will just have to pick the device again after each reload.</p>
           </template>
+
+          <details v-if="rememberedDevices > 0" class="telematics-setup__more">
+            <summary>Make Chrome forget this device</summary>
+            <p>Disconnect only drops the link. Chrome keeps the device and this page reconnects to it on the next load, so pairing a different one means removing the permission by hand.</p>
+            <ol>
+              <li><strong class="telematics-inline">In Chrome</strong> tap the icon left of the address bar, open <strong class="telematics-inline">Permissions</strong>, and remove the device under <strong class="telematics-inline">Bluetooth devices</strong>. The wording moves around between Chrome versions; <strong class="telematics-inline">Reset permissions</strong> on that same sheet also works, but it clears this page's certificate exception too.</li>
+              <li><strong class="telematics-inline">In Android</strong> open <strong class="telematics-inline">Settings &rarr; Connected devices</strong>, tap the gear beside the device, then <strong class="telematics-inline">Forget</strong>.</li>
+            </ol>
+            <p>Do both. The Android pairing outlives the Chrome permission, and a leftover one is the usual reason the next pairing attempt fails.</p>
+          </details>
         </div>
       </GalaxyModal>
       <div v-if="capability === 'insecure'" class="telematics-gate">
