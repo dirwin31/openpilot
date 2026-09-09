@@ -150,6 +150,10 @@ export const Telematics = {
     secureHost() {
       try { return new URL(this.secureURL).hostname } catch (error) { return "this device" }
     },
+    // True while Bluetooth is the relevant path but this page can't offer it at all
+    // (needs the HTTPS page). The dashboard and connect bar stay hidden in favor of
+    // just the gate, instead of showing controls a user on this page can't use.
+    bluetoothHttpsGate() { return this.bluetoothControlsRelevant && !this.bluetoothSecure },
     canRestoreBluetooth() { return supportsBluetoothRestore() },
     canWatchAdvertisements() { return supportsAdvertisementWatch() },
     bluetoothFlagsReady() { return this.canRestoreBluetooth && this.canWatchAdvertisements },
@@ -710,7 +714,7 @@ export const Telematics = {
         <a v-if="localGalaxyURL" class="gx-btn gx-btn--outlined" :href="localGalaxyURL">Open local Galaxy</a>
         <p>If Chrome blocks local access, open local Galaxy above. This page and the local page save their settings separately.</p>
       </GalaxyModal>
-      <div v-if="bluetoothControlsRelevant && !bluetoothSecure" class="telematics-gate">
+      <div v-if="bluetoothHttpsGate" class="telematics-gate">
         <GxNotice tone="warn" icon="bi-shield-lock-fill" title="Bluetooth pairing needs the HTTPS page">
           Web Bluetooth only works on a secure page. Galaxy serves one on port 8443.
         </GxNotice>
@@ -744,18 +748,21 @@ export const Telematics = {
       <template v-if="capability === 'ready'">
         <div v-if="!isLandscape" class="telematics-connect-bar">
           <span class="telematics-status" :title="deviceName"><i :style="{ background: freshnessTint }"></i>{{ statusLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }} · {{ connectionSourceLabel }}</small></span>
-          <button class="telematics-setup-button" type="button" aria-label="Local Wi-Fi settings" title="Local Wi-Fi settings" @click="showConnectionSetup = true"><i class="bi bi-wifi"></i></button>
+          <button v-if="!bluetoothHttpsGate" class="telematics-setup-button" type="button" aria-label="Local Wi-Fi settings" title="Local Wi-Fi settings" @click="showConnectionSetup = true"><i class="bi bi-wifi"></i></button>
           <select class="gx-field telematics-connection-select" aria-label="Connection method" :value="connectionMode" @change="setConnectionMode($event.target.value)">
             <option value="automatic">Automatic</option><option value="lan">Local Wi-Fi</option><option value="bluetooth">Bluetooth</option>
           </select>
-          <button v-if="connectionMode !== 'lan' && !bluetoothBannerVisible" class="telematics-setup-button" type="button" :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
-            :title="bluetoothNeedsAttention ? 'Bluetooth status — needs attention' : 'Bluetooth status'"
-            :aria-label="bluetoothNeedsAttention ? 'Bluetooth status, needs attention' : 'Bluetooth status'"
-            @click="openBluetoothSetup"><i class="bi bi-lightbulb-fill"></i></button>
-          <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Disconnect</button>
-          <button v-else-if="connectionPending" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Cancel</button>
-          <button v-else class="gx-btn" type="button" :disabled="!canConnect" @click="connect()"><i class="bi" :class="connectionMode === 'bluetooth' ? 'bi-bluetooth' : 'bi-wifi'"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
+          <template v-if="!bluetoothHttpsGate">
+            <button v-if="connectionMode !== 'lan' && !bluetoothBannerVisible" class="telematics-setup-button" type="button" :class="{ 'telematics-setup-button--alert': bluetoothNeedsAttention }"
+              :title="bluetoothNeedsAttention ? 'Bluetooth status — needs attention' : 'Bluetooth status'"
+              :aria-label="bluetoothNeedsAttention ? 'Bluetooth status, needs attention' : 'Bluetooth status'"
+              @click="openBluetoothSetup"><i class="bi bi-lightbulb-fill"></i></button>
+            <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Disconnect</button>
+            <button v-else-if="connectionPending" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Cancel</button>
+            <button v-else class="gx-btn" type="button" :disabled="!canConnect" @click="connect()"><i class="bi" :class="connectionMode === 'bluetooth' ? 'bi-bluetooth' : 'bi-wifi'"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
+          </template>
         </div>
+        <template v-if="!bluetoothHttpsGate">
         <GxNotice v-if="bleState === 'needs-pairing'" class="telematics-pairing" tone="warn" icon="bi-bluetooth" title="Pair the device first" :text="bleMessage" />
         <GxNotice v-else-if="bleState === 'error'" class="telematics-pairing" tone="danger" icon="bi-exclamation-circle-fill" title="Connection error" :text="bleMessage" />
         <GxNotice v-else-if="bluetoothBannerVisible" class="telematics-pairing" :tone="bluetoothBanner.tone"
@@ -828,6 +835,7 @@ export const Telematics = {
             <div class="telematics-tile-grid"><TelematicsTile v-for="tile in portraitTiles" :key="tile[0]" :title="tile[0]" :value="tile[1]" /></div>
           </section>
         </div>
+        </template>
       </template>
     </div>
   `,
