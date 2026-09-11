@@ -61,6 +61,10 @@ const VIEWS = {
 }
 
 function resolveView(path) {
+  if (path === "/uniden_r4" || path === "/uniden" || path.startsWith("/uniden_r4")) {
+    navigate("/bluetooth/uniden", { replace: true })
+    return Bluetooth
+  }
   if (path === "/embed" || path.startsWith("/embed/")) return ToolEmbed
   for (const [root, view] of Object.entries(VIEWS)) {
     if (path === root || (root !== "/" && path.startsWith(root + "/"))) return view
