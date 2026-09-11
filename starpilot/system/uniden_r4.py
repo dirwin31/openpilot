@@ -270,7 +270,42 @@ async def _pairing_flow():
         if dev_addr:
             set_param("UnidenR4Mac", dev_addr)
         set_shm_param("UnidenManualConnectTrigger", True)
-        _set_pair_state("success", f"Paired & bonded to {dev_name or dev_addr}! Connecting now - alerts should start shortly.")
+
+        # Do not claim success unless we can actually reach the detector -
+        # a cached bond persists in BlueZ even when the R4 is powered off.
+        connected = False
+        try:
+            reply = await bus.call(Message(
+                destination="org.bluez", path=dev_path,
+                interface="org.bluez.Device1", member="Connect", timeout=30.0,
+            ))
+            if reply.message_type != MessageType.ERROR:
+                connected = True
+        except Exception:
+            connected = False
+        if not connected:
+            try:
+                connected_reply = await bus.call(Message(
+                    destination="org.bluez", path=dev_path,
+                    interface="org.freedesktop.DBus.Properties", member="Get",
+                    signature="ss", body=["org.bluez.Device1", "Connected"],
+                ))
+                connected = bool(connected_reply.body[0].value)
+            except Exception:
+                connected = False
+
+        if connected:
+            _set_pair_state("success", f"Bonded & connected to {dev_name or dev_addr}! Radar alerts are live.")
+        else:
+            # Bond established (new or from a previous pairing) but the detector
+            # could not be reached right now. Keep the saved MAC - the BLE daemon
+            # will connect automatically as soon as the R4 is powered on.
+            _set_pair_state(
+                "unreachable",
+                f"{dev_name or dev_addr} is bonded, but not reachable right now. "
+                "Power the detector on (its display should light up) and it will connect automatically. "
+                "If it still won't appear, put it in pairing mode and tap Scan & Pair again."
+            )
     except Exception as e:
         err = str(e).strip() or repr(e)
         hint = "Make sure the detector is in pairing mode and try again."
