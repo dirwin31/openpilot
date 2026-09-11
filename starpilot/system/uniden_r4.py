@@ -241,10 +241,10 @@ async def _pairing_flow():
 
         _set_pair_state("verifying", f"Found {dev_name}. Establishing secure bond (LTK exchange)...")
         if not target["paired"]:
-            reply = await bus.call(Message(
+            reply = await asyncio.wait_for(bus.call(Message(
                 destination="org.bluez", path=dev_path,
-                interface="org.bluez.Device1", member="Pair", timeout=90.0,
-            ))
+                interface="org.bluez.Device1", member="Pair",
+            )), timeout=90.0)
             if reply.message_type == MessageType.ERROR:
                 raise RuntimeError(reply.error_name or "pairing rejected")
 
@@ -254,7 +254,7 @@ async def _pairing_flow():
                 interface="org.freedesktop.DBus.Properties", member="Get",
                 signature="ss", body=["org.bluez.Device1", "Paired"],
             ))
-            if not paired_reply.body[0].value:
+            if paired_reply.message_type == MessageType.ERROR or not paired_reply.body or not getattr(paired_reply.body[0], "value", False):
                 raise RuntimeError("bond did not complete (Paired=false)")
 
         # Trust so BlueZ auto-completes encryption with the stored LTK on reconnects.
@@ -275,10 +275,10 @@ async def _pairing_flow():
         # a cached bond persists in BlueZ even when the R4 is powered off.
         connected = False
         try:
-            reply = await bus.call(Message(
+            reply = await asyncio.wait_for(bus.call(Message(
                 destination="org.bluez", path=dev_path,
-                interface="org.bluez.Device1", member="Connect", timeout=30.0,
-            ))
+                interface="org.bluez.Device1", member="Connect",
+            )), timeout=30.0)
             if reply.message_type != MessageType.ERROR:
                 connected = True
         except Exception:
@@ -290,7 +290,8 @@ async def _pairing_flow():
                     interface="org.freedesktop.DBus.Properties", member="Get",
                     signature="ss", body=["org.bluez.Device1", "Connected"],
                 ))
-                connected = bool(connected_reply.body[0].value)
+                if connected_reply.message_type != MessageType.ERROR and connected_reply.body:
+                    connected = bool(getattr(connected_reply.body[0], "value", False))
             except Exception:
                 connected = False
 
@@ -307,7 +308,10 @@ async def _pairing_flow():
                 "If it still won't appear, put it in pairing mode and tap Scan & Pair again."
             )
     except Exception as e:
-        err = str(e).strip() or repr(e)
+        if isinstance(e, asyncio.TimeoutError):
+            err = "Operation timed out."
+        else:
+            err = str(e).strip() or repr(e)
         hint = "Make sure the detector is in pairing mode and try again."
         if "Connection" in err or "in progress" in err:
             pass
