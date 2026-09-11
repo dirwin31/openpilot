@@ -59,6 +59,8 @@ async function loadData() {
           notify(state.status.pairing_message || "Uniden R4 paired & bonded!")
         } else if (ps === "failed") {
           notify(state.status.pairing_message || "Pairing failed", "error")
+        } else if (ps === "unreachable") {
+          notify(state.status.pairing_message || "Detector bonded but not reachable", "warning")
         }
         prevPairingState = ps
       }
@@ -171,9 +173,11 @@ export function UnidenR4View() {
             if (ps === "idle" || !state.status.pairing_message) return ""
             const cls = ps === "success" ? "uniden-pair-banner uniden-pair-success"
               : ps === "failed" ? "uniden-pair-banner uniden-pair-error"
+              : ps === "unreachable" ? "uniden-pair-banner uniden-pair-warn"
               : "uniden-pair-banner uniden-pair-active"
             const icon = ps === "success" ? "bi-check-circle-fill"
               : ps === "failed" ? "bi-x-octagon-fill"
+              : ps === "unreachable" ? "bi-exclamation-triangle-fill"
               : "bi-broadcast-pin"
             return html`
               <div class="${cls}">
