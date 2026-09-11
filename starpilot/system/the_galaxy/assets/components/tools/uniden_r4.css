@@ -233,3 +233,47 @@
 .uniden-btn-danger:hover {
   background: #c0392b;
 }
+
+/* ---- Pairing progress banner ---- */
+.uniden-pair-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0 4px 0;
+  padding: 12px 16px;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.uniden-pair-banner i {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+}
+
+.uniden-pair-active {
+  background: rgba(33, 150, 243, 0.15);
+  border: 1px solid rgba(33, 150, 243, 0.45);
+  color: #64b5f6;
+}
+
+.uniden-pair-active i {
+  animation: uniden-pair-pulse 1.2s ease-in-out infinite;
+}
+
+.uniden-pair-success {
+  background: rgba(76, 175, 80, 0.15);
+  border: 1px solid rgba(76, 175, 80, 0.45);
+  color: #81c784;
+}
+
+.uniden-pair-error {
+  background: rgba(244, 67, 54, 0.15);
+  border: 1px solid rgba(244, 67, 54, 0.45);
+  color: #e57373;
+}
+
+@keyframes uniden-pair-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
