@@ -1,7 +1,7 @@
 import { navigate, toolHref } from "../store.js"
 
 const TOOLS = [
-  { name: "Bluetooth", link: "/bluetooth", icon: "bi-bluetooth", desc: "Pair devices, controllers, & audio" },
+  { name: "Bluetooth", link: "/bluetooth", icon: "bi-bluetooth", desc: "Pair devices, controllers, & radar detector" },
   { name: "Cameras & Monitoring", link: "/cameras", icon: "bi-camera-video", desc: "Sentry, PiP side camera, & V-ASM spot monitor" },
   { name: "Galaxy & App Install", link: "/galaxy", icon: "bi-globe2", desc: "Remote access, pairing, & app install" },  
   { name: "Logs & Diagnostics", link: "/logs", icon: "bi-exclamation-triangle", desc: "Error logs, tmux, troubleshoot" },

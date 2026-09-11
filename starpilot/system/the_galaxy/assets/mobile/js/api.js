@@ -75,6 +75,10 @@ export const api = {
   activateFavoriteAction(key, value) { return request("/api/favorites/action", { method: "POST", data: { key, ...(value == null ? {} : { value }) } }) },
 
   getDeviceStatus() { return requestOk("/api/device/status") },
+  getUnidenStatus() { return request("/api/uniden/status", { cache: "no-store" }) },
+  getUnidenSettings() { return request("/api/uniden/settings", { cache: "no-store" }) },
+  updateUnidenSettings(data) { return request("/api/uniden/settings", { method: "POST", data }) },
+  unidenAction(action) { return request(`/api/uniden/action/${encodeURIComponent(action)}`, { method: "POST" }) },
   getStats() { return requestOk("/api/stats") },
   setDriveStats(action, routeNames) { return request(`/api/stats/${action}_drive`, { method: "POST", data: { routeNames } }) },
 

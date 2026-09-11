@@ -1,5 +1,6 @@
 import { BluetoothPanel } from "../components/BluetoothPanel.js"
 import { WheelControls } from "../components/WheelControls.js"
+import { UnidenPanel } from "../components/UnidenPanel.js"
 import { GalaxySection } from "../components/GalaxySection.js"
 import { GalaxyTabs } from "../components/GalaxyTabs.js"
 import { useTabRouting } from "../composables.js"
@@ -7,13 +8,14 @@ import { useTabRouting } from "../composables.js"
 const TABS = {
   bluetooth: "Bluetooth",
   controllers: "Controllers",
+  uniden: "Uniden R4",
 }
 
 export const Bluetooth = {
   name: "Bluetooth",
-  components: { BluetoothPanel, WheelControls, GalaxySection, GalaxyTabs },
+  components: { BluetoothPanel, WheelControls, UnidenPanel, GalaxySection, GalaxyTabs },
   setup() {
-    return useTabRouting("/bluetooth", { bluetooth: "bluetooth", controllers: "controllers" })
+    return useTabRouting("/bluetooth", { bluetooth: "bluetooth", controllers: "controllers", uniden: "uniden" })
   },
   data() { return { TABS } },
   template: `
@@ -27,8 +29,12 @@ export const Bluetooth = {
         </GalaxySection>
       </template>
 
-      <template v-else>
+      <template v-else-if="tab === 'controllers'">
         <WheelControls />
+      </template>
+
+      <template v-else-if="tab === 'uniden'">
+        <UnidenPanel />
       </template>
     </div>
   `,

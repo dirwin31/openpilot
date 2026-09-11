@@ -1703,6 +1703,41 @@ button.gx-chip:hover {
   width: 100%;
 }
 
+.gx-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  margin-bottom: var(--sp-3);
+}
+
+.gx-banner--success {
+  background: rgba(46, 204, 113, 0.15);
+  color: #2ecc71;
+  border: 1px solid rgba(46, 204, 113, 0.3);
+}
+
+.gx-banner--error {
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+  border: 1px solid rgba(231, 76, 60, 0.3);
+}
+
+.gx-banner--warn {
+  background: rgba(243, 156, 18, 0.15);
+  color: #f39c12;
+  border: 1px solid rgba(243, 156, 18, 0.3);
+}
+
+.gx-banner--active {
+  background: rgba(155, 89, 182, 0.15);
+  color: #c39bd3;
+  border: 1px solid rgba(155, 89, 182, 0.3);
+}
+
 .gx-loading, .gx-empty {
   color: var(--text-muted);
   padding: var(--sp-6);
