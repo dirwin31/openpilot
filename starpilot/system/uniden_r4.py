@@ -1,6 +1,8 @@
+import asyncio
 import json
 import os
 import subprocess
+import threading
 import time
 try:
     from openpilot.starpilot.system.uniden_shm import set_shm_param, get_shm_param
@@ -54,6 +56,268 @@ MODE_CMDS = {
 }
 
 WRITE_CHAR_UUID = "2c86686a-53dc-25b3-0c4a-f0e10c8dee20"
+
+# ---------------------------------------------------------------------------
+# Pairing (SMP bond) via native BlueZ D-Bus - no bluetoothctl, no agent shell,
+# works headless so users only need to press "Scan & Pair" in The Galaxy UI.
+# ---------------------------------------------------------------------------
+PAIRING_MODE_HINT = (
+    "Put your Uniden R4 in pairing mode now - it only advertises while pairing! "
+    "The detector display should show PAIRING / Accept Pairing. Keep it within one "
+    "meter of this device."
+)
+
+PAIRING_SCAN_WINDOW_SEC = 45.0
+PAIRING_NAME_KEYS = ("R4@", "R5@", "R7@", "R8@", "R9@", "R1@", "R3@", "UNIDEN")
+
+ACTIVE_PAIRING_STATES = ("searching", "pairing", "verifying")
+
+
+def _set_pair_state(state, message):
+    set_shm_param("UnidenPairState", state)
+    if message:
+        set_shm_param("UnidenPairMessage", message)
+
+
+def _uniden_name_match(name):
+    if not name:
+        return False
+    upper = str(name).upper()
+    return any(key in upper for key in PAIRING_NAME_KEYS)
+
+
+class _BlueZAgent:
+    """Auto-accepting BlueZ agent implemented directly with dbus_fast, so SMP
+    bonding completes without any interactive bluetoothctl."""
+
+    def __init__(self):
+        from dbus_fast.service import ServiceInterface, method
+
+        class Agent(ServiceInterface):
+            def __init__(self):
+                super().__init__("org.bluez.Agent1")
+
+            @method()
+            def Release(self) -> None:
+                pass
+
+            @method()
+            def RequestPinCode(self, device: "o") -> "s":
+                return "0000"
+
+            @method()
+            def DisplayPinCode(self, device: "o", pin_code: "s") -> None:
+                pass
+
+            @method()
+            def RequestPasskey(self, device: "o") -> "u":
+                return 0
+
+            @method()
+            def DisplayPasskey(self, device: "o", passkey: "u", entered: "u") -> None:
+                pass
+
+            @method()
+            def RequestConfirmation(self, device: "o", passkey: "u") -> None:
+                pass  # auto-accept Just Works / numeric comparison
+
+            @method()
+            def RequestAuthorization(self, device: "o") -> None:
+                pass
+
+            @method()
+            def AuthorizeService(self, device: "o", uuid: "s") -> None:
+                pass
+
+            @method()
+            def Cancel(self) -> None:
+                pass
+
+        self._cls = Agent
+        self._instance = None
+
+    def export(self, bus, path):
+        self._instance = self._cls()
+        bus.export(path, self._instance)
+
+
+async def _pairing_flow():
+    from dbus_fast import Message, MessageType, unpack_variants, Variant, BusType
+    from dbus_fast.aio import MessageBus
+
+    adapter_path = "/org/bluez/hci0"
+    agent_path = "/starpilot/bluez/uniden_agent"
+
+    _set_pair_state("searching", "Searching for your detector... " + PAIRING_MODE_HINT)
+
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    agent = _BlueZAgent()
+    agent_path_exported = False
+    agent_registered = False
+    discovering = False
+    try:
+        agent.export(bus, agent_path)
+        agent_path_exported = True
+
+        await bus.call(Message(
+            destination="org.bluez", path="/org/bluez",
+            interface="org.bluez.AgentManager1", member="RegisterAgent",
+            signature="os", body=[agent_path, "NoInputNoOutput"],
+        ))
+        agent_registered = True
+        await bus.call(Message(
+            destination="org.bluez", path="/org/bluez",
+            interface="org.bluez.AgentManager1", member="RequestDefaultAgent",
+            signature="o", body=[agent_path],
+        ))
+
+        try:
+            await bus.call(Message(
+                destination="org.bluez", path=adapter_path,
+                interface="org.bluez.Adapter1", member="SetDiscoveryFilter",
+                signature="a{sv}", body=[{
+                    "Transport": Variant("s", "le"),
+                    "DuplicateData": Variant("b", False),
+                }],
+            ))
+            await bus.call(Message(
+                destination="org.bluez", path=adapter_path,
+                interface="org.bluez.Adapter1", member="StartDiscovery",
+            ))
+            discovering = True
+        except Exception:
+            pass  # discovery is best-effort; known devices may still be in BlueZ
+
+        deadline = time.monotonic() + PAIRING_SCAN_WINDOW_SEC
+        target = None
+        last_notice = 0.0
+        while time.monotonic() < deadline and target is None:
+            reply = await bus.call(Message(
+                destination="org.bluez", path="/",
+                interface="org.freedesktop.DBus.ObjectManager",
+                member="GetManagedObjects",
+            ))
+            if reply.message_type != MessageType.ERROR:
+                for obj_path, interfaces in unpack_variants(reply.body[0]).items():
+                    props = interfaces.get("org.bluez.Device1")
+                    if not props:
+                        continue
+                    name = props.get("Name") or props.get("Alias") or ""
+                    if not _uniden_name_match(name):
+                        continue
+                    if props.get("Paired"):
+                        # Already bonded (e.g. reconnect scenario) - just trust it.
+                        target = {"path": obj_path, "props": dict(props), "paired": True}
+                    elif target is None:
+                        target = {"path": obj_path, "props": dict(props), "paired": False}
+
+            remaining = int(deadline - time.monotonic())
+            if time.monotonic() - last_notice > 5.0:
+                last_notice = time.monotonic()
+                if target is None:
+                    _set_pair_state("searching", f"Searching for your detector ({remaining}s left)... {PAIRING_MODE_HINT}")
+
+            if target is not None:
+                break
+            await asyncio.sleep(1.0)
+
+        if discovering:
+            try:
+                await bus.call(Message(
+                    destination="org.bluez", path=adapter_path,
+                    interface="org.bluez.Adapter1", member="StopDiscovery",
+                ))
+            except Exception:
+                pass
+            discovering = False
+
+        if target is None:
+            _set_pair_state("failed", "Couldn't find a Uniden detector. " + PAIRING_MODE_HINT + " Then tap Scan & Pair again.")
+            return
+
+        dev_path, props = target["path"], target["props"]
+        dev_addr = props.get("Address") or ""
+        dev_name = props.get("Name") or props.get("Alias") or dev_addr
+
+        _set_pair_state("verifying", f"Found {dev_name}. Establishing secure bond (LTK exchange)...")
+        if not target["paired"]:
+            reply = await bus.call(Message(
+                destination="org.bluez", path=dev_path,
+                interface="org.bluez.Device1", member="Pair", timeout=90.0,
+            ))
+            if reply.message_type == MessageType.ERROR:
+                raise RuntimeError(reply.error_name or "pairing rejected")
+
+            # Confirm the SMP bond really completed before telling the user it worked.
+            paired_reply = await bus.call(Message(
+                destination="org.bluez", path=dev_path,
+                interface="org.freedesktop.DBus.Properties", member="Get",
+                signature="ss", body=["org.bluez.Device1", "Paired"],
+            ))
+            if not paired_reply.body[0].value:
+                raise RuntimeError("bond did not complete (Paired=false)")
+
+        # Trust so BlueZ auto-completes encryption with the stored LTK on reconnects.
+        try:
+            await bus.call(Message(
+                destination="org.bluez", path=dev_path,
+                interface="org.freedesktop.DBus.Properties", member="Set",
+                signature="ssv", body=["org.bluez.Device1", "Trusted", Variant("b", True)],
+            ))
+        except Exception:
+            pass
+
+        if dev_addr:
+            set_param("UnidenR4Mac", dev_addr)
+        set_shm_param("UnidenManualConnectTrigger", True)
+        _set_pair_state("success", f"Paired & bonded to {dev_name or dev_addr}! Connecting now - alerts should start shortly.")
+    except Exception as e:
+        err = str(e).strip() or repr(e)
+        hint = "Make sure the detector is in pairing mode and try again."
+        if "Connection" in err or "in progress" in err:
+            pass
+        _set_pair_state("failed", f"Pairing failed: {err} {hint}")
+    finally:
+        if discovering:
+            try:
+                await bus.call(Message(
+                    destination="org.bluez", path=adapter_path,
+                    interface="org.bluez.Adapter1", member="StopDiscovery",
+                ))
+            except Exception:
+                pass
+        if agent_registered:
+            try:
+                await bus.call(Message(
+                    destination="org.bluez", path="/org/bluez",
+                    interface="org.bluez.AgentManager1", member="UnregisterAgent",
+                    signature="o", body=[agent_path],
+                ))
+            except Exception:
+                pass
+        try:
+            bus.disconnect()
+        except Exception:
+            pass
+
+
+def _pairing_worker():
+    try:
+        asyncio.run(_pairing_flow())
+    except Exception as e:
+        _set_pair_state("failed", f"Pairing failed: {e} Make sure the detector is in pairing mode and try again.")
+
+
+def scan_and_pair_uniden():
+    """Kick off headless SMP bonding in a background thread and return immediately,
+    so the Galaxy UI can show progress while the user puts the detector in
+    pairing mode. The BLE daemon picks the result up and connects."""
+    current = get_shm_param("UnidenPairState", "idle")
+    if current in ACTIVE_PAIRING_STATES:
+        return {"status": current, "message": "Pairing already in progress - " + PAIRING_MODE_HINT}
+    _set_pair_state("idle", PAIRING_MODE_HINT)
+    threading.Thread(target=_pairing_worker, name="uniden-pairing", daemon=True).start()
+    return {"status": "searching", "message": PAIRING_MODE_HINT}
 
 def get_param(name, default):
     p = os.path.join(PARAMS_PATH, name)
@@ -118,27 +382,6 @@ def discover_uniden_device():
             return mac
 
     return ""
-
-def scan_and_pair_uniden():
-    """Runs a 5-second BLE scan, finds any advertising Uniden detector, pairs and trusts it via BlueZ."""
-    try:
-        # Start discovery for 5 seconds
-        subprocess.run(['bluetoothctl', '--timeout', '5', 'scan', 'le'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        out = subprocess.check_output(['bluetoothctl', 'devices'], stderr=subprocess.DEVNULL, timeout=3).decode()
-        for line in out.splitlines():
-            if any(k in line.upper() for k in ["R4@", "R8@", "R9@", "UNIDEN"]):
-                parts = line.split()
-                if len(parts) >= 2:
-                    mac = parts[1].strip()
-                    # Pair and trust
-                    subprocess.run(['bluetoothctl', 'pair', mac], check=False, timeout=6)
-                    subprocess.run(['bluetoothctl', 'trust', mac], check=False, timeout=3)
-                    set_param("UnidenR4Mac", mac)
-                    set_shm_param("UnidenManualConnectTrigger", True)
-                    return {"status": "ok", "mac": mac, "name": " ".join(parts[2:]), "message": f"Successfully paired & trusted {mac}!"}
-        return {"status": "error", "message": "No Uniden radar detector found advertising nearby. Ensure Bluetooth is ON on the detector."}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 def get_char_write_path(mac=None):
     """Dynamically resolve the BlueZ D-Bus object path for the detector's command characteristic."""
@@ -233,6 +476,8 @@ def get_connection_status():
         "connected": bool(is_connected_shm),
         "trusted": False,
         "rssi": None,
+        "pairing_state": get_shm_param("UnidenPairState", "idle"),
+        "pairing_message": get_shm_param("UnidenPairMessage", ""),
     }
     if not mac:
         return status

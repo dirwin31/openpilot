@@ -7,6 +7,8 @@ const state = reactive({
     name: "Uniden Radar Detector",
     mac: "",
     rssi: null,
+    pairing_state: "idle",
+    pairing_message: "",
   },
   settings: {
     UnidenR4Enabled: true,
@@ -51,6 +53,15 @@ async function loadData() {
       for (const [k, v] of Object.entries(s)) {
         state.status[k] = v
       }
+      const ps = state.status.pairing_state || "idle"
+      if (ps !== prevPairingState) {
+        if (ps === "success") {
+          notify(state.status.pairing_message || "Uniden R4 paired & bonded!")
+        } else if (ps === "failed") {
+          notify(state.status.pairing_message || "Pairing failed", "error")
+        }
+        prevPairingState = ps
+      }
     }
     if (resSettings.ok) {
       const data = await resSettings.json()
@@ -90,11 +101,17 @@ async function sendAction(action) {
     const res = await fetch(`/api/uniden/action/${action}`, { method: "POST" })
     const data = await res.json()
     notify(data.message || "Action sent")
+    if (action === "pair" && data.status) {
+      state.status.pairing_state = data.status
+      state.status.pairing_message = data.message || ""
+    }
     loadData()
   } catch (e) {
     notify(`Action failed: ${e.message}`, "error")
   }
 }
+
+let prevPairingState = "idle"
 
 let loadedOnce = false
 
@@ -149,8 +166,25 @@ export function UnidenR4View() {
             </button>
           </div>
 
+          ${() => {
+            const ps = state.status.pairing_state || "idle"
+            if (ps === "idle" || !state.status.pairing_message) return ""
+            const cls = ps === "success" ? "uniden-pair-banner uniden-pair-success"
+              : ps === "failed" ? "uniden-pair-banner uniden-pair-error"
+              : "uniden-pair-banner uniden-pair-active"
+            const icon = ps === "success" ? "bi-check-circle-fill"
+              : ps === "failed" ? "bi-x-octagon-fill"
+              : "bi-broadcast-pin"
+            return html`
+              <div class="${cls}">
+                <i class="bi ${icon}"></i>
+                <span>${() => state.status.pairing_message}</span>
+              </div>
+            `
+          }}
+
           <div class="uniden-actions">
-            <button class="uniden-btn uniden-btn-secondary" @click="${() => sendAction('pair')}">
+            <button class="uniden-btn uniden-btn-secondary" @click="${() => sendAction('pair')}" disabled="${() => ['searching', 'pairing', 'verifying'].includes(state.status.pairing_state)}">
               <i class="bi bi-bluetooth"></i> Scan & Pair Detector
             </button>
             ${() => state.status.mac ? html`
