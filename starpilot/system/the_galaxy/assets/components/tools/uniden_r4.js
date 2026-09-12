@@ -127,7 +127,7 @@ export function UnidenR4View() {
   return html`
     <div class="uniden-container">
       <div class="uniden-header">
-        <h1><i class="bi bi-broadcast"></i> Uniden R4 Radar Settings</h1>
+        <h1><i class="bi bi-broadcast"></i> Uniden R4/R8/R9 Radar Settings</h1>
         <div class="${() => `uniden-status-badge ${state.status.connected ? 'uniden-status-connected' : 'uniden-status-disconnected'}`}">
           <i class="${() => `bi ${state.status.connected ? 'bi-bluetooth' : 'bi-slash-circle'}`}"></i>
           <span>${() => state.status.connected ? `Connected (${state.status.rssi ? state.status.rssi + ' dBm' : 'BLE'})` : 'Disconnected'}</span>
@@ -142,7 +142,7 @@ export function UnidenR4View() {
           <div class="uniden-setting-row">
             <div class="uniden-setting-info">
               <span class="uniden-setting-label">Enable Radar Integration</span>
-              <span class="uniden-setting-desc">Process BLE alerts from Uniden R4</span>
+              <span class="uniden-setting-desc">Process BLE alerts from Uniden R4 / R8 / R9</span>
             </div>
             <label class="uniden-switch">
               <input type="checkbox" 

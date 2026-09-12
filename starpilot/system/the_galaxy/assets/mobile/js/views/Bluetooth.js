@@ -8,7 +8,7 @@ import { useTabRouting } from "../composables.js"
 const TABS = {
   bluetooth: "Bluetooth",
   controllers: "Controllers",
-  uniden: "Uniden R4",
+  uniden: "Uniden R4/R8/R9",
 }
 
 export const Bluetooth = {
