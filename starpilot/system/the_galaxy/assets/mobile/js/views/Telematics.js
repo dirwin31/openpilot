@@ -99,15 +99,18 @@ export const TelematicsConnectBar = {
     retry: Boolean,
     connectionMode: String,
     isFullscreen: Boolean,
+    actionHidden: Boolean,
   },
   emits: ["connect", "disconnect", "mode", "settings", "fullscreen"],
   template: `
     <div class="telematics-connect-bar">
       <div class="telematics-connect-bar__row">
         <span class="telematics-status" :title="deviceName"><i :style="{ background: statusTint }"></i>{{ statusLabel }}<small>{{ statusDetail }}</small></span>
-        <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="$emit('disconnect')">Disconnect</button>
-        <button v-else-if="pending" class="gx-btn gx-btn--outlined" type="button" @click="$emit('disconnect')">Cancel</button>
-        <button v-else class="gx-btn" type="button" :disabled="!canConnect" @click="$emit('connect')"><i class="bi" :class="connectionMode === 'bluetooth' ? 'bi-bluetooth' : 'bi-wifi'"></i> {{ retry ? 'Reconnect' : 'Connect' }}</button>
+        <template v-if="!actionHidden">
+          <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="$emit('disconnect')">Disconnect</button>
+          <button v-else-if="pending" class="gx-btn gx-btn--outlined" type="button" @click="$emit('disconnect')">Cancel</button>
+          <button v-else class="gx-btn" type="button" :disabled="!canConnect" @click="$emit('connect')"><i class="bi" :class="connectionMode === 'bluetooth' ? 'bi-bluetooth' : 'bi-wifi'"></i> {{ retry ? 'Reconnect' : 'Connect' }}</button>
+        </template>
       </div>
       <div class="telematics-connect-bar__row">
         <div class="telematics-mode-toggle" role="radiogroup" aria-label="Connection method">
@@ -201,8 +204,12 @@ export const Telematics = {
         retry: this.bleState === "error" || this.bleState === "needs-pairing",
         connectionMode: this.connectionMode,
         isFullscreen: this.isFullscreen,
+        actionHidden: this.bluetoothUnsupported,
       }
     },
+    // Bluetooth chosen in a browser without it: only the explanation and the
+    // transport toggle apply, so the dashboard and connect action are hidden.
+    bluetoothUnsupported() { return this.connectionMode === "bluetooth" && ["ios", "firefox", "unsupported"].includes(this.bluetoothSupport) },
     usesMetric() { return flag(this.frame, "metric") },
     speedUnit() { return this.usesMetric ? "km/h" : "mph" },
     // Badge under the MAX sign. Null (not "—") when there is no frame, so the
@@ -589,12 +596,12 @@ export const Telematics = {
         <p>If Chrome blocks local access, open local Galaxy above. This page and the local page save their settings separately.</p>
       </GalaxyModal>
       <template v-if="capability === 'ready'">
-        <TelematicsConnectBar v-if="!isLandscape" v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @fullscreen="toggleFullscreen" />
+        <TelematicsConnectBar v-if="!isLandscape || bluetoothUnsupported" v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @fullscreen="toggleFullscreen" />
         <GxNotice v-if="!connectionMode" class="telematics-pairing" tone="info" icon="bi-wifi" title="No paired phone found">
           Use Local Wi-Fi instead? To connect over Bluetooth, pair this phone first.
           <button class="telematics-setup-link" type="button" @click="setConnectionMode('lan', false); connect()">Use Wi-Fi</button> · <button class="telematics-setup-link" type="button" @click="pairPhone">Pair a phone</button>
         </GxNotice>
-        <BluetoothSupportNotice v-else-if="connectionMode === 'bluetooth' && ['ios', 'firefox', 'unsupported'].includes(bluetoothSupport)" class="telematics-pairing" :platform="bluetoothSupport" :secure-url="secureURL" />
+        <BluetoothSupportNotice v-else-if="bluetoothUnsupported" class="telematics-pairing" :platform="bluetoothSupport" :secure-url="secureURL" pair-elsewhere />
         <GxNotice v-else-if="connectionMode === 'bluetooth' && !bluetoothSecure" class="telematics-pairing" tone="warn" icon="bi-shield-lock-fill" title="Bluetooth needs the secure page">
           Chrome allows Bluetooth only on the HTTPS page, and a phone paired there is remembered only there.
           <a class="telematics-setup-link" :href="secureURL">Open the secure page</a>
@@ -608,7 +615,7 @@ export const Telematics = {
           <button v-if="connectionMode === 'bluetooth'" class="telematics-setup-link" type="button" @click="pairPhone">Pair a phone</button>
         </GxNotice>
 
-        <div v-if="isLandscape" class="telematics-landscape">
+        <div v-if="isLandscape && !bluetoothUnsupported" class="telematics-landscape">
           <aside class="telematics-side telematics-side--left">
             <button class="telematics-menu-button" type="button" aria-label="Open menu" @click="openMenu"><i class="bi bi-list"></i></button>
             <TelematicsTile landscape title="TEMP" :value="tempText" :tint="tempTint" />
@@ -640,7 +647,7 @@ export const Telematics = {
           </aside>
         </div>
 
-        <div v-else class="telematics-portrait">
+        <div v-else-if="!bluetoothUnsupported" class="telematics-portrait">
           <section class="telematics-instrument" :style="{ '--mode-color': modeColor }">
             <TelematicsHeader compact
               :set-speed-text="setSpeedText" :current-speed-badge="currentSpeedBadge"

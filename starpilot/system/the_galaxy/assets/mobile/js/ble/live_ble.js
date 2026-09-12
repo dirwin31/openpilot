@@ -9,7 +9,7 @@ export const COMPANION_UUIDS = Object.freeze({
 })
 
 const LAST_DEVICE_KEY = "galaxy-live-ble-device"
-const PAIRING_MESSAGE = "Pair the device first under Bluetooth → Phone, then reconnect."
+const PAIRING_MESSAGE = "Pair the device first under Tools → Bluetooth → Phone, then reconnect."
 const SECURITY_READ_RETRIES = 2
 const SECURITY_READ_RETRY_MS = 750
 const NOTIFICATION_RETRIES = 2

@@ -130,7 +130,7 @@ export class TelematicsConnection {
             result = client.device ? await client.reconnect() : await client.reconnectRemembered()
           }
           if (generation !== this.generation) return
-          if (result === false || client.state !== "connected" || !client.isActive()) throw new Error(this.cache[source].state?.message || "No paired phone. Pair it under Bluetooth → Phone.")
+          if (result === false || client.state !== "connected" || !client.isActive()) throw new Error(this.cache[source].state?.message || "No paired phone. Pair it under Tools → Bluetooth → Phone.")
           connected = true
           this.busy = false
           this._activate(source)
@@ -148,7 +148,8 @@ export class TelematicsConnection {
           this.source = ""
           this._clearLive()
           this._state("error", message)
-          this._schedule()
+          // Without a Bluetooth client this page can never succeed, so do not retry.
+          if (source === "lan" || this.ble) this._schedule()
         }
       }
     }

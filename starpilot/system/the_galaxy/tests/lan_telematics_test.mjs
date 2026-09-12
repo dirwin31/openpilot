@@ -167,6 +167,14 @@ controller.configure({ mode: "bluetooth", identity: "other", address: config.add
 assert.equal(controller.session.observedDrivingSeconds, 0)
 controller.close()
 
+// A page without a Bluetooth client reports the problem once instead of retrying forever.
+const noBluetooth = new TelematicsConnection({ lan: new Transport(), ble: null, callbacks: { onState: value => observed.push(value) } })
+noBluetooth.configure({ mode: "bluetooth", identity: "comma", address: config.address })
+assert.equal(await noBluetooth.connect(), false)
+assert.equal(observed.at(-1).state, "error")
+assert.equal(noBluetooth.retryTimer, null)
+noBluetooth.close()
+
 // Superseded failures cannot disconnect the replacement attempt.
 const slowLAN = new Transport(), replacementBLE = new BLE()
 let rejectOld

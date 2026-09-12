@@ -1,11 +1,12 @@
 import { GxNotice } from "./GxNotice.js"
 
 // Why this browser cannot use Bluetooth, for a bluetoothPlatform() of "ios",
-// "firefox" or "unsupported". Shared by the Phone tab and Telematics.
+// "firefox" or "unsupported". Shared by the Phone tab and Telematics; outside the
+// Phone tab, `pairElsewhere` also points to where pairing happens.
 export const BluetoothSupportNotice = {
   name: "BluetoothSupportNotice",
   components: { GxNotice },
-  props: { platform: String, secureUrl: String },
+  props: { platform: String, secureUrl: String, pairElsewhere: Boolean },
   template: `
     <GxNotice v-if="platform === 'ios'" tone="info" icon="bi-apple" title="Bluetooth in the browser is not supported on iPhone at this time :(">
       Safari and every other iPhone and iPad browser lack Web Bluetooth, so a phone cannot pair with the comma from this page.
@@ -16,10 +17,12 @@ export const BluetoothSupportNotice = {
         Firefox does not provide Web Bluetooth. Open this page in Chrome on Android to pair:
       </GxNotice>
       <p class="telematics-gate__url"><code>{{ secureUrl }}</code></p>
+      <p v-if="pairElsewhere" class="telematics-gate__url">Then navigate to <strong>Tools &rarr; Bluetooth &rarr; Phone</strong> to pair.</p>
     </div>
 
     <GxNotice v-else tone="info" icon="bi-phone" title="Chrome on Android required">
       This browser does not provide Web Bluetooth. Open this page in Chrome on Android.
+      <template v-if="pairElsewhere">Then navigate to <strong>Tools &rarr; Bluetooth &rarr; Phone</strong> to pair.</template>
     </GxNotice>
   `,
 }

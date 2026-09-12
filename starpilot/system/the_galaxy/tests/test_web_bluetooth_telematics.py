@@ -52,6 +52,9 @@ def test_phone_tab_gates_platforms_and_owns_pairing():
   assert "Bluetooth in the browser is not supported on iPhone at this time :(" in notice
   assert "Bluetooth Pairing in the Browser is not supported in Firefox" in notice
   assert "Chrome on Android required" in notice
+  # outside the Phone tab the notice also says where pairing happens
+  assert "Tools &rarr; Bluetooth &rarr; Phone" in notice and 'v-if="pairElsewhere"' in notice
+  assert "pair-elsewhere" not in phone
   # the insecure gate must explain the jump instead of silently redirecting to :8443
   assert "window.location.replace(this.secureURL)" not in phone
   assert ":href=\"secureURL\"" in phone
@@ -560,7 +563,20 @@ try {
       assert.equal(notices.length, 1)
       assert.equal(notices[0].props.platform, platform)
       assert.equal(notices[0].props["secure-url"], unsupported.secureURL)
+      assert.ok("pair-elsewhere" in notices[0].props, "Telematics points to Tools → Bluetooth → Phone")
+      // Below it: only the connection bar, without the dashboard or a Reconnect action.
+      unsupported.bleState = "error"
+      const page = render(unsupported, [])
+      assert.equal(collect(page, node => node.type === "TelematicsHeader").length, 0, `${platform} hides the dashboard`)
+      const bar = barOf(unsupported)
+      const [statusRow] = collect(bar, node => node.props?.class === "telematics-connect-bar__row")
+      assert.equal(collect(statusRow, node => node.type === "button").length, 0, `${platform} hides Connect/Reconnect`)
+      assert.ok(collect(bar, node => !!node.props).some(node => node.props.role === "radiogroup"), "Wi-Fi stays one tap away")
     }
+    // Back on Wi-Fi the dashboard and connect action return.
+    const wifi = makeView({ capability: "ready", connectionMode: "lan", bluetoothSupport: "firefox", isLandscape })
+    assert.equal(collect(render(wifi, []), node => node.type === "TelematicsHeader").length, 1)
+    assert.ok(collect(barOf(wifi), node => node.type === "button").some(node => text(node).trim() === "Connect"))
   }
 } finally { console.warn = originalWarn }
 
