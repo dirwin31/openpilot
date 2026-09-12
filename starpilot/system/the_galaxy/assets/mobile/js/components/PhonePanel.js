@@ -1,8 +1,9 @@
 import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
-import { isIOSDevice } from "../browser.js"
+import { bluetoothPlatform } from "../browser.js"
 import { getLiveBLEClient } from "../ble/live_ble.js"
 import { GxNotice } from "./GxNotice.js"
+import { BluetoothSupportNotice } from "./BluetoothSupportNotice.js"
 
 // API exposure does not prove that Chrome's persistent permissions backend is on.
 // Only a successful connection to a device saved before this page loaded does.
@@ -11,23 +12,12 @@ const supportsBluetoothRestore = () => typeof navigator.bluetooth?.getDevices ==
 // reload, and Chrome keeps it behind the experimental features flag.
 const supportsAdvertisementWatch = () => typeof globalThis.BluetoothDevice?.prototype?.watchAdvertisements === "function"
 
-// Web Bluetooth exists only in Chromium browsers on Android, and only on a secure
-// page. Firefox never exposes it, so it is turned away before the HTTPS detour.
-function phonePlatform() {
-  if (isIOSDevice()) return "ios"
-  const agent = navigator.userAgent || ""
-  if (/Firefox\//.test(agent)) return "firefox"
-  if (!/Android/i.test(agent)) return "unsupported"
-  if (!(window.isSecureContext && window.location.protocol === "https:")) return "insecure"
-  return navigator.bluetooth ? "ready" : "unsupported"
-}
-
 export const PhonePanel = {
   name: "PhonePanel",
-  components: { GxNotice },
+  components: { GxNotice, BluetoothSupportNotice },
   data() {
     return {
-      platform: phonePlatform(),
+      platform: bluetoothPlatform(),
       bluetoothRadio: "unknown",
       rememberedDevices: null,
       restoredAfterReload: false,
@@ -154,20 +144,7 @@ export const PhonePanel = {
   },
   template: `
     <div style="padding: var(--sp-3);">
-      <GxNotice v-if="platform === 'ios'" tone="info" icon="bi-apple" title="Bluetooth Pairing in the Browser is not supported in Safari">
-        Safari and every other iPhone and iPad browser lack Web Bluetooth, so a phone cannot pair with the comma from this page.
-      </GxNotice>
-
-      <div v-else-if="platform === 'firefox'" class="telematics-gate">
-        <GxNotice tone="info" icon="bi-browser-firefox" title="Bluetooth Pairing in the Browser is not supported in Firefox">
-          Firefox does not provide Web Bluetooth. Open this page in Chrome on Android to pair:
-        </GxNotice>
-        <p class="telematics-gate__url"><code>{{ secureURL }}</code></p>
-      </div>
-
-      <GxNotice v-else-if="platform === 'unsupported'" tone="info" icon="bi-phone" title="Chrome on Android required">
-        This browser does not provide Web Bluetooth. Open this page in Chrome on Android.
-      </GxNotice>
+      <BluetoothSupportNotice v-if="['ios', 'firefox', 'unsupported'].includes(platform)" :platform="platform" :secure-url="secureURL" />
 
       <div v-else-if="platform === 'insecure'" class="telematics-gate">
         <GxNotice tone="warn" icon="bi-shield-lock-fill" title="Bluetooth pairing needs the HTTPS page">

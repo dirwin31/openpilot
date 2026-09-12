@@ -41,16 +41,17 @@ def test_telematics_route_navigation_and_styles_are_wired():
 def test_phone_tab_gates_platforms_and_owns_pairing():
   bluetooth = _read("js/views/Bluetooth.js")
   phone = _read("js/components/PhonePanel.js")
+  browser = _read("js/browser.js")
+  notice = _read("js/components/BluetoothSupportNotice.js")
   assert 'phone: "Phone"' in bluetooth and "<PhonePanel />" in bluetooth
   assert bluetooth.index('controllers: "Controllers"') < bluetooth.index('phone: "Phone"')
   # iOS has no Web Bluetooth in any browser; Firefox never exposes it either
-  assert "isIOSDevice()" in phone
-  assert "Bluetooth Pairing in the Browser is not supported in Safari" in phone
-  assert "/Firefox\\//" in phone
-  assert "Bluetooth Pairing in the Browser is not supported in Firefox" in phone
-  assert "Chrome on Android required" in phone
-  assert "window.isSecureContext" in phone
-  assert 'window.location.protocol === "https:"' in phone
+  assert "platform: bluetoothPlatform()" in phone and "<BluetoothSupportNotice" in phone
+  assert "isIOSDevice()" in browser and "/Firefox\\//" in browser
+  assert "window.isSecureContext" in browser and 'window.location.protocol === "https:"' in browser
+  assert "Bluetooth in the browser is not supported on iPhone at this time :(" in notice
+  assert "Bluetooth Pairing in the Browser is not supported in Firefox" in notice
+  assert "Chrome on Android required" in notice
   # the insecure gate must explain the jump instead of silently redirecting to :8443
   assert "window.location.replace(this.secureURL)" not in phone
   assert ":href=\"secureURL\"" in phone
@@ -109,8 +110,14 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert "No paired phone found" in telematics
   assert "Use Wi-Fi" in telematics
   assert "defaultToBluetooth" in telematics
-  # Disconnect and Cancel stay reachable in both orientations
-  assert telematics.count('v-else-if="connectionPending"') == 2
+  # both orientations share one connection bar: action on the status row, no Wi-Fi icon
+  assert telematics.count('<TelematicsConnectBar ') == 2 and telematics.count('v-bind="connectBar"') == 2
+  assert telematics.count('v-else-if="pending"') == 1
+  # Wi-Fi settings belong to the Wi-Fi tab only
+  assert """v-if="connectionMode === 'lan'" class="gx-btn gx-btn--outlined" type="button" aria-label="Local Wi-Fi settings\"""" in telematics
+  # an unsupported browser on the Bluetooth tab gets the Phone tab's explanation
+  assert "<BluetoothSupportNotice" in telematics and "bluetoothPlatform()" in telematics
+  assert "Full screen" in telematics
   assert "telematics-landscape" in telematics
   assert "telematics-portrait" in telematics
   assert "STEER DELAY" in telematics
@@ -121,7 +128,6 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert "requestFullscreen" in telematics
   assert 'navigationUI: "hide"' in telematics
   assert "fullscreenchange" in telematics
-  assert "bi-fullscreen-exit" in telematics
   assert "demo" not in telematics.lower()
 
 
@@ -394,7 +400,7 @@ late.close()
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
 def test_telematics_javascript_modules_parse(tmp_path):
   for relative in ("js/ble/live_frames.js", "js/ble/live_ble.js", "js/views/Telematics.js", "js/components/GalaxyModal.js", "js/lan/live_lan.js", "js/lan/connection.js",
-                   "js/components/PhonePanel.js", "js/views/Bluetooth.js"):
+                   "js/components/PhonePanel.js", "js/views/Bluetooth.js", "js/components/BluetoothSupportNotice.js", "js/browser.js"):
     source = UI_ROOT / relative
     target = tmp_path / (source.stem + ".mjs")
     target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
@@ -412,7 +418,7 @@ const navigations = []
 globalThis.navigate = (target) => navigations.push(target)
 const source = fs.readFileSync("js/views/Telematics.js", "utf8").replace(/^import .*$/gm, "")
 const moduleURL = (code) => `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
-const { Telematics } = await import(moduleURL("const GxNotice = {}, GalaxyModal = {};\n" + source))
+const { Telematics, TelematicsConnectBar } = await import(moduleURL("const GxNotice = {}, GalaxyModal = {}, BluetoothSupportNotice = {};\n" + source))
 globalThis.window = { location: new URL("https://starpilot-comma.local:8443/#/telematics") }
 const bluetooth = {}
 Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Android", bluetooth } })
@@ -468,6 +474,16 @@ await insecure.connect()
 assert.equal(insecure.bleState, "error")
 assert.match(insecure.bleMessage, /HTTPS/)
 
+// The header says Syncing whenever the connect bar shows an attempt or retry.
+for (const [state, extra, title] of [
+  ["connecting", {}, "Syncing"], ["reconnecting", {}, "Syncing"], ["connected", {}, "Syncing"],
+  ["idle", { connecting: true }, "Syncing"], ["error", {}, "No connection"], ["idle", {}, "No connection"],
+]) {
+  assert.equal(makeView({ bleState: state, ...extra }).heroStatus.title, title, `${state} ${JSON.stringify(extra)}`)
+}
+assert.equal(makeView({ bleState: "connected" }).heroStatus.detail, "Waiting for live data")
+assert.equal(makeView({ bleState: "reconnecting", connectionMode: "lan" }).heroStatus.detail, "Reconnecting over Local Wi-Fi")
+
 // A cancelled UI request cannot keep buttons busy or clear a newer request.
 const returning = makeView({ rememberedDevices: 1, bleState: "error" })
 let finishOld, finishNew
@@ -486,9 +502,10 @@ finishNew()
 await newer
 assert.equal(returning.connecting, false)
 
-// Render the actual Vue template: both orientations retain their exit controls.
+// Render the actual Vue templates: both orientations retain their exit controls.
 const { compile } = await import(moduleURL(fs.readFileSync("../vendor/vue/vue.esm-browser.js", "utf8")))
 const render = compile(Telematics.template, { decodeEntities: text => text })
+const renderBar = compile(TelematicsConnectBar.template, { decodeEntities: text => text })
 const collect = (root, keep) => {
   const found = []
   const walk = node => {
@@ -501,20 +518,33 @@ const collect = (root, keep) => {
 }
 const text = node => typeof node.children === "string" ? node.children
   : (node.children || []).map(child => typeof child.children === "string" ? child.children : "").join("")
+// Unmounted, a child component renders as a vnode named after it; render its own
+// template with the props the parent passed.
+const barOf = view => {
+  const bars = collect(render(view, []), node => node.type === "TelematicsConnectBar")
+  assert.equal(bars.length, 1, `${view.isLandscape ? 'landscape' : 'portrait'} renders one connection bar`)
+  return renderBar({ ...bars[0].props, $emit() {} }, [])
+}
 const originalWarn = console.warn
 // Rendering without mounting emits component-resolution warnings; child
 // components are intentionally opaque while we inspect the parent's buttons.
 console.warn = () => {}
 try {
+  for (const [bleState, expected] of [["idle", "Connect"], ["connecting", "Cancel"], ["reconnecting", "Cancel"], ["connected", "Disconnect"], ["error", "Reconnect"]]) {
+    const layouts = [false, true].map(isLandscape => {
+      const bar = barOf(makeView({ capability: "ready", isLandscape, bleState }))
+      const [statusRow, controlRow] = collect(bar, node => node.props?.class === "telematics-connect-bar__row")
+      const action = collect(statusRow, node => node.type === "button").map(node => [text(node).trim(), node.props?.disabled])
+      assert.ok(action.some(([label, disabled]) => label === expected && !disabled), `${isLandscape ? 'landscape' : 'portrait'} ${bleState} must expose ${expected} on the status row`)
+      assert.ok(collect(controlRow, node => node.type === "button").some(node => text(node) === "Full screen"))
+      return JSON.stringify(bar)
+    })
+    assert.equal(layouts[0], layouts[1], `${bleState}: portrait and landscape bars must match`)
+  }
   for (const isLandscape of [false, true]) {
-    for (const [bleState, expected] of [["idle", "Connect"], ["connecting", "Cancel"], ["reconnecting", "Cancel"], ["connected", "Disconnect"], ["error", "Reconnect"]]) {
-      const rendered = makeView({ capability: "ready", isLandscape, bleState })
-      const buttons = collect(render(rendered, []), node => node.type === "button").map(node => [text(node).trim(), node.props?.disabled])
-      assert.ok(buttons.some(([label, disabled]) => label === expected && !disabled), `${isLandscape ? 'landscape' : 'portrait'} ${bleState} must expose ${expected}`)
-    }
-    // HTTP pages keep the transport toggle and Wi-Fi settings.
+    // HTTP pages keep the transport toggle; Wi-Fi settings show on the Wi-Fi tab only.
     const local = makeView({ capability: "ready", connectionMode: "lan", bluetoothSecure: false, ble: null, isLandscape })
-    const controls = collect(render(local, []), node => !!node.props)
+    const controls = collect(barOf(local), node => !!node.props)
     assert.ok(controls.some(node => node.props.role === "radiogroup" && node.props["aria-label"] === "Connection method"))
     assert.ok(controls.some(node => node.props["aria-label"] === "Local Wi-Fi settings"))
     assert.ok(controls.some(node => node.props.role === "radio" && text(node) === "Wi-Fi" && node.props["aria-checked"] === "true"))
@@ -522,8 +552,35 @@ try {
     local.bleState = "error"
     local.setConnectionMode("bluetooth")
     assert.equal(local.canConnect, true, "Switching from a LAN error must not leave a global gate")
+    assert.ok(!collect(barOf(local), node => !!node.props).some(node => node.props["aria-label"] === "Local Wi-Fi settings"))
+    // Firefox and Safari on the Bluetooth tab get the Phone tab's explanation.
+    for (const platform of ["firefox", "ios", "unsupported"]) {
+      const unsupported = makeView({ capability: "ready", connectionMode: "bluetooth", bluetoothSupport: platform, ble: null, bluetoothSecure: false, isLandscape })
+      const notices = collect(render(unsupported, []), node => node.type === "BluetoothSupportNotice")
+      assert.equal(notices.length, 1)
+      assert.equal(notices[0].props.platform, platform)
+      assert.equal(notices[0].props["secure-url"], unsupported.secureURL)
+    }
   }
 } finally { console.warn = originalWarn }
+
+// Returning to Wi-Fi reconnects, even after Bluetooth failed without starting.
+const firefoxView = makeView({ connectionMode: "bluetooth", ble: null, bluetoothSecure: false, bluetoothSupport: "firefox" })
+await firefoxView.connect()
+assert.equal(firefoxView.bleState, "error")
+let wifiStarts = 0
+firefoxView.connection.connect = () => { wifiStarts++ }
+firefoxView.setConnectionMode("lan")
+await new Promise(resolve => setTimeout(resolve, 0))
+assert.equal(firefoxView.connectionMode, "lan")
+assert.equal(wifiStarts, 1, "Choosing Wi-Fi must reconnect")
+// Choosing Bluetooth while idle still waits for Connect.
+const idle = makeView({ connectionMode: "lan" })
+let idleStarts = 0
+idle.connection.connect = () => { idleStarts++ }
+idle.setConnectionMode("bluetooth")
+await new Promise(resolve => setTimeout(resolve, 0))
+assert.equal(idleStarts, 0)
 
 // Restored preferences use comma identity; a local page tries its own origin.
 const frameModule = moduleURL(fs.readFileSync("js/ble/live_frames.js", "utf8"))
@@ -569,6 +626,7 @@ window.addEventListener = () => {}
 window.removeEventListener = () => {}
 globalThis.document = { addEventListener() {}, removeEventListener() {}, visibilityState: "visible" }
 globalThis.isIOSDevice = () => false
+globalThis.bluetoothPlatform = () => "ready"
 globalThis.usePolling = () => ({ start() {}, destroy() {} })
 globalThis.getLiveBLEClient = () => ({})
 let cachedStarts = 0
@@ -612,13 +670,13 @@ const notices = []
 globalThis.showSnackbar = (...args) => notices.push(args)
 const source = fs.readFileSync("js/components/PhonePanel.js", "utf8").replace(/^import .*$/gm, "")
 const moduleURL = (code) => `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
-const { PhonePanel } = await import(moduleURL("const GxNotice = {};\n" + source))
+const { PhonePanel } = await import(moduleURL("const GxNotice = {}, BluetoothSupportNotice = {};\n" + source))
+globalThis.bluetoothPlatform = (await import(moduleURL(fs.readFileSync("js/browser.js", "utf8")))).bluetoothPlatform
 const CHROME = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
 const FIREFOX = "Mozilla/5.0 (Android 14; Mobile; rv:130.0) Gecko/130.0 Firefox/130.0"
 const bluetooth = {}
 const setBrowser = (userAgent, url, { ios = false, withBluetooth = true } = {}) => {
-  globalThis.isIOSDevice = () => ios
-  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent, bluetooth: withBluetooth ? bluetooth : undefined } })
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent, platform: ios ? "iPhone" : "", maxTouchPoints: 0, bluetooth: withBluetooth ? bluetooth : undefined } })
   const location = new URL(url)
   globalThis.window = { location, isSecureContext: location.protocol === "https:" }
 }
@@ -631,6 +689,9 @@ const makeView = () => {
 }
 
 setBrowser("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", "https://comma.local:8443/#/bluetooth/phone", { ios: true, withBluetooth: false })
+assert.equal(makeView().platform, "ios")
+// "Request Desktop Website" on iPhone reports a Mac, but still has a touch screen.
+Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15", platform: "MacIntel", maxTouchPoints: 5 } })
 assert.equal(makeView().platform, "ios")
 setBrowser(FIREFOX, "http://192.168.1.5:8082/#/bluetooth/phone", { withBluetooth: false })
 const firefox = makeView()

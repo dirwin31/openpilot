@@ -2,8 +2,9 @@ import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "../components/GxNotice.js"
 import { GalaxyModal } from "../components/GalaxyModal.js"
+import { BluetoothSupportNotice } from "../components/BluetoothSupportNotice.js"
 import { store, navigate } from "../store.js"
-import { isIOSDevice } from "../browser.js"
+import { isIOSDevice, bluetoothPlatform } from "../browser.js"
 import { getLiveBLEClient } from "../ble/live_ble.js"
 import { LiveLANClient, localOrigin } from "../lan/live_lan.js"
 import { TelematicsConnection } from "../lan/connection.js"
@@ -83,9 +84,46 @@ export const TelematicsHeader = {
   `,
 }
 
+// Shared connection controls for both orientations: status with its connect or
+// disconnect action on the first row, transport toggle and full screen below.
+export const TelematicsConnectBar = {
+  name: "TelematicsConnectBar",
+  props: {
+    statusLabel: String,
+    statusDetail: String,
+    statusTint: String,
+    deviceName: String,
+    connected: Boolean,
+    pending: Boolean,
+    canConnect: Boolean,
+    retry: Boolean,
+    connectionMode: String,
+    isFullscreen: Boolean,
+  },
+  emits: ["connect", "disconnect", "mode", "settings", "fullscreen"],
+  template: `
+    <div class="telematics-connect-bar">
+      <div class="telematics-connect-bar__row">
+        <span class="telematics-status" :title="deviceName"><i :style="{ background: statusTint }"></i>{{ statusLabel }}<small>{{ statusDetail }}</small></span>
+        <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="$emit('disconnect')">Disconnect</button>
+        <button v-else-if="pending" class="gx-btn gx-btn--outlined" type="button" @click="$emit('disconnect')">Cancel</button>
+        <button v-else class="gx-btn" type="button" :disabled="!canConnect" @click="$emit('connect')"><i class="bi" :class="connectionMode === 'bluetooth' ? 'bi-bluetooth' : 'bi-wifi'"></i> {{ retry ? 'Reconnect' : 'Connect' }}</button>
+      </div>
+      <div class="telematics-connect-bar__row">
+        <div class="telematics-mode-toggle" role="radiogroup" aria-label="Connection method">
+          <button type="button" role="radio" :aria-checked="connectionMode === 'lan' ? 'true' : 'false'" :class="{ active: connectionMode === 'lan' }" @click="$emit('mode', 'lan')">Wi-Fi</button>
+          <button type="button" role="radio" :aria-checked="connectionMode === 'bluetooth' ? 'true' : 'false'" :class="{ active: connectionMode === 'bluetooth' }" @click="$emit('mode', 'bluetooth')">Bluetooth</button>
+        </div>
+        <button v-if="connectionMode === 'lan'" class="gx-btn gx-btn--outlined" type="button" aria-label="Local Wi-Fi settings" title="Local Wi-Fi settings" @click="$emit('settings')"><i class="bi bi-gear"></i></button>
+        <button class="gx-btn gx-btn--outlined" type="button" :aria-pressed="isFullscreen" @click="$emit('fullscreen')">{{ isFullscreen ? 'Exit full screen' : 'Full screen' }}</button>
+      </div>
+    </div>
+  `,
+}
+
 export const Telematics = {
   name: "Telematics",
-  components: { TelematicsTile, RoadPill, TelematicsHeader, GxNotice, GalaxyModal },
+  components: { TelematicsTile, RoadPill, TelematicsHeader, TelematicsConnectBar, GxNotice, GalaxyModal, BluetoothSupportNotice },
   data() {
     return {
       isLandscape: false,
@@ -116,12 +154,15 @@ export const Telematics = {
       testingLocal: false,
       identity: "",
       bluetoothSecure: false,
+      bluetoothSupport: "",
       manuallyDisconnected: false,
     }
   },
   computed: {
     connected() { return this.bleState === "connected" },
     connectionPending() { return this.connecting || ["connecting", "reconnecting"].includes(this.bleState) },
+    // Matches the connect bar: connecting, retrying, or a live link awaiting its first frame.
+    syncing() { return this.connectionPending || (this.connected && !this.frame) },
     canConnect() { return this.capability === "ready" && !this.connectionPending && !!this.connectionMode },
     connectionSourceLabel() {
       return this.connectionSource === "lan" ? "Local Wi-Fi" : this.connectionSource === "bluetooth" ? "Bluetooth" : "—"
@@ -146,6 +187,21 @@ export const Telematics = {
     deviceStatusLabel() {
       if (!this.deviceStatus) return "—"
       return this.deviceStatus.status || (this.deviceStatus.onroad ? "Driving" : "Parked")
+    },
+    // One binding for both orientations keeps their connection bars identical.
+    connectBar() {
+      return {
+        statusLabel: this.statusLabel,
+        statusDetail: `${this.deviceStatusLabel} · ${this.freshness} · ${this.connectionSourceLabel}`,
+        statusTint: this.freshnessTint,
+        deviceName: this.deviceName,
+        connected: this.connected,
+        pending: this.connectionPending,
+        canConnect: this.canConnect,
+        retry: this.bleState === "error" || this.bleState === "needs-pairing",
+        connectionMode: this.connectionMode,
+        isFullscreen: this.isFullscreen,
+      }
     },
     usesMetric() { return flag(this.frame, "metric") },
     speedUnit() { return this.usesMetric ? "km/h" : "mph" },
@@ -184,9 +240,12 @@ export const Telematics = {
     heroStatus() {
       const frame = this.frame
       if (!frame) {
-        return this.connected
-          ? { title: "Waiting", detail: "Waiting for telemetry", icon: "bi-hourglass-split", tint: "var(--text-muted)" }
-          : { title: "Not connected", detail: "Connect to the device over Local Wi-Fi or Bluetooth to populate telematics.", icon: "bi-broadcast-pin", tint: "var(--text-muted)" }
+        if (this.syncing) {
+          const via = this.connectionMode === "bluetooth" ? "Bluetooth" : "Local Wi-Fi"
+          const detail = this.connected ? "Waiting for live data" : this.bleState === "reconnecting" ? `Reconnecting over ${via}` : `Connecting over ${via}`
+          return { title: "Syncing", detail, icon: "bi-arrow-repeat", tint: "var(--text-muted)" }
+        }
+        return { title: "No connection", detail: "Connect to the device over Local Wi-Fi or Bluetooth to populate telematics.", icon: "bi-broadcast-pin", tint: "var(--text-muted)" }
       }
       if (!flag(frame, "started")) return { title: "Vehicle offroad", detail: null, icon: "bi-car-front", tint: "var(--text-muted)" }
       if (!flag(frame, "telemetryValid")) return { title: "Waiting", detail: "Waiting for valid vehicle state", icon: "bi-hourglass-split", tint: "var(--text-muted)" }
@@ -378,7 +437,8 @@ export const Telematics = {
       this.connectionMode = mode
       this.saveConnectionSettings()
       this.configureConnection()
-      if (reconnect && running) void this.connect()
+      // Wi-Fi always works, so choosing it reconnects even after a failed Bluetooth try.
+      if (reconnect && (running || mode === "lan")) void this.connect()
     },
     async testLocalConnection() {
       this.testClient?.close()
@@ -467,6 +527,7 @@ export const Telematics = {
     void this.loadParams()
     this.capability = "ready"
     this.bluetoothSecure = window.isSecureContext && window.location.protocol === "https:"
+    this.bluetoothSupport = bluetoothPlatform()
     if (this.bluetoothSecure && navigator.bluetooth) this.ble = getLiveBLEClient()
     this.connection = new TelematicsConnection({
       ble: this.ble,
@@ -528,21 +589,12 @@ export const Telematics = {
         <p>If Chrome blocks local access, open local Galaxy above. This page and the local page save their settings separately.</p>
       </GalaxyModal>
       <template v-if="capability === 'ready'">
-        <div v-if="!isLandscape" class="telematics-connect-bar">
-          <span class="telematics-status" :title="deviceName"><i :style="{ background: freshnessTint }"></i>{{ statusLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }} · {{ connectionSourceLabel }}</small></span>
-          <button class="telematics-setup-button" type="button" aria-label="Local Wi-Fi settings" title="Local Wi-Fi settings" @click="showConnectionSetup = true"><i class="bi bi-wifi"></i></button>
-          <div class="telematics-mode-toggle" role="radiogroup" aria-label="Connection method">
-            <button type="button" role="radio" :aria-checked="connectionMode === 'lan' ? 'true' : 'false'" :class="{ active: connectionMode === 'lan' }" @click="setConnectionMode('lan')">Wi-Fi</button>
-            <button type="button" role="radio" :aria-checked="connectionMode === 'bluetooth' ? 'true' : 'false'" :class="{ active: connectionMode === 'bluetooth' }" @click="setConnectionMode('bluetooth')">Bluetooth</button>
-          </div>
-          <button v-if="connected" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Disconnect</button>
-          <button v-else-if="connectionPending" class="gx-btn gx-btn--outlined" type="button" @click="disconnect">Cancel</button>
-          <button v-else class="gx-btn" type="button" :disabled="!canConnect" @click="connect()"><i class="bi" :class="connectionMode === 'bluetooth' ? 'bi-bluetooth' : 'bi-wifi'"></i> {{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
-        </div>
+        <TelematicsConnectBar v-if="!isLandscape" v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @fullscreen="toggleFullscreen" />
         <GxNotice v-if="!connectionMode" class="telematics-pairing" tone="info" icon="bi-wifi" title="No paired phone found">
           Use Local Wi-Fi instead? To connect over Bluetooth, pair this phone first.
           <button class="telematics-setup-link" type="button" @click="setConnectionMode('lan', false); connect()">Use Wi-Fi</button> · <button class="telematics-setup-link" type="button" @click="pairPhone">Pair a phone</button>
         </GxNotice>
+        <BluetoothSupportNotice v-else-if="connectionMode === 'bluetooth' && ['ios', 'firefox', 'unsupported'].includes(bluetoothSupport)" class="telematics-pairing" :platform="bluetoothSupport" :secure-url="secureURL" />
         <GxNotice v-else-if="connectionMode === 'bluetooth' && !bluetoothSecure" class="telematics-pairing" tone="warn" icon="bi-shield-lock-fill" title="Bluetooth needs the secure page">
           Chrome allows Bluetooth only on the HTTPS page, and a phone paired there is remembered only there.
           <a class="telematics-setup-link" :href="secureURL">Open the secure page</a>
@@ -568,21 +620,7 @@ export const Telematics = {
           </aside>
 
           <section class="telematics-center" :style="{ '--mode-color': modeColor }">
-            <div class="telematics-center__connection">
-              <span :title="deviceName">{{ statusLabel }} · {{ connectionSourceLabel }}<small>{{ deviceStatusLabel }} · {{ freshness }}</small></span>
-              <button class="telematics-setup-button" type="button" aria-label="Local Wi-Fi settings" title="Local Wi-Fi settings" @click="showConnectionSetup = true"><i class="bi bi-wifi"></i></button>
-              <div class="telematics-mode-toggle" role="radiogroup" aria-label="Connection method">
-                <button type="button" role="radio" :aria-checked="connectionMode === 'lan' ? 'true' : 'false'" :class="{ active: connectionMode === 'lan' }" @click="setConnectionMode('lan')">Wi-Fi</button>
-                <button type="button" role="radio" :aria-checked="connectionMode === 'bluetooth' ? 'true' : 'false'" :class="{ active: connectionMode === 'bluetooth' }" @click="setConnectionMode('bluetooth')">Bluetooth</button>
-              </div>
-              <button class="telematics-fullscreen-button" type="button" :aria-label="isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'"
-                :title="isFullscreen ? 'Exit fullscreen' : 'Hide browser controls'" :aria-pressed="isFullscreen" @click="toggleFullscreen">
-                <i class="bi" :class="isFullscreen ? 'bi-fullscreen-exit' : 'bi-arrows-fullscreen'"></i>
-              </button>
-              <button v-if="connected" type="button" @click="disconnect">Disconnect</button>
-              <button v-else-if="connectionPending" type="button" @click="disconnect">Cancel</button>
-              <button v-else type="button" :disabled="!canConnect" @click="connect()">{{ bleState === 'error' || bleState === 'needs-pairing' ? 'Reconnect' : 'Connect' }}</button>
-            </div>
+            <TelematicsConnectBar v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @fullscreen="toggleFullscreen" />
             <TelematicsHeader
               :set-speed-text="setSpeedText" :current-speed-badge="currentSpeedBadge"
               :has-speed-limit="hasSpeedLimit" :speed-limit-text="speedLimitText" :speed-limit-offset-text="speedLimitOffsetText"
