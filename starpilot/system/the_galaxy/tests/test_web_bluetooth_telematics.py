@@ -38,61 +38,79 @@ def test_telematics_route_navigation_and_styles_are_wired():
   assert not (UI_ROOT / "css/dashboard.css").exists()
 
 
+def test_phone_tab_gates_platforms_and_owns_pairing():
+  bluetooth = _read("js/views/Bluetooth.js")
+  phone = _read("js/components/PhonePanel.js")
+  assert 'phone: "Phone"' in bluetooth and "<PhonePanel />" in bluetooth
+  assert bluetooth.index('controllers: "Controllers"') < bluetooth.index('phone: "Phone"')
+  # iOS has no Web Bluetooth in any browser; Firefox never exposes it either
+  assert "isIOSDevice()" in phone
+  assert "Bluetooth Pairing in the Browser is not supported in Safari" in phone
+  assert "/Firefox\\//" in phone
+  assert "Bluetooth Pairing in the Browser is not supported in Firefox" in phone
+  assert "Chrome on Android required" in phone
+  assert "window.isSecureContext" in phone
+  assert 'window.location.protocol === "https:"' in phone
+  # the insecure gate must explain the jump instead of silently redirecting to :8443
+  assert "window.location.replace(this.secureURL)" not in phone
+  assert ":href=\"secureURL\"" in phone
+  assert 'target.port = "8443"' in phone
+  assert "NET::ERR_CERT_AUTHORITY_INVALID" in phone
+  assert "Proceed to {{ secureHost }} (unsafe)" in phone
+  # the gate must lead with the notice and action, not bury them under prose
+  assert "telematics-gate__open" in phone
+  assert phone.index("telematics-gate__open") < phone.index("telematics-gate__steps")
+  # the comma's pairing window opens from here instead of the device screen
+  assert 'api.bluetoothOp("companion_pair")' in phone
+  assert "companion_pairing_remaining" in phone
+  assert "discoverable / 120s" in phone
+  assert "Pair now" in phone
+  assert "client.connect()" in phone
+  assert ':open="!bluetoothFlagsReady || !restoredAfterReload"' in phone
+  # pairing from Android's settings is the common wrong turn; warn against it
+  assert "Do not pair from Android's Bluetooth settings" in phone
+  assert "only creates a system bond" in phone
+  # Disconnect cannot revoke the Chrome permission, so say how to do it by hand
+  assert "Make Chrome forget this device" in phone
+  assert "Bluetooth devices" in phone
+  assert "Connected devices" in phone
+  assert 'v-if="rememberedDevices > 0"' in phone
+  assert "telematics-setup__more" in phone
+  # both flags are required, so both get a numbered step and a probed row
+  assert "bluetoothChecks" in phone
+  assert "canRestoreBluetooth" in phone
+  assert "canWatchAdvertisements" in phone
+  assert "bluetoothFlagsReady" in phone
+  assert "getAvailability" in phone
+  assert "Experimental Web Platform features" in phone
+  assert "Find device after reload" in phone
+  assert "demo" not in phone.lower()
+
+
 def test_telematics_has_security_gate_controls_and_complete_layouts():
   telematics = _read("js/views/Telematics.js")
   assert "window.isSecureContext" in telematics
   assert "isIOSDevice" in telematics
   assert "homeURL.hash = \"/\"" in telematics
   assert 'window.location.protocol === "https:"' in telematics
-  # the insecure gate must explain the jump instead of silently redirecting to :8443
   assert "window.location.replace(this.secureURL)" not in telematics
   assert ":href=\"secureURL\"" in telematics
-  assert "NET::ERR_CERT_AUTHORITY_INVALID" in telematics
-  assert "Proceed to {{ secureHost }} (unsafe)" in telematics
-  # the gate must lead with the notice and action, not bury them under prose
-  assert "telematics-gate__open" in telematics
-  assert telematics.index("GxNotice") < telematics.index("telematics-gate__steps")
-  assert "<details" in telematics
-  assert "navigator.bluetooth" in telematics
-  assert "Chrome on Android required" in telematics
   assert 'target.port = "8443"' in telematics
+  assert "navigator.bluetooth" in telematics
   assert "reconnectRemembered" in _read("js/lan/connection.js")
   assert "Pair the device first" in telematics
-  # the Chrome flag instructions must stay reachable, not be a one-shot interstitial
-  assert '@click="openBluetoothSetup"' in telematics
-  assert "canRestoreBluetooth" in telematics
-  # the banner must be driven by a real fault so it disappears when nothing is wrong
-  assert "Set up Bluetooth reconnect" in telematics
-  assert 'v-else-if="bluetoothBannerVisible"' in telematics
-  assert "getAvailability" in telematics
-  # Setup may guide pairing, but must never hide Disconnect or Cancel.
-  assert "bluetoothControlsHidden" not in telematics
+  # pairing lives on the Bluetooth page's Phone tab now
+  assert 'navigate("/bluetooth/phone")' in telematics
+  assert "requestDevice" not in telematics and "chooseNew" not in telematics
+  assert "chooseNew" not in _read("js/lan/connection.js")
+  # Wi-Fi or Bluetooth, no Automatic; an unpaired phone is asked about Wi-Fi
+  assert 'role="radiogroup" aria-label="Connection method"' in telematics
+  assert "automatic" not in telematics.lower()
+  assert "No paired phone found" in telematics
+  assert "Use Wi-Fi" in telematics
+  assert "defaultToBluetooth" in telematics
+  # Disconnect and Cancel stay reachable in both orientations
   assert telematics.count('v-else-if="connectionPending"') == 2
-  assert '@click="chooseDevice"' in telematics
-  assert ':open="!bluetoothFlagsReady || !restoredAfterReload"' in telematics
-  # the device side of pairing is invisible from the phone, so the panel must spell it out
-  assert "pair a phone" in telematics
-  assert "discoverable / 120s" in telematics
-  # the briefing ends at the real pair button
-  assert '"Pair now"' in telematics
-  assert "at the bottom of this panel" in telematics
-  # pairing from Android's settings is the common wrong turn; warn against it
-  assert "Do not pair from Android's Bluetooth settings" in telematics
-  assert "only creates a system bond" in telematics
-  assert 'v-if="showPairingSteps"' in telematics
-  # Disconnect cannot revoke the Chrome permission, so say how to do it by hand
-  assert "Make Chrome forget this device" in telematics
-  assert "Bluetooth devices" in telematics
-  assert "Connected devices" in telematics
-  assert 'v-if="rememberedDevices > 0"' in telematics
-  assert "telematics-setup__more" in telematics
-  assert "bluetoothChecks" in telematics
-  # both flags are required now, so both get a numbered step and a probed row
-  assert "canWatchAdvertisements" in telematics
-  assert "bluetoothFlagsReady" in telematics
-  assert "Experimental Web Platform features" in telematics
-  assert "Find device after reload" in telematics
-  assert "bluetoothNeedsAttention" in telematics
   assert "telematics-landscape" in telematics
   assert "telematics-portrait" in telematics
   assert "STEER DELAY" in telematics
@@ -375,7 +393,8 @@ late.close()
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
 def test_telematics_javascript_modules_parse(tmp_path):
-  for relative in ("js/ble/live_frames.js", "js/ble/live_ble.js", "js/views/Telematics.js", "js/components/GalaxyModal.js", "js/lan/live_lan.js", "js/lan/connection.js"):
+  for relative in ("js/ble/live_frames.js", "js/ble/live_ble.js", "js/views/Telematics.js", "js/components/GalaxyModal.js", "js/lan/live_lan.js", "js/lan/connection.js",
+                   "js/components/PhonePanel.js", "js/views/Bluetooth.js"):
     source = UI_ROOT / relative
     target = tmp_path / (source.stem + ".mjs")
     target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
@@ -384,92 +403,73 @@ def test_telematics_javascript_modules_parse(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
-def test_android_setup_preserves_pairing_and_existing_connections():
+def test_telematics_defaults_to_paired_bluetooth_and_keeps_existing_connections():
   script = r'''
 import assert from "node:assert/strict"
 import fs from "node:fs"
-const notices = []
-globalThis.showSnackbar = (...args) => notices.push(args)
+globalThis.showSnackbar = () => {}
+const navigations = []
+globalThis.navigate = (target) => navigations.push(target)
 const source = fs.readFileSync("js/views/Telematics.js", "utf8").replace(/^import .*$/gm, "")
 const moduleURL = (code) => `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
 const { Telematics } = await import(moduleURL("const GxNotice = {}, GalaxyModal = {};\n" + source))
 globalThis.window = { location: new URL("https://starpilot-comma.local:8443/#/telematics") }
 const bluetooth = {}
 Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Android", bluetooth } })
-let connects = 0, reconnects = 0, disconnects = 0
+let reconnects = 0, disconnects = 0
 const makeView = (extra = {}) => {
   const view = Object.assign(Telematics.data(), Telematics.methods, {
-    identity: "comma", connectionMode: "bluetooth", bluetoothSecure: true, bluetoothAvailable: true,
-    ble: { connect() { connects++ }, reconnect() { reconnects++ }, disconnect() { disconnects++ } },
+    identity: "comma", connectionMode: "bluetooth", bluetoothSecure: true,
+    ble: { reconnect() { reconnects++ }, disconnect() { disconnects++ } },
   }, extra)
   for (const [name, getter] of Object.entries(Telematics.computed)) {
     Object.defineProperty(view, name, { get: () => getter.call(view) })
   }
   view.connection = {
     configure() {},
-    connect({ chooseNew } = {}) { return chooseNew ? view.ble.connect() : view.ble.reconnect() },
-    disconnect() { view.ble.disconnect() },
+    connect() { return view.ble.reconnect() },
+    disconnect() { view.ble?.disconnect() },
   }
   return view
 }
 
-// Both orientations brief users before pairing when either API is missing.
-for (const isLandscape of [false, true]) {
-  const initial = connects
-  const view = makeView({ isLandscape })
-  await view.connect()
-  assert.equal(view.showBluetoothSetup, true)
-  assert.equal(connects, initial)
-  assert.equal(view.bluetoothSetupConfirmLabel, "Connect anyway")
-  const pairing = view.continueBluetoothPairing()
-  assert.equal(connects, initial + 1, "Chooser must open synchronously in the button gesture")
-  await pairing
-  assert.equal(view.connecting, false)
-  assert.equal(view.showBluetoothSetup, false)
-}
-bluetooth.getDevices = async () => []
-const halfFlagged = makeView()
-assert.equal(halfFlagged.bluetoothFlagsReady, false)
-assert.equal(halfFlagged.bluetoothBanner.action, "Show me how")
-await halfFlagged.connect()
-assert.equal(halfFlagged.showBluetoothSetup, true)
-globalThis.BluetoothDevice = { prototype: { watchAdvertisements() {} } }
-const firstPair = makeView()
-await firstPair.connect()
-assert.equal(firstPair.showBluetoothSetup, true, "First Android pairing still needs instructions")
-assert.equal(firstPair.bluetoothSetupConfirmLabel, "Pair now")
-
-// API exposure and a current permission do not prove persistence.
-bluetooth.getAvailability = async () => true
+// A phone Chrome already paired picks Bluetooth and connects without asking.
 bluetooth.getDevices = async () => [{ id: "remembered" }]
-const healthy = makeView()
-await healthy.refreshBluetoothStatus()
-assert.equal(healthy.bluetoothFlagsReady, true)
-assert.equal(healthy.bluetoothSetupReady, false)
-assert.equal(healthy.bluetoothChecks.at(-1).value, "Not verified")
-healthy.restoredAfterReload = true
-assert.equal(healthy.bluetoothSetupReady, true)
-assert.equal(healthy.bluetoothChecks.at(-1).value, "Verified")
-assert.equal(healthy.bluetoothBanner, null)
+const paired = makeView({ connectionMode: "", capability: "ready" })
+let before = reconnects
+await paired.refreshBluetoothStatus()
+paired.defaultToBluetooth()
+assert.equal(paired.connectionMode, "bluetooth")
+assert.equal(reconnects, before + 1)
 
-// Returning users can retry, and Choose device always takes the chooser path.
-const returning = makeView({ rememberedDevices: 1, bleState: "error" })
-returning.ble.device = { id: "stale-permission" }
-const retriesBefore = reconnects
-await returning.connect()
-assert.equal(reconnects, retriesBefore + 1)
-assert.equal(returning.showBluetoothSetup, false)
-await returning.openBluetoothSetup()
-const chooserBefore = connects
-assert.equal(returning.bluetoothSetupConfirmLabel, "Done")
-await returning.confirmBluetoothSetup()
-assert.equal(connects, chooserBefore, "Done must not invoke the chooser")
-await returning.chooseDevice()
-assert.equal(connects, chooserBefore + 1)
-assert.ok(disconnects > 0, "Choosing a replacement stops retries")
-assert.equal(returning.showBluetoothSetup, false)
+// Without one, nothing connects until the user answers the Wi-Fi question.
+bluetooth.getDevices = async () => []
+const unpaired = makeView({ connectionMode: "", capability: "ready" })
+before = reconnects
+await unpaired.refreshBluetoothStatus()
+unpaired.defaultToBluetooth()
+assert.equal(unpaired.connectionMode, "")
+assert.equal(unpaired.canConnect, false)
+assert.equal(reconnects, before)
+unpaired.setConnectionMode("lan", false)
+assert.equal(unpaired.connectionMode, "lan")
+assert.equal(unpaired.canConnect, true)
+unpaired.pairPhone()
+assert.deepEqual(navigations, ["/bluetooth/phone"])
+
+// A saved choice outranks the paired-phone default.
+const chosen = makeView({ connectionMode: "lan", rememberedDevices: 1 })
+chosen.defaultToBluetooth()
+assert.equal(chosen.connectionMode, "lan")
+
+// Bluetooth on the HTTP page explains itself instead of opening anything.
+const insecure = makeView({ ble: null, bluetoothSecure: false })
+await insecure.connect()
+assert.equal(insecure.bleState, "error")
+assert.match(insecure.bleMessage, /HTTPS/)
 
 // A cancelled UI request cannot keep buttons busy or clear a newer request.
+const returning = makeView({ rememberedDevices: 1, bleState: "error" })
 let finishOld, finishNew
 returning.ble.reconnect = () => new Promise(resolve => { finishOld = resolve })
 const old = returning.connect()
@@ -486,30 +486,21 @@ finishNew()
 await newer
 assert.equal(returning.connecting, false)
 
-// Radio faults keep actionable setup access, including while a link exists.
-bluetooth.getAvailability = async () => false
-delete bluetooth.getDevices
-delete globalThis.BluetoothDevice
-for (const isLandscape of [false, true]) {
-  const connected = makeView({ isLandscape, bleState: "connected" })
-  await connected.refreshBluetoothStatus()
-  assert.equal(connected.connected, true)
-  assert.equal(connected.bluetoothBanner.title, "Bluetooth is off")
-  assert.equal(connected.bluetoothNeedsAttention, true)
-  connected.bleState = "reconnecting"
-  assert.equal(connected.connectionPending, true)
-  await connected.openBluetoothSetup()
-  assert.equal(connected.showBluetoothSetup, true)
-}
-delete bluetooth.getAvailability
-const opaque = makeView()
-await opaque.refreshBluetoothStatus()
-assert.equal(opaque.bluetoothRadio, "unknown")
-assert.equal(opaque.bluetoothChecks[0].ok, undefined)
-const view = makeView()
 // Render the actual Vue template: both orientations retain their exit controls.
 const { compile } = await import(moduleURL(fs.readFileSync("../vendor/vue/vue.esm-browser.js", "utf8")))
 const render = compile(Telematics.template, { decodeEntities: text => text })
+const collect = (root, keep) => {
+  const found = []
+  const walk = node => {
+    if (!node || typeof node !== "object") return
+    if (keep(node)) found.push(node)
+    if (Array.isArray(node.children)) node.children.forEach(walk)
+  }
+  walk(root)
+  return found
+}
+const text = node => typeof node.children === "string" ? node.children
+  : (node.children || []).map(child => typeof child.children === "string" ? child.children : "").join("")
 const originalWarn = console.warn
 // Rendering without mounting emits component-resolution warnings; child
 // components are intentionally opaque while we inspect the parent's buttons.
@@ -518,36 +509,15 @@ try {
   for (const isLandscape of [false, true]) {
     for (const [bleState, expected] of [["idle", "Connect"], ["connecting", "Cancel"], ["reconnecting", "Cancel"], ["connected", "Disconnect"], ["error", "Reconnect"]]) {
       const rendered = makeView({ capability: "ready", isLandscape, bleState })
-      const buttons = []
-      const walk = node => {
-        if (!node || typeof node !== "object") return
-        if (node.type === "button") {
-          const text = typeof node.children === "string" ? node.children
-            : (node.children || []).map(child => typeof child.children === "string" ? child.children : "").join("")
-          buttons.push([text.trim(), node.props?.disabled])
-        }
-        if (Array.isArray(node.children)) node.children.forEach(walk)
-      }
-      walk(render(rendered, []))
+      const buttons = collect(render(rendered, []), node => node.type === "button").map(node => [text(node).trim(), node.props?.disabled])
       assert.ok(buttons.some(([label, disabled]) => label === expected && !disabled), `${isLandscape ? 'landscape' : 'portrait'} ${bleState} must expose ${expected}`)
     }
-  }
-} finally { console.warn = originalWarn }
-
-// HTTP and unsupported Bluetooth must keep both mode selectors and exit controls.
-console.warn = () => {}
-try {
-  for (const isLandscape of [false, true]) {
-    const local = makeView({ capability: "ready", connectionMode: "lan", bluetoothSecure: false, bluetoothAvailable: false, isLandscape })
-    const controls = []
-    const walk = node => {
-      if (!node || typeof node !== "object") return
-      if (["select", "button"].includes(node.type)) controls.push(node)
-      if (Array.isArray(node.children)) node.children.forEach(walk)
-    }
-    walk(render(local, []))
-    assert.ok(controls.some(node => node.type === "select" && node.props["aria-label"] === "Connection method"))
-    assert.ok(controls.some(node => node.props?.["aria-label"] === "Local Wi-Fi settings"))
+    // HTTP pages keep the transport toggle and Wi-Fi settings.
+    const local = makeView({ capability: "ready", connectionMode: "lan", bluetoothSecure: false, ble: null, isLandscape })
+    const controls = collect(render(local, []), node => !!node.props)
+    assert.ok(controls.some(node => node.props.role === "radiogroup" && node.props["aria-label"] === "Connection method"))
+    assert.ok(controls.some(node => node.props["aria-label"] === "Local Wi-Fi settings"))
+    assert.ok(controls.some(node => node.props.role === "radio" && text(node) === "Wi-Fi" && node.props["aria-checked"] === "true"))
     assert.equal(local.canConnect, true)
     local.bleState = "error"
     local.setConnectionMode("bluetooth")
@@ -563,7 +533,7 @@ const saved = new Map([["galaxy-telematics:serial", JSON.stringify({ mode: "lan"
 globalThis.localStorage = { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value) }
 window.location = new URL("http://192.168.1.5:8082/#/telematics")
 globalThis.api = { getDeviceStatus: async () => ({ telematicsDeviceId: "serial", localHostname: "starpilot-comma.local" }) }
-const restored = makeView({ identity: "", connectionMode: "automatic" })
+const restored = makeView({ identity: "", connectionMode: "" })
 let starts = 0
 restored.connection.connect = () => { starts++ }
 await restored.loadDeviceStatus()
@@ -573,6 +543,14 @@ assert.equal(restored.localAddress, "http://192.168.1.5:8082")
 assert.equal(starts, 1, "Reload must restore the connection without a chooser")
 await restored.loadDeviceStatus()
 assert.equal(starts, 1, "Ordinary status polling must not reconnect a healthy link")
+// Old saved "automatic" preferences fall back to the paired-phone default.
+saved.set("galaxy-telematics:serial", JSON.stringify({ mode: "automatic" }))
+const legacy = makeView({ identity: "", connectionMode: "" })
+legacy.connection.connect = () => { starts++ }
+await legacy.loadDeviceStatus()
+assert.equal(legacy.connectionMode, "")
+assert.equal(starts, 1, "An unanswered Wi-Fi question must not connect")
+saved.set("galaxy-telematics:serial", JSON.stringify({ mode: "lan", address: "http://old.local:8082" }))
 let finishIdentity
 api.getDeviceStatus = () => new Promise(resolve => { finishIdentity = resolve })
 const cancelledIdentity = makeView({ identity: "" })
@@ -601,13 +579,112 @@ globalThis.TelematicsConnection = class {
 }
 saved.set("galaxy-telematics-page:/this-comma/mobile", "serial")
 saved.set("galaxy-telematics:serial", JSON.stringify({ mode: "bluetooth", address: "http://starpilot-comma.local:8082" }))
-const offline = makeView({ identity: "", connectionMode: "automatic" })
+const offline = makeView({ identity: "", connectionMode: "" })
 Telematics.mounted.call(offline)
 assert.equal(cachedStarts, 1)
 assert.equal(offline.connection.config.identity, "serial")
 assert.equal(offline.connection.config.mode, "bluetooth")
 assert.equal(offline.localAddress, "http://starpilot-comma.local:8082")
 Telematics.beforeUnmount.call(offline)
+
+// With no saved choice, the page connects once Chrome reports the paired phone.
+saved.set("galaxy-telematics:serial", JSON.stringify({ address: "http://starpilot-comma.local:8082" }))
+bluetooth.getDevices = async () => [{ id: "remembered" }]
+cachedStarts = 0
+const fresh = makeView({ identity: "", connectionMode: "" })
+Telematics.mounted.call(fresh)
+assert.equal(cachedStarts, 0, "Mode is unknown until Chrome's devices are read")
+await new Promise(resolve => setTimeout(resolve, 0))
+assert.equal(fresh.connectionMode, "bluetooth")
+assert.equal(cachedStarts, 1)
+Telematics.beforeUnmount.call(fresh)
+'''
+  result = subprocess.run([shutil.which("node"), "--input-type=module", "-e", script], cwd=UI_ROOT, capture_output=True, text=True)
+  assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
+def test_phone_panel_gates_browsers_and_pairs_in_the_click():
+  script = r'''
+import assert from "node:assert/strict"
+import fs from "node:fs"
+const notices = []
+globalThis.showSnackbar = (...args) => notices.push(args)
+const source = fs.readFileSync("js/components/PhonePanel.js", "utf8").replace(/^import .*$/gm, "")
+const moduleURL = (code) => `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
+const { PhonePanel } = await import(moduleURL("const GxNotice = {};\n" + source))
+const CHROME = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
+const FIREFOX = "Mozilla/5.0 (Android 14; Mobile; rv:130.0) Gecko/130.0 Firefox/130.0"
+const bluetooth = {}
+const setBrowser = (userAgent, url, { ios = false, withBluetooth = true } = {}) => {
+  globalThis.isIOSDevice = () => ios
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent, bluetooth: withBluetooth ? bluetooth : undefined } })
+  const location = new URL(url)
+  globalThis.window = { location, isSecureContext: location.protocol === "https:" }
+}
+const makeView = () => {
+  const view = Object.assign(PhonePanel.data(), PhonePanel.methods)
+  for (const [name, getter] of Object.entries(PhonePanel.computed)) {
+    Object.defineProperty(view, name, { get: () => getter.call(view) })
+  }
+  return view
+}
+
+setBrowser("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", "https://comma.local:8443/#/bluetooth/phone", { ios: true, withBluetooth: false })
+assert.equal(makeView().platform, "ios")
+setBrowser(FIREFOX, "http://192.168.1.5:8082/#/bluetooth/phone", { withBluetooth: false })
+const firefox = makeView()
+assert.equal(firefox.platform, "firefox", "Firefox is turned away before the HTTPS detour")
+assert.equal(firefox.secureURL, "https://192.168.1.5:8443/#/bluetooth/phone", "Firefox users get the address to open in Chrome")
+setBrowser("Mozilla/5.0 (X11; Linux x86_64) Chrome/130.0", "https://comma.local:8443/#/bluetooth/phone")
+assert.equal(makeView().platform, "unsupported")
+setBrowser(CHROME, "http://192.168.1.5:8082/#/bluetooth/phone", { withBluetooth: false })
+const insecure = makeView()
+assert.equal(insecure.platform, "insecure")
+assert.equal(insecure.secureURL, "https://192.168.1.5:8443/#/bluetooth/phone", "The secure page opens on this same tab")
+let polls = 0
+globalThis.usePolling = () => { polls++; return { start() {}, destroy() {} } }
+PhonePanel.created.call(insecure)
+assert.equal(polls, 0, "Only a page that can pair polls the pairing window")
+setBrowser(CHROME, "https://192.168.1.5:8443/#/bluetooth/phone")
+assert.equal(makeView().platform, "ready")
+
+// The comma's pairing window opens from the phone and reports its countdown.
+const ops = []
+globalThis.api = {
+  bluetoothOp: async (operation) => { ops.push(operation) },
+  getBluetoothStatus: async () => ({ offroad: true, enabled: true, companion_pairing_remaining: 118 }),
+}
+const view = makeView()
+await view.openPairingWindow()
+assert.deepEqual(ops, ["companion_pair"])
+assert.equal(view.pairingRemaining, 118)
+assert.equal(view.busy, "")
+
+// Chrome's chooser opens inside the click, and a proven bond is released for Telematics.
+let choosers = 0
+const client = {
+  state: "idle", message: "", device: null, disconnects: 0,
+  connect() { choosers++; this.state = "connected"; this.device = { name: "comma-1234" }; return Promise.resolve() },
+  disconnect() { this.disconnects++; this.state = "idle" },
+}
+globalThis.getLiveBLEClient = () => client
+bluetooth.getDevices = async () => [{ id: "remembered" }]
+const pairing = view.pair()
+assert.equal(choosers, 1, "Chooser must open synchronously in the button gesture")
+await pairing
+assert.match(view.pairMessage, /comma-1234/)
+assert.equal(client.disconnects, 1)
+assert.equal(view.rememberedDevices, 1)
+assert.equal(view.busy, "")
+
+client.connect = function () { this.state = "needs-pairing"; this.message = "Pair the device first"; return Promise.reject(new Error("bond")) }
+await view.pair()
+assert.equal(view.error, "Pair the device first")
+client.connect = function () { this.state = "idle"; this.message = "No device selected"; return Promise.resolve() }
+view.error = ""
+await view.pair()
+assert.equal(view.error, "", "Closing Chrome's chooser is not an error")
 
 let copied
 navigator.clipboard = { async writeText(value) { copied = value } }

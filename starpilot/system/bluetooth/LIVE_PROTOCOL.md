@@ -353,12 +353,13 @@ Galaxy starts one independent LAN publisher lazily on the first stream and
 closes it on server shutdown. Slow or cancelled subscribers do not block it.
 
 The web connection controller owns session statistics and transport recovery.
-Automatic tries LAN with a three-second deadline covering status, stream
-headers and first fresh state; it falls back only to authorized Bluetooth.
-Explicit pairing buttons alone may open Chrome's chooser. Local Wi-Fi and
-Bluetooth modes remain exclusive. Failed attempts back off to 15 seconds;
-a healthy Bluetooth connection is replaced only after a LAN probe remains
-fresh for three seconds. State becomes stale after two seconds, and returning
+Local Wi-Fi and Bluetooth modes are exclusive; neither falls back to the other.
+LAN connects with a three-second deadline covering status, stream headers and
+first fresh state. Bluetooth reconnects only a device Chrome already authorized;
+Chrome's chooser opens only from the Pair now button on Galaxy's Bluetooth →
+Phone tab. Telematics defaults to Bluetooth when Chrome remembers a paired
+device and otherwise asks whether to use Local Wi-Fi. Failed attempts back off
+to 15 seconds. State becomes stale after two seconds, and returning
 from background revalidates the connection. Disconnect cancels both transports
 and retries. Totals survive reconnects to the same comma, excluding gaps and
 duplicate samples; changing device identity starts a new session.

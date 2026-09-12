@@ -14,8 +14,6 @@ export class TelematicsConnection {
     this.source = ""
     this.cache = { lan: {}, bluetooth: {} }
     this.retryDelay = 1000
-    this.probeDelayMs = 15000
-    this.switchbackMs = 3000
     if (ble) ble.autoReconnect = false
     for (const [source, client] of [["lan", lan], ["bluetooth", ble]]) {
       if (!client) continue
@@ -63,7 +61,7 @@ export class TelematicsConnection {
 
   _state(state, message = "") {
     this.callbacks.onState?.({ state, message, source: state === "connected" ? this.source : "",
-      deviceName: this.identity, restoredAfterReload: this.source === "bluetooth" && !!this.ble?.restoredDeviceID })
+      deviceName: this.identity })
   }
 
   _clearLive() {
@@ -95,7 +93,7 @@ export class TelematicsConnection {
     if (emit) this.callbacks.onLive?.(frame, this.session.snapshot(), at)
   }
 
-  connect({ chooseNew = false } = {}) {
+  connect() {
     this.disconnect(false)
     this.running = true
     this.retryDelay = 1000
@@ -106,38 +104,33 @@ export class TelematicsConnection {
       this._state("reconnecting", "Live data stopped; reconnecting…")
       this._schedule()
     }, 500)
-    // _run reaches ble.connect synchronously when chooseNew is true.
-    return this._run(generation, chooseNew)
+    return this._run(generation)
   }
 
-  async _run(generation, chooseNew = false) {
+  async _run(generation) {
     if (!this.running || generation !== this.generation || this.busy) return
     this.busy = true
     clearTimeout(this.retryTimer)
     this.retryTimer = null
-    clearTimeout(this.probeTimer)
-    this._state("connecting", chooseNew ? "Choose the comma in Chrome" : "Connecting…")
+    this._state("connecting", "Connecting…")
     let message = "Local Wi-Fi unavailable"
-    let lanError = ""
     let connected = false
-    const sources = chooseNew || this.mode === "bluetooth" ? ["bluetooth"] : this.mode === "lan" ? ["lan"] : ["lan", "bluetooth"]
+    const source = this.mode === "bluetooth" ? "bluetooth" : "lan"
     try {
-      for (const source of sources) {
-        if (generation !== this.generation) return
-        this.source = source
-        const client = source === "lan" ? this.lan : this.ble
-        if (!client) { message = "Bluetooth needs Chrome on an HTTPS page. Use Local Wi-Fi or open the secure page."; continue }
+      this.source = source
+      const client = source === "lan" ? this.lan : this.ble
+      if (!client) message = "Bluetooth needs Chrome on an HTTPS page. Use Local Wi-Fi or open the secure page."
+      else {
         this.cache[source] = {}
         try {
           let result
           if (source === "lan") result = await client.connect({ address: this.address, expectedIdentity: this.identity })
-          else if (chooseNew) result = await client.connect()
           else {
             client.manualDisconnect = false
             result = client.device ? await client.reconnect() : await client.reconnectRemembered()
           }
           if (generation !== this.generation) return
-          if (result === false || client.state !== "connected" || !client.isActive()) throw new Error(this.cache[source].state?.message || "No saved Bluetooth device. Open Bluetooth status and choose the comma.")
+          if (result === false || client.state !== "connected" || !client.isActive()) throw new Error(this.cache[source].state?.message || "No paired phone. Pair it under Bluetooth → Phone.")
           connected = true
           this.busy = false
           this._activate(source)
@@ -145,7 +138,6 @@ export class TelematicsConnection {
         } catch (error) {
           if (generation !== this.generation) return
           message = String(error.message || error)
-          if (source === "lan") lanError = message
           client.disconnect()
         }
       }
@@ -155,8 +147,8 @@ export class TelematicsConnection {
         if (!connected) {
           this.source = ""
           this._clearLive()
-          this._state("error", lanError && lanError !== message ? `${lanError} ${message}` : message)
-          if (!chooseNew) this._schedule()
+          this._state("error", message)
+          this._schedule()
         }
       }
     }
@@ -176,7 +168,6 @@ export class TelematicsConnection {
     this.callbacks.onMetadata?.(cache.metadata || null)
     if (cache.health) this.callbacks.onHealth?.(...cache.health)
     if (cache.live) this._live(...cache.live)
-    if (this.mode === "automatic" && source === "bluetooth") this._probeLater()
   }
 
   _schedule() {
@@ -193,28 +184,6 @@ export class TelematicsConnection {
     this.retryDelay = Math.min(15000, this.retryDelay * 2)
   }
 
-  _probeLater() {
-    const generation = this.generation
-    clearTimeout(this.probeTimer)
-    this.probeTimer = setTimeout(async () => {
-      if (generation !== this.generation || this.source !== "bluetooth" || this.busy) return
-      try {
-        if (!await this.lan.connect({ address: this.address, expectedIdentity: this.identity })) return
-        if (generation !== this.generation || this.source !== "bluetooth") return
-        this.probeTimer = setTimeout(() => {
-          if (generation !== this.generation || this.source !== "bluetooth" || this.busy) return
-          if (this.lan.isActive() && Date.now() - (this.cache.lan.live?.[1] || 0) < 2000) {
-            this._clearLive()
-            this._activate("lan")
-            this.ble?.disconnect()
-          } else this._probeLater()
-        }, this.switchbackMs)
-      } catch {
-        if (generation === this.generation && this.source === "bluetooth") this._probeLater()
-      }
-    }, this.probeDelayMs)
-  }
-
   resume() {
     if (this.running) return this.connect()
   }
@@ -226,7 +195,6 @@ export class TelematicsConnection {
     this.source = ""
     clearTimeout(this.retryTimer)
     this.retryTimer = null
-    clearTimeout(this.probeTimer)
     clearInterval(this.watchdog)
     this.lan.disconnect()
     this.ble?.disconnect()

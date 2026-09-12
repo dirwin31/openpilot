@@ -124,20 +124,13 @@ class BLE extends Transport {
 }
 const lan = new Transport(), ble = new BLE(), observed = []
 const controller = new TelematicsConnection({ lan, ble, callbacks: { onState: value => observed.push(value), onLive: (frame, stats) => {} } })
-controller.configure({ mode: "automatic", identity: "comma", address: config.address })
-lan.fail = true
+controller.configure({ mode: "bluetooth", identity: "comma", address: config.address })
 await controller.connect()
 assert.equal(controller.source, "bluetooth")
 assert.equal(ble.restores, 1)
-assert.equal(ble.choosers, 0, "Automatic must never invoke a chooser")
-assert.equal(lan.calls, 1, "BLE reconnecting must not restart LAN selection")
+assert.equal(ble.choosers, 0, "Telematics must never invoke a chooser")
+assert.equal(lan.calls, 0, "Bluetooth mode must not try Local Wi-Fi")
 assert.equal(ble.state, "connected")
-
-// Explicit pairing reaches the chooser before yielding for any LAN request.
-const pairing = controller.connect({ chooseNew: true })
-assert.equal(ble.choosers, 1)
-assert.equal(lan.calls, 1)
-await pairing
 
 // One session survives source changes, excludes gaps, and rejects overlap.
 const frame = time => ({ monotonicMilliseconds: time, flags: LIVE_FLAGS.started | LIVE_FLAGS.telemetryValid | LIVE_FLAGS.lateralActive })
@@ -146,6 +139,13 @@ ble.callbacks.onLive(frame(2000), null, Date.now())
 assert.equal(controller.session.observedDrivingSeconds, 1)
 controller.disconnect()
 assert.equal(controller.session.observedDrivingSeconds, 1)
+controller.configure({ mode: "lan", identity: "comma", address: config.address })
+lan.fail = true
+const restoresBefore = ble.restores
+await controller.connect()
+assert.equal(controller.source, "")
+assert.equal(ble.restores, restoresBefore, "Local Wi-Fi mode must not fall back to Bluetooth")
+controller.disconnect()
 lan.fail = false
 await controller.connect()
 assert.equal(controller.source, "lan")
@@ -163,18 +163,6 @@ controller.resume()
 await wait(5)
 assert.equal(lan.calls, callsBefore, "Resume cannot undo Disconnect")
 
-// A healthy LAN probe must remain healthy before replacing BLE.
-lan.fail = true
-controller.probeDelayMs = 10
-controller.switchbackMs = 30
-await controller.connect()
-lan.fail = false
-await until(() => lan.state === "connected")
-assert.equal(controller.source, "bluetooth")
-lan.callbacks.onLive(frame(13000), null, Date.now())
-await wait(40)
-assert.equal(controller.source, "lan")
-assert.equal(ble.state, "idle")
 controller.configure({ mode: "bluetooth", identity: "other", address: config.address })
 assert.equal(controller.session.observedDrivingSeconds, 0)
 controller.close()
