@@ -68,10 +68,14 @@ assert.equal(calls.at(-1)[0], "stop_scan")
 await view.request("pair", { address: nearby.address })
 assert.deepEqual(calls.at(-1), ["pair", { address: nearby.address }])
 view.offroad = false
+view.setupAllowed = false
 assert.equal(button("Pair").props.disabled, true)
 assert.equal(button("Forget").props.disabled, true)
 assert.equal(button("Search for Detectors").props.disabled, true)
 assert.equal(button("Connect").props.disabled, false)
+view.setupAllowed = true
+assert.equal(button("Search for Detectors").props.disabled, false, "setup works with ignition on in Park")
+assert.equal(button("Pair").props.disabled, false)
 view.offroad = true
 view.pairingAddress = nearby.address
 assert.equal(button("Pair").props.disabled, true)

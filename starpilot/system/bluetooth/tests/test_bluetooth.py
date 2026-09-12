@@ -1301,9 +1301,9 @@ def test_uniden_pair_connect_keeps_companion_service_and_audio_selection():
   assert params.get("BluetoothAudioAddress") == "speaker"
 
 
-def test_uniden_reconnect_shares_backoff_and_disconnect_suppression_with_other_devices():
+def test_uniden_reconnect_discovers_with_short_retries_and_disconnect_suppression():
   phones = ["00:11:22:33:44:66", "00:11:22:33:44:77"]
-  params = FakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionDevices=phones)
+  params = FakeParams(IsOffroad=False, IsOnroad=True, BluetoothEnabled=True, BluetoothCompanionDevices=phones)
   client = FakeBlueZ()
   controller = BluetoothController(params, lambda: client, FakeRadio(), FakeParams(), companion_factory=FakeCompanion)
   status = controller.status()
@@ -1318,10 +1318,12 @@ def test_uniden_reconnect_shares_backoff_and_disconnect_suppression_with_other_d
   client.connect = fail_connect
   now = time.monotonic()
   controller._maintain_reconnects(status, now)
+  assert client.discovering
+  assert controller._reconnect_scan
   assert attempts == [detector["address"]]  # Saved phones must initiate their companion connections.
   assert controller._reconnect_backoff[detector["address"]] == (1, now + 15)
   controller._maintain_reconnects(status, now + 15)
-  assert controller._reconnect_backoff[detector["address"]] == (2, now + 45)
+  assert controller._reconnect_backoff[detector["address"]] == (2, now + 30)
   controller.handle({"command": "disconnect", "address": detector["address"]})
   controller._maintain_reconnects({**status, "devices": []}, now + 30)
   assert detector["address"] in controller._manual_disconnect_until
@@ -1332,7 +1334,7 @@ def test_uniden_reconnect_shares_backoff_and_disconnect_suppression_with_other_d
 def test_reconnect_does_not_block_phone_status():
   client = FakeBlueZ()
   client.device.update(audio=False, uniden=True)
-  controller = BluetoothController(FakeParams(IsOffroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  controller = BluetoothController(FakeParams(IsOffroad=False, IsOnroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
   status = controller.status()
   pending, release, status_done = threading.Event(), threading.Event(), threading.Event()
   client.connect = lambda _address: (pending.set(), release.wait(2))
@@ -1353,7 +1355,7 @@ def test_reconnect_does_not_block_phone_status():
 def test_slow_detector_reconnect_does_not_block_other_device_disconnect():
   client = FakeBlueZ()
   client.device.update(audio=False, uniden=True)
-  controller = BluetoothController(FakeParams(IsOffroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  controller = BluetoothController(FakeParams(IsOffroad=False, IsOnroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
   status = controller.status()
   pending, release, disconnected = threading.Event(), threading.Event(), threading.Event()
   client.connect = lambda _address: (pending.set(), release.wait(2))
@@ -1376,7 +1378,7 @@ def test_slow_detector_reconnect_does_not_block_other_device_disconnect():
 def test_companion_maintenance_continues_during_detector_reconnect(monkeypatch):
   client = FakeBlueZ()
   client.device.update(audio=False, uniden=True)
-  controller = BluetoothController(FakeParams(IsOffroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  controller = BluetoothController(FakeParams(IsOffroad=False, IsOnroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
   controller.status()
   pending, release = threading.Event(), threading.Event()
   client.connect = lambda _address: (pending.set(), release.wait(2))
@@ -2320,3 +2322,121 @@ def test_audio_address_decodes_device_params_bytes():
   params = FakeParams(BluetoothEnabled=True, BluetoothAudioAddress=b"00:11:22:33:44:55")
   sink = BluetoothAudioSink(params, start_thread=False)
   assert sink.desired_address() == "00:11:22:33:44:55"
+
+
+def test_bluetooth_setup_requires_fresh_stationary_park():
+  from cereal import car
+  params = FakeParams(IsOffroad=False, BluetoothEnabled=True)
+  client = FakeBlueZ()
+  controller = BluetoothController(params, lambda: client, FakeRadio(), FakeParams())
+  vehicle = SimpleNamespace(standstill=True, gearShifter=car.CarState.GearShifter.park)
+
+  class VehicleState(dict):
+    seen = {"carState": True}
+    alive = {"carState": True}
+    valid = {"carState": True}
+    def update(self, timeout):
+      pass
+
+  sm = VehicleState(carState=vehicle)
+  controller._vehicle_state = sm
+  assert controller.status()["setup_allowed"]
+  assert not controller.status()["offroad"]
+  controller.handle({"command": "start_scan"})
+  assert client.discovering
+  vehicle.gearShifter = car.CarState.GearShifter.drive
+  assert not controller._setup_allowed()
+  with pytest.raises(RuntimeError, match="Park"):
+    controller.handle({"command": "start_scan"})
+  controller._maintain_scan(controller.status(), time.monotonic())
+  assert not client.discovering
+  vehicle.gearShifter = car.CarState.GearShifter.park
+  vehicle.standstill = False
+  assert not controller._setup_allowed()
+  vehicle.standstill = True
+  for flags in [sm.seen, sm.alive, sm.valid]:
+    flags["carState"] = False
+    assert not controller._setup_allowed()
+    flags["carState"] = True
+
+
+def test_uniden_background_discovery_works_onroad_and_stops_after_connection():
+  client = FakeBlueZ()
+  client.device.update(audio=False, uniden=True)
+  controller = BluetoothController(FakeParams(IsOffroad=False, IsOnroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  controller._setup_allowed = lambda: False
+  now = time.monotonic()
+  status = controller.status()
+  controller._maintain_reconnects(status, now)
+  assert client.discovering
+  controller._maintain_scan({**status, "discovering": True}, now + 1)
+  assert client.discovering
+  controller._maintain_scan(controller.status(), now + 2)
+  assert not client.discovering
+
+
+def test_uniden_reconnect_discovery_is_bounded_and_preserves_manual_scan():
+  client = FakeBlueZ()
+  client.device.update(audio=False, uniden=True)
+  controller = BluetoothController(FakeParams(IsOffroad=False, IsOnroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  def unavailable(address):
+    raise RuntimeError("Detector still booting")
+  client.connect = unavailable
+  now = time.monotonic()
+  status = controller.status()
+  controller._maintain_reconnects(status, now)
+  controller._maintain_scan(controller.status(), controller._scan_deadline)
+  assert not client.discovering
+  controller._setup_allowed = lambda: True
+  controller.handle({"command": "start_scan"})
+  manual_deadline = controller._scan_deadline
+  controller._maintain_reconnects(controller.status(), now + 30)
+  assert not controller._reconnect_scan
+  assert controller._scan_deadline == manual_deadline
+  for retry in range(2, 9):
+    controller._maintain_reconnects(controller.status(), now + retry * 30)
+    assert controller._reconnect_backoff[client.device["address"]][1] == now + retry * 30 + 15
+
+
+def test_uniden_reconnect_pauses_overnight_and_resumes_without_comma_restart():
+  params = FakeParams(IsOffroad=True, IsOnroad=False, BluetoothEnabled=True)
+  client = FakeBlueZ()
+  client.device.update(audio=False, uniden=True)
+  controller = BluetoothController(params, lambda: client, FakeRadio(), FakeParams())
+  status = controller.status()
+  client.actions.clear()
+  now = time.monotonic()
+  controller._reconnect_backoff[client.device["address"]] = (5, now + 300)
+  for elapsed in [0, 15, 3600, 7200]:
+    controller._maintain_reconnects(status, now + elapsed)
+    assert not client.discovering
+    assert not client.actions
+  assert client.device["address"] not in controller._reconnect_backoff
+  params.put_bool("IsOnroad", True)
+  params.put_bool("IsOffroad", False)
+  controller._maintain_reconnects(controller.status(), now + 7215)
+  assert client.discovering
+  assert ("connect", client.device["address"]) in client.actions
+  # Ignition-off stops automatic discovery even if the detector is still disconnected.
+  client.device["connected"] = False
+  params.put_bool("IsOnroad", False)
+  params.put_bool("IsOffroad", True)
+  controller._maintain_scan(controller.status(), time.monotonic())
+  assert not client.discovering
+  client.actions.clear()
+  controller._maintain_reconnects(controller.status(), now + 7230)
+  assert not client.actions
+  # A manual setup search is still permitted and owns its normal timeout.
+  controller.handle({"command": "start_scan"})
+  controller._maintain_scan(controller.status(), time.monotonic())
+  assert client.discovering
+
+
+def test_uniden_reconnect_does_not_assume_ignition_on_before_manager_status():
+  client = FakeBlueZ()
+  client.device.update(audio=False, uniden=True)
+  controller = BluetoothController(FakeParams(BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  status = controller.status()
+  client.actions.clear()
+  controller._maintain_reconnects(status, time.monotonic())
+  assert not client.actions

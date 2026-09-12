@@ -72,6 +72,7 @@ class BluetoothStatus:
   powered: bool = False
   discovering: bool = False
   offroad: bool = False
+  setup_allowed: bool = False
   selected_audio: str = ""
   pairing_address: str = ""
   devices: tuple[BluetoothDevice, ...] = ()
@@ -92,6 +93,7 @@ class BluetoothStatus:
       powered=bool(value.get("powered", False)),
       discovering=bool(value.get("discovering", False)),
       offroad=bool(value.get("offroad", False)),
+      setup_allowed=bool(value.get("setup_allowed", value.get("offroad", False))),
       selected_audio=str(value.get("selected_audio", "")),
       pairing_address=str(value.get("pairing_address", "")),
       devices=tuple(BluetoothDevice.from_dict(device) for device in value.get("devices", ())),
@@ -153,6 +155,7 @@ class _DesktopFakeBluetooth:
         discovering=self._discovering,
         # Desktop demos do not run bluetooth_managerd, so keep the mock usable from Settings.
         offroad=True,
+        setup_allowed=True,
         selected_audio=self._selected_audio,
         companion_enabled=self._companion_enabled,
         companion_pairing=pairing_remaining > 0,

@@ -5355,8 +5355,9 @@ def setup(app):
     command = commands.get(operation)
     if command is None:
       return jsonify({"error": "Unknown Bluetooth operation."}), 404
+    # Power, discovery, and pairing are checked by the Bluetooth daemon using live Park/standstill data.
     offroad_only = {
-      "power", "scan", "stop_scan", "pair", "forget", "test_audio", "pairing_response",
+      "test_audio",
       "companion", "companion_pair", "companion_pair_stop",
     }
     if operation in offroad_only and not params.get_bool("IsOffroad"):

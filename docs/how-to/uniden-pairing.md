@@ -4,13 +4,13 @@ Open **Tools → Bluetooth → Uniden** (`#/bluetooth/uniden`). This tab uses th
 
 ## Pair and select a detector
 
-1. Park the vehicle and enable Bluetooth on the comma.
+1. Keep the ignition on with the vehicle stationary in Park so the detector stays powered, then enable Bluetooth on the comma. Setup also works offroad; ignition-on setup requires fresh vehicle data confirming Park and standstill.
 2. Enable Bluetooth on the detector (BT/WiFi on some models), select **BT Pairing**, and press the Menu key.
 3. Select **Search for Detectors**, identify the name and address, then select **Pair**.
-4. Wait for **Connected · Services ready**, select the device under **Active detector**, enable monitoring, and save the configuration.
+4. Wait for **Connected · Services ready**. Once offroad, select the device under **Active detector**, enable monitoring, and save the configuration.
 5. Check the monitor's live alerts and reported firmware before enabling auto slowdown.
 
-Disconnect a phone app already using the detector if it is missing from discovery. Enter BT Pairing again and search. Saved detectors reconnect through the existing Bluetooth manager. Disconnect pauses retries for five minutes; Connect resumes immediately. Forget removes the saved BlueZ device and bond. Bluetooth power affects all devices, including phones and audio.
+Disconnect a phone app already using the detector if it is missing from discovery. Enter BT Pairing again and search. Saved detectors reconnect through the existing Bluetooth manager, which starts bounded discovery windows to find fresh detector advertisements and retries failed Uniden connections at 15-second intervals instead of backing off to five minutes. Automatic detector discovery and reconnect attempts pause when the car goes offroad and resume when the driving stack reports onroad, even if the comma has remained powered for hours. An active automatic scan stops when the car goes offroad; manual setup searches retain their normal timeout. Automatic discovery does not authorize pairing new devices. Disconnect pauses retries for five minutes; Connect resumes immediately. Forget removes the saved BlueZ device and bond. Bluetooth power affects all devices, including phones and audio.
 
 Discovery recognizes R4/R4W/R8/R8W/R9/R9W-style names and UNIDEN names. Actual access requires a paired connection and the expected GATT characteristics. A recognized name or completed service discovery does not prove protocol compatibility. R7 is not supported by this integration.
 

@@ -11,7 +11,7 @@ export const BluetoothPanel = {
   data() {
     return {
       loading: true, busy: "", available: false, enabled: false, powered: false, discovering: false,
-      offroad: false, selectedAudio: "", pairingAddress: "", devices: [], prompt: null, pairValue: "", error: "", operationError: "",
+      offroad: false, setupAllowed: false, selectedAudio: "", pairingAddress: "", devices: [], prompt: null, pairValue: "", error: "", operationError: "",
     }
   },
   created() { this.poll = usePolling(() => this.refresh(), { interval: 2000 }); this.poll.start() },
@@ -31,6 +31,7 @@ export const BluetoothPanel = {
         this.powered = !!p.powered
         this.discovering = !!p.discovering
         this.offroad = !!p.offroad
+        this.setupAllowed = !!(p.setup_allowed ?? p.offroad)
         this.selectedAudio = String(p.selected_audio || "")
         this.pairingAddress = String(p.pairing_address || "")
         this.devices = Array.isArray(p.devices) ? p.devices : []
@@ -40,6 +41,7 @@ export const BluetoothPanel = {
       } catch (e) {
         this.available = false
         this.offroad = false
+        this.setupAllowed = false
         this.devices = []
         this.prompt = null
         this.error = e?.message || "Bluetooth service unavailable"
@@ -85,6 +87,7 @@ export const BluetoothPanel = {
       }
       return d.paired ? "Paired · Disconnected" : d.trusted ? "Trusted · Pairing required" : "Ready to pair"
     },
+    setupDisabled() { return !this.available || !this.setupAllowed || !!this.busy },
     offroadDisabled() { return !this.available || !this.offroad || !!this.busy },
     needsPairValue() { return this.prompt && (this.prompt.kind === "pin" || this.prompt.kind === "passkey") },
   },
@@ -105,10 +108,10 @@ export const BluetoothPanel = {
         </div>
         <div style="display:flex; align-items:center; gap:12px; justify-content:space-between;">
           <span>Bluetooth {{ enabled ? 'On' : 'Off' }}</span>
-          <button type="button" class="gx-btn gx-btn--tonal" :disabled="!available || offroadDisabled()" @click="request('power', { enabled: !enabled })">{{ enabled ? 'Turn Off' : 'Turn On' }}</button>
+          <button type="button" class="gx-btn gx-btn--tonal" :disabled="!available || setupDisabled()" @click="request('power', { enabled: !enabled })">{{ enabled ? 'Turn Off' : 'Turn On' }}</button>
         </div>
         <GxNotice v-if="!available && !loading" text="Bluetooth service unavailable. Check the comma connection and refresh." />
-        <GxNotice v-if="!offroad" text="Scanning, pairing, and forgetting devices are available offroad only." style="margin:0 0 var(--sp-2);" />
+        <GxNotice v-if="!setupAllowed" text="Bluetooth setup is available offroad or while stationary in Park. Keep the ignition on to power your detector." style="margin:0 0 var(--sp-2);" />
         <GxNotice v-if="operationError || error" tone="danger" :text="operationError || error" style="margin:0 0 var(--sp-2);" />
 
         <div v-if="prompt" class="gx-card" style="margin:12px 0; background:var(--surface-variant);">
@@ -118,18 +121,18 @@ export const BluetoothPanel = {
             <p v-if="prompt.value" style="font-size:1.5em; font-variant-numeric:tabular-nums;">{{ prompt.value }}</p>
             <input v-if="needsPairValue() && !prompt.display_only" v-model="pairValue" class="gx-field" style="width:100%;" inputmode="numeric" placeholder="Value" />
             <div v-if="!prompt.display_only" style="display:flex; gap:8px; margin-top:8px;">
-              <button type="button" class="gx-btn gx-btn--tonal" :disabled="offroadDisabled()" @click="respondPairing(false)">Cancel</button>
-              <button type="button" class="gx-btn" :disabled="offroadDisabled()" @click="respondPairing(true)">Allow</button>
+              <button type="button" class="gx-btn gx-btn--tonal" :disabled="setupDisabled()" @click="respondPairing(false)">Cancel</button>
+              <button type="button" class="gx-btn" :disabled="setupDisabled()" @click="respondPairing(true)">Allow</button>
             </div>
           </div>
         </div>
 
         <div style="display:flex; gap:8px; margin:12px 0;">
-          <button type="button" class="gx-btn" :disabled="!offroad || !enabled || offroadDisabled()" @click="request(discovering ? 'stop_scan' : 'scan')">{{ discovering ? 'Stop Search' : detectorOnly ? 'Search for Detectors' : 'Search for Devices' }}</button>
+          <button type="button" class="gx-btn" :disabled="!enabled || setupDisabled()" @click="request(discovering ? 'stop_scan' : 'scan')">{{ discovering ? 'Stop Search' : detectorOnly ? 'Search for Detectors' : 'Search for Devices' }}</button>
           <button type="button" class="gx-btn gx-btn--tonal" :disabled="!!busy" @click="refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
         </div>
 
-        <p v-if="detectorOnly" class="gx-row__desc">Bluetooth power applies to all devices. Saved detectors reconnect automatically while Bluetooth is on. Disconnect pauses retries for 5 minutes; Connect resumes immediately. Forget removes the saved pairing.</p>
+        <p v-if="detectorOnly" class="gx-row__desc">Bluetooth power applies to all devices. Saved detectors reconnect automatically while Bluetooth is on and the car is on. Automatic searches pause when the car is off. Disconnect pauses retries for 5 minutes; Connect resumes immediately. Forget removes the saved pairing.</p>
         <h4 style="margin:12px 0 8px;">{{ detectorOnly ? 'My Detectors' : 'My Devices' }}</h4>
         <div v-if="!known.length" class="gx-empty" style="padding: var(--sp-2) 0;">No saved devices yet.</div>
         <div v-for="d in known" :key="d.address" class="gx-row" style="flex-wrap:wrap;">
@@ -139,11 +142,11 @@ export const BluetoothPanel = {
           </div>
           <div v-if="detectorOnly" class="gx-row__desc" style="width:100%;">{{ d.address }} · {{ d.paired ? 'Paired' : 'Not paired' }} · {{ d.trusted ? 'Trusted' : 'Not trusted' }}<span v-if="d.rssi != null"> · Last signal {{ d.rssi }} dBm</span></div>
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
-            <button v-if="!d.paired" type="button" class="gx-btn" :disabled="offroadDisabled() || !enabled || !!pairingAddress" @click="pair(d)">{{ isPairing(d) ? 'Pairing…' : 'Pair' }}</button>
+            <button v-if="!d.paired" type="button" class="gx-btn" :disabled="setupDisabled() || !enabled || !!pairingAddress" @click="pair(d)">{{ isPairing(d) ? 'Pairing…' : 'Pair' }}</button>
             <button v-if="d.paired || d.connected" type="button" class="gx-btn gx-btn--tonal" :disabled="!available || !enabled || !!busy || !!pairingAddress" @click="connect(d)">{{ d.connected ? 'Disconnect' : 'Connect' }}</button>
             <button v-if="d.audio" type="button" class="gx-btn gx-btn--tonal" :disabled="!!busy" @click="audio(d)">{{ selectedAudio.toUpperCase() === address(d) ? 'Stop Using for Audio' : 'Use for Audio' }}</button>
             <button v-if="d.audio && d.connected" type="button" class="gx-btn gx-btn--tonal" :disabled="offroadDisabled()" @click="testAudio(d)">Test Audio</button>
-            <button v-if="d.paired || d.trusted || d.connected" type="button" class="gx-btn gx-btn--danger" :disabled="offroadDisabled()" :aria-label="'Forget ' + d.name" @click="forget(d)">Forget</button>
+            <button v-if="d.paired || d.trusted || d.connected" type="button" class="gx-btn gx-btn--danger" :disabled="setupDisabled()" :aria-label="'Forget ' + d.name" @click="forget(d)">Forget</button>
           </div>
         </div>
 
@@ -154,7 +157,7 @@ export const BluetoothPanel = {
             <span class="gx-row__label">{{ d.name }}</span>
             <span class="gx-row__desc">{{ statusOf(d) }}<template v-if="detectorOnly"> · {{ d.address }}<span v-if="d.rssi != null"> · Last signal {{ d.rssi }} dBm</span></template></span>
           </div>
-          <button type="button" class="gx-btn" :disabled="offroadDisabled() || !enabled || !!pairingAddress" @click="pair(d)">{{ isPairing(d) ? 'Pairing…' : 'Pair' }}</button>
+          <button type="button" class="gx-btn" :disabled="setupDisabled() || !enabled || !!pairingAddress" @click="pair(d)">{{ isPairing(d) ? 'Pairing…' : 'Pair' }}</button>
         </div>
       </div>
     </div>

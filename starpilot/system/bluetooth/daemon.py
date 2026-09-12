@@ -19,6 +19,7 @@ OFFROAD_COMMANDS = {
   "set_power", "start_scan", "stop_scan", "pair", "forget", "test_audio", "pairing_response",
   "set_companion", "start_companion_pairing", "stop_companion_pairing",
 }
+PARKED_COMMANDS = {"set_power", "start_scan", "stop_scan", "pair", "forget", "pairing_response"}
 SCAN_DURATION = 20.0
 COMPANION_PAIRING_DURATION = 120.0
 AUDIO_TEST_START_DELAY = 3.0
@@ -61,6 +62,8 @@ class BluetoothController:
     self._policy_disconnected: set[str] = set()
     self._policy_disconnect_retry_after: dict[str, float] = {}
     self._scan_deadline = 0.0
+    self._reconnect_scan = False
+    self._vehicle_state = None
     self._audio_test_deadline = 0.0
     self._sleep = sleep
     self.params.put_bool("BluetoothCompanionEnabled", bool(self._companion_addresses()))
@@ -293,6 +296,22 @@ class BluetoothController:
   def _offroad(self) -> bool:
     return self.params.get_bool("IsOffroad")
 
+  def _setup_allowed(self) -> bool:
+    if self._offroad():
+      return True
+    # Do not infer parked from ignition or zero speed alone (e.g. a red light).
+    try:
+      from cereal import car, messaging
+      with self._lock:
+        if self._vehicle_state is None:
+          self._vehicle_state = messaging.SubMaster(["carState"])
+        sm = self._vehicle_state
+        sm.update(0)
+        return bool(sm.seen["carState"] and sm.alive["carState"] and sm.valid["carState"] and
+                    sm["carState"].standstill and sm["carState"].gearShifter == car.CarState.GearShifter.park)
+    except Exception:
+      return False
+
   def _connection_lock(self, address: str):
     with self._lock:
       return self._connection_locks.setdefault(address.upper(), threading.Lock())
@@ -308,6 +327,7 @@ class BluetoothController:
         "powered": False,
         "discovering": False,
         "offroad": self._offroad(),
+        "setup_allowed": self._setup_allowed(),
         "selected_audio": self.params.get("BluetoothAudioAddress", encoding="utf-8") or "",
         "devices": [],
         "prompt": None,
@@ -342,6 +362,10 @@ class BluetoothController:
       return result
 
   def _require_offroad(self, command: str) -> None:
+    if command in PARKED_COMMANDS:
+      if not self._setup_allowed():
+        raise RuntimeError("Bluetooth setup requires offroad or a stationary vehicle in Park")
+      return
     if command in OFFROAD_COMMANDS and not self._offroad():
       raise RuntimeError("Bluetooth settings can only be changed offroad")
 
@@ -485,6 +509,7 @@ class BluetoothController:
         raise RuntimeError("Enable Bluetooth before scanning")
       self._pairing_error = ""
       self._client().start_discovery()
+      self._reconnect_scan = False
       self._scan_deadline = time.monotonic() + SCAN_DURATION
     elif command == "stop_scan":
       self._client().stop_discovery()
@@ -565,7 +590,13 @@ class BluetoothController:
   def _maintain_scan(self, status: dict[str, Any], now: float) -> None:
     if not status["discovering"]:
       self._scan_deadline = 0.0
-    elif not status["offroad"] or (self._scan_deadline and now >= self._scan_deadline):
+      self._reconnect_scan = False
+    elif ((not self._reconnect_scan and not status.get("setup_allowed", status["offroad"])) or
+          (self._scan_deadline and now >= self._scan_deadline) or
+          (self._reconnect_scan and not self.params.get_bool("IsOnroad")) or
+          (self._reconnect_scan and not any(d.get("uniden") and d["paired"] and d["trusted"] and not d["connected"]
+                                           and now >= self._manual_disconnect_until.get(d["address"].upper(), 0.0)
+                                           for d in status["devices"]))):
       self._client().stop_discovery()
       self._scan_deadline = 0.0
 
@@ -637,6 +668,12 @@ class BluetoothController:
 
     selected = str(status["selected_audio"])
     candidates = [device for device in devices if device["paired"] and device["trusted"] and not device["connected"]]
+    if not self.params.get_bool("IsOnroad"):
+      # An always-powered comma should not search for an ignition-powered detector all night.
+      for device in candidates:
+        if device.get("uniden", False):
+          self._reconnect_backoff.pop(device["address"].upper(), None)
+      candidates = [device for device in candidates if not device.get("uniden", False)]
     candidates.sort(key=lambda device: device["address"].upper() != selected.upper())
     controller_candidates = {
       device["address"].upper() for device in candidates
@@ -672,6 +709,18 @@ class BluetoothController:
         with self._connection_lock(address):
           if time.monotonic() < self._manual_disconnect_until.get(address, 0.0):
             continue
+          if device.get("uniden", False):
+            # The car may have turned off while this worker was waiting for another connection.
+            if not self.params.get_bool("IsOnroad"):
+              continue
+            # LE detectors may not be connectable until BlueZ sees a fresh advertisement.
+            # Keep discovery alive across the connection attempt, including onroad retries.
+            with self._lock:
+              client = self._client()
+              if not client.status()["discovering"]:
+                client.start_discovery()
+                self._reconnect_scan = True
+                self._scan_deadline = time.monotonic() + SCAN_DURATION
           if controller:
             self._client().connect(address, timeout=CONTROLLER_RECONNECT_INTERVAL_SECONDS)
           else:
@@ -680,7 +729,7 @@ class BluetoothController:
       except Exception:
         attempts += 1
         delay = (CONTROLLER_RECONNECT_INTERVAL_SECONDS if controller else
-                 min(RECONNECT_INTERVAL_SECONDS * (2 ** (attempts - 1)), RECONNECT_MAX_BACKOFF_SECONDS))
+                 RECONNECT_INTERVAL_SECONDS if device.get("uniden", False) else min(RECONNECT_INTERVAL_SECONDS * (2 ** (attempts - 1)), RECONNECT_MAX_BACKOFF_SECONDS))
         self._reconnect_backoff[address] = (attempts, now + delay)
         cloudlog.warning(f"Bluetooth reconnect failed for {address}; retrying in {delay:.0f}s")
 
