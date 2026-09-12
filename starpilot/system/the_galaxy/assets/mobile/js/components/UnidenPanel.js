@@ -1,4 +1,4 @@
-﻿import { api, showSnackbar } from "../api.js"
+import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "./GxNotice.js"
 
@@ -127,6 +127,11 @@ export const UnidenPanel = {
       } catch (e) {
         showSnackbar(e?.message || "Failed to update setting", "error")
       }
+    },
+    formatOffset(val) {
+      const n = parseInt(val, 10)
+      if (isNaN(n) || n === -1) return "Disabled"
+      return `${n >= 0 ? "+" : ""}${n} mph`
     },
     async sendAction(action) {
       if (this.busy) return
@@ -363,7 +368,7 @@ export const UnidenPanel = {
         <div class="gx-row" style="margin-bottom:var(--sp-3);">
           <div class="gx-row__info">
             <span class="gx-row__label">Radar Auto Slowdown</span>
-            <span class="gx-row__desc">Automatically reduce set speed when radar alerts are received</span>
+            <span class="gx-row__desc">Automatically adjust cruise speed to speed limit offsets when radar alerts are received</span>
           </div>
           <label class="gx-switch">
             <input type="checkbox" :checked="!!settings.UnidenAutoSlowdown"
@@ -375,40 +380,43 @@ export const UnidenPanel = {
 
         <div class="gx-row gx-row--stack" style="margin-bottom:var(--sp-3);">
           <div class="gx-row__info">
-            <span class="gx-row__label">Weak Alert (1-2 Bars) Slowdown</span>
-            <span class="gx-row__desc">Speed reduction below current speed</span>
+            <span class="gx-row__label">Weak Alert (1-2 Bars) Offset</span>
+            <span class="gx-row__desc">Offset added to the road speed limit during weak radar alerts</span>
           </div>
           <div class="gx-slider-row">
-            <span class="gx-row__value" style="min-width:60px;">-{{ settings.UnidenSlowdownOffset1_2 }} mph</span>
-            <input class="gx-slider" type="range" min="0" max="30" step="1"
-              :value="settings.UnidenSlowdownOffset1_2"
-              @change="updateSetting('UnidenSlowdownOffset1_2', parseInt($event.target.value))" />
+            <span class="gx-row__value" style="min-width:70px;">{{ formatOffset(settings.UnidenSlowdownOffset1_2) }}</span>
+            <input class="gx-slider" type="range" min="-1" max="30" step="1"
+              :value="settings.UnidenSlowdownOffset1_2 !== undefined ? settings.UnidenSlowdownOffset1_2 : 14"
+              @input="settings.UnidenSlowdownOffset1_2 = parseInt($event.target.value, 10)"
+              @change="updateSetting('UnidenSlowdownOffset1_2', parseInt($event.target.value, 10))" />
           </div>
         </div>
 
         <div class="gx-row gx-row--stack" style="margin-bottom:var(--sp-3);">
           <div class="gx-row__info">
-            <span class="gx-row__label">Medium Alert (3-5 Bars) Slowdown</span>
-            <span class="gx-row__desc">Speed reduction below current speed</span>
+            <span class="gx-row__label">Medium Alert (3-5 Bars) Offset</span>
+            <span class="gx-row__desc">Offset added to the road speed limit during medium radar alerts</span>
           </div>
           <div class="gx-slider-row">
-            <span class="gx-row__value" style="min-width:60px;">-{{ settings.UnidenSlowdownOffset3_5 }} mph</span>
-            <input class="gx-slider" type="range" min="0" max="30" step="1"
-              :value="settings.UnidenSlowdownOffset3_5"
-              @change="updateSetting('UnidenSlowdownOffset3_5', parseInt($event.target.value))" />
+            <span class="gx-row__value" style="min-width:70px;">{{ formatOffset(settings.UnidenSlowdownOffset3_5) }}</span>
+            <input class="gx-slider" type="range" min="-1" max="30" step="1"
+              :value="settings.UnidenSlowdownOffset3_5 !== undefined ? settings.UnidenSlowdownOffset3_5 : 9"
+              @input="settings.UnidenSlowdownOffset3_5 = parseInt($event.target.value, 10)"
+              @change="updateSetting('UnidenSlowdownOffset3_5', parseInt($event.target.value, 10))" />
           </div>
         </div>
 
         <div class="gx-row gx-row--stack">
           <div class="gx-row__info">
-            <span class="gx-row__label">Strong Alert (6-8 Bars) Slowdown</span>
-            <span class="gx-row__desc">Speed reduction below current speed</span>
+            <span class="gx-row__label">Strong Alert (6-8 Bars) Offset</span>
+            <span class="gx-row__desc">Offset added to the road speed limit during strong radar alerts</span>
           </div>
           <div class="gx-slider-row">
-            <span class="gx-row__value" style="min-width:60px;">-{{ settings.UnidenSlowdownOffset6_8 }} mph</span>
-            <input class="gx-slider" type="range" min="0" max="30" step="1"
-              :value="settings.UnidenSlowdownOffset6_8"
-              @change="updateSetting('UnidenSlowdownOffset6_8', parseInt($event.target.value))" />
+            <span class="gx-row__value" style="min-width:70px;">{{ formatOffset(settings.UnidenSlowdownOffset6_8) }}</span>
+            <input class="gx-slider" type="range" min="-1" max="30" step="1"
+              :value="settings.UnidenSlowdownOffset6_8 !== undefined ? settings.UnidenSlowdownOffset6_8 : 5"
+              @input="settings.UnidenSlowdownOffset6_8 = parseInt($event.target.value, 10)"
+              @change="updateSetting('UnidenSlowdownOffset6_8', parseInt($event.target.value, 10))" />
           </div>
         </div>
       </section>

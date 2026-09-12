@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import json
 import math
-import time
 
 from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
@@ -639,17 +638,25 @@ class StarPilotVCruise:
     # Pfeiferj's Speed Limit Controller
     self.slc.starpilot_toggles = starpilot_toggles
 
-    if starpilot_toggles.speed_limit_controller:
+    slc_active = bool(starpilot_toggles.speed_limit_controller)
+
+    if slc_active:
       self.slc.update_limits(sm["starpilotCarState"].dashboardSpeedLimit, now, time_validated, v_cruise, v_ego, sm)
       self.slc.update_override(v_cruise, v_cruise_diff, v_ego, v_ego_diff, sm)
 
       self.slc_offset = self.slc.offset
       self.slc_target = self.slc.target
-    elif starpilot_toggles.show_speed_limits:
+    elif starpilot_toggles.show_speed_limits or get_shm_param("UnidenAutoSlowdown", True):
       self.slc.update_limits(sm["starpilotCarState"].dashboardSpeedLimit, now, time_validated, v_cruise, v_ego, sm, display_only=True)
-
-      self.slc_offset = 0
-      self.slc_target = self.slc.target
+      radar_offset = self.slc.get_uniden_offset()
+      if radar_offset is not None and self.slc.target > 0.0:
+        self.slc.update_override(v_cruise, v_cruise_diff, v_ego, v_ego_diff, sm)
+        self.slc_offset = self.slc.offset
+        self.slc_target = self.slc.target
+        slc_active = True
+      else:
+        self.slc_offset = 0
+        self.slc_target = self.slc.target if starpilot_toggles.show_speed_limits else 0
     else:
       self.slc_offset = 0
       self.slc_target = 0
@@ -748,7 +755,7 @@ class StarPilotVCruise:
       if self.csc_target >= CSC_MIN_SPEED:
         targets.append(self.csc_target)
       slc_control_target = get_active_slc_control_target(
-        starpilot_toggles.speed_limit_controller,
+        slc_active,
         getattr(starpilot_toggles, "set_speed_limit", False),
         self.slc_target,
         self.slc_offset,
@@ -769,40 +776,13 @@ class StarPilotVCruise:
       if slc_control_target >= CSC_MIN_SPEED:
         targets.append(slc_control_target)
 
-      # Uniden Radar Auto-Slowdown (tiered offsets applied to the posted speed limit)
-      now_mono = time.monotonic()
-      radar_heartbeat = float(get_shm_param("UnidenRadarHeartbeat", 0.0) or 0.0)
-      radar_alive = (now_mono - radar_heartbeat) <= 3.0 if radar_heartbeat > 0 else True
-      uniden_slowdown = get_shm_param("UnidenAutoSlowdown", True) and get_shm_param("UnidenRadarAlertActive", False) and radar_alive
-
-      # Check for manual gas pedal override: hold until slowdown ends or gas is applied
-      gas_pressed = bool(sm["carState"].gasPressed or self.slc.overridden_speed > 0.0)
-      if uniden_slowdown:
-        if gas_pressed:
+      # Uniden Radar manual gas override tracking for HUD banner
+      radar_offset = self.slc.get_uniden_offset()
+      if radar_offset is not None:
+        if bool(sm["carState"].gasPressed or self.slc.overridden_speed > 0.0):
           set_shm_param("RoadAlertGasOverride", True)
       else:
         set_shm_param("RoadAlertGasOverride", False)
-
-      gas_override = get_shm_param("RoadAlertGasOverride", False)
-      if uniden_slowdown and not gas_override:
-        if self.slc_target > 0.0:
-          offset_mph = 0
-          strength = int(get_shm_param("UnidenRadarAlertStrength", 0) or 0)
-          if 1 <= strength <= 2:
-            offset_mph = int(get_shm_param("UnidenSlowdownOffset1_2", 14) or 0)
-          elif 3 <= strength <= 5:
-            offset_mph = int(get_shm_param("UnidenSlowdownOffset3_5", 9) or 0)
-          elif strength >= 6:
-            offset_mph = int(get_shm_param("UnidenSlowdownOffset6_8", 5) or 0)
-          else:
-            offset_mph = 0
-
-          # If offset is negative (-1), slowdown for this tier is disabled
-          if offset_mph >= 0:
-            radar_target = self.slc_target + (offset_mph * CV.MPH_TO_MS)
-            slc_control_target = radar_target
-            self._applied_slc_control_target = slc_control_target
-            targets.append(slc_control_target)
 
       if self.nav_turn_target > 0.0:
         targets.append(self.nav_turn_target)
