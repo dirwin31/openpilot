@@ -62,13 +62,13 @@ WRITE_CHAR_UUID = "2c86686a-53dc-25b3-0c4a-f0e10c8dee20"
 # works headless so users only need to press "Scan & Pair" in The Galaxy UI.
 # ---------------------------------------------------------------------------
 PAIRING_MODE_HINT = (
-    "Put your Uniden R4 in pairing mode now - it only advertises while pairing! "
+    "Put your Uniden detector (R4 / R8 / R9) in pairing mode now - it only advertises while pairing! "
     "The detector display should show PAIRING / Accept Pairing. Keep it within one "
     "meter of this device."
 )
 
 PAIRING_SCAN_WINDOW_SEC = 45.0
-PAIRING_NAME_KEYS = ("R4@", "R5@", "R7@", "R8@", "R9@", "R1@", "R3@", "UNIDEN")
+PAIRING_NAME_KEYS = ("R4@", "R5@", "R7@", "R8@", "R8W@", "R9@", "R1@", "R3@", "UNIDEN")
 
 ACTIVE_PAIRING_STATES = ("searching", "pairing", "verifying")
 
@@ -390,7 +390,7 @@ def set_param(name, value):
         return False
 
 def discover_uniden_device():
-    """Dynamically discover any paired or connected Uniden R-series detector (R4@*, R8@*, etc.)"""
+    """Dynamically discover any paired or connected Uniden R-series detector (R4@*, R8@*, R9@*, etc.)"""
     configured_mac = get_param("UnidenR4Mac", "")
     
     # Check what devices BlueZ actually has paired/known
@@ -416,7 +416,7 @@ def discover_uniden_device():
 
     # Fallback: Check if any known BlueZ device looks like a Uniden detector
     for mac, name in paired_devices.items():
-        if any(k in name.upper() for k in ["R4@", "R8@", "R9@", "UNIDEN"]):
+        if _uniden_name_match(name):
             set_param("UnidenR4Mac", mac)
             return mac
 

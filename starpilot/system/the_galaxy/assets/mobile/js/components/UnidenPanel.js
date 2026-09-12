@@ -95,7 +95,7 @@ export const UnidenPanel = {
           const ps = this.status.pairing_state || "idle"
           if (ps !== this.prevPairingState) {
             if (ps === "success") {
-              showSnackbar(this.status.pairing_message || "Uniden R4 paired & bonded!")
+              showSnackbar(this.status.pairing_message || "Uniden detector paired & bonded!")
             } else if (ps === "failed") {
               showSnackbar(this.status.pairing_message || "Pairing failed", "error")
             } else if (ps === "unreachable") {
@@ -190,7 +190,7 @@ export const UnidenPanel = {
         <div class="gx-row" style="margin-bottom:var(--sp-3);">
           <div class="gx-row__info">
             <span class="gx-row__label">Enable Radar Integration</span>
-            <span class="gx-row__desc">Process BLE alerts from Uniden R4</span>
+            <span class="gx-row__desc">Process BLE alerts from Uniden R4 / R8 / R9</span>
           </div>
           <label class="gx-switch">
             <input type="checkbox" :checked="!!settings.UnidenR4Enabled"
