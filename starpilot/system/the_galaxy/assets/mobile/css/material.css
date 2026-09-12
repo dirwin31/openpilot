@@ -1896,3 +1896,30 @@ button.gx-chip:hover {
 .gx-monitor td:first-child { min-width:180px; max-width:350px; white-space:normal; overflow-wrap:anywhere; }
 .gx-monitor tbody tr:hover { background:var(--surface); }
 @media(max-width:600px) { .gx-monitor__summary { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; } .gx-monitor__metric { padding:12px; } .gx-monitor__metric strong { font-size:22px; } }
+
+
+/* Uniden controls retain full-width, touch-friendly fields on phones. */
+.gx-uniden { padding: var(--sp-3); min-width: 0; }
+.gx-uniden h3 { margin: 0 0 16px; }
+.gx-uniden p { line-height: 1.5; overflow-wrap: anywhere; }
+.gx-uniden__status { padding: var(--sp-3); margin: 12px 0; }
+.gx-uniden__config { border: 0; padding: 0; margin: 0 0 16px; min-width: 0; }
+.gx-uniden .gx-row { gap: 16px; }
+.gx-uniden .gx-row > span { min-width: 0; }
+.gx-uniden input[type="checkbox"] { flex-shrink: 0; width: 22px; height: 22px; accent-color: var(--primary); }
+.gx-uniden .gx-uniden__field { align-items: stretch; flex-direction: column; gap: 8px; }
+.gx-uniden__field select { width: 100%; }
+.gx-uniden select { font-size: 16px; }
+.gx-uniden__bands { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 0; }
+.gx-uniden__bands label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border: 1px solid var(--glass-border); border-radius: var(--radius-md); }
+.gx-uniden__settings { margin-top: 24px; border-top: 1px solid var(--glass-border); padding-top: 12px; }
+.gx-uniden__settings summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+.gx-uniden__command { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 14px 0; border-bottom: 1px solid var(--glass-border); }
+.gx-uniden__command > label { grid-column: 1 / -1; }
+.gx-uniden__command select { width: 100%; }
+.gx-uniden__actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.gx-uniden .gx-btn { min-height: 44px; }
+@media (max-width: 480px) {
+  .gx-uniden__config + .gx-btn { width: 100%; }
+  .gx-uniden__actions .gx-btn { flex: 1 1 auto; }
+}

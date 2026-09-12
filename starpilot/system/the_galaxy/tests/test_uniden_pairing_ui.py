@@ -157,6 +157,24 @@ assert.match(view.message, /confirmation is unavailable/)
 const { compile } = await import(moduleURL(fs.readFileSync("../vendor/vue/vue.esm-browser.js", "utf8")))
 const render = compile(panel.template, { decodeEntities: text => text })
 assert.ok(render(view, []))
+const collect = node => {
+  if (!node || typeof node !== "object") return []
+  const children = Array.isArray(node) ? node : Array.isArray(node.children) ? node.children : []
+  return [node, ...children.flatMap(collect)]
+}
+const volumeSelect = () => collect(render(view, [])).find(node => node.type === "select" && node.props.id === "uniden-volume")
+view.state = { connected: false, can_write: false }
+view.dirty = true
+assert.equal(volumeSelect().props.disabled, false, "value selection must not require a writable detector or saved config")
+volumeSelect().props["onUpdate:modelValue"](0)
+await view.refresh()
+assert.equal(view.values.volume, 0, "polling must preserve selected values, including zero")
+assert.equal(view.writeDisabled, true)
+const beforeBlockedSend = calls.length
+await view.send("volume")
+assert.equal(calls.length, beforeBlockedSend)
+view.offroad = false
+assert.equal(volumeSelect().props.disabled, true)
 view.offroad = false
 const before = calls.length
 await view.send("volume")

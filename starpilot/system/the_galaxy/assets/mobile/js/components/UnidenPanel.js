@@ -14,6 +14,13 @@ export const UnidenPanel = {
   computed: {
     disabled() { return !this.online || !this.offroad || this.busy },
     writeDisabled() { return this.disabled || !this.state.connected || !this.state.can_write || this.dirty },
+    writeHint() {
+      if (this.disabled) return "Detector commands are available while parked and connected to StarPilot."
+      if (this.dirty) return "Save your configuration before sending detector commands."
+      if (!this.state.connected) return "Connect a detector to send commands."
+      if (!this.state.can_write) return "This detector connection does not support commands."
+      return ""
+    },
     targetText() {
       const speed = Number(this.slowdown.target_mps)
       return speed > 0 ? `${Math.round(speed * 2.236936)} mph / ${Math.round(speed * 3.6)} km/h` : "—"
@@ -70,12 +77,12 @@ export const UnidenPanel = {
     },
   },
   template: `
-    <div style="padding:var(--sp-3);">
+    <div class="gx-uniden">
       <h3>Detector &amp; Auto Slowdown</h3>
       <GxNotice v-if="error" tone="danger" :text="error" />
       <GxNotice v-if="message" :text="message" />
       <GxNotice v-if="!offroad" text="Configuration and detector commands are available while parked." />
-      <div class="gx-card" style="padding:var(--sp-3); margin:12px 0;">
+      <div class="gx-card gx-uniden__status">
         <strong>{{ state.connected ? state.name : 'Detector monitor disconnected' }}</strong>
         <p>{{ slowdown.reason || 'Planner inactive' }} · Target {{ targetText }}</p>
         <p v-if="state.firmware" class="gx-row__desc">Firmware: {{ state.firmware }}</p>
@@ -85,9 +92,9 @@ export const UnidenPanel = {
           <span>{{ alert.direction }} · {{ alert.frequency }} {{ alert.frequency ? 'GHz' : '' }} {{ alert.muted ? '· Muted' : '' }}</span>
         </div>
       </div>
-      <fieldset v-if="config" :disabled="disabled" style="border:0; padding:0; margin:0;" @change="dirty = true">
+      <fieldset v-if="config" :disabled="disabled" class="gx-uniden__config" @change="dirty = true">
         <label class="gx-row"><span>Enable detector monitoring</span><input type="checkbox" v-model="config.enabled" /></label>
-        <label class="gx-row"><span>Active detector</span>
+        <label class="gx-row gx-uniden__field"><span>Active detector</span>
           <select class="gx-field" v-model="config.address" aria-label="Active detector">
             <option value="">Select a paired detector</option>
             <option v-for="d in devices" :key="d.address" :value="d.address">{{ d.name }} · {{ d.address }}</option>
@@ -98,28 +105,29 @@ export const UnidenPanel = {
         <p class="gx-row__desc">Requires active openpilot longitudinal control and a valid speed limit from Speed Limit Controller or Show Speed Limits.
           Uses the posted limit without your offset; never raises your cruise target. Pressing gas overrides slowdown until the alert clears.
           Stale detector data cancels this speed ceiling.</p>
-        <label class="gx-row"><span>Minimum signal strength</span><select class="gx-field" v-model.number="config.min_strength" aria-label="Minimum signal strength"><option v-for="n in 8" :value="n">{{ n }} / 8</option></select></label>
+        <label class="gx-row gx-uniden__field"><span>Minimum signal strength</span><select class="gx-field" v-model.number="config.min_strength" aria-label="Minimum signal strength"><option v-for="n in 8" :value="n">{{ n }} / 8</option></select></label>
         <label class="gx-row"><span>Ignore muted alerts</span><input type="checkbox" v-model="config.ignore_muted" /></label>
-        <div style="display:flex; gap:12px; flex-wrap:wrap; padding:12px 0;">
+        <div class="gx-uniden__bands" role="group" aria-label="Alert bands">
           <label v-for="band in bands" :key="band"><input type="checkbox" v-model="config.bands" :value="band" /> {{ band }}</label>
         </div>
       </fieldset>
       <button type="button" class="gx-btn" :disabled="disabled || !dirty" @click="save">Save Configuration</button>
 
-      <details style="margin-top:24px;">
+      <details class="gx-uniden__settings">
         <summary>Detector Settings (experimental)</summary>
         <p>These command mappings come from the Uniden integration branch and are not verified across models or firmware.
           Current settings cannot be read back here. Select a value and send one command at a time, then check it on the detector.</p>
         <p class="gx-row__desc">R4/R4W/R8/R8W and R9 variants are candidates when they expose the required Bluetooth services. R7 is not supported.</p>
-        <div v-for="setting in settings" :key="setting.key" class="gx-row" style="flex-wrap:wrap; gap:8px;">
+        <p v-if="writeHint" class="gx-row__desc" role="status">{{ writeHint }}</p>
+        <div v-for="setting in settings" :key="setting.key" class="gx-uniden__command">
           <label :for="'uniden-' + setting.key">{{ setting.label }}</label>
-          <select :id="'uniden-' + setting.key" class="gx-field" v-model="values[setting.key]" :disabled="writeDisabled">
+          <select :id="'uniden-' + setting.key" class="gx-field" v-model="values[setting.key]" :disabled="disabled">
             <option :value="undefined" disabled>Select a value</option>
             <option v-for="value in setting.choices" :key="value" :value="value">{{ setting.choices.length === 2 && typeof value === 'number' ? (value ? 'On' : 'Off') : value }}</option>
           </select>
           <button type="button" class="gx-btn gx-btn--tonal" :disabled="writeDisabled || values[setting.key] == null" @click="send(setting.key)">Send</button>
         </div>
-        <div style="display:flex; gap:8px; margin:12px 0;">
+        <div class="gx-uniden__actions">
           <button type="button" class="gx-btn" :disabled="writeDisabled" @click="send('mute')">Mute Alert</button>
           <button type="button" class="gx-btn gx-btn--tonal" :disabled="writeDisabled" @click="send('unmute')">Unmute Alert</button>
         </div>
