@@ -2,9 +2,15 @@
 # PFEIFER - SLC - Modified by FrogAi
 import calendar
 import json
+import time
 import requests
 
 from concurrent.futures import ThreadPoolExecutor
+
+try:
+  from openpilot.starpilot.system.uniden_shm import get_shm_param, set_shm_param
+except ImportError:
+  from starpilot.system.uniden_shm import get_shm_param, set_shm_param
 
 from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
@@ -54,6 +60,7 @@ class SpeedLimitController:
     self._prev_v_cruise = None
     self._persistent_override_speed = 0.0
     self._set_speed_override_input_consumed = False
+    self.radar_slowdown_active = False
 
     self.denied_target = 0
     self.map_speed_limit = 0
@@ -108,7 +115,33 @@ class SpeedLimitController:
         return self.last_valid_limit
     return self.target
 
+  def get_uniden_offset(self):
+    if self.target <= 0:
+      return None
+    now_mono = time.monotonic()
+    radar_heartbeat = float(get_shm_param("UnidenRadarHeartbeat", 0.0) or 0.0)
+    radar_alive = (now_mono - radar_heartbeat) <= 3.0 if radar_heartbeat > 0 else True
+    uniden_slowdown = get_shm_param("UnidenAutoSlowdown", True) and get_shm_param("UnidenRadarAlertActive", False) and radar_alive
+    if not uniden_slowdown:
+      return None
+    strength = int(get_shm_param("UnidenRadarAlertStrength", 0) or 0)
+    if 1 <= strength <= 2:
+      offset_mph = int(get_shm_param("UnidenSlowdownOffset1_2", 14) or 0)
+    elif 3 <= strength <= 5:
+      offset_mph = int(get_shm_param("UnidenSlowdownOffset3_5", 9) or 0)
+    elif strength >= 6:
+      offset_mph = int(get_shm_param("UnidenSlowdownOffset6_8", 5) or 0)
+    else:
+      offset_mph = 0
+    if offset_mph < 0:
+      return None
+    return offset_mph * CV.MPH_TO_MS
+
   def get_offset(self, target_speed):
+    radar_offset = self.get_uniden_offset()
+    if radar_offset is not None:
+      return radar_offset
+
     if self.starpilot_toggles is None:
       return 0
     offset_map = OFFSET_MAP_METRIC if self.starpilot_toggles.is_metric else OFFSET_MAP_IMPERIAL
@@ -546,6 +579,19 @@ class SpeedLimitController:
       return
 
     self.override_disable_timer = 0.0
+
+    radar_offset = self.get_uniden_offset()
+    radar_active = radar_offset is not None
+    if radar_active != self.radar_slowdown_active:
+      self.radar_slowdown_active = radar_active
+      self.override_slc = False
+      self.overridden_speed = 0
+      self.override_requires_gas_release = True
+      if radar_active:
+        set_shm_param("RoadAlertGasOverride", False)
+
+    if not sm["carState"].gasPressed:
+      self.override_requires_gas_release = False
 
     target_to_use = self.target_to_use
     target_with_offset = target_to_use + self.get_offset(target_to_use)
