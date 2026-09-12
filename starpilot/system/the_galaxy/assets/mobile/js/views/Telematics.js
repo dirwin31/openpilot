@@ -162,6 +162,10 @@ export const Telematics = {
     }
   },
   computed: {
+    offlinePageURL() {
+      return new URL("../../telematics.html#/telematics", import.meta.url).href
+    },
+    standalonePage() { return window.location.pathname.endsWith("/assets/mobile/telematics.html") },
     connected() { return this.bleState === "connected" },
     connectionPending() { return this.connecting || ["connecting", "reconnecting"].includes(this.bleState) },
     // Matches the connect bar: connecting, retrying, or a live link awaiting its first frame.
@@ -204,12 +208,13 @@ export const Telematics = {
         retry: this.bleState === "error" || this.bleState === "needs-pairing",
         connectionMode: this.connectionMode,
         isFullscreen: this.isFullscreen,
-        actionHidden: this.bluetoothUnsupported,
+        actionHidden: this.bluetoothUnavailable,
       }
     },
-    // Bluetooth chosen in a browser without it: only the explanation and the
-    // transport toggle apply, so the dashboard and connect action are hidden.
-    bluetoothUnsupported() { return this.connectionMode === "bluetooth" && ["ios", "firefox", "unsupported"].includes(this.bluetoothSupport) },
+    // Bluetooth chosen where this page cannot use it (another browser, or Chrome
+    // on the HTTP page): only the explanation and the transport toggle apply, so
+    // the dashboard and connect action are hidden.
+    bluetoothUnavailable() { return this.connectionMode === "bluetooth" && this.bluetoothSupport !== "ready" },
     usesMetric() { return flag(this.frame, "metric") },
     speedUnit() { return this.usesMetric ? "km/h" : "mph" },
     // Badge under the MAX sign. Null (not "—") when there is no frame, so the
@@ -419,6 +424,13 @@ export const Telematics = {
       this.configureConnection()
       if (this.identity && !this.manuallyDisconnected) void this.connection?.connect()
     },
+    saveOfflineIdentity() {
+      try {
+        const target = new URL(this.offlinePageURL)
+        const identity = this.identity || localStorage.getItem(`galaxy-telematics-page:${window.location.pathname}`)
+        if (identity) localStorage.setItem(`galaxy-telematics-page:${target.pathname}`, identity)
+      } catch { /* The standalone page can also fetch identity while online. */ }
+    },
     pairPhone() { navigate("/bluetooth/phone") },
     configureConnection() {
       this.connection?.configure({ mode: this.connectionMode, address: this.localAddress, identity: this.identity })
@@ -583,6 +595,9 @@ export const Telematics = {
   },
   template: `
     <div class="telematics-page" :class="{ 'telematics-page--landscape': isLandscape }">
+      <p v-if="!standalonePage && !isLandscape" style="padding:12px">
+        <a class="gx-btn gx-btn--outlined" :href="offlinePageURL" @click="saveOfflineIdentity">Open offline-ready Telematics</a>
+      </p>
       <GalaxyModal v-model="showConnectionSetup" title="Local Wi-Fi connection" confirm-label="Done" cancel-label="Close" @cancel="cancelLocalTest" @confirm="cancelLocalTest">
         <p>Connect the phone and comma to the same Wi-Fi or hotspot. From galaxy.link, allow Chrome’s local network permission when asked.</p>
         <p v-if="identity">Comma: {{ identity }}</p>
@@ -596,13 +611,13 @@ export const Telematics = {
         <p>If Chrome blocks local access, open local Galaxy above. This page and the local page save their settings separately.</p>
       </GalaxyModal>
       <template v-if="capability === 'ready'">
-        <TelematicsConnectBar v-if="!isLandscape || bluetoothUnsupported" v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @fullscreen="toggleFullscreen" />
+        <TelematicsConnectBar v-if="!isLandscape || bluetoothUnavailable" v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @fullscreen="toggleFullscreen" />
         <GxNotice v-if="!connectionMode" class="telematics-pairing" tone="info" icon="bi-wifi" title="No paired phone found">
           Use Local Wi-Fi instead? To connect over Bluetooth, pair this phone first.
           <button class="telematics-setup-link" type="button" @click="setConnectionMode('lan', false); connect()">Use Wi-Fi</button> · <button class="telematics-setup-link" type="button" @click="pairPhone">Pair a phone</button>
         </GxNotice>
-        <BluetoothSupportNotice v-else-if="bluetoothUnsupported" class="telematics-pairing" :platform="bluetoothSupport" :secure-url="secureURL" pair-elsewhere />
-        <GxNotice v-else-if="connectionMode === 'bluetooth' && !bluetoothSecure" class="telematics-pairing" tone="warn" icon="bi-shield-lock-fill" title="Bluetooth needs the secure page">
+        <BluetoothSupportNotice v-else-if="bluetoothUnavailable && bluetoothSupport !== 'insecure'" class="telematics-pairing" :platform="bluetoothSupport" :secure-url="secureURL" pair-elsewhere />
+        <GxNotice v-else-if="bluetoothUnavailable" class="telematics-pairing" tone="warn" icon="bi-shield-lock-fill" title="Bluetooth needs the secure page">
           Chrome allows Bluetooth only on the HTTPS page, and a phone paired there is remembered only there.
           <a class="telematics-setup-link" :href="secureURL">Open the secure page</a>
         </GxNotice>
@@ -615,7 +630,7 @@ export const Telematics = {
           <button v-if="connectionMode === 'bluetooth'" class="telematics-setup-link" type="button" @click="pairPhone">Pair a phone</button>
         </GxNotice>
 
-        <div v-if="isLandscape && !bluetoothUnsupported" class="telematics-landscape">
+        <div v-if="isLandscape && !bluetoothUnavailable" class="telematics-landscape">
           <aside class="telematics-side telematics-side--left">
             <button class="telematics-menu-button" type="button" aria-label="Open menu" @click="openMenu"><i class="bi bi-list"></i></button>
             <TelematicsTile landscape title="TEMP" :value="tempText" :tint="tempTint" />
@@ -647,7 +662,7 @@ export const Telematics = {
           </aside>
         </div>
 
-        <div v-else-if="!bluetoothUnsupported" class="telematics-portrait">
+        <div v-else-if="!bluetoothUnavailable" class="telematics-portrait">
           <section class="telematics-instrument" :style="{ '--mode-color': modeColor }">
             <TelematicsHeader compact
               :set-speed-text="setSpeedText" :current-speed-badge="currentSpeedBadge"

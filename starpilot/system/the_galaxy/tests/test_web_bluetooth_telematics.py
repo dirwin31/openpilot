@@ -428,7 +428,7 @@ Object.defineProperty(globalThis, "navigator", { configurable: true, value: { us
 let reconnects = 0, disconnects = 0
 const makeView = (extra = {}) => {
   const view = Object.assign(Telematics.data(), Telematics.methods, {
-    identity: "comma", connectionMode: "bluetooth", bluetoothSecure: true,
+    identity: "comma", connectionMode: "bluetooth", bluetoothSecure: true, bluetoothSupport: "ready",
     ble: { reconnect() { reconnects++ }, disconnect() { disconnects++ } },
   }, extra)
   for (const [name, getter] of Object.entries(Telematics.computed)) {
@@ -556,14 +556,20 @@ try {
     local.setConnectionMode("bluetooth")
     assert.equal(local.canConnect, true, "Switching from a LAN error must not leave a global gate")
     assert.ok(!collect(barOf(local), node => !!node.props).some(node => node.props["aria-label"] === "Local Wi-Fi settings"))
-    // Firefox and Safari on the Bluetooth tab get the Phone tab's explanation.
-    for (const platform of ["firefox", "ios", "unsupported"]) {
+    // Firefox and Safari on the Bluetooth tab get the Phone tab's explanation;
+    // Chrome on the HTTP page gets the secure-page link instead.
+    for (const platform of ["firefox", "ios", "unsupported", "insecure"]) {
       const unsupported = makeView({ capability: "ready", connectionMode: "bluetooth", bluetoothSupport: platform, ble: null, bluetoothSecure: false, isLandscape })
       const notices = collect(render(unsupported, []), node => node.type === "BluetoothSupportNotice")
-      assert.equal(notices.length, 1)
-      assert.equal(notices[0].props.platform, platform)
-      assert.equal(notices[0].props["secure-url"], unsupported.secureURL)
-      assert.ok("pair-elsewhere" in notices[0].props, "Telematics points to Tools → Bluetooth → Phone")
+      if (platform === "insecure") {
+        assert.equal(notices.length, 0)
+        assert.ok(collect(render(unsupported, []), node => node.type === "a").some(node => node.props.href === unsupported.secureURL))
+      } else {
+        assert.equal(notices.length, 1)
+        assert.equal(notices[0].props.platform, platform)
+        assert.equal(notices[0].props["secure-url"], unsupported.secureURL)
+        assert.ok("pair-elsewhere" in notices[0].props, "Telematics points to Tools → Bluetooth → Phone")
+      }
       // Below it: only the connection bar, without the dashboard or a Reconnect action.
       unsupported.bleState = "error"
       const page = render(unsupported, [])
