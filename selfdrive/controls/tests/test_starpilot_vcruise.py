@@ -1352,3 +1352,40 @@ def test_nav_turn_speed_control_does_not_floor_steer_to_zero_cars():
 
   assert result == pytest.approx(vcruise.nav_turn_target)
   assert vcruise.nav_turn_target == pytest.approx(5.0 * CV.MPH_TO_MS)
+
+
+def test_uniden_speed_ceiling_respects_other_targets_and_gas_override(monkeypatch):
+  from openpilot.starpilot.system.bluetooth.uniden import CONFIG_KEY, STATE_KEY, normalize_config
+  import openpilot.starpilot.controls.lib.uniden_slowdown as uniden_module
+
+  monkeypatch.setattr(uniden_module.time, "monotonic", lambda: 100.0)
+  planner, vcruise = make_vcruise()
+  address = "AA:BB:CC:DD:EE:01"
+  planner.params.values[CONFIG_KEY] = normalize_config({"enabled": True, "address": address, "auto_slowdown": True})
+  planner.params_memory.values[STATE_KEY] = {
+    "connected": True, "address": address, "observed_at": 100.0,
+    "alerts": [{"band": "KA", "strength": 5, "muted": False}],
+  }
+  sm = make_sm(standstill=False)
+  sm["carParams"].openpilotLongitudinalControl = True
+  toggles = make_toggles()
+  toggles.show_speed_limits = True
+  vcruise.slc.target = 15.0
+  vcruise.slc.source = "Map Data"
+  monkeypatch.setattr(vcruise.slc, "update_limits", lambda *args, **kwargs: None)
+  assert update_vcruise(vcruise, sm, toggles, now=100.0, v_ego=20) == pytest.approx(15.0)
+  assert update_vcruise(vcruise, sm, toggles, now=100.0, v_ego=20, v_cruise=10) == pytest.approx(10.0)
+  sm["carState"].gasPressed = True
+  assert update_vcruise(vcruise, sm, toggles, now=100.0, v_ego=20) == pytest.approx(20.0)
+  sm["carState"].gasPressed = False
+  assert update_vcruise(vcruise, sm, toggles, now=100.0, v_ego=20) == pytest.approx(20.0)
+  planner.params_memory.values[STATE_KEY]["alerts"] = []
+  update_vcruise(vcruise, sm, toggles, now=100.0, v_ego=20)
+  planner.params_memory.values[STATE_KEY]["alerts"] = [{"band": "KA", "strength": 5, "muted": False}]
+  sm["carControl"].longActive = False
+  assert update_vcruise(vcruise, sm, toggles, now=100.0, v_ego=20) == pytest.approx(20.0)
+  sm["carControl"].longActive = True
+  assert update_vcruise(vcruise, sm, toggles, now=100.0, v_ego=20) == pytest.approx(15.0)
+  toggles.curve_speed_controller = True
+  monkeypatch.setattr(vcruise.csc, "update_target", lambda *args: setattr(vcruise.csc, "target", 14.0))
+  assert update_vcruise(vcruise, sm, toggles, now=100.0, v_ego=20) == pytest.approx(14.0)

@@ -166,6 +166,8 @@ export const api = {
   getWheelControlsStatus() { return request("/api/wheel-controls/status", { cache: "no-store" }) },
   wheelControlsOp(operation, body = {}) { return request(`/api/wheel-controls/${operation}`, { method: "POST", data: body }) },
 
+  getUniden() { return request("/api/bluetooth/uniden") },
+  unidenOp(body) { return request("/api/bluetooth/uniden", { method: "POST", data: body }) },
   getBluetoothStatus() { return request("/api/bluetooth/status") },
   bluetoothOp(operation, body = {}) { return request(`/api/bluetooth/${operation}`, { method: "POST", data: body }) },
 

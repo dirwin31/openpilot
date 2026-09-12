@@ -415,6 +415,17 @@ class BluetoothController:
 
   def handle(self, request: dict[str, Any]) -> dict[str, Any]:
     command = str(request.get("command", ""))
+    if command.startswith("uniden_"):
+      service = getattr(self, "uniden", None)
+      if service is None:
+        raise RuntimeError("Uniden monitor unavailable")
+      if not self._offroad():
+        raise RuntimeError("Uniden settings can only be changed offroad")
+      if command == "uniden_config":
+        return {"config": service.configure(request.get("config"))}
+      if command == "uniden_setting":
+        return {"result": service.apply_setting(request.get("setting"), request.get("value"))}
+      raise ValueError("Unknown Uniden operation")
     if command == "status":
       return {"status": self.status()}
     self._require_offroad(command)
@@ -752,7 +763,10 @@ def main() -> None:
     os.unlink(BLUETOOTH_SOCKET_PATH)
   except FileNotFoundError:
     pass
+  from openpilot.starpilot.system.bluetooth.uniden import UnidenService
   controller = BluetoothController()
+  controller.uniden = UnidenService(controller, Params(memory=True))
+  threading.Thread(target=controller.uniden.run, daemon=True).start()
   threading.Thread(target=controller.initialize, daemon=True).start()
   threading.Thread(target=controller.maintain_connections, daemon=True).start()
   try:
@@ -760,6 +774,7 @@ def main() -> None:
       os.chmod(BLUETOOTH_SOCKET_PATH, 0o660)
       server.serve_forever()
   finally:
+    controller.uniden.close()
     controller.close()
     try:
       os.unlink(BLUETOOTH_SOCKET_PATH)

@@ -1,3 +1,4 @@
+import { UnidenPanel } from "../components/UnidenPanel.js"
 import { BluetoothPanel } from "../components/BluetoothPanel.js"
 import { PhonePanel } from "../components/PhonePanel.js"
 import { WheelControls } from "../components/WheelControls.js"
@@ -9,13 +10,14 @@ const TABS = {
   bluetooth: "Bluetooth",
   controllers: "Controllers",
   phone: "Phone",
+  uniden: "Uniden",
 }
 
 export const Bluetooth = {
   name: "Bluetooth",
-  components: { BluetoothPanel, PhonePanel, WheelControls, GalaxySection, GalaxyTabs },
+  components: { UnidenPanel, BluetoothPanel, PhonePanel, WheelControls, GalaxySection, GalaxyTabs },
   setup() {
-    return useTabRouting("/bluetooth", { bluetooth: "bluetooth", controllers: "controllers", phone: "phone" })
+    return useTabRouting("/bluetooth", { bluetooth: "bluetooth", controllers: "controllers", phone: "phone", uniden: "uniden" })
   },
   data() { return { TABS } },
   template: `
@@ -32,6 +34,13 @@ export const Bluetooth = {
       <template v-else-if="tab === 'phone'">
         <GalaxySection title="Pair a Phone" icon="bi-phone" :collapsible="false">
           <PhonePanel />
+        </GalaxySection>
+      </template>
+
+      <template v-else-if="tab === 'uniden'">
+        <GalaxySection title="Uniden Pairing" icon="bi-broadcast" :collapsible="false">
+          <UnidenPanel />
+          <BluetoothPanel detector-only />
         </GalaxySection>
       </template>
 

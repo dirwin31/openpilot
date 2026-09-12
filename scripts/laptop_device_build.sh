@@ -433,6 +433,9 @@ set -euo pipefail
 export UV_CACHE_DIR=/work/.cache/uv
 export SCONS_CACHE=/work/.cache/scons
 export SP_FORCE_TICI=1
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=safe.directory
+export GIT_CONFIG_VALUE_0=/work
 export SP_FORCE_ARCH=larch64
 export SP_TICI_SYSROOT=/opt/tici-sysroot
 export SP_BUILD_WARP_ARTIFACTS="\${SP_BUILD_WARP_ARTIFACTS:-0}"

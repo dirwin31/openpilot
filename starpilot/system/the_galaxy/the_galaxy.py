@@ -5275,6 +5275,45 @@ def setup(app):
     response.headers["X-Accel-Buffering"] = "no"
     return response
 
+  @app.route("/api/bluetooth/uniden", methods=["GET"])
+  def uniden_status():
+    from openpilot.starpilot.system.bluetooth.uniden import load_config, SETTINGS, BANDS, STATE_KEY, SLOWDOWN_KEY
+    state = _params_memory_raw.get(STATE_KEY) or {}
+    age = time.monotonic() - float(state.get("observed_at", 0))
+    if not 0 <= age <= 3:
+      state = {**state, "connected": False, "alerts": [], "can_write": False, "error": "Waiting for fresh detector data"}
+    feedback = _params_memory_raw.get(SLOWDOWN_KEY) or {}
+    if not 0 <= time.monotonic() - float(feedback.get("observed_at", 0)) <= 3:
+      feedback = {"active": False, "reason": "Planner inactive"}
+    return _no_store_response(jsonify({"config": load_config(_params_raw), "state": state, "slowdown": feedback,
+                                      "offroad": params.get_bool("IsOffroad"), "bands": BANDS,
+                                      "settings": [{"key": key, "label": spec[0], "choices": list(spec[2])}
+                                                   for key, spec in SETTINGS.items()]}))
+
+  @app.route("/api/bluetooth/uniden", methods=["POST"])
+  def uniden_operation():
+    if not params.get_bool("IsOffroad"):
+      return jsonify({"error": "Uniden settings can only be changed offroad."}), 409
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+      return jsonify({"error": "Expected a JSON object"}), 400
+    try:
+      from openpilot.starpilot.system.bluetooth.uniden import normalize_config, setting_command
+      if data.get("operation") == "configure":
+        payload = {"config": normalize_config(data.get("config"))}
+        command = "uniden_config"
+      elif data.get("operation") == "setting":
+        setting_command(data.get("setting"), data.get("value"))
+        payload = {"setting": data.get("setting"), "value": data.get("value")}
+        command = "uniden_setting"
+      else:
+        raise ValueError("Unknown Uniden operation")
+      return jsonify(BluetoothClient(timeout=15).call(command, **payload))
+    except (ValueError, TypeError) as error:
+      return jsonify({"error": str(error)}), 400
+    except Exception as error:
+      return jsonify({"error": str(error)}), 503
+
   @app.route("/api/bluetooth/status", methods=["GET"])
   def bluetooth_status():
     try:

@@ -116,7 +116,7 @@ def device_capabilities(uuids: list[str] | tuple[str, ...], bluetooth_class: int
 
 def is_uniden_device(name: str) -> bool:
   # Advertisement names used by the collaborator's Uniden integration.
-  return name.strip().upper().startswith(("R4@", "R8@", "R9@", "UNIDEN"))
+  return name.strip().upper().startswith(("R4@", "R4W@", "R8@", "R8W@", "R9@", "R9W@", "UNIDEN"))
 
 
 def show_pairing_device(address: str, name: str, paired: bool, trusted: bool, connected: bool, blocked: bool,

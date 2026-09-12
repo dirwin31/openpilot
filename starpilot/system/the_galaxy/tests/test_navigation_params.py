@@ -824,3 +824,30 @@ def test_curve_speed_controller_reset_rejected_onroad(monkeypatch):
   assert response.get_json()["error"] == "Curve Speed Controller data can only be reset while parked."
   assert fake_params.writes == []
   assert fake_params.removals == []
+
+
+def test_uniden_api_validates_commands_and_blocks_onroad(monkeypatch):
+  client, fake_params = _params_client(monkeypatch, {"IsOffroad": True}, "mici")
+  monkeypatch.setattr(the_galaxy, "BluetoothClient", FakeBluetoothClient)
+  FakeBluetoothClient.calls = []
+  assert client.post("/api/bluetooth/uniden", json={"operation": "setting", "setting": "volume", "value": 9}).status_code == 400
+  assert not FakeBluetoothClient.calls
+  response = client.post("/api/bluetooth/uniden", json={"operation": "setting", "setting": "volume", "value": 5})
+  assert response.status_code == 200
+  assert FakeBluetoothClient.calls[-1] == ("uniden_setting", {"setting": "volume", "value": 5})
+  fake_params.values["IsOffroad"] = False
+  assert client.post("/api/bluetooth/uniden", json={"operation": "configure", "config": {}}).status_code == 409
+
+
+def test_uniden_api_expires_stale_state(monkeypatch):
+  client, _ = _params_client(monkeypatch, {"IsOffroad": True}, "mici")
+  memory = FakeParamsBackend(values={"UnidenState": {"connected": True, "observed_at": 0, "alerts": [{"band": "KA"}]},
+                                    "UnidenSlowdownStatus": {"active": True, "observed_at": 0}})
+  monkeypatch.setattr(the_galaxy, "_params_memory_raw", memory)
+  monkeypatch.setattr(the_galaxy, "_params_raw", FakeParamsBackend())
+  response = client.get("/api/bluetooth/uniden")
+  assert response.status_code == 200
+  data = response.get_json()
+  assert not data["state"]["connected"] and data["state"]["alerts"] == []
+  assert not data["slowdown"]["active"]
+  assert not data["config"]["auto_slowdown"]

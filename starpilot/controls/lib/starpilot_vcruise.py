@@ -4,6 +4,7 @@ import math
 
 from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
+from openpilot.starpilot.controls.lib.uniden_slowdown import UnidenSlowdown
 
 from openpilot.starpilot.common.starpilot_variables import CITY_SPEED_LIMIT, CRUISING_SPEED
 from openpilot.starpilot.controls.lib.curve_speed_controller import (
@@ -175,6 +176,7 @@ def get_slc_lead_drop_relaxed_target(raw_target, previous_target, v_ego, trackin
 class StarPilotVCruise:
   def __init__(self, StarPilotPlanner):
     self.starpilot_planner = StarPilotPlanner
+    self.uniden = UnidenSlowdown(StarPilotPlanner.params, StarPilotPlanner.params_memory)
 
     self.csc = CurveSpeedController(self)
     self.slc = SpeedLimitController(self)
@@ -653,6 +655,13 @@ class StarPilotVCruise:
       self.slc_target = 0
 
     self.nav_turn_target = self._get_nav_turn_control_target(v_cruise, sm, starpilot_toggles)
+    uniden_target = self.uniden.update(
+      enabled=controls_enabled,
+      longitudinal=bool(getattr(car_params, "openpilotLongitudinalControl", False) and sm["carControl"].longActive),
+      gas_pressed=bool(sm["carState"].gasPressed or self.slc.overridden_speed > 0),
+      brake_pressed=bool(sm["carState"].brakePressed),
+      cruise=v_cruise, posted_limit=self.slc_target, source=getattr(self.slc, "source", "None"),
+    )
 
     # Single tuning knob (signed feet -> meters). Defense clamp on top of UI bounds.
     offset_ft_raw = int(getattr(starpilot_toggles, 'force_stop_distance_offset', 0) or 0)
@@ -743,6 +752,8 @@ class StarPilotVCruise:
       self.force_stop_distance_cap = self.tracked_model_length
 
       targets = [v_cruise]
+      if uniden_target > 0:
+        targets.append(uniden_target)
       if self.csc_target >= CSC_MIN_SPEED:
         targets.append(self.csc_target)
       slc_control_target = get_active_slc_control_target(
