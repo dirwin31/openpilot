@@ -150,14 +150,21 @@ class AlertRenderer(Widget):
                     size=starpilot_ss.alertSize.raw, status=starpilot_ss.alertStatus.raw,
                     alert_type=starpilot_ss.alertType)
       else:
-        # Check for active Uniden Radar alert banner
+        # Check for active Uniden Radar alert banner (held until the threat clears)
         try:
           from openpilot.starpilot.system.uniden_shm import get_shm_param
-          if get_shm_param("UnidenRadarAlertActive", False):
+          gas_override = get_shm_param("RoadAlertGasOverride", False)
+          now_mono = time.monotonic()
+          radar_heartbeat = float(get_shm_param("UnidenRadarHeartbeat", 0.0) or 0.0)
+          radar_alive = (now_mono - radar_heartbeat) <= 3.0 if radar_heartbeat > 0 else True
+          if get_shm_param("UnidenRadarAlertActive", False) and radar_alive:
             band = str(get_shm_param("UnidenRadarAlertBand", "") or "").upper()
             strength = get_shm_param("UnidenRadarAlertStrength", 0)
-            ret = Alert(text1=f"RADAR: {band} BAND", text2=f"Signal Strength: {strength}/8",
-                        size=AlertSize.mid, status=AlertStatus.userPrompt, alert_type="unidenRadar")
+            t1 = f"{strength}/8 {band} BAND"
+            t2 = "Manual Gas Override" if gas_override else ""
+            size = AlertSize.mid if t2 else AlertSize.small
+            ret = Alert(text1=t1, text2=t2,
+                        size=size, status=AlertStatus.userPrompt, alert_type="unidenRadar")
           else:
             return None
         except Exception:
