@@ -119,7 +119,7 @@ export class TelematicsConnection {
     try {
       this.source = source
       const client = source === "lan" ? this.lan : this.ble
-      if (!client) message = "Bluetooth needs Chrome on an HTTPS page. Use Local Wi-Fi or open the secure page."
+      if (!client) message = "Open your Galaxy link in Chrome on Android to use Bluetooth."
       else {
         this.cache[source] = {}
         try {

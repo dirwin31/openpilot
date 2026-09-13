@@ -1,6 +1,6 @@
 import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
-import { bluetoothPlatform } from "../browser.js"
+import { bluetoothPlatform, isGalaxyLink, galaxyRoute } from "../browser.js"
 import { getLiveBLEClient } from "../ble/live_ble.js"
 import { GxNotice } from "./GxNotice.js"
 import { BluetoothSupportNotice } from "./BluetoothSupportNotice.js"
@@ -18,6 +18,10 @@ export const PhonePanel = {
   data() {
     return {
       platform: bluetoothPlatform(),
+      onGalaxyLink: isGalaxyLink(),
+      galaxyURL: "",
+      galaxyLinkError: false,
+      galaxyLinkLoading: true,
       bluetoothRadio: "unknown",
       rememberedDevices: null,
       restoredAfterReload: false,
@@ -30,6 +34,7 @@ export const PhonePanel = {
     }
   },
   created() {
+    if (!this.onGalaxyLink) { void this.loadGalaxyLink(); return }
     if (this.platform !== "ready") return
     // Telematics shares this client, so a restore it already made is visible here.
     this.restoredAfterReload = !!getLiveBLEClient().restoredDeviceID
@@ -39,16 +44,7 @@ export const PhonePanel = {
   },
   beforeUnmount() { this.poll?.destroy() },
   computed: {
-    secureURL() {
-      const target = new URL(window.location.href)
-      if (target.protocol === "https:") return target.toString()
-      target.protocol = "https:"
-      target.port = "8443"
-      return target.toString()
-    },
-    secureHost() {
-      try { return new URL(this.secureURL).hostname } catch (error) { return "this device" }
-    },
+    secureURL() { return this.onGalaxyLink ? window.location.href : this.galaxyURL },
     canRestoreBluetooth() { return supportsBluetoothRestore() },
     canWatchAdvertisements() { return supportsAdvertisementWatch() },
     bluetoothFlagsReady() { return this.canRestoreBluetooth && this.canWatchAdvertisements },
@@ -80,6 +76,16 @@ export const PhonePanel = {
     bluetoothSetupReady() { return this.bluetoothChecks.every((check) => check.ok) },
   },
   methods: {
+    async loadGalaxyLink() {
+      this.galaxyLinkError = false
+      this.galaxyLinkLoading = true
+      try {
+        const status = await api.getGalaxyStatus()
+        this.galaxyURL = status?.paired ? galaxyRoute(status.url, "/bluetooth/phone") : ""
+      } catch { this.galaxyLinkError = true }
+      finally { this.galaxyLinkLoading = false }
+    },
+    setupGalaxy() { window.location.hash = "/galaxy" },
     async refresh() {
       try {
         const p = await api.getBluetoothStatus()
@@ -144,33 +150,21 @@ export const PhonePanel = {
   },
   template: `
     <div style="padding: var(--sp-3);">
-      <BluetoothSupportNotice v-if="['ios', 'firefox', 'unsupported'].includes(platform)" :platform="platform" :secure-url="secureURL" />
+      <BluetoothSupportNotice v-if="platform === 'ios' || (onGalaxyLink && ['firefox', 'unsupported'].includes(platform))" :platform="platform" :secure-url="secureURL" />
 
-      <div v-else-if="platform === 'insecure'" class="telematics-gate">
-        <GxNotice tone="warn" icon="bi-shield-lock-fill" title="Bluetooth pairing needs the HTTPS page">
-          Web Bluetooth only works on a secure page. Galaxy serves one on port 8443.
+      <div v-else-if="!onGalaxyLink || platform === 'insecure'" class="telematics-gate">
+        <GxNotice tone="info" icon="bi-bluetooth" title="Use Bluetooth in Galaxy">
+          Use this device page for Wi-Fi Telematics. Pair your phone through your Galaxy link for Bluetooth and automatic offline saving.
         </GxNotice>
-
-        <a class="gx-btn gx-btn--block telematics-gate__open" :href="secureURL" rel="noopener">
-          <i class="bi bi-box-arrow-up-right"></i> Open the secure page
-        </a>
-        <p class="telematics-gate__url"><code>{{ secureURL }}</code></p>
-
+        <a v-if="galaxyURL" class="gx-btn gx-btn--block telematics-gate__open" :href="galaxyURL">Use Bluetooth in Galaxy</a>
+        <button v-else-if="galaxyLinkLoading" class="gx-btn gx-btn--outlined" disabled>Checking Galaxy link…</button>
+        <button v-else-if="galaxyLinkError" class="gx-btn gx-btn--outlined" @click="loadGalaxyLink">Retry Galaxy link</button>
+        <button v-else class="gx-btn gx-btn--outlined" @click="setupGalaxy">Set up Galaxy remote access</button>
         <ol class="telematics-gate__steps">
-          <li>Chrome warns <strong>&ldquo;Your connection is not private&rdquo;</strong>. Expected — keep going.</li>
-          <li>Tap <strong>Advanced</strong>, then <strong>Proceed to {{ secureHost }} (unsafe)</strong>.</li>
-          <li>You return to this tab. Follow the pairing steps there.</li>
+          <li>Open your Galaxy link in Chrome on Android while connected to the internet.</li>
+          <li>Follow the Chrome settings and pairing steps on the Phone tab.</li>
+          <li>Open Telematics and wait for “Available without internet”. Install Galaxy to return from your home screen.</li>
         </ol>
-        <p class="telematics-gate__once">You do this once per phone.</p>
-
-        <details class="telematics-gate__more">
-          <summary>Why does Chrome call it unsafe?</summary>
-          <p>Chrome shows <code>NET::ERR_CERT_AUTHORITY_INVALID</code> because the certificate is generated on your device and signed by the device itself, so no public authority vouches for it. Traffic is still encrypted and never leaves your local network.</p>
-        </details>
-        <details class="telematics-gate__more">
-          <summary>Warning keeps coming back?</summary>
-          <p>Chrome remembers the exception per address. Reach the device by name — <code>https://starpilot-&lt;device&gt;.local:8443</code> — so a new DHCP lease does not undo it.</p>
-        </details>
       </div>
 
       <div v-else class="telematics-bluetooth-setup">
@@ -240,7 +234,7 @@ export const PhonePanel = {
           <summary>Make Chrome forget this device</summary>
           <p><strong class="telematics-inline">Disconnect</strong> on Telematics ends the connection; it does not forget the device. To remove the saved pairing:</p>
           <ol>
-            <li><strong class="telematics-inline">Chrome:</strong> address-bar icon &rarr; <strong class="telematics-inline">Permissions &rarr; Bluetooth devices</strong> &rarr; remove the comma. Labels vary by Chrome version. <strong class="telematics-inline">Reset permissions</strong> also works; you may need to accept the certificate warning again.</li>
+            <li><strong class="telematics-inline">Chrome:</strong> address-bar icon &rarr; <strong class="telematics-inline">Permissions &rarr; Bluetooth devices</strong> &rarr; remove the comma. Labels vary by Chrome version. <strong class="telematics-inline">Reset permissions</strong> also works.</li>
             <li><strong class="telematics-inline">In Android</strong> open <strong class="telematics-inline">Settings &rarr; Connected devices</strong>, tap the gear beside the device, then <strong class="telematics-inline">Forget</strong>.</li>
           </ol>
           <p>Clear both: removing Chrome's permission leaves the Android pairing, which can block pairing again.</p>

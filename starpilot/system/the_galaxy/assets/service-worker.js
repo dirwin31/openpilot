@@ -1,3 +1,6 @@
+// Share the PWA scope with offline Telematics while preserving push notifications.
+importScripts("assets/mobile/telematics-worker.js")
+
 self.addEventListener("install", () => self.skipWaiting())
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()))
 

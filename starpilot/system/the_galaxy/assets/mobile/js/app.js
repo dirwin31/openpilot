@@ -1,3 +1,4 @@
+import { prepareOffline } from "./offline.js"
 import { createApp, h } from "vue"
 import { AppShell } from "./components/AppShell.js"
 import { Home } from "./views/Home.js"
@@ -171,3 +172,5 @@ initRouter()
     bg.appendChild(s)
   }
 })()
+
+void prepareOffline()

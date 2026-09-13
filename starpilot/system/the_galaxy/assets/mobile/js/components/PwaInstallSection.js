@@ -59,7 +59,7 @@ export const PwaInstallSection = {
           <li><i class="bi bi-hdd"></i><span>Uses a tiny fraction of the storage of a native app.</span></li>
           <li><i class="bi bi-lightning-charge"></i><span>Opens instantly in its own window, giving a native-app like feel.</span></li>
           <li><i class="bi bi-cloud-download"></i><span>No need to manually update the app.</span></li>
-          <li><i class="bi bi-wifi"></i><span>Requires an active network connection at all times, just like the browser version.</span></li>
+          <li><i class="bi bi-wifi"></i><span>Bluetooth Telematics works without internet on supported Android phones once saved and paired. Other features need a connection.</span></li>
         </ul>
 
         <div v-if="onLocal" class="gx-install__hint">
