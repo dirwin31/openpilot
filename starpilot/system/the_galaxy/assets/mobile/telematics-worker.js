@@ -1,6 +1,6 @@
 // Only the standalone Telematics page and its static dependencies are saved.
 // Bump this version when changing any dependency to refresh the offline snapshot.
-const CACHE = "galaxy-telematics-v3:" + self.registration.scope
+const CACHE = "galaxy-telematics-v4:" + self.registration.scope
 const workerURL = self.location.href.endsWith("/service-worker.js")
   ? new URL("assets/mobile/telematics-worker.js", self.location.href).href : self.location.href
 const appURL = new URL("../../", workerURL)

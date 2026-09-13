@@ -99,7 +99,8 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert "homeURL.hash = \"/\"" in telematics
   assert 'window.location.protocol === "https:"' in telematics
   assert "window.location.replace(this.secureURL)" not in telematics
-  assert ':href="galaxyURL"' in telematics
+  assert ':url="galaxyURL"' in telematics
+  assert ':href="url"' in telematics
   assert "8443" not in telematics
   assert "navigator.bluetooth" in telematics
   assert "reconnectRemembered" in _read("js/lan/connection.js")
@@ -599,6 +600,28 @@ globalThis.localOrigin = (await import(moduleURL(lanModule))).localOrigin
 const saved = new Map([["galaxy-telematics:serial", JSON.stringify({ mode: "lan", address: "http://old.local:8082" })]])
 globalThis.localStorage = { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value) }
 window.location = new URL("http://192.168.1.5:8082/#/telematics")
+// Dismissal survives a fresh view; help stays next to the local settings gear.
+const intro = makeView({ onGalaxyLink: false, connectionMode: "lan" })
+assert.equal(intro.wifiHelpDismissed, false)
+intro.dismissBluetoothHelp()
+assert.equal(makeView().wifiHelpDismissed, true)
+console.warn = () => {}
+try {
+  for (const isLandscape of [false, true]) {
+    const localHelp = makeView({ onGalaxyLink: false, connectionMode: "lan", capability: "ready", isLandscape })
+    const buttons = collect(barOf(localHelp), node => node.type === "button")
+    const gear = buttons.findIndex(node => node.props["aria-label"] === "Local Wi-Fi settings")
+    assert.equal(buttons[gear + 1].props["aria-label"], "Bluetooth help")
+    const page = render(localHelp, [])
+    assert.equal(collect(page, node => node.type === "GxNotice" && node.props.title === "Want to use Bluetooth?").length, 0)
+    const bar = collect(page, node => node.type === "TelematicsConnectBar")[0]
+    bar.props.onBluetoothHelp()
+    assert.equal(localHelp.showBluetoothHelp, true)
+    const modal = collect(render(localHelp, []), node => node.type === "GalaxyModal" && node.props.title === "Want to use Bluetooth?")[0]
+    assert.equal(modal.props.modelValue, true)
+  }
+} finally { console.warn = originalWarn }
+
 globalThis.api = { getDeviceStatus: async () => ({ telematicsDeviceId: "serial", localHostname: "starpilot-comma.local" }) }
 const restored = makeView({ identity: "", connectionMode: "" })
 let starts = 0

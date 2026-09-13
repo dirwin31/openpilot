@@ -101,8 +101,9 @@ export const TelematicsConnectBar = {
     connectionMode: String,
     isFullscreen: Boolean,
     actionHidden: Boolean,
+    bluetoothHelp: Boolean,
   },
-  emits: ["connect", "disconnect", "mode", "settings", "fullscreen"],
+  emits: ["connect", "disconnect", "mode", "settings", "bluetooth-help", "fullscreen"],
   template: `
     <div class="telematics-connect-bar">
       <div class="telematics-connect-bar__row">
@@ -115,17 +116,38 @@ export const TelematicsConnectBar = {
       </div>
       <div class="telematics-connect-bar__row">
         <button v-if="connectionMode === 'lan'" class="gx-btn gx-btn--outlined" type="button" aria-label="Local Wi-Fi settings" title="Local Wi-Fi settings" @click="$emit('settings')"><i class="bi bi-gear"></i></button>
+        <button v-if="connectionMode === 'lan' && bluetoothHelp" class="gx-btn gx-btn--outlined" type="button" aria-label="Bluetooth help" title="Bluetooth help" @click="$emit('bluetooth-help')"><i class="bi bi-bluetooth" aria-hidden="true"></i><span aria-hidden="true">?</span></button>
         <button class="gx-btn gx-btn--outlined" type="button" :aria-pressed="isFullscreen" @click="$emit('fullscreen')">{{ isFullscreen ? 'Exit full screen' : 'Full screen' }}</button>
       </div>
     </div>
   `,
 }
 
+// One message and link shared by the introduction and its help dialog.
+export const BluetoothLinkHelp = {
+  name: "BluetoothLinkHelp",
+  props: { url: String, loading: Boolean, error: Boolean },
+  emits: ["retry", "setup"],
+  template: `
+    <div>
+      <p>Open your Galaxy link in Chrome on Android to pair your phone with your comma. After setup, Bluetooth Telematics works without internet.</p>
+      <a v-if="url" class="gx-btn gx-btn--outlined" :href="url">Use Bluetooth in Galaxy</a>
+      <button v-else-if="loading" class="gx-btn gx-btn--outlined" type="button" disabled>Checking Galaxy link…</button>
+      <button v-else-if="error" class="gx-btn gx-btn--outlined" type="button" @click="$emit('retry')">Retry Galaxy link</button>
+      <button v-else class="gx-btn gx-btn--outlined" type="button" @click="$emit('setup')">Set up Galaxy remote access</button>
+    </div>
+  `,
+}
+
 export const Telematics = {
   name: "Telematics",
-  components: { TelematicsTile, RoadPill, TelematicsHeader, TelematicsConnectBar, GxNotice, GalaxyModal, BluetoothSupportNotice },
+  components: { TelematicsTile, RoadPill, TelematicsHeader, TelematicsConnectBar, GxNotice, GalaxyModal, BluetoothSupportNotice, BluetoothLinkHelp },
   data() {
+    let wifiHelpDismissed = false
+    try { wifiHelpDismissed = localStorage.getItem("galaxy-telematics-bluetooth-help-dismissed") === "1" } catch { /* Storage may be unavailable. */ }
     return {
+      wifiHelpDismissed,
+      showBluetoothHelp: false,
       isLandscape: false,
       isFullscreen: false,
       capability: "checking",
@@ -206,6 +228,7 @@ export const Telematics = {
         connectionMode: this.connectionMode,
         isFullscreen: this.isFullscreen,
         actionHidden: this.bluetoothUnavailable,
+        bluetoothHelp: this.wifiHelpDismissed,
       }
     },
     // Unsupported browsers on the Galaxy link show setup guidance instead of
@@ -438,6 +461,10 @@ export const Telematics = {
     },
     setupGalaxy() { navigate("/galaxy") },
     retryOffline() { void prepareOffline(true) },
+    dismissBluetoothHelp() {
+      this.wifiHelpDismissed = true
+      try { localStorage.setItem("galaxy-telematics-bluetooth-help-dismissed", "1") } catch { /* Dismiss for this visit if storage is blocked. */ }
+    },
     configureConnection() {
       this.connection?.configure({ mode: this.connectionMode, address: this.localAddress, identity: this.identity })
     },
@@ -605,12 +632,9 @@ export const Telematics = {
   },
   template: `
     <div class="telematics-page" :class="{ 'telematics-page--landscape': isLandscape }">
-      <GxNotice v-if="!onGalaxyLink && (!isLandscape || !connected)" class="telematics-pairing" tone="info" icon="bi-wifi" title="Wi-Fi Telematics">
-        Connect your phone and comma to the same Wi-Fi or hotspot. To use Bluetooth and save Telematics on this phone, open your Galaxy link.
-        <a v-if="galaxyURL" class="gx-btn gx-btn--outlined" :href="galaxyURL">Use Bluetooth in Galaxy</a>
-        <button v-else-if="galaxyLinkLoading" class="gx-btn gx-btn--outlined" disabled>Checking Galaxy link…</button>
-        <button v-else-if="galaxyLinkError" class="gx-btn gx-btn--outlined" @click="loadGalaxyLink">Retry Galaxy link</button>
-        <button v-else class="gx-btn gx-btn--outlined" @click="setupGalaxy">Set up Galaxy remote access</button>
+      <GxNotice v-if="!onGalaxyLink && !wifiHelpDismissed && (!isLandscape || !connected)" class="telematics-pairing" tone="info" icon="bi-bluetooth" title="Want to use Bluetooth?">
+        <BluetoothLinkHelp :url="galaxyURL" :loading="galaxyLinkLoading" :error="galaxyLinkError" @retry="loadGalaxyLink" @setup="setupGalaxy" />
+        <button class="gx-btn gx-btn--text" type="button" @click="dismissBluetoothHelp">Dismiss</button>
       </GxNotice>
       <GxNotice v-else-if="onGalaxyLink && (!isLandscape || !connected)" class="telematics-pairing" tone="info" icon="bi-bluetooth" title="Bluetooth Telematics">
         Set up once while online: pair this phone under Tools → Bluetooth → Phone, then connect near your comma. Install Galaxy from Galaxy &amp; App Install to reopen it from your home screen.
@@ -619,6 +643,9 @@ export const Telematics = {
         <button class="gx-btn gx-btn--outlined" @click="setupGalaxy">Galaxy &amp; App Install</button>
         <button v-if="offlineState.state === 'error'" class="gx-btn gx-btn--outlined" @click="retryOffline">Retry saving</button>
       </GxNotice>
+      <GalaxyModal v-if="!onGalaxyLink" v-model="showBluetoothHelp" title="Want to use Bluetooth?" confirm-label="Done" cancel-label="Close">
+        <BluetoothLinkHelp :url="galaxyURL" :loading="galaxyLinkLoading" :error="galaxyLinkError" @retry="loadGalaxyLink" @setup="setupGalaxy" />
+      </GalaxyModal>
       <GalaxyModal v-if="!onGalaxyLink" v-model="showConnectionSetup" title="Local Wi-Fi connection" confirm-label="Done" cancel-label="Close" @cancel="cancelLocalTest" @confirm="cancelLocalTest">
         <p>Connect the phone and comma to the same Wi-Fi or hotspot.</p>
         <p v-if="identity">Comma: {{ identity }}</p>
@@ -631,7 +658,7 @@ export const Telematics = {
         <a v-if="localGalaxyURL" class="gx-btn gx-btn--outlined" :href="localGalaxyURL">Open local Galaxy</a>
       </GalaxyModal>
       <template v-if="capability === 'ready'">
-        <TelematicsConnectBar v-if="!isLandscape || bluetoothUnavailable" v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @fullscreen="toggleFullscreen" />
+        <TelematicsConnectBar v-if="!isLandscape || bluetoothUnavailable" v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @bluetooth-help="showBluetoothHelp = true" @fullscreen="toggleFullscreen" />
         <BluetoothSupportNotice v-if="bluetoothUnavailable && bluetoothSupport !== 'insecure'" class="telematics-pairing" :platform="bluetoothSupport" :secure-url="secureURL" pair-elsewhere />
         <GxNotice v-else-if="bluetoothUnavailable" class="telematics-pairing" tone="warn" icon="bi-shield-lock-fill" title="Open your Galaxy link in Chrome">
           Reload your Galaxy link in Chrome on Android to enable Bluetooth.
@@ -657,7 +684,7 @@ export const Telematics = {
           </aside>
 
           <section class="telematics-center" :style="{ '--mode-color': modeColor }">
-            <TelematicsConnectBar v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @fullscreen="toggleFullscreen" />
+            <TelematicsConnectBar v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @bluetooth-help="showBluetoothHelp = true" @fullscreen="toggleFullscreen" />
             <TelematicsHeader
               :set-speed-text="setSpeedText" :current-speed-badge="currentSpeedBadge"
               :has-speed-limit="hasSpeedLimit" :speed-limit-text="speedLimitText" :speed-limit-offset-text="speedLimitOffsetText"
