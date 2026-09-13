@@ -190,6 +190,26 @@ export const PhonePanel = {
       </div>
 
       <div v-else class="telematics-bluetooth-setup" :class="{ 'telematics-bluetooth-setup--install': telematicsInstall.setupPage }">
+        <section class="telematics-offline-setup">
+          <p class="telematics-setup__heading">{{ telematicsInstall.setupPage ? "Finish installing Telematics" : "Telematics without internet" }}</p>
+          <p v-if="!telematicsInstall.setupPage">This page belongs to the Galaxy app. Use the button below to open the separate Telematics installer. Chrome’s install menu on this page will offer Galaxy.</p>
+          <p>Install StarPilot Telematics as a separate app. Its saved dashboard opens without internet and connects to your comma over Bluetooth.</p>
+          <p v-if="telematicsInstall.appWindow">You’re using the Telematics app.</p>
+          <p v-else-if="telematicsInstall.installed">Telematics installed. Open its home-screen icon near your comma.</p>
+          <template v-else>
+            <button v-if="!telematicsInstall.setupPage || offlineState.state !== 'ready'" class="gx-btn" type="button" :disabled="telematicsInstall.setupPage && offlineState.state === 'saving'" @click="setupOffline">{{ !telematicsInstall.setupPage ? 'Open Telematics installer' : offlineState.state === 'saving' ? 'Saving Telematics…' : 'Retry offline saving' }}</button>
+            <button v-else class="gx-btn" type="button" @click="installOfflineApp">Install Telematics</button>
+            <p v-if="telematicsInstall.setupPage && offlineState.state === 'ready'">Saved for offline use. Tap <b>Install Telematics</b> above to finish adding the app to your home screen.</p>
+            <div v-if="telematicsInstall.manualHelp">
+              <p>Open this page in Chrome. In its menu, choose <b>Add to Home screen → Install</b>. Check that the app is named <b>StarPilot Telematics</b>.</p>
+              <button class="gx-btn gx-btn--outlined" type="button" @click="copyOfflineLink">Copy setup link for Chrome</button>
+            </div>
+          </template>
+          <p v-if="offlineState.state !== 'idle'" role="status">{{ offlineState.message }}</p>
+          <p v-if="telematicsInstall.message" role="status">{{ telematicsInstall.message }}</p>
+          <p class="telematics-check__hint">Set up while your phone and comma have internet. Once saved and paired, use the Telematics icon without internet. Enable Android auto-rotate to use landscape.</p>
+        </section>
+
         <p class="telematics-setup__heading">Pair a phone</p>
         <GxNotice tone="warn" icon="bi-phone-fill" title="Do not pair from Android's Bluetooth settings">
           Start pairing here. Accept Android’s pairing prompt when it appears.
@@ -233,24 +253,7 @@ export const PhonePanel = {
           </li>
         </ol>
 
-        <section class="telematics-offline-setup">
-          <p class="telematics-setup__heading">{{ telematicsInstall.setupPage ? "Finish installing Telematics" : "Telematics without internet" }}</p>
-          <p>Install StarPilot Telematics as a separate app. Its saved dashboard opens without internet and connects to your comma over Bluetooth.</p>
-          <p v-if="telematicsInstall.appWindow">You’re using the Telematics app.</p>
-          <p v-else-if="telematicsInstall.installed">Telematics installed. Open its home-screen icon near your comma.</p>
-          <template v-else>
-            <button v-if="!telematicsInstall.setupPage || offlineState.state !== 'ready'" class="gx-btn" type="button" :disabled="offlineState.state === 'saving'" @click="setupOffline">{{ offlineState.state === 'saving' ? 'Saving Telematics…' : 'Set up offline Telematics' }}</button>
-            <button v-else class="gx-btn" type="button" @click="installOfflineApp">Install Telematics</button>
-            <p v-if="telematicsInstall.setupPage && offlineState.state === 'ready'">Saved for offline use. Tap <b>Install Telematics</b> above to finish adding the app to your home screen.</p>
-            <div v-if="telematicsInstall.manualHelp">
-              <p>Open this page in Chrome. In its menu, choose <b>Add to Home screen → Install</b>. Check that the app is named <b>StarPilot Telematics</b>.</p>
-              <button class="gx-btn gx-btn--outlined" type="button" @click="copyOfflineLink">Copy setup link for Chrome</button>
-            </div>
-          </template>
-          <p v-if="offlineState.state !== 'idle'" role="status">{{ offlineState.message }}</p>
-          <p v-if="telematicsInstall.message" role="status">{{ telematicsInstall.message }}</p>
-          <p class="telematics-check__hint">Set up while your phone and comma have internet. Once saved and paired, use the Telematics icon without internet. Enable Android auto-rotate to use landscape.</p>
-        </section>
+
 
         <p class="telematics-setup__heading">Connection checks</p>
         <ul class="telematics-checks">

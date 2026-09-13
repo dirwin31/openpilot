@@ -32,14 +32,16 @@ if (telematicsInstall.setupPage) {
 }
 
 export async function setupTelematicsOffline() {
-  if (offlineState.state === "saving") return
-  await prepareOffline(true)
-  if (offlineState.state !== "ready") return
+  // Leave the Galaxy manifest behind first. Saving on the main Phone page can
+  // fail or stall, leaving Chrome offering the existing Galaxy app instead.
   if (!telematicsInstall.setupPage) {
     const url = new URL("assets/mobile/telematics-setup.html", galaxyAppBase())
     url.hash = "/bluetooth/phone"
     window.location.assign(url.href)
+    return
   }
+  if (offlineState.state === "saving") return
+  await prepareOffline(true)
 }
 
 export async function installTelematics() {
