@@ -1,4 +1,4 @@
-import { openGalaxyBluetooth } from "../galaxy-link.js"
+import { openGalaxyBluetooth, galaxySignInURL } from "../galaxy-link.js"
 import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "../components/GxNotice.js"
@@ -132,6 +132,7 @@ export const BluetoothLinkHelp = {
   props: { url: String, loading: Boolean, error: Boolean },
   emits: ["retry", "setup"],
   data() { return { opening: false, openError: "" } },
+  computed: { loginURL() { return galaxySignInURL(this.url) } },
   methods: {
     async openGalaxy() {
       if (this.opening) return
@@ -145,10 +146,11 @@ export const BluetoothLinkHelp = {
   template: `
     <div>
       <p>Open your Galaxy link in Chrome on Android to pair your phone with your comma. After setup, Bluetooth Telematics works without internet.</p>
-      <button v-if="url" class="gx-btn gx-btn--outlined" type="button" :disabled="opening" @click="openGalaxy">{{ opening ? "Checking Galaxy…" : "Use Bluetooth in Galaxy" }}</button>
+      <button v-if="url" class="gx-btn gx-btn--outlined" type="button" :disabled="opening" @click="openGalaxy">{{ opening ? "Opening Galaxy…" : "Use Bluetooth in Galaxy" }}</button>
       <button v-else-if="loading" class="gx-btn gx-btn--outlined" type="button" disabled>Checking Galaxy link…</button>
       <button v-else-if="error" class="gx-btn gx-btn--outlined" type="button" @click="$emit('retry')">Retry Galaxy link</button>
       <button v-else class="gx-btn gx-btn--outlined" type="button" @click="$emit('setup')">Set up Galaxy remote access</button>
+      <p v-if="url" class="telematics-check__hint" style="margin-top: 10px;">If Galaxy shows “unknown route” or asks for a password, <a :href="loginURL">sign in to Galaxy</a>, then return here and tap the button again.</p>
       <p v-if="openError" role="alert">{{ openError }}</p>
     </div>
   `,

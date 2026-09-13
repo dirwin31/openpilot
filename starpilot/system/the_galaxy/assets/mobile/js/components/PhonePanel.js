@@ -1,4 +1,4 @@
-import { openGalaxyBluetooth } from "../galaxy-link.js"
+import { openGalaxyBluetooth, galaxySignInURL } from "../galaxy-link.js"
 import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { bluetoothPlatform, isGalaxyLink, galaxyRoute } from "../browser.js"
@@ -47,6 +47,7 @@ export const PhonePanel = {
   },
   beforeUnmount() { this.poll?.destroy() },
   computed: {
+    loginURL() { return galaxySignInURL(this.galaxyURL) },
     secureURL() { return this.onGalaxyLink ? window.location.href : this.galaxyURL },
     canRestoreBluetooth() { return supportsBluetoothRestore() },
     canWatchAdvertisements() { return supportsAdvertisementWatch() },
@@ -168,10 +169,11 @@ export const PhonePanel = {
         <GxNotice tone="info" icon="bi-bluetooth" title="Use Bluetooth in Galaxy">
           Use this device page for Wi-Fi Telematics. Pair your phone through your Galaxy link for Bluetooth and automatic offline saving.
         </GxNotice>
-        <button v-if="galaxyURL" class="gx-btn gx-btn--block telematics-gate__open telematics-gate__open--phone" type="button" :disabled="openingGalaxy" @click="openGalaxy">{{ openingGalaxy ? "Checking Galaxy…" : "Use Bluetooth in Galaxy" }}</button>
+        <button v-if="galaxyURL" class="gx-btn gx-btn--block telematics-gate__open telematics-gate__open--phone" type="button" :disabled="openingGalaxy" @click="openGalaxy">{{ openingGalaxy ? "Opening Galaxy…" : "Use Bluetooth in Galaxy" }}</button>
         <button v-else-if="galaxyLinkLoading" class="gx-btn gx-btn--outlined" disabled>Checking Galaxy link…</button>
         <button v-else-if="galaxyLinkError" class="gx-btn gx-btn--outlined" @click="loadGalaxyLink">Retry Galaxy link</button>
         <button v-else class="gx-btn gx-btn--outlined" @click="setupGalaxy">Set up Galaxy remote access</button>
+        <p v-if="galaxyURL" class="telematics-check__hint" style="margin-top: 10px;">If Galaxy shows “unknown route” or asks for a password, <a :href="loginURL">sign in to Galaxy</a>, then navigate back to here.</p>
         <p v-if="galaxyOpenError" role="alert">{{ galaxyOpenError }}</p>
         <ol class="telematics-gate__steps">
           <li>Open your Galaxy link in Chrome on Android while connected to the internet.</li>
