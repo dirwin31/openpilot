@@ -150,7 +150,7 @@ export const BluetoothLinkHelp = {
       <button v-else-if="loading" class="gx-btn gx-btn--outlined" type="button" disabled>Checking Galaxy link…</button>
       <button v-else-if="error" class="gx-btn gx-btn--outlined" type="button" @click="$emit('retry')">Retry Galaxy link</button>
       <button v-else class="gx-btn gx-btn--outlined" type="button" @click="$emit('setup')">Set up Galaxy remote access</button>
-      <p v-if="url" class="telematics-check__hint" style="margin-top: 10px;">If Galaxy shows “unknown route” or asks for a password, <a :href="loginURL">sign in to Galaxy</a>, then return here and tap the button again.</p>
+      <p v-if="url" class="telematics-signin-warning">If Galaxy shows “unknown route” or asks for a password, <a :href="loginURL">sign in to Galaxy</a>, then return here and tap the button again.</p>
       <p v-if="openError" role="alert">{{ openError }}</p>
     </div>
   `,

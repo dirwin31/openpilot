@@ -446,3 +446,15 @@
 .telematics-pair-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 
 .telematics-bluetooth-setup .telematics-pair-success { margin-top: 16px; }
+
+.telematics-signin-warning,
+.telematics-bluetooth-setup .telematics-signin-warning {
+  background: color-mix(in srgb, var(--warning, #f5c542) 16%, var(--surface-container-low));
+  border: 1px solid color-mix(in srgb, var(--warning, #f5c542) 55%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--on-surface);
+  line-height: 1.5;
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  text-align: center;
+}

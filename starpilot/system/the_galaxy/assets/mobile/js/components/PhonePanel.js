@@ -173,7 +173,7 @@ export const PhonePanel = {
         <button v-else-if="galaxyLinkLoading" class="gx-btn gx-btn--outlined" disabled>Checking Galaxy link…</button>
         <button v-else-if="galaxyLinkError" class="gx-btn gx-btn--outlined" @click="loadGalaxyLink">Retry Galaxy link</button>
         <button v-else class="gx-btn gx-btn--outlined" @click="setupGalaxy">Set up Galaxy remote access</button>
-        <p v-if="galaxyURL" class="telematics-check__hint" style="margin-top: 10px;">If Galaxy shows “unknown route” or asks for a password, <a :href="loginURL">sign in to Galaxy</a>, then navigate back to here.</p>
+        <p v-if="galaxyURL" class="telematics-signin-warning">If Galaxy shows “unknown route” or asks for a password, <a :href="loginURL">sign in to Galaxy</a>, then navigate back to here.</p>
         <p v-if="galaxyOpenError" role="alert">{{ galaxyOpenError }}</p>
         <ol class="telematics-gate__steps">
           <li>Open your Galaxy link in Chrome on Android while connected to the internet.</li>
