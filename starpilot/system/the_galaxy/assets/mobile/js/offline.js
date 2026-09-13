@@ -67,7 +67,7 @@ export function prepareOffline(retry = false) {
       })
       if (!identity) throw new Error("Device identity unavailable")
       offlineState.state = "ready"
-      offlineState.message = "Available without internet. Open the Telematics app near your paired comma with Bluetooth enabled."
+      offlineState.message = "Available without internet. Open the saved Telematics page near your paired comma with Bluetooth enabled."
     } catch (error) {
       offlineState.state = "error"
       offlineState.message = "Telematics could not be saved completely. Connect to the internet and retry saving from your Galaxy link."

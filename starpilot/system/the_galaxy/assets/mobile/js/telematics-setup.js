@@ -3,7 +3,6 @@ import { createApp } from "vue"
 import { PhonePanel } from "./components/PhonePanel.js"
 import { galaxyAppBase } from "./browser.js"
 import { initRouter } from "./store.js"
-import { prepareOffline } from "./offline.js"
 
 function route() {
   const hash = window.location.hash
@@ -20,6 +19,3 @@ route()
 window.addEventListener("hashchange", route)
 initRouter()
 createApp(PhonePanel).mount("#galaxy-app")
-// Continue the setup explicitly started on the Bluetooth Phone page. Verify the
-// snapshot again in this install document before enabling the install action.
-if (!isTelematicsAppWindow()) void prepareOffline()

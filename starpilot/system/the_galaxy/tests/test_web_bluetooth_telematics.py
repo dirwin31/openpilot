@@ -717,7 +717,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 const notices = []
 globalThis.offlineState = { state: "idle", message: "" }
-globalThis.telematicsInstall = { setupPage: false, appWindow: false }
+globalThis.telematicsOffline = { dismissed: false }
 globalThis.showSnackbar = (...args) => notices.push(args)
 const source = fs.readFileSync("js/components/PhonePanel.js", "utf8").replace(/^import .*$/gm, "")
 const moduleURL = (code) => `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`

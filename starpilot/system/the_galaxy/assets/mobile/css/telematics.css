@@ -459,8 +459,8 @@
   text-align: center;
 }
 
-.telematics-offline-setup { border-top: 1px solid var(--outline); margin: 16px 0; padding: 16px 0; }
 
-/* The separate installation document opens at the next action, not pairing step 1. */
-.telematics-bluetooth-setup--install { display: flex; flex-direction: column; }
-.telematics-bluetooth-setup--install > .telematics-offline-setup { order: -1; border-top: 0; margin-top: 0; }
+
+
+
+.telematics-bluetooth-setup .telematics-offline-banner { margin-bottom: 16px; }
