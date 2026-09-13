@@ -1,3 +1,4 @@
+import { openGalaxyBluetooth } from "../galaxy-link.js"
 import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "../components/GxNotice.js"
@@ -130,13 +131,25 @@ export const BluetoothLinkHelp = {
   name: "BluetoothLinkHelp",
   props: { url: String, loading: Boolean, error: Boolean },
   emits: ["retry", "setup"],
+  data() { return { opening: false, openError: "" } },
+  methods: {
+    async openGalaxy() {
+      if (this.opening) return
+      this.opening = true
+      this.openError = ""
+      try { await openGalaxyBluetooth(this.url) }
+      catch (error) { this.openError = error.message }
+      finally { this.opening = false }
+    },
+  },
   template: `
     <div>
       <p>Open your Galaxy link in Chrome on Android to pair your phone with your comma. After setup, Bluetooth Telematics works without internet.</p>
-      <a v-if="url" class="gx-btn gx-btn--outlined" :href="url">Use Bluetooth in Galaxy</a>
+      <button v-if="url" class="gx-btn gx-btn--outlined" type="button" :disabled="opening" @click="openGalaxy">{{ opening ? "Checking Galaxy…" : "Use Bluetooth in Galaxy" }}</button>
       <button v-else-if="loading" class="gx-btn gx-btn--outlined" type="button" disabled>Checking Galaxy link…</button>
       <button v-else-if="error" class="gx-btn gx-btn--outlined" type="button" @click="$emit('retry')">Retry Galaxy link</button>
       <button v-else class="gx-btn gx-btn--outlined" type="button" @click="$emit('setup')">Set up Galaxy remote access</button>
+      <p v-if="openError" role="alert">{{ openError }}</p>
     </div>
   `,
 }

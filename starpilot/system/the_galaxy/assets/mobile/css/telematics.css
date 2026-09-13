@@ -20,6 +20,8 @@
   text-decoration: none;
 }
 
+.telematics-gate__open--phone { margin-bottom: var(--sp-4); }
+
 .telematics-gate__url {
   color: var(--text-muted);
   margin: 8px 0 20px;

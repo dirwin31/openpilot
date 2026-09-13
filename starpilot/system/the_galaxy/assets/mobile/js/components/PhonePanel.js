@@ -1,3 +1,4 @@
+import { openGalaxyBluetooth } from "../galaxy-link.js"
 import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { bluetoothPlatform, isGalaxyLink, galaxyRoute } from "../browser.js"
@@ -20,6 +21,8 @@ export const PhonePanel = {
       platform: bluetoothPlatform(),
       onGalaxyLink: isGalaxyLink(),
       galaxyURL: "",
+      openingGalaxy: false,
+      galaxyOpenError: "",
       galaxyLinkError: false,
       galaxyLinkLoading: true,
       bluetoothRadio: "unknown",
@@ -76,6 +79,14 @@ export const PhonePanel = {
     bluetoothSetupReady() { return this.bluetoothChecks.every((check) => check.ok) },
   },
   methods: {
+    async openGalaxy() {
+      if (this.openingGalaxy) return
+      this.openingGalaxy = true
+      this.galaxyOpenError = ""
+      try { await openGalaxyBluetooth(this.galaxyURL) }
+      catch (error) { this.galaxyOpenError = error.message }
+      finally { this.openingGalaxy = false }
+    },
     async loadGalaxyLink() {
       this.galaxyLinkError = false
       this.galaxyLinkLoading = true
@@ -157,10 +168,11 @@ export const PhonePanel = {
         <GxNotice tone="info" icon="bi-bluetooth" title="Use Bluetooth in Galaxy">
           Use this device page for Wi-Fi Telematics. Pair your phone through your Galaxy link for Bluetooth and automatic offline saving.
         </GxNotice>
-        <a v-if="galaxyURL" class="gx-btn gx-btn--block telematics-gate__open" :href="galaxyURL">Use Bluetooth in Galaxy</a>
+        <button v-if="galaxyURL" class="gx-btn gx-btn--block telematics-gate__open telematics-gate__open--phone" type="button" :disabled="openingGalaxy" @click="openGalaxy">{{ openingGalaxy ? "Checking Galaxy…" : "Use Bluetooth in Galaxy" }}</button>
         <button v-else-if="galaxyLinkLoading" class="gx-btn gx-btn--outlined" disabled>Checking Galaxy link…</button>
         <button v-else-if="galaxyLinkError" class="gx-btn gx-btn--outlined" @click="loadGalaxyLink">Retry Galaxy link</button>
         <button v-else class="gx-btn gx-btn--outlined" @click="setupGalaxy">Set up Galaxy remote access</button>
+        <p v-if="galaxyOpenError" role="alert">{{ galaxyOpenError }}</p>
         <ol class="telematics-gate__steps">
           <li>Open your Galaxy link in Chrome on Android while connected to the internet.</li>
           <li>Follow the Chrome settings and pairing steps on the Phone tab.</li>

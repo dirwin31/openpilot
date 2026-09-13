@@ -57,7 +57,7 @@ def test_phone_tab_gates_platforms_and_owns_pairing():
   assert "pair-elsewhere" not in phone
   # the insecure gate must explain the jump instead of silently redirecting to :8443
   assert "window.location.replace(this.secureURL)" not in phone
-  assert ':href="galaxyURL"' in phone
+  assert '@click="openGalaxy"' in phone
   assert "8443" not in phone
   assert "Set up Galaxy remote access" in phone
   assert "Use Bluetooth in Galaxy" in phone
@@ -100,7 +100,7 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert 'window.location.protocol === "https:"' in telematics
   assert "window.location.replace(this.secureURL)" not in telematics
   assert ':url="galaxyURL"' in telematics
-  assert ':href="url"' in telematics
+  assert '@click="openGalaxy"' in telematics
   assert "8443" not in telematics
   assert "navigator.bluetooth" in telematics
   assert "reconnectRemembered" in _read("js/lan/connection.js")
@@ -806,7 +806,7 @@ assert.equal(notices.at(-1)[1], "error", "Clipboard failure must offer manual co
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
-@pytest.mark.parametrize("script", ["telematics_offline_test.mjs", "telematics_pwa_test.mjs", "telematics_setup_test.mjs"])
+@pytest.mark.parametrize("script", ["telematics_offline_test.mjs", "telematics_pwa_test.mjs", "telematics_setup_test.mjs", "galaxy_link_test.mjs"])
 def test_telematics_offline_pwa(script):
   result = subprocess.run([shutil.which("node"), str(Path(__file__).with_name(script))], capture_output=True, text=True, timeout=20)
   assert result.returncode == 0, result.stderr
