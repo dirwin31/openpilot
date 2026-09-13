@@ -7,6 +7,11 @@ for p in ("/data/python_packages", "/usr/local/venv/lib/python3.12/site-packages
     if os.path.isdir(p) and p not in sys.path:
         sys.path.insert(0, p)
 
+# Add starpilot third_party for vendored bleak + dbus-fast
+_third_party = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "third_party")
+if os.path.isdir(_third_party) and _third_party not in sys.path:
+    sys.path.insert(0, _third_party)
+
 try:
     import bleak
 except ImportError:
@@ -16,34 +21,45 @@ from openpilot.common.params import Params
 from starpilot.system.uniden_r4 import discover_uniden_device, DEFAULTS, get_param, set_param
 from starpilot.system.uniden_protocol import parse_alerts, parse_telemetry
 
+# Use uniden_shm for cross-process shared memory
+from starpilot.system.uniden_shm import set_shm_param, get_shm_param
 
-params_memory = Params(memory=True)
 
-def set_shm_param(name, value):
+async def _resolve_device(mac: str):
+    """Look up a known BlueZ device by MAC and return a BLEDevice with the D-Bus path,
+    so BleakClient does not need an active BLE scan."""
     try:
-        if isinstance(value, bool):
-            params_memory.put_bool(name, value)
-        else:
-            params_memory.put(name, str(value))
-        return True
-    except Exception:
-        return False
+        from dbus_fast import Message, MessageType, unpack_variants
+        from dbus_fast.aio import MessageBus
+        from dbus_fast.constants import BusType
+        from bleak.backends.device import BLEDevice
 
-def get_shm_param(name, default):
-    try:
-        if isinstance(default, bool):
-            return params_memory.get_bool(name)
-        val = params_memory.get(name)
-        if val is None:
-            return default
-        val_str = val.decode("utf-8") if isinstance(val, bytes) else str(val)
-        if isinstance(default, int):
-            return int(val_str)
-        if isinstance(default, float):
-            return float(val_str)
-        return val_str
+        bus = MessageBus(bus_type=BusType.SYSTEM)
+        await bus.connect()
+        try:
+            reply = await bus.call(
+                Message(
+                    destination="org.bluez",
+                    path="/",
+                    interface="org.freedesktop.DBus.ObjectManager",
+                    member="GetManagedObjects",
+                )
+            )
+            if reply.message_type == MessageType.ERROR:
+                return None
+
+            for obj_path, interfaces in unpack_variants(reply.body[0]).items():
+                if "org.bluez.Device1" in interfaces:
+                    props = interfaces["org.bluez.Device1"]
+                    addr = (props.get("Address") or "").upper()
+                    name = props.get("Alias", "")
+                    if addr == mac.upper():
+                        return BLEDevice(addr, name, {"path": obj_path, "props": props})
+            return None
+        finally:
+            bus.disconnect()
     except Exception:
-        return default
+        return None
 
 
 ALERT_UUID = "6eb675ab-8bd1-1b9a-7444-621e52ec6823"
@@ -133,7 +149,14 @@ async def run_uniden_daemon():
                 continue
 
             print(f"[uniden_radar_d] Attempting connection to {mac}...")
-            client = bleak.BleakClient(mac, timeout=12.0)
+            # Resolve BlueZ device path and create BLEDevice so bleak doesn't
+            # need an active scan (device is already known/bonded to BlueZ)
+            device = await _resolve_device(mac)
+            if device is None:
+                print(f"[uniden_radar_d] Device {mac} not found in BlueZ, trying scan...")
+                await asyncio.sleep(0.5)
+                continue
+            client = bleak.BleakClient(device, timeout=12.0)
             await client.connect()
             print(f"[uniden_radar_d] Connected to {mac}!")
             set_shm_param("UnidenRadarConnected", True)
