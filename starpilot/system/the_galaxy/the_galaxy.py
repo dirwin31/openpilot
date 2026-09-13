@@ -10742,7 +10742,10 @@ def setup(app):
     from starpilot.system.uniden_r4 import update_settings
     data = request.get_json(silent=True) or {}
     updated = update_settings(data)
-    return jsonify({"success": True, "settings": updated})
+    # Return both flat and nested 'settings' for UI client compatibility
+    resp = {"success": True, "settings": updated}
+    resp.update(updated)
+    return jsonify(resp)
 
   @app.route("/api/uniden/status", methods=["GET"])
   def uniden_get_status():
@@ -10764,14 +10767,6 @@ def main():
   app = Flask(__name__, static_folder="assets", static_url_path="/assets")
   setup(app)
   threading.Thread(target=_testing_ground_custom_reserved_worker, daemon=True).start()
-
-  # Start Uniden Radar Detector background BLE monitor in a daemon thread
-  try:
-    from starpilot.system.uniden_radar_d import main as uniden_main
-    threading.Thread(target=uniden_main, name="uniden_radar_thread", daemon=True).start()
-  except Exception as e:
-    print(f"Failed to start Uniden radar background monitor: {e}")
-
 
   # Desktop-only debug mode. On-device must stay on 8082 to match Galaxy FRP routing.
   on_device = _is_comma_device_runtime()
