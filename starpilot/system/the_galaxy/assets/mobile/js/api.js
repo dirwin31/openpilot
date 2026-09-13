@@ -3,7 +3,9 @@ export const LAYOUT_URL = "/assets/components/tools/device_settings_layout.json?
 async function parse(res) {
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    const err = new Error(data?.error || data?.message || res.statusText || "Request failed")
+    const detail = data?.error || data?.message || res.statusText || "Request failed"
+    const err = new Error(`${detail} (HTTP ${res.status})`)
+    err.status = res.status
     err.data = data
     throw err
   }

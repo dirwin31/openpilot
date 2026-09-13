@@ -114,7 +114,7 @@ export const PhonePanel = {
         this.error = ""
         await this.refresh()
       } catch (e) {
-        this.error = e?.message || "Unable to open the pairing window"
+        this.error = `Could not open pairing window: ${e?.message || "Unable to reach the comma"}`
       } finally {
         this.busy = ""
       }
@@ -176,7 +176,7 @@ export const PhonePanel = {
 
         <ol class="telematics-pair-steps">
           <li>
-            <strong>Set up Chrome once</strong>
+            <strong>Set up Chrome once <i v-if="bluetoothFlagsReady" class="bi bi-check-circle-fill" style="color: var(--success); margin-left: 6px;" role="img" aria-label="Both Chrome feature checks passed" title="Saved device access and find device after reload are available"></i></strong>
             <p>Turn on your phone’s Bluetooth. Copy each address into Chrome, choose <b>Enabled</b>, then <b>Relaunch</b> and return here.</p>
             <div class="telematics-pair-setting">
               <span>Web Bluetooth new permissions backend</span>
@@ -236,7 +236,7 @@ export const PhonePanel = {
           <ol>
             <li><strong class="telematics-inline">Chrome:</strong> address-bar icon → Permissions → Bluetooth devices → remove the comma. If needed, use Reset permissions.</li>
             <li><strong class="telematics-inline">Android:</strong> Settings → Connected devices → comma → Forget.</li>
-            <li><strong class="telematics-inline">Android:</strong> Galaxy Bluetooth → My Devices → Trash.</li>
+            <li><strong class="telematics-inline">Galaxy:</strong> Tools → Bluetooth → My Devices → Trash.</li>
           </ol>
         </details>
         <p v-if="!bluetoothFlagsReady" class="telematics-setup__fallback"><strong class="telematics-inline">Reconnect is not ready.</strong> Complete step 1 to reconnect after a reload. You can still pair now.</p>
