@@ -358,7 +358,12 @@ class BlueZClient:
   def stop_discovery(self) -> None:
     path, props = self.adapter()
     if props.get("Discovering", False):
-      self._call(path, ADAPTER_IFACE, "StopDiscovery")
+      try:
+        self._call(path, ADAPTER_IFACE, "StopDiscovery")
+      except RuntimeError as e:
+        if "No discovery started" in str(e):
+          return
+        raise
 
   def device_for_address(self, address: str) -> dict[str, Any]:
     normalized = address.upper()
