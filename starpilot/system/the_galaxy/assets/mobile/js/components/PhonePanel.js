@@ -192,7 +192,7 @@ export const PhonePanel = {
           </li>
           <li>
             <strong>Pair your comma</strong>
-            <p>While parked near your comma, open its pairing window, then tap <b>Pair now</b>. Choose your comma and accept the pairing prompt.</p>
+            <p>While parked near your comma, open its pairing window, then tap <b>Pair now</b>. Choose your comma (It should say Starpilot) and accept the pairing prompt.</p>
             <div class="telematics-pair-actions">
               <button v-if="pairingRemaining > 0" class="gx-btn gx-btn--outlined" type="button" disabled>Pairing window open · {{ pairingRemaining }}s</button>
               <button v-else class="gx-btn gx-btn--outlined" type="button" :disabled="!offroad || !enabled || !!busy" @click="openPairingWindow">Open pairing window</button>
@@ -201,7 +201,7 @@ export const PhonePanel = {
             <p class="telematics-check__hint">The comma is discoverable for 120 seconds.</p>
             <p v-if="!offroad" class="telematics-check__hint">Park before opening the pairing window.</p>
             <p v-else-if="!enabled" class="telematics-check__hint">Turn Bluetooth on in the Bluetooth tab first.</p>
-            <p v-if="pairMessage" class="telematics-setup-done" role="status"><i class="bi bi-check-circle-fill"></i> {{ pairMessage }}</p>
+            <p v-if="pairMessage" class="telematics-setup-done telematics-pair-success" role="status"><i class="bi bi-check-circle-fill"></i> {{ pairMessage }}</p>
             <GxNotice v-if="error" tone="danger" icon="bi-exclamation-circle-fill" :text="error" />
           </li>
           <li>

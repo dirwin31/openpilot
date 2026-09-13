@@ -442,3 +442,5 @@
 .telematics-pair-setting { margin: 12px 0; }
 .telematics-pair-setting > span { display: block; margin-bottom: 5px; }
 .telematics-pair-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+
+.telematics-bluetooth-setup .telematics-pair-success { margin-top: 16px; }

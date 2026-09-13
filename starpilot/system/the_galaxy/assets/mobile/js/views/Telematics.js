@@ -644,13 +644,6 @@ export const Telematics = {
         <BluetoothLinkHelp :url="galaxyURL" :loading="galaxyLinkLoading" :error="galaxyLinkError" @retry="loadGalaxyLink" @setup="setupGalaxy" />
         <button class="gx-btn gx-btn--text" type="button" @click="dismissBluetoothHelp">Dismiss</button>
       </GxNotice>
-      <GxNotice v-else-if="onGalaxyLink && !bluetoothSetupNeeded && !bluetoothUnavailable && (!isLandscape || !connected)" class="telematics-pairing" tone="info" icon="bi-bluetooth" title="Bluetooth Telematics">
-        Set up once while online: pair this phone under Tools → Bluetooth → Phone, then connect near your comma. Install Galaxy from Galaxy &amp; App Install to reopen it from your home screen.
-        <p role="status">{{ offlineState.message }}</p>
-        <button class="gx-btn gx-btn--outlined" @click="pairPhone">Phone setup</button>
-        <button class="gx-btn gx-btn--outlined" @click="setupGalaxy">Galaxy &amp; App Install</button>
-        <button v-if="offlineState.state === 'error'" class="gx-btn gx-btn--outlined" @click="retryOffline">Retry saving</button>
-      </GxNotice>
       <GalaxyModal v-if="!onGalaxyLink" v-model="showBluetoothHelp" title="Want to use Bluetooth?" confirm-label="Done" cancel-label="Close">
         <BluetoothLinkHelp :url="galaxyURL" :loading="galaxyLinkLoading" :error="galaxyLinkError" @retry="loadGalaxyLink" @setup="setupGalaxy" />
       </GalaxyModal>
@@ -733,6 +726,10 @@ export const Telematics = {
           </section>
         </div>
       </template>
+      <p v-if="onGalaxyLink && !bluetoothSetupNeeded && !bluetoothUnavailable && !isLandscape" class="telematics-check__hint" role="status">
+        {{ offlineState.message }}
+        <button v-if="offlineState.state === 'error'" class="gx-btn gx-btn--outlined" @click="retryOffline">Retry saving</button>
+      </p>
     </div>
   `,
 }
