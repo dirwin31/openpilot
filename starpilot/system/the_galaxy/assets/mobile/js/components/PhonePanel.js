@@ -191,7 +191,7 @@ export const PhonePanel = {
             <p class="telematics-check__hint">Already enabled both? Go to step 2.</p>
           </li>
           <li>
-            <strong>Pair your comma</strong>
+            <strong>Pair your comma <i v-if="pairMessage || rememberedDevices > 0 || restoredAfterReload" class="bi bi-check-circle-fill" style="color: var(--success); margin-left: 6px;" role="img" aria-label="Comma paired" title="A paired device is available to this page"></i></strong>
             <p>While parked near your comma, open its pairing window, then tap <b>Pair now</b>. Choose your comma (It should say Starpilot) and accept the pairing prompt.</p>
             <div class="telematics-pair-actions">
               <button v-if="pairingRemaining > 0" class="gx-btn gx-btn--outlined" type="button" disabled>Pairing window open · {{ pairingRemaining }}s</button>
