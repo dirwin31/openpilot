@@ -11,6 +11,8 @@ export function isTelematicsAppWindow() {
 export const telematicsInstall = reactive({
   setupPage: window.location.pathname.endsWith("/telematics-setup.html"),
   appWindow: isTelematicsAppWindow(),
+  browserWindow: !window.matchMedia("(display-mode: standalone)").matches,
+  manualHelp: false,
   prompt: null,
   installed: false,
   message: "",
@@ -42,7 +44,14 @@ export async function setupTelematicsOffline() {
 
 export async function installTelematics() {
   const prompt = telematicsInstall.prompt
-  if (!prompt || offlineState.state !== "ready") return
+  if (offlineState.state !== "ready") return
+  if (!prompt) {
+    telematicsInstall.manualHelp = true
+    telematicsInstall.message = telematicsInstall.browserWindow
+      ? "Chrome has not offered an install prompt. Use its menu → Add to Home screen → Install."
+      : "Open this setup page in Chrome to install a separate app. Copy the setup link below and paste it into Chrome."
+    return
+  }
   telematicsInstall.prompt = null
   try {
     // Called by the Phone page's Install button, inside the user gesture.
@@ -53,5 +62,16 @@ export async function installTelematics() {
       : "Installation cancelled. You can install later from Chrome’s menu."
   } catch {
     telematicsInstall.message = "Use Chrome’s menu → Add to Home screen → Install."
+  }
+}
+
+export async function copyTelematicsSetupLink() {
+  const url = new URL("assets/mobile/telematics-setup.html", galaxyAppBase())
+  url.hash = "/bluetooth/phone"
+  try {
+    await navigator.clipboard.writeText(url.href)
+    telematicsInstall.message = "Setup link copied. Paste it into Chrome’s address bar."
+  } catch {
+    telematicsInstall.message = `Open this address in Chrome: ${url.href}`
   }
 }

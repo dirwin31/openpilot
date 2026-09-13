@@ -1,5 +1,5 @@
 import { offlineState } from "../offline.js"
-import { telematicsInstall, setupTelematicsOffline, installTelematics } from "../telematics-install.js"
+import { telematicsInstall, setupTelematicsOffline, installTelematics, copyTelematicsSetupLink } from "../telematics-install.js"
 import { openGalaxyBluetooth, galaxySignInURL } from "../galaxy-link.js"
 import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
@@ -86,6 +86,7 @@ export const PhonePanel = {
   methods: {
     setupOffline() { return setupTelematicsOffline() },
     installOfflineApp() { return installTelematics() },
+    copyOfflineLink() { return copyTelematicsSetupLink() },
     async openGalaxy() {
       if (this.openingGalaxy) return
       this.openingGalaxy = true
@@ -188,7 +189,7 @@ export const PhonePanel = {
         </ol>
       </div>
 
-      <div v-else class="telematics-bluetooth-setup">
+      <div v-else class="telematics-bluetooth-setup" :class="{ 'telematics-bluetooth-setup--install': telematicsInstall.setupPage }">
         <p class="telematics-setup__heading">Pair a phone</p>
         <GxNotice tone="warn" icon="bi-phone-fill" title="Do not pair from Android's Bluetooth settings">
           Start pairing here. Accept Android’s pairing prompt when it appears.
@@ -233,14 +234,18 @@ export const PhonePanel = {
         </ol>
 
         <section class="telematics-offline-setup">
-          <p class="telematics-setup__heading">Telematics without internet</p>
+          <p class="telematics-setup__heading">{{ telematicsInstall.setupPage ? "Finish installing Telematics" : "Telematics without internet" }}</p>
           <p>Install StarPilot Telematics as a separate app. Its saved dashboard opens without internet and connects to your comma over Bluetooth.</p>
           <p v-if="telematicsInstall.appWindow">You’re using the Telematics app.</p>
           <p v-else-if="telematicsInstall.installed">Telematics installed. Open its home-screen icon near your comma.</p>
           <template v-else>
             <button v-if="!telematicsInstall.setupPage || offlineState.state !== 'ready'" class="gx-btn" type="button" :disabled="offlineState.state === 'saving'" @click="setupOffline">{{ offlineState.state === 'saving' ? 'Saving Telematics…' : 'Set up offline Telematics' }}</button>
-            <button v-else-if="telematicsInstall.prompt" class="gx-btn" type="button" @click="installOfflineApp">Install Telematics</button>
-            <p v-else>In Chrome’s menu, choose <b>Add to Home screen → Install</b>. Check that the app is named <b>StarPilot Telematics</b>. If you’re in the Galaxy app, open this setup page in Chrome first.</p>
+            <button v-else class="gx-btn" type="button" @click="installOfflineApp">Install Telematics</button>
+            <p v-if="telematicsInstall.setupPage && offlineState.state === 'ready'">Saved for offline use. Tap <b>Install Telematics</b> above to finish adding the app to your home screen.</p>
+            <div v-if="telematicsInstall.manualHelp">
+              <p>Open this page in Chrome. In its menu, choose <b>Add to Home screen → Install</b>. Check that the app is named <b>StarPilot Telematics</b>.</p>
+              <button class="gx-btn gx-btn--outlined" type="button" @click="copyOfflineLink">Copy setup link for Chrome</button>
+            </div>
           </template>
           <p v-if="offlineState.state !== 'idle'" role="status">{{ offlineState.message }}</p>
           <p v-if="telematicsInstall.message" role="status">{{ telematicsInstall.message }}</p>
