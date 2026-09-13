@@ -1,0 +1,16 @@
+{
+  "id": "./telematics-app",
+  "name": "StarPilot Telematics",
+  "short_name": "Telematics",
+  "description": "Live Bluetooth Telematics from your comma, available without internet after setup.",
+  "start_url": "./telematics.html?app=telematics#/telematics",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#06060f",
+  "theme_color": "#8b6cc5",
+  "icons": [
+    { "src": "../images/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "../images/android-chrome-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

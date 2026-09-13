@@ -2,7 +2,7 @@ import { reactive } from "vue"
 import { api } from "./api.js"
 import { isGalaxyLink, isIOSDevice, galaxyAppBase } from "./browser.js"
 
-export const offlineState = reactive({ state: "idle", message: "Preparing Telematics for use without internet…" })
+export const offlineState = reactive({ state: "idle", message: "Set up offline Telematics from Tools → Bluetooth → Phone." })
 const base = galaxyAppBase()
 const dashboard = new URL("assets/mobile/telematics.html", base)
 let preparation
@@ -44,9 +44,9 @@ export function prepareOffline(retry = false) {
           localStorage.setItem(`galaxy-telematics-page:${dashboard.pathname}`, identity)
         }
       } catch { /* An already saved identity remains usable without the tunnel. */ }
-      const registration = await navigator.serviceWorker.register(new URL("service-worker.js", base).href, { scope: base.pathname.replace(/\/$/, "") || "/" })
+      const registration = await navigator.serviceWorker.register(new URL("assets/mobile/telematics-worker.js", base).href, { scope: new URL("assets/mobile/", base).pathname })
         .catch(async error => {
-          const saved = await navigator.serviceWorker.getRegistration(base.href)
+          const saved = await navigator.serviceWorker.getRegistration(dashboard.href)
           if (saved?.active) return saved
           throw error
         })
@@ -65,13 +65,9 @@ export function prepareOffline(retry = false) {
         }
         registration.active.postMessage({ type: "TELEMATICS_OFFLINE_STATUS", repair: true }, [channel.port2])
       })
-      // Retire the old, narrower dashboard worker after the PWA snapshot is safe.
-      for (const previous of await navigator.serviceWorker.getRegistrations()) {
-        if (previous.scope === new URL("assets/mobile/", base).href) await previous.unregister()
-      }
       if (!identity) throw new Error("Device identity unavailable")
       offlineState.state = "ready"
-      offlineState.message = "Available without internet. Reopen Galaxy near your paired comma with Bluetooth enabled."
+      offlineState.message = "Available without internet. Open the Telematics app near your paired comma with Bluetooth enabled."
     } catch (error) {
       offlineState.state = "error"
       offlineState.message = "Telematics could not be saved completely. Connect to the internet and retry saving from your Galaxy link."

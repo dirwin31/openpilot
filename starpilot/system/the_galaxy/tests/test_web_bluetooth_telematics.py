@@ -113,7 +113,9 @@ def test_telematics_has_security_gate_controls_and_complete_layouts():
   assert 'role="radiogroup" aria-label="Connection method"' not in telematics
   assert 'this.onGalaxyLink ? "bluetooth" : "lan"' in telematics
   assert "Use Bluetooth in Galaxy" in telematics
-  assert "prepareOffline()" in telematics
+  assert "prepareOffline()" not in telematics
+  assert "prepareOffline()" not in _read("js/app.js")
+  assert '@click="setupOffline"' in _read("js/components/PhonePanel.js")
   # both orientations share one connection bar: action on the status row, no Wi-Fi icon
   assert telematics.count('<TelematicsConnectBar ') == 2 and telematics.count('v-bind="connectBar"') == 2
   assert telematics.count('v-else-if="pending"') == 1
@@ -404,7 +406,7 @@ late.close()
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
 def test_telematics_javascript_modules_parse(tmp_path):
   for relative in ("js/ble/live_frames.js", "js/ble/live_ble.js", "js/views/Telematics.js", "js/components/GalaxyModal.js", "js/lan/live_lan.js", "js/lan/connection.js",
-                   "js/offline.js", "js/telematics-app.js", "js/components/PhonePanel.js", "js/views/Bluetooth.js", "js/components/BluetoothSupportNotice.js", "js/browser.js"):
+                   "js/offline.js", "js/telematics-app.js", "js/telematics-install.js", "js/telematics-setup.js", "js/components/PhonePanel.js", "js/views/Bluetooth.js", "js/components/BluetoothSupportNotice.js", "js/browser.js"):
     source = UI_ROOT / relative
     target = tmp_path / (source.stem + ".mjs")
     target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
@@ -426,6 +428,7 @@ const { Telematics, TelematicsConnectBar } = await import(moduleURL("const GxNot
 Object.assign(globalThis, await import(moduleURL(fs.readFileSync("js/browser.js", "utf8"))))
 globalThis.offlineState = { state: "ready", message: "Saved" }
 globalThis.prepareOffline = async () => {}
+globalThis.isTelematicsAppWindow = () => false
 globalThis.window = { location: new URL("https://galaxy.firestar.link/1234567890abcdef/#/telematics") }
 const bluetooth = {}
 Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Android", bluetooth } })
@@ -713,6 +716,8 @@ def test_phone_panel_gates_browsers_and_pairs_in_the_click():
 import assert from "node:assert/strict"
 import fs from "node:fs"
 const notices = []
+globalThis.offlineState = { state: "idle", message: "" }
+globalThis.telematicsInstall = { setupPage: false, appWindow: false }
 globalThis.showSnackbar = (...args) => notices.push(args)
 const source = fs.readFileSync("js/components/PhonePanel.js", "utf8").replace(/^import .*$/gm, "")
 const moduleURL = (code) => `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
@@ -806,7 +811,7 @@ assert.equal(notices.at(-1)[1], "error", "Clipboard failure must offer manual co
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node.js runtime available")
-@pytest.mark.parametrize("script", ["telematics_offline_test.mjs", "telematics_pwa_test.mjs", "telematics_setup_test.mjs", "galaxy_link_test.mjs"])
+@pytest.mark.parametrize("script", ["telematics_offline_test.mjs", "telematics_pwa_test.mjs", "telematics_setup_test.mjs", "galaxy_link_test.mjs", "telematics_install_test.mjs"])
 def test_telematics_offline_pwa(script):
   result = subprocess.run([shutil.which("node"), str(Path(__file__).with_name(script))], capture_output=True, text=True, timeout=20)
   assert result.returncode == 0, result.stderr

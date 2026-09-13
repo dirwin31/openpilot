@@ -1,3 +1,5 @@
+import { offlineState } from "../offline.js"
+import { telematicsInstall, setupTelematicsOffline, installTelematics } from "../telematics-install.js"
 import { openGalaxyBluetooth, galaxySignInURL } from "../galaxy-link.js"
 import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
@@ -18,6 +20,8 @@ export const PhonePanel = {
   components: { GxNotice, BluetoothSupportNotice },
   data() {
     return {
+      offlineState,
+      telematicsInstall,
       platform: bluetoothPlatform(),
       onGalaxyLink: isGalaxyLink(),
       galaxyURL: "",
@@ -80,6 +84,8 @@ export const PhonePanel = {
     bluetoothSetupReady() { return this.bluetoothChecks.every((check) => check.ok) },
   },
   methods: {
+    setupOffline() { return setupTelematicsOffline() },
+    installOfflineApp() { return installTelematics() },
     async openGalaxy() {
       if (this.openingGalaxy) return
       this.openingGalaxy = true
@@ -220,11 +226,26 @@ export const PhonePanel = {
           </li>
           <li>
             <strong>Open Telematics and check reconnect</strong>
-            <p>Connect, then reload near your comma to check it reconnects. Wait for <b>Available without internet</b> before using Galaxy offline.</p>
+            <p>Connect, then reload near your comma to check it reconnects. For use without internet, set up the separate Telematics app below.</p>
             <button class="gx-btn" type="button" @click="openTelematics">Open Telematics</button>
             <p v-if="bluetoothSetupReady" class="telematics-setup-done"><i class="bi bi-check-circle-fill"></i> Reconnect verified.</p>
           </li>
         </ol>
+
+        <section class="telematics-offline-setup">
+          <p class="telematics-setup__heading">Telematics without internet</p>
+          <p>Install StarPilot Telematics as a separate app. Its saved dashboard opens without internet and connects to your comma over Bluetooth.</p>
+          <p v-if="telematicsInstall.appWindow">You’re using the Telematics app.</p>
+          <p v-else-if="telematicsInstall.installed">Telematics installed. Open its home-screen icon near your comma.</p>
+          <template v-else>
+            <button v-if="!telematicsInstall.setupPage || offlineState.state !== 'ready'" class="gx-btn" type="button" :disabled="offlineState.state === 'saving'" @click="setupOffline">{{ offlineState.state === 'saving' ? 'Saving Telematics…' : 'Set up offline Telematics' }}</button>
+            <button v-else-if="telematicsInstall.prompt" class="gx-btn" type="button" @click="installOfflineApp">Install Telematics</button>
+            <p v-else>In Chrome’s menu, choose <b>Add to Home screen → Install</b>. Check that the app is named <b>StarPilot Telematics</b>. If you’re in the Galaxy app, open this setup page in Chrome first.</p>
+          </template>
+          <p v-if="offlineState.state !== 'idle'" role="status">{{ offlineState.message }}</p>
+          <p v-if="telematicsInstall.message" role="status">{{ telematicsInstall.message }}</p>
+          <p class="telematics-check__hint">Set up while your phone and comma have internet. Once saved and paired, use the Telematics icon without internet. Enable Android auto-rotate to use landscape.</p>
+        </section>
 
         <p class="telematics-setup__heading">Connection checks</p>
         <ul class="telematics-checks">

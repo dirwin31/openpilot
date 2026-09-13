@@ -40,6 +40,17 @@ for (const prefix of ['', '/device123']) {
     handlers.fetch({ request: new Request(url), respondWith: promise => { response = promise } })
     assert.ok((await response).ok, url)
   }
+  const manifestURL = `${origin}/assets/mobile/telematics-manifest.json`
+  const manifest = await entries.get(manifestURL).clone().json()
+  const launch = new URL(manifest.start_url, manifestURL)
+  launch.hash = ''
+  let offlineLaunch
+  handlers.fetch({ request: new Request(launch), respondWith: p => { offlineLaunch = p } })
+  assert.ok((await offlineLaunch).ok, 'Installed app launches from cache with its app marker and no network')
+  assert.ok(new URL(launch).pathname.startsWith(new URL(manifest.scope, manifestURL).pathname))
+  assert.equal(manifest.orientation, 'any')
+  assert.notEqual(manifest.id, '46bf2df73deba8e1512c35de')
+  for (const icon of manifest.icons) assert.ok(entries.has(new URL(icon.src, manifestURL).href))
   // Every static JS import in the cached snapshot must also be available offline.
   for (const [url, response] of entries) {
     if (!url.endsWith('.js')) continue

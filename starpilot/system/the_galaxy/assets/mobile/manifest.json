@@ -13,5 +13,5 @@
   "theme_color": "#8b6cc5",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
-  "orientation": "portrait-primary"
+  "orientation": "any"
 }

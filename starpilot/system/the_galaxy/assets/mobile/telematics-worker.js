@@ -1,6 +1,6 @@
 // Only the standalone Telematics page and its static dependencies are saved.
 // Bump this version when changing any dependency to refresh the offline snapshot.
-const CACHE = "galaxy-telematics-v15:" + self.registration.scope
+const CACHE = "galaxy-telematics-v16:" + self.registration.scope
 const workerURL = self.location.href.endsWith("/service-worker.js")
   ? new URL("assets/mobile/telematics-worker.js", self.location.href).href : self.location.href
 const appURL = new URL("../../", workerURL)
@@ -11,6 +11,9 @@ const ASSETS = new Set([
   "../mobile/js/api.js",
   "../mobile/js/galaxy-link.js",
   "../mobile/js/offline.js",
+  "../mobile/js/telematics-install.js",
+  "../mobile/js/telematics-setup.js",
+  "../mobile/js/components/PhonePanel.js",
   "../mobile/js/ble/live_ble.js",
   "../mobile/js/ble/live_frames.js",
   "../mobile/js/browser.js",
@@ -24,6 +27,10 @@ const ASSETS = new Set([
   "../mobile/js/telematics-app.js",
   "../mobile/js/views/Telematics.js",
   "../mobile/telematics.html",
+  "../mobile/telematics-setup.html",
+  "../mobile/telematics-manifest.json",
+  "../images/android-chrome-192x192.png",
+  "../images/android-chrome-512x512.png",
   "../images/main_logo.png",
   "../vendor/bootstrap-icons/bootstrap-icons.min.css",
   "../vendor/bootstrap-icons/fonts/bootstrap-icons.woff",

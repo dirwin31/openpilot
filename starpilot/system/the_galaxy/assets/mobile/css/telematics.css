@@ -458,3 +458,5 @@
   padding: 12px 14px;
   text-align: center;
 }
+
+.telematics-offline-setup { border-top: 1px solid var(--outline); margin: 16px 0; padding: 16px 0; }

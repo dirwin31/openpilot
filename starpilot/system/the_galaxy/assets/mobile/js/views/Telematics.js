@@ -7,7 +7,7 @@ import { BluetoothSupportNotice } from "../components/BluetoothSupportNotice.js"
 import { store, navigate } from "../store.js"
 import { isIOSDevice, bluetoothPlatform, isGalaxyLink, galaxyRoute, galaxyAppBase } from "../browser.js"
 import { getLiveBLEClient } from "../ble/live_ble.js"
-import { offlineState, prepareOffline } from "../offline.js"
+import { isTelematicsAppWindow } from "../telematics-install.js"
 import { LiveLANClient, localOrigin } from "../lan/live_lan.js"
 import { TelematicsConnection } from "../lan/connection.js"
 import { hasFlag, LIVE_FLAGS } from "../ble/live_frames.js"
@@ -190,7 +190,7 @@ export const Telematics = {
       galaxyURL: "",
       galaxyLinkError: false,
       galaxyLinkLoading: true,
-      offlineState,
+      inTelematicsApp: isTelematicsAppWindow(),
       connectionSource: "",
       connection: null,
       localAddress: "",
@@ -482,7 +482,6 @@ export const Telematics = {
       finally { this.galaxyLinkLoading = false }
     },
     setupGalaxy() { navigate("/galaxy") },
-    retryOffline() { void prepareOffline(true) },
     dismissBluetoothHelp() {
       this.wifiHelpDismissed = true
       try { localStorage.setItem("galaxy-telematics-bluetooth-help-dismissed", "1") } catch { /* Dismiss for this visit if storage is blocked. */ }
@@ -592,8 +591,7 @@ export const Telematics = {
       return
     }
 
-    if (this.onGalaxyLink) void prepareOffline()
-    else void this.loadGalaxyLink()
+    if (!this.onGalaxyLink) void this.loadGalaxyLink()
 
     this.orientation = window.matchMedia("(orientation: landscape)")
     this.isLandscape = this.orientation.matches
@@ -741,10 +739,7 @@ export const Telematics = {
           </section>
         </div>
       </template>
-      <p v-if="onGalaxyLink && !bluetoothSetupNeeded && !bluetoothUnavailable && !isLandscape" class="telematics-check__hint" role="status">
-        {{ offlineState.message }}
-        <button v-if="offlineState.state === 'error'" class="gx-btn gx-btn--outlined" @click="retryOffline">Retry saving</button>
-      </p>
+      <p v-if="inTelematicsApp && !isLandscape" class="telematics-check__hint">StarPilot Telematics app · Bluetooth</p>
     </div>
   `,
 }
