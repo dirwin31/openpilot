@@ -668,7 +668,7 @@ export const Telematics = {
       <GxNotice v-if="bluetoothSetupNeeded" class="telematics-pairing" tone="info" icon="bi-bluetooth" :title="bluetoothChecked ? 'Pair your phone to get started' : 'Checking for a paired phone…'">
         <template v-if="bluetoothChecked">
           Pair this phone with your comma to see live Telematics. Setup takes place in Chrome on Android while you’re online and parked near your comma.
-          <button class="gx-btn" type="button" @click="pairPhone">Pair a phone</button>
+          <div style="margin-top: 12px;"><button class="gx-btn" type="button" @click="pairPhone">Pair a phone</button></div>
         </template>
       </GxNotice>
       <template v-if="capability === 'ready' && !bluetoothSetupNeeded">

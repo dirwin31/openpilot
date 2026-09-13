@@ -231,11 +231,12 @@ export const PhonePanel = {
         <p class="telematics-check__hint"><strong class="telematics-inline">Can’t find your comma?</strong> Open the pairing window again. If you paired in Android settings, remove the pairing below and retry.</p>
 
         <details class="telematics-setup__more">
-          <summary>Remove an old pairing</summary>
-          <p>Remove it from both places, then repeat step 2.</p>
+          <summary>Errors Connecting? Remove an old pairing</summary>
+          <p>Remove it from All 3 places, then repeat step 2.</p>
           <ol>
             <li><strong class="telematics-inline">Chrome:</strong> address-bar icon → Permissions → Bluetooth devices → remove the comma. If needed, use Reset permissions.</li>
             <li><strong class="telematics-inline">Android:</strong> Settings → Connected devices → comma → Forget.</li>
+            <li><strong class="telematics-inline">Android:</strong> Galaxy Bluetooth → My Devices → Trash.</li>
           </ol>
         </details>
         <p v-if="!bluetoothFlagsReady" class="telematics-setup__fallback"><strong class="telematics-inline">Reconnect is not ready.</strong> Complete step 1 to reconnect after a reload. You can still pair now.</p>
