@@ -67,18 +67,19 @@ def test_phone_tab_gates_platforms_and_owns_pairing():
   # the comma's pairing window opens from here instead of the device screen
   assert 'api.bluetoothOp("companion_pair")' in phone
   assert "companion_pairing_remaining" in phone
-  assert "discoverable / 120s" in phone
+  assert "discoverable for 120 seconds" in phone
   assert "Pair now" in phone
   assert "client.connect()" in phone
-  assert ':open="!bluetoothFlagsReady || !restoredAfterReload"' in phone
+  assert ':open="!bluetoothFlagsReady || !restoredAfterReload"' not in phone
   # pairing from Android's settings is the common wrong turn; warn against it
   assert "Do not pair from Android's Bluetooth settings" in phone
-  assert "only creates a system bond" in phone
+  assert phone.index("Do not pair from Android's Bluetooth settings") < phone.index('<ol class="telematics-pair-steps">')
   # Disconnect cannot revoke the Chrome permission, so say how to do it by hand
-  assert "Make Chrome forget this device" in phone
+  assert "Remove an old pairing" in phone
   assert "Bluetooth devices" in phone
   assert "Connected devices" in phone
-  assert 'v-if="rememberedDevices > 0"' in phone
+  assert phone.index("Open Telematics and check reconnect") < phone.index("Connection checks")
+  assert phone.index("Connection checks") < phone.index("<details")
   assert "telematics-setup__more" in phone
   # both flags are required, so both get a numbered step and a probed row
   assert "bluetoothChecks" in phone

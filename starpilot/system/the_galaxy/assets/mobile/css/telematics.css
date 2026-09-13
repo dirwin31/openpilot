@@ -407,3 +407,37 @@
   .telematics-page--landscape { min-height: 355px; }
   .telematics-page--landscape > .telematics-pairing { margin: 8px; max-width: none; position: static; }
 }
+
+/* Keep required phone setup visible and in one numbered sequence. */
+.telematics-bluetooth-setup .telematics-pair-steps {
+  counter-reset: phone-step;
+  list-style: none;
+  margin-top: 16px;
+  padding: 0;
+}
+.telematics-pair-steps > li {
+  border-top: 1px solid var(--outline);
+  counter-increment: phone-step;
+  padding: 16px 0 8px 40px;
+  position: relative;
+}
+.telematics-pair-steps > li::before {
+  align-items: center;
+  background: var(--primary);
+  border-radius: 50%;
+  color: var(--on-primary, #fff);
+  content: counter(phone-step);
+  display: flex;
+  font-size: 15px;
+  font-weight: 700;
+  height: 28px;
+  justify-content: center;
+  left: 0;
+  position: absolute;
+  top: 14px;
+  width: 28px;
+}
+.telematics-pair-steps > li > strong { font-size: 16px; margin-bottom: 8px; }
+.telematics-pair-setting { margin: 12px 0; }
+.telematics-pair-setting > span { display: block; margin-bottom: 5px; }
+.telematics-pair-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }

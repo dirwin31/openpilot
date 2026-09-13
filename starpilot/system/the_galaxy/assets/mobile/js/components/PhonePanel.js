@@ -86,6 +86,7 @@ export const PhonePanel = {
       finally { this.galaxyLinkLoading = false }
     },
     setupGalaxy() { window.location.hash = "/galaxy" },
+    openTelematics() { window.location.hash = "/telematics" },
     async refresh() {
       try {
         const p = await api.getBluetoothStatus()
@@ -168,6 +169,50 @@ export const PhonePanel = {
       </div>
 
       <div v-else class="telematics-bluetooth-setup">
+        <p class="telematics-setup__heading">Pair a phone</p>
+        <GxNotice tone="warn" icon="bi-phone-fill" title="Do not pair from Android's Bluetooth settings">
+          Start pairing here. Accept Android’s pairing prompt when it appears.
+        </GxNotice>
+
+        <ol class="telematics-pair-steps">
+          <li>
+            <strong>Set up Chrome once</strong>
+            <p>Turn on your phone’s Bluetooth. Copy each address into Chrome, choose <b>Enabled</b>, then <b>Relaunch</b> and return here.</p>
+            <div class="telematics-pair-setting">
+              <span>Web Bluetooth new permissions backend</span>
+              <code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</code>
+              <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-web-bluetooth-new-permissions-backend')">Copy first address</button>
+            </div>
+            <div class="telematics-pair-setting">
+              <span>Experimental Web Platform features</span>
+              <code>chrome://flags/#enable-experimental-web-platform-features</code>
+              <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-experimental-web-platform-features')">Copy second address</button>
+            </div>
+            <p class="telematics-check__hint">Already enabled both? Go to step 2.</p>
+          </li>
+          <li>
+            <strong>Pair your comma</strong>
+            <p>While parked near your comma, open its pairing window, then tap <b>Pair now</b>. Choose your comma and accept the pairing prompt.</p>
+            <div class="telematics-pair-actions">
+              <button v-if="pairingRemaining > 0" class="gx-btn gx-btn--outlined" type="button" disabled>Pairing window open · {{ pairingRemaining }}s</button>
+              <button v-else class="gx-btn gx-btn--outlined" type="button" :disabled="!offroad || !enabled || !!busy" @click="openPairingWindow">Open pairing window</button>
+              <button class="gx-btn" type="button" :disabled="!!busy" @click="pair">{{ busy === 'pair' ? 'Pairing…' : 'Pair now' }}</button>
+            </div>
+            <p class="telematics-check__hint">The comma is discoverable for 120 seconds.</p>
+            <p v-if="!offroad" class="telematics-check__hint">Park before opening the pairing window.</p>
+            <p v-else-if="!enabled" class="telematics-check__hint">Turn Bluetooth on in the Bluetooth tab first.</p>
+            <p v-if="pairMessage" class="telematics-setup-done" role="status"><i class="bi bi-check-circle-fill"></i> {{ pairMessage }}</p>
+            <GxNotice v-if="error" tone="danger" icon="bi-exclamation-circle-fill" :text="error" />
+          </li>
+          <li>
+            <strong>Open Telematics and check reconnect</strong>
+            <p>Connect, then reload near your comma to check it reconnects. Wait for <b>Available without internet</b> before using Galaxy offline.</p>
+            <button class="gx-btn" type="button" @click="openTelematics">Open Telematics</button>
+            <p v-if="bluetoothSetupReady" class="telematics-setup-done"><i class="bi bi-check-circle-fill"></i> Reconnect verified.</p>
+          </li>
+        </ol>
+
+        <p class="telematics-setup__heading">Connection checks</p>
         <ul class="telematics-checks">
           <li v-for="check in bluetoothChecks" :key="check.label" class="telematics-check"
             :class="check.ok ? 'telematics-check--ok' : check.ok === false ? 'telematics-check--bad' : 'telematics-check--unknown'">
@@ -182,64 +227,18 @@ export const PhonePanel = {
           </li>
         </ul>
 
-        <p v-if="bluetoothSetupReady" class="telematics-setup-done">
-          <i class="bi bi-check-circle-fill"></i> Your saved comma reconnected after a reload.
-        </p>
+        <p class="telematics-check__hint">These checks show available features. Reload Telematics to verify the saved pairing.</p>
+        <p class="telematics-check__hint"><strong class="telematics-inline">Can’t find your comma?</strong> Open the pairing window again. If you paired in Android settings, remove the pairing below and retry.</p>
 
-        <details class="telematics-setup__more" :open="!bluetoothFlagsReady || !restoredAfterReload">
-          <summary>Chrome settings for reconnect</summary>
-          <p>Enable both settings in Chrome. This page checks Bluetooth features, but cannot read or change the flags. Available features alone do not prove the pairing is saved.</p>
+        <details class="telematics-setup__more">
+          <summary>Remove an old pairing</summary>
+          <p>Remove it from both places, then repeat step 2.</p>
           <ol>
-            <li>
-              <strong>Web Bluetooth new permissions backend</strong>
-              <code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</code>
-              <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-web-bluetooth-new-permissions-backend')">Copy address</button>
-              <p class="telematics-check__hint">Saves the device so you do not have to pick it after every reload.</p>
-            </li>
-            <li>
-              <strong>Experimental Web Platform features</strong>
-              <code>chrome://flags/#enable-experimental-web-platform-features</code>
-              <button class="gx-btn gx-btn--outlined" type="button" @click="copyBluetoothSetting('enable-experimental-web-platform-features')">Copy address</button>
-              <p class="telematics-check__hint">Finds the saved device after a reload. Without a fresh signal, Chrome may report it as out of range.</p>
-            </li>
+            <li><strong class="telematics-inline">Chrome:</strong> address-bar icon → Permissions → Bluetooth devices → remove the comma. If needed, use Reset permissions.</li>
+            <li><strong class="telematics-inline">Android:</strong> Settings → Connected devices → comma → Forget.</li>
           </ol>
-          <p>Copy each address into Chrome's address bar. Set both to <strong class="telematics-inline">Enabled</strong>, then <strong class="telematics-inline">Relaunch</strong> Chrome and return here. Pair once, then reload Telematics near the comma to verify reconnect.</p>
         </details>
-
-        <p class="telematics-setup__heading">Pairing a phone</p>
-        <ol>
-          <li>
-            While parked, open the comma's <strong class="telematics-inline">discoverable / 120s</strong> pairing window. New phones can pair only during the countdown.
-            <div>
-              <button v-if="pairingRemaining > 0" class="gx-btn gx-btn--outlined" type="button" disabled>Pairing window open · {{ pairingRemaining }}s</button>
-              <button v-else class="gx-btn gx-btn--outlined" type="button" :disabled="!offroad || !enabled || !!busy" @click="openPairingWindow">Open pairing window</button>
-            </div>
-            <p v-if="!offroad" class="telematics-check__hint">Available offroad only.</p>
-            <p v-else-if="!enabled" class="telematics-check__hint">Turn Bluetooth on in the Bluetooth tab first.</p>
-          </li>
-          <li>
-            Tap <strong class="telematics-inline">Pair now</strong>, then pick the comma from Chrome's list.
-            <div><button class="gx-btn" type="button" :disabled="!!busy" @click="pair">{{ busy === 'pair' ? 'Pairing…' : 'Pair now' }}</button></div>
-          </li>
-          <li>Accept Android's pairing prompt if one appears.</li>
-        </ol>
-        <p v-if="pairMessage" class="telematics-setup-done" role="status"><i class="bi bi-check-circle-fill"></i> {{ pairMessage }}</p>
-        <GxNotice v-if="error" tone="danger" icon="bi-exclamation-circle-fill" :text="error" />
-        <GxNotice tone="warn" icon="bi-phone-fill" title="Do not pair from Android's Bluetooth settings">
-          The comma may appear there during the countdown. Pairing there only creates a system bond, without granting this page access, and can block Chrome pairing. Pair here; use Android settings only to forget the device.
-        </GxNotice>
-        <p class="telematics-check__hint"><strong class="telematics-inline">No device or pairing failed?</strong> Open the 120-second pairing window again. If you paired in Android settings, forget the device in both Chrome and Android first.</p>
-
-        <details v-if="rememberedDevices > 0" class="telematics-setup__more">
-          <summary>Make Chrome forget this device</summary>
-          <p><strong class="telematics-inline">Disconnect</strong> on Telematics ends the connection; it does not forget the device. To remove the saved pairing:</p>
-          <ol>
-            <li><strong class="telematics-inline">Chrome:</strong> address-bar icon &rarr; <strong class="telematics-inline">Permissions &rarr; Bluetooth devices</strong> &rarr; remove the comma. Labels vary by Chrome version. <strong class="telematics-inline">Reset permissions</strong> also works.</li>
-            <li><strong class="telematics-inline">In Android</strong> open <strong class="telematics-inline">Settings &rarr; Connected devices</strong>, tap the gear beside the device, then <strong class="telematics-inline">Forget</strong>.</li>
-          </ol>
-          <p>Clear both: removing Chrome's permission leaves the Android pairing, which can block pairing again.</p>
-        </details>
-        <p v-if="!bluetoothFlagsReady" class="telematics-setup__fallback"><strong class="telematics-inline">Reconnect is not ready.</strong> If you cannot enable the settings, you can still pair now. After a reload, you may need to pair again.</p>
+        <p v-if="!bluetoothFlagsReady" class="telematics-setup__fallback"><strong class="telematics-inline">Reconnect is not ready.</strong> Complete step 1 to reconnect after a reload. You can still pair now.</p>
       </div>
     </div>
   `,
