@@ -115,8 +115,10 @@ export const TelematicsConnectBar = {
         </template>
       </div>
       <div class="telematics-connect-bar__row">
-        <button v-if="connectionMode === 'lan'" class="gx-btn gx-btn--outlined" type="button" aria-label="Local Wi-Fi settings" title="Local Wi-Fi settings" @click="$emit('settings')"><i class="bi bi-gear"></i></button>
-        <button v-if="connectionMode === 'lan' && bluetoothHelp" class="gx-btn gx-btn--outlined" type="button" aria-label="Bluetooth help" title="Bluetooth help" @click="$emit('bluetooth-help')"><i class="bi bi-bluetooth" aria-hidden="true"></i><span aria-hidden="true">?</span></button>
+        <div v-if="connectionMode === 'lan'" class="telematics-connect-bar__local">
+          <button v-if="connectionMode === 'lan'" class="gx-btn gx-btn--outlined" type="button" aria-label="Local Wi-Fi settings" title="Local Wi-Fi settings" @click="$emit('settings')"><i class="bi bi-gear"></i></button>
+          <button v-if="connectionMode === 'lan' && bluetoothHelp" class="gx-btn gx-btn--outlined" type="button" aria-label="Bluetooth help" title="Bluetooth help" @click="$emit('bluetooth-help')"><i class="bi bi-bluetooth" aria-hidden="true"></i><span aria-hidden="true">?</span></button>
+        </div>
         <button class="gx-btn gx-btn--outlined" type="button" :aria-pressed="isFullscreen" @click="$emit('fullscreen')">{{ isFullscreen ? 'Exit full screen' : 'Full screen' }}</button>
       </div>
     </div>
@@ -166,6 +168,7 @@ export const Telematics = {
       connecting: false,
       connectionRequest: 0,
       rememberedDevices: null,
+      bluetoothChecked: false,
       // The page origin owns the transport; saved preferences cannot override it.
       connectionMode: isGalaxyLink() ? "bluetooth" : "lan",
       onGalaxyLink: isGalaxyLink(),
@@ -191,6 +194,9 @@ export const Telematics = {
     },
     logoURL() { return new URL("assets/images/main_logo.png", galaxyAppBase()).href },
     standalonePage() { return window.location.pathname.endsWith("/assets/mobile/telematics.html") },
+    bluetoothSetupNeeded() {
+      return this.onGalaxyLink && !this.bluetoothUnavailable && !this.connected && !this.ble?.device && !(this.rememberedDevices > 0)
+    },
     connected() { return this.bleState === "connected" },
     connectionPending() { return this.connecting || ["connecting", "reconnecting"].includes(this.bleState) },
     // Matches the connect bar: connecting, retrying, or a live link awaiting its first frame.
@@ -412,6 +418,7 @@ export const Telematics = {
       }
     },
     async connect() {
+      if (this.bluetoothSetupNeeded) return
       const request = ++this.connectionRequest
       this.manuallyDisconnected = false
       this.connecting = true
@@ -437,7 +444,7 @@ export const Telematics = {
     },
     // Resume an already permitted device without opening a chooser.
     defaultToBluetooth() {
-      if (!this.onGalaxyLink || !(this.rememberedDevices > 0)) return
+      if (!this.onGalaxyLink || this.bluetoothUnavailable || this.bluetoothSetupNeeded) return
       this.connectionMode = "bluetooth"
       this.configureConnection()
       if (this.identity && !this.manuallyDisconnected && !this.connection?.running) void this.connection?.connect()
@@ -528,6 +535,7 @@ export const Telematics = {
       try {
         this.rememberedDevices = supportsBluetoothRestore() ?(await navigator.bluetooth.getDevices()).length : null
       } catch (error) { this.rememberedDevices = null }
+      finally { this.bluetoothChecked = true }
     },
     disconnect() {
       if (this.testClient) this.cancelLocalTest()
@@ -556,7 +564,7 @@ export const Telematics = {
         this.saveConnectionSettings()
         this.saveOfflineIdentity()
         try { localStorage.setItem(`galaxy-telematics-page:${window.location.pathname}`, identity) } catch { /* Storage is optional. */ }
-        if (resume && this.connectionMode) void this.connection?.connect()
+        if (resume && this.connectionMode && !this.bluetoothSetupNeeded) void this.connection?.connect()
       }
     },
     setOrientation(event) { this.isLandscape = event.matches },
@@ -604,7 +612,7 @@ export const Telematics = {
       const identity = localStorage.getItem(`galaxy-telematics-page:${window.location.pathname}`)
       if (identity) {
         this.restoreConnectionSettings(identity)
-        if (this.connectionMode) void this.connection.connect()
+        if (this.connectionMode && !this.bluetoothSetupNeeded) void this.connection.connect()
       }
     } catch { /* Storage is optional. */ }
     this.devicePoll = usePolling(() => this.loadDeviceStatus(), { interval: 5000 })
@@ -636,7 +644,7 @@ export const Telematics = {
         <BluetoothLinkHelp :url="galaxyURL" :loading="galaxyLinkLoading" :error="galaxyLinkError" @retry="loadGalaxyLink" @setup="setupGalaxy" />
         <button class="gx-btn gx-btn--text" type="button" @click="dismissBluetoothHelp">Dismiss</button>
       </GxNotice>
-      <GxNotice v-else-if="onGalaxyLink && (!isLandscape || !connected)" class="telematics-pairing" tone="info" icon="bi-bluetooth" title="Bluetooth Telematics">
+      <GxNotice v-else-if="onGalaxyLink && !bluetoothSetupNeeded && !bluetoothUnavailable && (!isLandscape || !connected)" class="telematics-pairing" tone="info" icon="bi-bluetooth" title="Bluetooth Telematics">
         Set up once while online: pair this phone under Tools → Bluetooth → Phone, then connect near your comma. Install Galaxy from Galaxy &amp; App Install to reopen it from your home screen.
         <p role="status">{{ offlineState.message }}</p>
         <button class="gx-btn gx-btn--outlined" @click="pairPhone">Phone setup</button>
@@ -657,7 +665,13 @@ export const Telematics = {
         <p v-if="localTestMessage" role="status">{{ localTestMessage }}</p>
         <a v-if="localGalaxyURL" class="gx-btn gx-btn--outlined" :href="localGalaxyURL">Open local Galaxy</a>
       </GalaxyModal>
-      <template v-if="capability === 'ready'">
+      <GxNotice v-if="bluetoothSetupNeeded" class="telematics-pairing" tone="info" icon="bi-bluetooth" :title="bluetoothChecked ? 'Pair your phone to get started' : 'Checking for a paired phone…'">
+        <template v-if="bluetoothChecked">
+          Pair this phone with your comma to see live Telematics. Setup takes place in Chrome on Android while you’re online and parked near your comma.
+          <button class="gx-btn" type="button" @click="pairPhone">Pair a phone</button>
+        </template>
+      </GxNotice>
+      <template v-if="capability === 'ready' && !bluetoothSetupNeeded">
         <TelematicsConnectBar v-if="!isLandscape || bluetoothUnavailable" v-bind="connectBar" @connect="connect()" @disconnect="disconnect" @mode="setConnectionMode" @settings="showConnectionSetup = true" @bluetooth-help="showBluetoothHelp = true" @fullscreen="toggleFullscreen" />
         <BluetoothSupportNotice v-if="bluetoothUnavailable && bluetoothSupport !== 'insecure'" class="telematics-pairing" :platform="bluetoothSupport" :secure-url="secureURL" pair-elsewhere />
         <GxNotice v-else-if="bluetoothUnavailable" class="telematics-pairing" tone="warn" icon="bi-shield-lock-fill" title="Open your Galaxy link in Chrome">

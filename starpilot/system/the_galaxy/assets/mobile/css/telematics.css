@@ -219,6 +219,7 @@
 }
 
 .telematics-connect-bar__row { align-items: center; display: flex; gap: 8px; justify-content: space-between; }
+.telematics-connect-bar__local { align-items: center; display: flex; gap: 6px; }
 .telematics-connect-bar .gx-btn { flex: none; min-height: 34px; padding: 6px 14px; }
 .telematics-mode-toggle { border: 1px solid var(--glass-border); border-radius: var(--radius-sm); display: inline-flex; flex: 1; overflow: hidden; }
 .telematics-mode-toggle button { background: transparent; border: 0; color: var(--text-muted); cursor: pointer; flex: 1; font: inherit; font-size: 13px; font-weight: var(--fw-bold); min-height: 34px; padding: 6px 12px; }

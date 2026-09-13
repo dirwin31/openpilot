@@ -432,7 +432,7 @@ Object.defineProperty(globalThis, "navigator", { configurable: true, value: { us
 let reconnects = 0, disconnects = 0
 const makeView = (extra = {}) => {
   const view = Object.assign(Telematics.data(), Telematics.methods, {
-    identity: "comma", connectionMode: "bluetooth", bluetoothSecure: true, bluetoothSupport: "ready",
+    identity: "comma", connectionMode: "bluetooth", bluetoothSecure: true, bluetoothSupport: "ready", rememberedDevices: 1, bluetoothChecked: true,
     ble: { reconnect() { reconnects++ }, disconnect() { disconnects++ } },
   }, extra)
   for (const [name, getter] of Object.entries(Telematics.computed)) {
@@ -543,6 +543,19 @@ try {
     assert.equal(layouts[0], layouts[1], `${bleState}: portrait and landscape bars must match`)
   }
   for (const isLandscape of [false, true]) {
+    const needsPairing = makeView({ capability: "ready", rememberedDevices: 0, bluetoothChecked: true, bleState: "error", isLandscape })
+    const setupPage = render(needsPairing, [])
+    assert.equal(needsPairing.bluetoothSetupNeeded, true)
+    assert.equal(collect(setupPage, node => node.type === "TelematicsConnectBar" || node.type === "TelematicsHeader").length, 0)
+    const notices = collect(setupPage, node => node.type === "GxNotice")
+    assert.equal(notices.length, 1)
+    assert.equal(notices[0].props.title, "Pair your phone to get started")
+    const attempts = reconnects
+    await needsPairing.connect()
+    needsPairing.defaultToBluetooth()
+    assert.equal(reconnects, attempts, "Do not reconnect without a paired phone")
+    needsPairing.bluetoothChecked = false
+    assert.equal(collect(render(needsPairing, []), node => node.type === "GxNotice")[0].props.title, "Checking for a paired phone…")
     // Device pages expose Wi-Fi settings and never expose a transport toggle.
     const local = makeView({ onGalaxyLink: false, capability: "ready", connectionMode: "lan", bluetoothSecure: false, ble: null, isLandscape })
     const controls = collect(barOf(local), node => !!node.props)
