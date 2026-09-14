@@ -1585,6 +1585,52 @@ MAPS_DOWNLOAD_PROGRESS_PARAM = "MapsDownloadProgress"
 MAPS_DOWNLOAD_SIZE_CACHE_PARAM = MAPS_STORAGE_CACHE_PARAM
 
 
+def _model_download_busy(*, include_restore=True):
+  return bool(
+    (include_restore and _MODEL_RESTORE_ACTIVE)
+    or params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
+    or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
+    or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
+  )
+
+
+_MODEL_QUEUE_LOCK = threading.RLock()
+_MODEL_QUEUE_OWNER = None
+_MODEL_RESTORE_ACTIVE = False
+
+
+def _queue_model_download(model_key, *, lab=False, allow_gpu_without_gpu=False, restore_job=False):
+  global _MODEL_QUEUE_OWNER
+  with _MODEL_QUEUE_LOCK:
+    if _model_download_busy(include_restore=not restore_job):
+      raise ValueError("A model download is already in progress.")
+    if not lab and model_uses_external_gpu(model_key) and not external_gpu_available() and not allow_gpu_without_gpu:
+      raise ValueError("This model requires a detected external GPU.")
+    token = object()
+    parameter = MODEL_LAB_DOWNLOAD_PARAM if lab else MODEL_DOWNLOAD_PARAM
+    params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
+    if not lab:
+      params_memory.remove(MODEL_DOWNLOAD_ALL_PARAM)
+      params_memory.put_bool(ALLOW_GPU_DOWNLOAD_WITHOUT_GPU_PARAM, allow_gpu_without_gpu)
+    params_memory.put(MODEL_DOWNLOAD_PROGRESS_PARAM, "Starting eGPU variant download..." if lab else "Downloading...")
+    params_memory.put(parameter, model_key)
+    _MODEL_QUEUE_OWNER = (token, parameter, model_key)
+    return token
+
+
+def _owns_model_download(token):
+  with _MODEL_QUEUE_LOCK:
+    return bool(_MODEL_QUEUE_OWNER and _MODEL_QUEUE_OWNER[0] is token
+                and not params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
+                and (params_memory.get(_MODEL_QUEUE_OWNER[1], encoding="utf-8") or "") == _MODEL_QUEUE_OWNER[2])
+
+
+def _cancel_owned_model_download(token):
+  with _MODEL_QUEUE_LOCK:
+    if _owns_model_download(token):
+      params_memory.put_bool(MODEL_CANCEL_DOWNLOAD_PARAM, True)
+
+
 def _get_galaxy_dir():
   if override := os.getenv("SP_GALAXY_DIR"):
     return Path(override)
@@ -6992,11 +7038,7 @@ def setup(app):
   def download_model_laboratory_artifact():
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Model Laboratory artifacts can only be downloaded while parked."}), 403
-    if (
-      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
-      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
-      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
-    ):
+    if _model_download_busy():
       return jsonify({"error": "A model download is already in progress."}), 409
 
     data = request.get_json(silent=True) or {}
@@ -7011,20 +7053,17 @@ def setup(app):
     if model.get("modelLabArtifactInstalled"):
       return jsonify({"message": f"The eGPU variant for \"{model['label']}\" is already downloaded."}), 200
 
-    params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
-    params_memory.put(MODEL_LAB_DOWNLOAD_PARAM, model_key)
-    params_memory.put(MODEL_DOWNLOAD_PROGRESS_PARAM, "Starting eGPU variant download...")
+    try:
+      _queue_model_download(model_key, lab=True)
+    except ValueError as exc:
+      return jsonify({"error": str(exc)}), 409
     return jsonify({"message": f"Started downloading the eGPU variant for \"{model['label']}\"."}), 200
 
   @app.route("/api/model-laboratory/artifact", methods=["DELETE"])
   def delete_model_laboratory_artifact():
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Model Laboratory eGPU variants can only be deleted while parked."}), 403
-    if (
-      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
-      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
-      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
-    ):
+    if _model_download_busy():
       return jsonify({"error": "Cannot delete an eGPU variant while a model download is in progress."}), 409
 
     data = request.get_json(silent=True) or {}
@@ -7144,7 +7183,7 @@ def setup(app):
     progress = params_memory.get(MODEL_DOWNLOAD_PROGRESS_PARAM, encoding="utf-8") or ""
     cancelling = params_memory.get_bool(MODEL_CANCEL_DOWNLOAD_PARAM)
 
-    downloading = bool(model_to_download or lab_model_to_download) or download_all
+    downloading = bool(model_to_download or lab_model_to_download) or download_all or _MODEL_RESTORE_ACTIVE
     current_model = _current_model_key()
     active_small_model = _active_model_key("small")
     active_big_model = _active_model_key("big")
@@ -7212,24 +7251,22 @@ def setup(app):
       "sortMode": sort_mode,
     }), 200
 
+  def refresh_model_manifest():
+    from openpilot.starpilot.assets.model_manager import ModelManager
+
+    # ModelManager expects raw Params semantics (encoding-less get -> str, not legacy bytes).
+    ModelManager(_params_raw, _params_memory_raw).update_models(False)
+
   @app.route("/api/models/refresh_manifest", methods=["POST"])
   def refresh_models_manifest():
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Cannot refresh model manifest while driving."}), 403
 
-    if (
-      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
-      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
-      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
-    ):
+    if _model_download_busy():
       return jsonify({"error": "Cannot refresh model manifest while a download is in progress."}), 409
 
     try:
-      from openpilot.starpilot.assets.model_manager import ModelManager
-
-      # ModelManager expects raw Params semantics (encoding-less get -> str, not legacy bytes).
-      manager = ModelManager(_params_raw, _params_memory_raw)
-      manager.update_models(False)
+      refresh_model_manifest()
     except Exception as exception:
       return jsonify({"error": f"Failed to refresh model manifest: {exception}"}), 500
 
@@ -7240,11 +7277,7 @@ def setup(app):
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Cannot download models while driving."}), 403
 
-    if (
-      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
-      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
-      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
-    ):
+    if _model_download_busy():
       return jsonify({"error": "A model download is already in progress."}), 409
 
     data = request.get_json() or {}
@@ -7263,11 +7296,10 @@ def setup(app):
     if model["requiresGpu"] and not model["gpuAvailable"] and not allow_gpu_without_gpu:
       return jsonify({"error": "This model requires a detected external GPU."}), 409
 
-    params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
-    params_memory.remove(MODEL_DOWNLOAD_ALL_PARAM)
-    params_memory.put_bool(ALLOW_GPU_DOWNLOAD_WITHOUT_GPU_PARAM, allow_gpu_without_gpu)
-    params_memory.put(MODEL_DOWNLOAD_PARAM, model_key)
-    params_memory.put(MODEL_DOWNLOAD_PROGRESS_PARAM, "Downloading...")
+    try:
+      _queue_model_download(model_key, allow_gpu_without_gpu=allow_gpu_without_gpu)
+    except ValueError as exc:
+      return jsonify({"error": str(exc)}), 409
 
     return jsonify({"message": f"Started downloading \"{model['label']}\"."}), 200
 
@@ -7276,11 +7308,7 @@ def setup(app):
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Cannot download models while driving."}), 403
 
-    if (
-      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
-      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
-      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
-    ):
+    if _model_download_busy():
       return jsonify({"error": "A model download is already in progress."}), 409
 
     data = request.get_json(silent=True) or {}
@@ -7292,11 +7320,14 @@ def setup(app):
     if not missing_models:
       return jsonify({"message": "All models are already installed."}), 200
 
-    params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
-    params_memory.remove(MODEL_DOWNLOAD_PARAM)
-    params_memory.put_bool(ALLOW_GPU_DOWNLOAD_WITHOUT_GPU_PARAM, allow_gpu_without_gpu)
-    params_memory.put_bool(MODEL_DOWNLOAD_ALL_PARAM, True)
-    params_memory.put(MODEL_DOWNLOAD_PROGRESS_PARAM, "Downloading...")
+    with _MODEL_QUEUE_LOCK:
+      if _model_download_busy():
+        return jsonify({"error": "A model download is already in progress."}), 409
+      params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
+      params_memory.remove(MODEL_DOWNLOAD_PARAM)
+      params_memory.put_bool(ALLOW_GPU_DOWNLOAD_WITHOUT_GPU_PARAM, allow_gpu_without_gpu)
+      params_memory.put_bool(MODEL_DOWNLOAD_ALL_PARAM, True)
+      params_memory.put(MODEL_DOWNLOAD_PROGRESS_PARAM, "Downloading...")
 
     return jsonify({"message": f"Started downloading {len(missing_models)} model(s)."}), 200
 
@@ -7316,11 +7347,7 @@ def setup(app):
     if params.get_bool("IsOnroad"):
       return jsonify({"error": "Cannot delete model files while driving."}), 403
 
-    if (
-      params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
-      or (params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8") or "")
-      or (params_memory.get(MODEL_LAB_DOWNLOAD_PARAM, encoding="utf-8") or "")
-    ):
+    if _model_download_busy():
       return jsonify({"error": "Cannot delete model files while a download is in progress."}), 409
 
     data = request.get_json() or {}
@@ -10265,21 +10292,75 @@ def setup(app):
   device_backup_lock = threading.Lock()
   device_restore_ready = False
   device_restore_state = {"stage": "idle", "message": "", "models": []}
+  device_backup_workdir = MODELS_PATH.parent / "device_backup_work"
+  device_restore_result_path = device_backup_workdir / "last_restore.json"
+  try:
+    previous_result = json.loads(device_restore_result_path.read_text())
+    if isinstance(previous_result, dict) and isinstance(previous_result.get("message"), str):
+      device_restore_state.update(stage="complete", message=previous_result["message"])
+  except (OSError, ValueError):
+    pass
+  recovery_records = list(device_backup_workdir.glob("restore-*/recovery.json"))
+  if recovery_records:
+    device_restore_state.update(stage="restore_error", message="An interrupted restore has recovery copies in device_backup_work. Resolve it before driving.")
 
-  @app.route("/device_backup")
-  def device_backup_page():
-    return "", 302, {"Location": "/#/system"}
-
-  def device_backup_context():
+  def check_device_backup_parked():
     if _personality_settings_write_locked():
       raise ValueError("Park the vehicle with off-road state confirmed before backup or restore.")
     if flm_workspace.flm_analyzer_running():
       raise ValueError("Wait for FLM analysis to finish before backup or restore.")
-    roots = {"flm": flm_workspace.get_flm_workspace_root(),
-             "themes": THEME_SAVE_PATH, "active_theme": ACTIVE_THEME_PATH, "profiles": TOGGLE_BACKUPS}
-    keys = {key.decode() if isinstance(key, bytes) else key for key in _params_raw.all_keys()}
-    keys = device_backup.eligible_keys(key for key in keys if _params_raw.get_key_flag(key) & ParamKeyFlag.PERSISTENT)
+
+  def device_backup_context():
+    check_device_backup_parked()
+    # Theme packs in /data/themes are the source of truth; the active theme is rebuilt from Params on boot.
+    roots = {"flm": flm_workspace.get_flm_workspace_root(), "themes": THEME_SAVE_PATH, "profiles": TOGGLE_BACKUPS}
+    keys = device_backup.eligible_keys(key.decode() if isinstance(key, bytes) else key for key in _params_raw.all_keys())
+    device_backup_workdir.mkdir(parents=True, exist_ok=True)
     return roots, keys
+
+  def validate_device_restore_params(values, restore_keys):
+    """Validate personality values and prepare a consistent document/master pair before writes."""
+    accepted = {}
+    for key, value in values.items():
+      try:
+        if key in PERSONALITY_ADVANCED_PARAM_KEYS:
+          value = validate_personality_advanced_value(value)
+        elif key in PERSONALITY_FOLLOW_PARAM_KEYS:
+          value = validate_personality_follow_value(value)
+        elif key in PERSONALITY_PROFILE_ENABLE_PARAM_KEYS or key == "CustomPersonalities":
+          if type(value) is not bool:
+            raise ValueError("Personality controls must be booleans")
+        elif key == PERSONALITY_PROFILES_PARAM and not is_unconfigured_profile_document(value):
+          value = migrate_profile_document(value)
+          if value is None:
+            raise ValueError("Unrecognized personality profile document")
+      except (TypeError, ValueError):
+        continue
+      accepted[key] = value
+    pair = {PERSONALITY_PROFILES_PARAM, "CustomPersonalities"}
+    if pair & (set(values) - set(accepted)):
+      for key in pair:
+        accepted.pop(key, None)
+      return accepted
+    if pair & set(accepted):
+      raw_document = accepted.get(PERSONALITY_PROFILES_PARAM)
+      if PERSONALITY_PROFILES_PARAM not in restore_keys:
+        raw_document = _params_raw.get(PERSONALITY_PROFILES_PARAM)
+        # Do not turn on a pre-existing document whose migration has not been verified.
+        if not is_unconfigured_profile_document(raw_document) and strict_profile_document(raw_document) is None:
+          accepted.pop("CustomPersonalities", None)
+          return accepted
+      enabled = accepted.get("CustomPersonalities", False if "CustomPersonalities" in restore_keys else _params_raw.get_bool("CustomPersonalities"))
+      ev_tuning = _get_detected_ev_tuning()
+      truck_tuning = (_get_detected_truck_tuning() or accepted.get("TruckTuning", params.get_bool("TruckTuning"))) and not ev_tuning
+      document = synchronise_profile_document_enabled(raw_document, enabled, ev_tuning, truck_tuning)
+      if document is not None:
+        if strict_profile_document(document) is None:
+          for key in pair:
+            accepted.pop(key, None)
+        else:
+          accepted[PERSONALITY_PROFILES_PARAM] = document
+    return accepted
 
   @app.route("/api/device_backup/download", methods=["POST"])
   def download_device_backup():
@@ -10288,11 +10369,9 @@ def setup(app):
     temporary = None
     try:
       roots, keys = device_backup_context()
-      workdir = MODELS_PATH.parent / "device_backup_work"
-      workdir.mkdir(parents=True, exist_ok=True)
-      temporary = tempfile.TemporaryFile(dir=workdir)
+      temporary = tempfile.TemporaryFile(dir=device_backup_workdir)
       device_backup.create_backup(temporary, roots, _params_raw, keys, models=device_backup.saved_models(get_model_catalog()))
-      device_backup_context()
+      check_device_backup_parked()
       temporary.seek(0)
       response = send_file(temporary, as_attachment=True,
                            download_name=f"starpilot-device-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip",
@@ -10307,6 +10386,27 @@ def setup(app):
     finally:
       device_backup_lock.release()
 
+  def receive_device_backup_upload(output):
+    """Bound raw uploads and stream directly to /data, including chunked HTTP bodies."""
+    if request.mimetype != "application/zip":
+      raise ValueError("Upload the backup as an application/zip body.")
+    size = request.content_length
+    limit = min(device_backup.MAX_ARCHIVE_BYTES, max(0, (shutil.disk_usage(device_backup_workdir).free - device_backup.RESTORE_MARGIN_BYTES) // 3))
+    if size is not None and (size <= 0 or size > limit):
+      raise ValueError("The backup is empty, exceeds the 8 GiB limit, or there is not enough free space to restore it.")
+    received = 0
+    while chunk := request.stream.read(min(1024 * 1024, limit - received + 1)):
+      check_device_backup_parked()
+      received += len(chunk)
+      if received > limit:
+        raise ValueError("The backup upload exceeds the available space or 8 GiB limit.")
+      if shutil.disk_usage(device_backup_workdir).free < len(chunk) + device_backup.RESTORE_MARGIN_BYTES:
+        raise ValueError("Not enough free space to finish the backup upload.")
+      output.write(chunk)
+    if not received or (size is not None and received != size):
+      raise ValueError("The backup upload was interrupted. Try again.")
+    output.seek(0)
+
   @app.route("/api/device_backup/restore", methods=["POST"])
   def restore_device_backup():
     nonlocal device_restore_ready
@@ -10314,20 +10414,24 @@ def setup(app):
       return jsonify(success=False, message="A device backup or restore is already running."), 409
     try:
       roots, keys = device_backup_context()
-      upload = request.files.get("backup")
-      if upload is None:
-        raise ValueError("Choose a full StarPilot backup ZIP file.")
-      workdir = MODELS_PATH.parent / "device_backup_work"
-      workdir.mkdir(parents=True, exist_ok=True)
       device_restore_ready = False
       device_restore_state.update(stage="restoring", message="Restoring backup...", models=[])
       models = []
-      with _PERSONALITY_PROFILES_WRITE_LOCK:
-        count, files = device_backup.restore_backup(upload.stream, roots, _params_raw, keys, workdir, device_backup_context, models_out=models)
+      with tempfile.TemporaryFile(dir=device_backup_workdir) as upload:
+        receive_device_backup_upload(upload)
+        with _PERSONALITY_PROFILES_WRITE_LOCK:
+          count, files, skipped = device_backup.restore_backup(
+            upload, roots, _params_raw, keys, device_backup_workdir, check_device_backup_parked,
+            models_out=models, validate=validate_device_restore_params,
+          )
       device_restore_ready = True
-      message = f"Restored {count} settings and {files} files. Choose whether to download the {len(models)} saved model(s) before rebooting."
-      device_restore_state.update(stage="awaiting_choice", message=message, models=models)
-      return jsonify(success=True, message=message, models=models)
+      message = f"Restored {count} settings and {files} files."
+      if skipped:
+        message += f" Kept current values for {len(skipped)} incompatible setting(s): {', '.join(skipped)}."
+      summary = message
+      message += f" Choose whether to download the {len(models)} saved model(s) before rebooting."
+      device_restore_state.update(stage="awaiting_choice", message=message, models=models, settingsSummary=summary)
+      return jsonify(success=True, message=message, models=models, skipped=skipped)
     except Exception as exc:
       device_restore_state.update(stage="restore_error", message=str(exc))
       cloudlog.exception("Device restore failed")
@@ -10335,37 +10439,40 @@ def setup(app):
     finally:
       device_backup_lock.release()
 
-  def restore_model_download_busy():
-    return bool(params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
-                or params_memory.get(MODEL_DOWNLOAD_PARAM)
-                or params_memory.get(MODEL_LAB_DOWNLOAD_PARAM))
-
-  def queue_restore_model(key, variant):
-    params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
-    params_memory.put_bool(ALLOW_GPU_DOWNLOAD_WITHOUT_GPU_PARAM, True)
-    params_memory.put(MODEL_DOWNLOAD_PROGRESS_PARAM, "Downloading restored model...")
-    params_memory.put(MODEL_LAB_DOWNLOAD_PARAM if variant == "lab" else MODEL_DOWNLOAD_PARAM, key)
-
-  def request_restore_reboot():
+  def request_restore_reboot(note=""):
     if _personality_settings_write_locked():
       raise ValueError("Park the vehicle before rebooting.")
+    # Keep the skipped-model/setting report visible after the server restarts.
+    summary = " ".join(filter(None, [device_restore_state.get("settingsSummary", "Restore completed."), note]))
+    result_temp = device_restore_result_path.with_suffix(".tmp")
+    with result_temp.open("w") as output:
+      json.dump({"message": summary}, output)
+      output.flush()
+      os.fsync(output.fileno())
+    result_temp.replace(device_restore_result_path)
     _params_raw.put_bool("DoReboot", True)
-    device_restore_state.update(stage="rebooting", message="Reboot requested. Keep ignition off and wait for Galaxy to reconnect.")
+    message = "Reboot requested. Keep ignition off and wait for Galaxy to reconnect."
+    device_restore_state.update(stage="rebooting", message=f"{note} {message}" if note else message)
 
   def run_restore_model_downloads():
+    global _MODEL_RESTORE_ACTIVE
     try:
       restore_models.download_saved_models(
-        device_restore_state["models"], catalog=get_model_catalog, queue=queue_restore_model,
-        busy=restore_model_download_busy,
+        device_restore_state["models"], catalog=get_model_catalog,
+        queue=lambda key, variant: _queue_model_download(key, lab=variant == "lab", restore_job=True),
+        cancel=_cancel_owned_model_download, owns=_owns_model_download,
+        busy=lambda: _model_download_busy(include_restore=False),
+        cancelled=lambda: params_memory.get_bool(MODEL_CANCEL_DOWNLOAD_PARAM),
         progress=lambda: params_memory.get(MODEL_DOWNLOAD_PROGRESS_PARAM, encoding="utf-8") or "",
-        check_parked=device_backup_context, reboot=request_restore_reboot,
+        check_parked=check_device_backup_parked, reboot=request_restore_reboot,
         report=lambda message: device_restore_state.update(message=message),
+        refresh=refresh_model_manifest, canonical=canonical_model_key,
       )
     except Exception as exc:
-      params_memory.put_bool(MODEL_CANCEL_DOWNLOAD_PARAM, True)
       device_restore_state.update(stage="error", message=str(exc))
       cloudlog.exception("Restore model download failed")
     finally:
+      _MODEL_RESTORE_ACTIVE = False
       device_backup_lock.release()
 
   @app.route("/api/device_backup/status", methods=["GET"])
@@ -10377,6 +10484,7 @@ def setup(app):
 
   @app.route("/api/device_backup/reboot", methods=["POST"])
   def reboot_after_device_restore():
+    global _MODEL_RESTORE_ACTIVE
     if not device_backup_lock.acquire(blocking=False):
       return jsonify(success=False, message="Wait for the device backup, restore, or model downloads to finish."), 409
     worker_started = False
@@ -10386,17 +10494,24 @@ def setup(app):
       if _personality_settings_write_locked():
         return jsonify(success=False, message="Park the vehicle before rebooting."), 403
       data = request.get_json(silent=True) or {}
-      if type(data.get("downloadModels")) is not bool:
+      if not isinstance(data, dict) or type(data.get("downloadModels")) is not bool:
         return jsonify(success=False, message="Choose whether to download saved models before rebooting."), 400
-      if restore_model_download_busy():
-        return jsonify(success=False, message="Wait for the current model download to finish."), 409
-      if data["downloadModels"]:
-        device_restore_state.update(stage="downloading", message="Checking saved models before download...")
-        worker = threading.Thread(target=run_restore_model_downloads, name="restore-models", daemon=True)
-        worker.start()
-        worker_started = True
-      else:
-        request_restore_reboot()
+      with _MODEL_QUEUE_LOCK:
+        if _model_download_busy():
+          return jsonify(success=False, message="Wait for the current model download to finish."), 409
+        if data["downloadModels"]:
+          _MODEL_RESTORE_ACTIVE = True
+          device_restore_state.update(stage="downloading", message="Checking saved models before download...")
+          worker = threading.Thread(target=run_restore_model_downloads, name="restore-models", daemon=True)
+          try:
+            worker.start()
+          except Exception:
+            _MODEL_RESTORE_ACTIVE = False
+            device_restore_state.update(stage="error", message="Could not start model downloads. Retry the final step.")
+            raise
+          worker_started = True
+        else:
+          request_restore_reboot()
       return jsonify(success=True, **dict(device_restore_state))
     finally:
       if not worker_started:

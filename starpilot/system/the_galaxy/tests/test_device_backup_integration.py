@@ -1,0 +1,180 @@
+"""Exercise actual Galaxy routes with native Params and temporary device-data roots."""
+import base64
+import io
+import json
+from pathlib import Path
+import zipfile
+
+import pytest
+
+from openpilot.common.params import Params
+from test_navigation_params import the_galaxy as server
+
+
+@pytest.fixture
+def device_client(monkeypatch, tmp_path):
+  raw = Params(str(tmp_path / "params"))
+  memory = Params(str(tmp_path / "memory"))
+  raw.put_bool("IsOffroad", True)
+  raw.put_bool("IsOnroad", False)
+  for name, value in (("_params_raw", raw), ("_params_memory_raw", memory),
+                      ("params", server.ParamsCompat(raw)), ("params_memory", server.ParamsCompat(memory)),
+                      ("MODELS_PATH", tmp_path / "models"), ("THEME_SAVE_PATH", tmp_path / "themes"),
+                      ("TOGGLE_BACKUPS", tmp_path / "toggle_backups")):
+    monkeypatch.setattr(server, name, value)
+  monkeypatch.setattr(server.flm_workspace, "get_flm_workspace_root", lambda: tmp_path / "flm", raising=False)
+  monkeypatch.setattr(server.flm_workspace, "flm_analyzer_running", lambda: False, raising=False)
+  monkeypatch.setattr(server, "_get_detected_ev_tuning", lambda: False)
+  monkeypatch.setattr(server, "_get_detected_truck_tuning", lambda: False)
+  assert server._import_galaxy_web_symbols()
+  app = server.Flask("full-backup-integration")
+  app.config["TESTING"] = True
+  server.setup(app)
+  return app.test_client(), raw, tmp_path
+
+
+def export(client):
+  response = client.post("/api/device_backup/download")
+  assert response.status_code == 200, response.get_data(as_text=True)
+  content = response.data
+  response.close()
+  return content
+
+
+def rewrite_manifest(content, edit):
+  result = io.BytesIO()
+  with zipfile.ZipFile(io.BytesIO(content)) as source, zipfile.ZipFile(result, "w") as output:
+    manifest = json.loads(source.read("manifest.json"))
+    edit(manifest)
+    for name in source.namelist():
+      output.writestr(name, json.dumps(manifest) if name == "manifest.json" else source.read(name))
+  return result.getvalue()
+
+
+def test_real_routes_round_trip_with_repository_theme_layout(device_client):
+  client, params, root = device_client
+  # This is the real shipped layout that made the first implementation fail.
+  active = Path(__file__).resolve().parents[3] / "assets" / "active_theme"
+  assert (active / "colors").is_symlink()
+  params.put_bool("IsMetric", True)
+  params.put_int("ScreenBrightness", 65)
+  params.put("FLMActiveOverrides", {"test": 1})
+  params.put("StarPilotApiToken", "original-secret")
+  for name, content in {
+    "themes/theme_packs/space/colors.json": '{"background":"#000"}',
+    "flm/saved_tunes/my-car.json": '{"name":"My Car"}',
+    "flm/progress.json": '{"version":1,"vehicles":{"my-car":{"minimumPathKey":"cleanup_pass"}}}',
+    "toggle_backups/Before switching/IsMetric": "1",
+    "toggle_backups/Before switching/StarPilotApiToken": "original-secret",
+  }.items():
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+  (root / "themes" / "active").symlink_to(active, target_is_directory=True)
+  content = export(client)
+  with zipfile.ZipFile(io.BytesIO(content)) as archive:
+    assert not any(name.startswith(("active_theme/", "models/")) for name in archive.namelist())
+    assert "profiles/Before switching/IsMetric" in archive.namelist()
+    assert "flm/progress.json" in archive.namelist()
+    assert all(b"original-secret" not in archive.read(name) for name in archive.namelist())
+  params.put_bool("IsMetric", False)
+  params.put_int("ScreenBrightness", 20)
+  params.put("StarPilotApiToken", "current-secret")
+  (root / "flm/saved_tunes/my-car.json").write_text("changed")
+  response = client.post("/api/device_backup/restore", data=content, content_type="application/zip")
+  assert response.status_code == 200, response.json
+  assert response.json["success"]
+  assert params.get_bool("IsMetric") is True
+  assert params.get_int("ScreenBrightness") == 65
+  assert params.get("FLMActiveOverrides") == {"test": 1}
+  assert params.get("StarPilotApiToken") == "current-secret"
+  assert (root / "flm/saved_tunes/my-car.json").read_text() == '{"name":"My Car"}'
+  assert not params.get_bool("DoReboot")
+  assert client.get("/api/device_backup/status").json["stage"] == "awaiting_choice"
+  assert client.post("/api/device_backup/reboot", json={"downloadModels": False}).status_code == 200
+  assert params.get_bool("DoReboot") is True  # Only a temporary Params store, never hardware reboot.
+
+
+def test_incompatible_type_and_bad_boolean_keep_current_values(device_client):
+  client, params, _ = device_client
+  params.put_bool("IsMetric", True)
+  params.put_int("ScreenBrightness", 65)
+  content = export(client)
+
+  def damage(manifest):
+    manifest["types"]["ScreenBrightness"] = int(server.ParamKeyType.STRING)
+    manifest["params"]["ScreenBrightness"] = base64.b64encode(b"55").decode()
+    manifest["params"]["IsMetric"] = base64.b64encode(b"not-a-boolean").decode()
+
+  params.put_int("ScreenBrightness", 20)
+  response = client.post("/api/device_backup/restore", data=rewrite_manifest(content, damage), content_type="application/zip")
+  assert response.status_code == 200, response.json
+  assert {"ScreenBrightness", "IsMetric"} <= set(response.json["skipped"])
+  assert params.get_int("ScreenBrightness") == 20
+  assert params.get_bool("IsMetric") is True
+
+
+def test_personality_master_and_document_are_synchronized(device_client):
+  client, params, _ = device_client
+  params.put_bool("CustomPersonalities", True)
+  params.put("LongitudinalPersonalityProfiles", {})
+  response = client.post("/api/device_backup/restore", data=export(client), content_type="application/zip")
+  assert response.status_code == 200, response.json
+  document = server.strict_profile_document(params.get("LongitudinalPersonalityProfiles"))
+  assert document and document["enabled"] is True
+  assert params.get_bool("CustomPersonalities") is True
+
+
+def test_upload_limit_and_chunked_body(device_client, monkeypatch):
+  client, params, root = device_client
+  content = export(client)
+  monkeypatch.setattr(server.device_backup, "MAX_ARCHIVE_BYTES", len(content) - 1)
+  response = client.post("/api/device_backup/restore", data=content, content_type="application/zip")
+  assert response.status_code == 400
+  assert "limit" in response.json["message"]
+  assert not list((root / "device_backup_work").iterdir())
+  monkeypatch.setattr(server.device_backup, "MAX_ARCHIVE_BYTES", len(content) + 1)
+  response = client.open("/api/device_backup/restore", method="POST", content_type="application/zip",
+                         environ_overrides={"wsgi.input": io.BytesIO(content), "wsgi.input_terminated": True,
+                                            "CONTENT_LENGTH": "", "HTTP_TRANSFER_ENCODING": "chunked"})
+  assert response.status_code == 200, response.json
+  assert not params.get_bool("DoReboot")
+
+
+def test_model_queue_cancellation_cannot_cancel_a_newer_request(device_client, monkeypatch):
+  _, _, _ = device_client
+  monkeypatch.setattr(server, "_MODEL_RESTORE_ACTIVE", False)
+  monkeypatch.setattr(server, "model_uses_external_gpu", lambda _: False)
+  old = server._queue_model_download("test-model")
+  server.params_memory.remove(server.MODEL_DOWNLOAD_PARAM)
+  newer = server._queue_model_download("test-model")
+  server._cancel_owned_model_download(old)
+  assert not server.params_memory.get_bool(server.MODEL_CANCEL_DOWNLOAD_PARAM)
+  server._cancel_owned_model_download(newer)
+  assert server.params_memory.get_bool(server.MODEL_CANCEL_DOWNLOAD_PARAM)
+
+
+def test_restore_reservation_and_gpu_guard_apply_to_existing_model_api(device_client, monkeypatch):
+  client, _, _ = device_client
+  monkeypatch.setattr(server, "_MODEL_RESTORE_ACTIVE", True)
+  assert client.post("/api/models/download", json={"model": "a"}).status_code == 409
+  assert client.post("/api/models/download_all", json={}).status_code == 409
+  assert client.post("/api/models/refresh_manifest").status_code == 409
+  monkeypatch.setattr(server, "_MODEL_RESTORE_ACTIVE", False)
+  monkeypatch.setattr(server, "model_uses_external_gpu", lambda _: True)
+  monkeypatch.setattr(server, "external_gpu_available", lambda: False)
+  with pytest.raises(ValueError, match="external GPU"):
+    server._queue_model_download("a", restore_job=True)
+  assert not server.params_memory.get(server.MODEL_DOWNLOAD_PARAM)
+
+
+def test_completion_report_survives_server_restart(device_client):
+  client, _, _ = device_client
+  content = export(client)
+  assert client.post("/api/device_backup/restore", data=content, content_type="application/zip").status_code == 200
+  assert client.post("/api/device_backup/reboot", json={"downloadModels": False}).status_code == 200
+  restarted_app = server.Flask("backup-result-after-restart")
+  server.setup(restarted_app)
+  status = restarted_app.test_client().get("/api/device_backup/status").json
+  assert status["stage"] == "complete"
+  assert "Restored" in status["message"]

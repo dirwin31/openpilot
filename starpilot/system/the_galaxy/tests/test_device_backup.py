@@ -36,7 +36,7 @@ def test_round_trip(backup, tmp_path):
   archive, root, params = backup
   params.values = {"IsMetric": b"0", "ScreenBrightness": b"new"}
   (root / "model.bin").write_bytes(b"changed")
-  assert restore_backup(archive, {"flm": root}, params, {"IsMetric", "FLMActiveOverrides", "ScreenBrightness"}, tmp_path, lambda: None) == (2, 1)
+  assert restore_backup(archive, {"flm": root}, params, {"IsMetric", "FLMActiveOverrides", "ScreenBrightness"}, tmp_path, lambda: None) == (2, 1, [])
   assert params.values == {"IsMetric": b"1", "FLMActiveOverrides": b'\x00\xff'}
   assert (root / "model.bin").read_bytes() == b"model contents"
 
@@ -200,7 +200,7 @@ def test_restore_reboot_requires_completed_restore_and_parked_state(ready, parke
            "_personality_settings_write_locked": lambda: not parked, "jsonify": lambda **kwargs: kwargs,
            "request": SimpleNamespace(get_json=lambda **kwargs: {"downloadModels": download}),
            "threading": SimpleNamespace(Thread=FakeThread), "run_restore_model_downloads": lambda: None,
-           "restore_model_download_busy": lambda: False, "device_restore_state": {},
+           "_model_download_busy": lambda: False, "_MODEL_QUEUE_LOCK": threading.RLock(), "device_restore_state": {},
            "request_restore_reboot": lambda: writes.append(("DoReboot", True))}
   exec(compile(ast.Module(body=[route], type_ignores=[]), "<reboot-route>", "exec"), scope)
   result = scope["reboot_after_device_restore"]()
@@ -246,32 +246,224 @@ def test_model_inventory_validation_precedes_restore(tmp_path):
   assert params.get("IsMetric") == b"1"
 
 
+class TypedParams:
+  """Mirrors native Params: typed get/put, serialized store files, and cpp2python returning None on a bad cast."""
+  decoders = {1: lambda v: v == b"1", 2: lambda v: int(v.decode()), 5: json.loads}
+
+  def __init__(self, store, types):
+    self.store = store
+    self.types = types
+    self.values = {}
+
+  def get_param_path(self, key):
+    return str(self.store / key)
+
+  def get_type(self, key):
+    return self.types[key]
+
+  def cpp2python(self, key, raw):
+    try:
+      return self.decoders[self.types[key]](raw)
+    except ValueError:
+      return None
+
+  def get(self, key):
+    return self.values.get(key)
+
+  def put(self, key, value):
+    assert type(value) in {1: (bool,), 2: (int,), 5: (dict, list)}[self.types[key]]
+    self.values[key] = value
+
+  def remove(self, key):
+    self.values.pop(key, None)
+
+
 def test_typed_params_round_trip_uses_serialized_store(tmp_path):
-  class TypedParams:
-    types = {"IsMetric": 1, "ScreenBrightness": 2, "FLMActiveOverrides": 5}
-    values = {"IsMetric": True, "ScreenBrightness": 70, "FLMActiveOverrides": {"tune": 1}}
-
-    def get_param_path(self, key):
-      return str(tmp_path / key)
-
-    def get_type(self, key):
-      return self.types[key]
-
-    def get(self, key):
-      return self.values.get(key)
-
-    def put(self, key, value):
-      assert type(value) is {1: bool, 2: int, 5: dict}[self.types[key]]
-      self.values[key] = value
-
-    def remove(self, key):
-      self.values.pop(key, None)
-
-  params = TypedParams()
+  params = TypedParams(tmp_path, {"IsMetric": 1, "ScreenBrightness": 2, "FLMActiveOverrides": 5})
   for key, value in {"IsMetric": b"1", "ScreenBrightness": b"70", "FLMActiveOverrides": b'{"tune":1}'}.items():
     (tmp_path / key).write_bytes(value)
   output = io.BytesIO()
   create_backup(output, {}, params, set(params.types))
-  params.values = {}
   restore_backup(output, {}, params, set(params.types), tmp_path, lambda: None)
   assert params.values == {"IsMetric": True, "ScreenBrightness": 70, "FLMActiveOverrides": {"tune": 1}}
+
+
+def test_setting_with_changed_type_keeps_current_value_instead_of_failing_restore(tmp_path):
+  store = tmp_path / "store"
+  store.mkdir()
+  (store / "IsMetric").write_bytes(b"1")
+  (store / "ScreenBrightness").write_bytes(b"bright")  # Saved while this key was a STRING.
+  output = io.BytesIO()
+  create_backup(output, {}, TypedParams(store, {"IsMetric": 1, "ScreenBrightness": 0}), {"IsMetric", "ScreenBrightness"})
+  params = TypedParams(store, {"IsMetric": 1, "ScreenBrightness": 2})
+  params.values = {"ScreenBrightness": 40}
+  assert restore_backup(output, {}, params, {"IsMetric", "ScreenBrightness"}, tmp_path, lambda: None) == (1, 0, ["ScreenBrightness"])
+  assert params.values == {"IsMetric": True, "ScreenBrightness": 40}
+
+
+def test_validator_rejections_keep_current_values(tmp_path):
+  archive, root, params = backup_archive(tmp_path)
+  params.values = {"IsMetric": b"current", "FLMActiveOverrides": b"current"}
+  result = restore_backup(archive, {"flm": root}, params, {"IsMetric", "FLMActiveOverrides"}, tmp_path, lambda: None,
+                          validate=lambda values, _keys: {key: value for key, value in values.items() if key != "FLMActiveOverrides"})
+  assert result == (1, 1, ["FLMActiveOverrides"])
+  assert params.values == {"IsMetric": b"1", "FLMActiveOverrides": b"current"}
+
+
+def backup_archive(tmp_path):
+  root = tmp_path / "flm"
+  root.mkdir()
+  (root / "tune.json").write_bytes(b"{}")
+  params = Params()
+  archive = io.BytesIO()
+  create_backup(archive, {"flm": root}, params, {"IsMetric", "FLMActiveOverrides"})
+  return archive, root, params
+
+
+def test_backup_skips_linked_theme_assets_instead_of_failing(tmp_path):
+  themes = tmp_path / "themes"
+  pack = themes / "theme_packs" / "space"
+  pack.mkdir(parents=True)
+  (pack / "colors.json").write_text("{}")
+  # Theme manager links active assets into place; the link targets are archived through their real path.
+  (themes / "active_colors").symlink_to(pack, target_is_directory=True)
+  (themes / "wheel.png").symlink_to(pack / "colors.json")
+  output = io.BytesIO()
+  create_backup(output, {"themes": themes}, Params(), set())
+  with zipfile.ZipFile(output) as archive:
+    assert sorted(archive.namelist()) == ["manifest.json", "themes/theme_packs/space/colors.json"]
+
+
+def test_galaxy_backs_up_only_known_roots_and_not_the_linked_active_theme():
+  import ast
+  from pathlib import Path
+  from starpilot.system.the_galaxy.device_backup import ROOT_LABELS
+
+  tree = ast.parse(Path(__file__).parents[1].joinpath("the_galaxy.py").read_text())
+  context = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "device_backup_context")
+  roots = next(node.value for node in ast.walk(context) if isinstance(node, ast.Assign) and node.targets[0].id == "roots")
+  assert {key.value for key in roots.keys} == set(ROOT_LABELS)
+  assert "ACTIVE_THEME_PATH" not in ast.unparse(roots)
+
+
+def test_user_named_toggle_backups_are_included_and_filtered(tmp_path):
+  profiles = tmp_path / "profiles"
+  for folder in ("2026-09-13_auto", "before_fork_switch", "2026-09-14_auto_in_progress"):
+    (profiles / folder).mkdir(parents=True)
+    (profiles / folder / "IsMetric").write_bytes(b"1")
+    (profiles / folder / "StarPilotApiToken").write_bytes(b"SECRET")
+  output = io.BytesIO()
+  create_backup(output, {"profiles": profiles}, Params(), {"IsMetric"})
+  with zipfile.ZipFile(output) as archive:
+    assert sorted(archive.namelist()) == ["manifest.json", "profiles/2026-09-13_auto/IsMetric", "profiles/before_fork_switch/IsMetric"]
+
+
+def test_flm_tuning_progress_is_backed_up(tmp_path):
+  flm = tmp_path / "flm"
+  (flm / "saved_tunes").mkdir(parents=True)
+  (flm / "progress.json").write_text('{"version":1,"vehicles":{"car":{"minimumPathKey":"cleanup_pass"}}}')
+  (flm / "saved_tunes" / "tune.json").write_text("{}")
+  output = io.BytesIO()
+  create_backup(output, {"flm": flm}, Params(), set())
+  with zipfile.ZipFile(output) as archive:
+    assert sorted(archive.namelist()) == ["flm/progress.json", "flm/saved_tunes/tune.json", "manifest.json"]
+
+
+def test_every_persistent_param_is_explicitly_included_or_excluded():
+  import re
+  from pathlib import Path
+  from starpilot.system.the_galaxy.device_backup import POLICY
+
+  registry = Path(__file__).resolve().parents[4].joinpath("common/params_keys.h").read_text()
+  persistent = {match.group(1) for match in re.finditer(r'^\s*\{"(\w+)",\s*\{([^,}]*)', registry, re.MULTILINE)
+                if "PERSISTENT" in match.group(2)}
+  include, exclude = set(POLICY["include"]), set(POLICY["exclude"])
+  assert not include & exclude
+  unreviewed = persistent - include - exclude
+  assert not unreviewed, f"Add new persistent Params to device_backup_keys.json include or exclude: {sorted(unreviewed)}"
+  assert include | exclude <= persistent, f"Remove deleted Params: {sorted((include | exclude) - persistent)}"
+
+
+def test_restore_applies_galaxy_personality_validation():
+  import ast
+  from pathlib import Path
+  from starpilot.common import longitudinal_personality_profiles as profiles
+
+  tree = ast.parse(Path(__file__).parents[1].joinpath("the_galaxy.py").read_text())
+  validator = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "validate_device_restore_params")
+  scope = {name: getattr(profiles, name) for name in (
+    "PERSONALITY_ADVANCED_PARAM_KEYS", "PERSONALITY_FOLLOW_PARAM_KEYS", "PERSONALITY_PROFILES_PARAM",
+    "validate_personality_advanced_value", "validate_personality_follow_value",
+    "is_unconfigured_profile_document", "migrate_profile_document", "PERSONALITY_PROFILE_ENABLE_PARAM_KEYS",
+    "strict_profile_document", "synchronise_profile_document_enabled")}
+  from types import SimpleNamespace
+  scope.update(_params_raw=SimpleNamespace(get=lambda key: None, get_bool=lambda key: False),
+               params=SimpleNamespace(get_bool=lambda key: False),
+               _get_detected_ev_tuning=lambda: False, _get_detected_truck_tuning=lambda: False)
+  exec(compile(ast.Module(body=[validator], type_ignores=[]), "<validator>", "exec"), scope)
+  def validate(values):
+    return scope["validate_device_restore_params"](values, set(values))
+  assert validate({"AggressiveFollow": 9.0, "TrafficJerkAcceleration": 100.0, "IsMetric": True}) == {
+    "TrafficJerkAcceleration": 100.0, "IsMetric": True}
+  assert validate({profiles.PERSONALITY_PROFILES_PARAM: {"garbage": 1}, "CustomPersonalities": True}) == {}
+  assert validate({profiles.PERSONALITY_PROFILES_PARAM: {}, "CustomPersonalities": False}) == {
+    profiles.PERSONALITY_PROFILES_PARAM: {}, "CustomPersonalities": False}
+
+
+def test_new_settings_absent_from_old_scope_are_not_cleared(tmp_path):
+  params = Params()
+  output = io.BytesIO()
+  create_backup(output, {}, params, {"IsMetric"})
+  params.values["ScreenBrightness"] = b"40"
+  restore_backup(output, {}, params, {"IsMetric", "ScreenBrightness"}, tmp_path, lambda: None)
+  assert params.values["ScreenBrightness"] == b"40"
+
+
+def test_params_failure_rolls_back_replaced_files(tmp_path):
+  archive, root, params = backup_archive(tmp_path)
+  (root / "tune.json").write_text("before")
+  params.values["IsMetric"] = b"0"
+  put = params.put
+  failed = False
+
+  def fail_once(key, value):
+    nonlocal failed
+    if not failed:
+      assert (root / "tune.json").read_text() == "{}", "must fail after live file replacement"
+      failed = True
+      raise OSError("Simulated Params write failure")
+    put(key, value)
+
+  params.put = fail_once
+  with pytest.raises(OSError, match="Params write"):
+    restore_backup(archive, {"flm": root}, params, {"IsMetric", "FLMActiveOverrides"}, tmp_path, lambda: None)
+  assert (root / "tune.json").read_text() == "before"
+  assert params.values["IsMetric"] == b"0"
+  assert not list(tmp_path.glob("restore-*"))
+
+
+def test_failed_rollback_retains_recovery_copies(tmp_path):
+  archive, root, params = backup_archive(tmp_path)
+  (root / "tune.json").write_text("before")
+
+  def fail_put(_key, _value):
+    raise OSError("Permanent write failure")
+
+  params.put = fail_put
+  with pytest.raises(RuntimeError, match="rollback was incomplete"):
+    restore_backup(archive, {"flm": root}, params, {"IsMetric", "FLMActiveOverrides"}, tmp_path, lambda: None)
+  recovery = next(tmp_path.glob("restore-*/recovery.json"))
+  assert json.loads(recovery.read_text())["params"]["IsMetric"] == "MQ=="
+  assert (recovery.parent / "old/flm/tune.json").read_text() == "before"
+
+
+def test_disk_budget_accounts_for_larger_existing_files(tmp_path, monkeypatch):
+  from collections import namedtuple
+  from starpilot.system.the_galaxy import device_backup
+  archive, root, params = backup_archive(tmp_path)
+  (root / "tune.json").write_bytes(b"x" * 10000)
+  usage = namedtuple("usage", "total used free")
+  monkeypatch.setattr(device_backup.shutil, "disk_usage", lambda _: usage(1_000_000, 0, device_backup.RESTORE_MARGIN_BYTES + 1000))
+  with pytest.raises(ValueError, match="free space"):
+    restore_backup(archive, {"flm": root}, params, {"IsMetric"}, tmp_path, lambda: None)
+  assert (root / "tune.json").stat().st_size == 10000

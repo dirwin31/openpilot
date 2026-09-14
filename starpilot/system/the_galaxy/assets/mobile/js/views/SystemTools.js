@@ -1,4 +1,4 @@
-import { api, showSnackbar } from "../api.js"
+import { api, downloadBlob, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GalaxyConfirm } from "../components/GalaxyModal.js"
 import { GalaxySection } from "../components/GalaxySection.js"
@@ -266,14 +266,7 @@ export const SystemTools = {
       this.deviceBackupMessage = "Creating full backup. Model files are excluded; keep this page open until the download starts."
       try {
         const blob = await api.backupDevice()
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = url
-        a.download = `starpilot-device-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`
-        document.body.appendChild(a)
-        a.click()
-        a.remove()
-        setTimeout(() => URL.revokeObjectURL(url), 60000)
+        downloadBlob(blob, `starpilot-device-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`)
         this.deviceBackupMessage = "Backup download started. Verify the ZIP is saved on your phone or computer before switching forks."
       } catch (e) {
         this.deviceBackupError = true
@@ -330,13 +323,24 @@ export const SystemTools = {
     },
     async rebootAfterRestore() {
       if (!this.deviceRestoreReady || this.deviceBackupBusy || this.isOnroad) return
-      const downloadModels = await GalaxyConfirm({
-        title: "Restore complete — finish and reboot",
-        message: `${this.deviceRestoreModels.length} saved model(s). Download any missing models before rebooting, or reboot without downloading. Downloads require internet access and may take several minutes. Keep the vehicle parked with ignition off.`,
-        confirmLabel: "Download Models and Reboot",
-        cancelLabel: "Reboot Without Downloading",
-        dismissible: false,
-      })
+      let downloadModels = false
+      // Rebooting without downloads is the modal's secondary action, so it gets its own confirmation.
+      for (;;) {
+        downloadModels = await GalaxyConfirm({
+          title: "Restore complete — finish and reboot",
+          message: `${this.deviceRestoreModels.length} saved model(s). Download any missing models before rebooting, or reboot without downloading. Downloads require internet access and may take several minutes. Models no longer offered are skipped and listed. Keep the vehicle parked with ignition off.`,
+          confirmLabel: "Download Models and Reboot",
+          cancelLabel: "Reboot Without Downloading",
+          dismissible: false,
+        })
+        if (downloadModels || await GalaxyConfirm({
+          title: "Reboot without downloading models?",
+          message: "The device reboots now. Missing models can be installed later from Model Manager.",
+          confirmLabel: "Reboot Now",
+          cancelLabel: "Back",
+          dismissible: false,
+        })) break
+      }
       if (this.deviceBackupBusy || this.isOnroad) return
       this.deviceBackupBusy = "reboot"
       this.deviceBackupError = false
@@ -358,12 +362,7 @@ export const SystemTools = {
     async backupToggles() {
       try {
         const blob = await api.backupToggles()
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = url
-        a.download = "toggle-backup.json"
-        a.click()
-        setTimeout(() => URL.revokeObjectURL(url), 1000)
+        downloadBlob(blob, "toggle-backup.json")
         showSnackbar("Toggle backup downloaded.")
       } catch (e) {
         showSnackbar(e?.message || "Backup failed.", "error")
@@ -871,8 +870,8 @@ export const SystemTools = {
         </div>
         <div style="padding: var(--sp-3);">
           <h4 style="margin:0 0 4px;">Full Backup</h4>
-          <p class="gx-note">Save toggles, your installed-model list, FLM tunings and workspace, themes, saved profiles, calibration, and driving statistics in one ZIP.</p>
-          <p class="gx-note">Save it to your phone or computer before switching forks. After reinstalling StarPilot, restore it here, then choose Download Models and Reboot or Reboot Without Downloading. The download option waits for all requested models to finish and be verified before rebooting. Failed downloads do not reboot the device. Existing model files are kept. Missing models require internet access and must still be available to download.</p>
+          <p class="gx-note">Save toggles, your installed-model list, FLM tunings and workspace, themes, saved profiles and toggle backups, calibration, and driving statistics in one ZIP.</p>
+          <p class="gx-note">Save it to your phone or computer before switching forks. After reinstalling StarPilot, restore it here, then choose Download Models and Reboot or Reboot Without Downloading. The download option installs each saved model the catalog still offers and verifies it before rebooting; models no longer offered are skipped and listed. Failed downloads do not reboot the device. Existing model files are kept. Settings that no longer fit this StarPilot version keep their current values and are listed after restore.</p>
           <p class="gx-note"><strong>Not included:</strong> Model files (only the installed-model list is saved), API keys and other credentials, Galaxy pairing and session tokens, device identity, saved navigation destinations, Wi-Fi/Bluetooth system configuration, driving recordings, offline maps, and the installed fork or operating system. Restore keeps current credentials and pairing unchanged.</p>
           <p class="gx-note">FLM reports and statistics can contain route names, timestamps, and vehicle details. Keep your backup private. Avoid changing settings, downloading models, or running FLM analysis during backup or restore.</p>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">

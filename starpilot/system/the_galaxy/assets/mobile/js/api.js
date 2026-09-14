@@ -232,11 +232,8 @@ export const api = {
   },
   deviceRestoreStatus() { return request("/api/device_backup/status", { cache: "no-store" }) },
   rebootAfterDeviceRestore(downloadModels) { return request("/api/device_backup/reboot", { method: "POST", data: { downloadModels } }) },
-  restoreDevice(file) {
-    const form = new FormData()
-    form.append("backup", file)
-    return request("/api/device_backup/restore", { method: "POST", form })
-  },
+  // Raw body, not multipart: the server streams it to /data instead of spooling it in RAM.
+  restoreDevice(file) { return request("/api/device_backup/restore", { method: "POST", form: file, headers: { "Content-Type": "application/zip" } }) },
   async backupToggles() {
     const res = await fetch("/api/toggles/backup", { method: "POST" })
     if (!res.ok) {
@@ -420,6 +417,17 @@ export const api = {
     const src = URL.createObjectURL(await res.blob())
     return { src, cleanup: () => URL.revokeObjectURL(src) }
   },
+}
+
+export function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 60000)
 }
 
 export function showSnackbar(message, level = "info") {

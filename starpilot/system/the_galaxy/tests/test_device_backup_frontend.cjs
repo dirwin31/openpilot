@@ -10,11 +10,17 @@ let backups = 0;
 let restoreFails = false;
 let finishFails = false;
 let status = {stage:'idle'};
+let confirmNoDownload = [];
 const finishes = [];
 const prompts = [];
 const ctx = {
   GalaxySection: {}, GxNotice: {},
-  GalaxyConfirm: async options => { prompts.push(options); return options.dismissible === false ? downloadModels : accepted; },
+  downloadBlob: () => {},
+  GalaxyConfirm: async options => {
+    prompts.push(options);
+    if (options.confirmLabel === 'Reboot Now') return confirmNoDownload.length ? confirmNoDownload.shift() : true;
+    return options.dismissible === false ? downloadModels : accepted;
+  },
   api: {
     restoreDevice: async () => {
       restores++;
@@ -48,13 +54,22 @@ vm.runInContext(source + '\nthis.view = SystemTools;', ctx);
   view.isOnroad = false;
   await view.onDeviceRestoreFile(event());
   assert.deepEqual(finishes, [false], 'secondary action must reboot without downloading');
-  assert.equal(prompts.at(-1).confirmLabel, 'Download Models and Reboot');
-  assert.equal(prompts.at(-1).cancelLabel, 'Reboot Without Downloading');
-  assert.equal(prompts.at(-1).dismissible, false, 'no Later/backdrop dismissal');
+  assert.equal(prompts.at(-2).confirmLabel, 'Download Models and Reboot');
+  assert.equal(prompts.at(-2).cancelLabel, 'Reboot Without Downloading');
+  assert.equal(prompts.at(-2).dismissible, false, 'no Later/backdrop dismissal');
+  assert.equal(prompts.at(-1).confirmLabel, 'Reboot Now', 'rebooting without downloads needs its own confirmation');
+  assert.equal(prompts.at(-1).dismissible, false);
+  confirmNoDownload = [false, true];
+  view.deviceRestoreReady = true;
+  const beforeBack = prompts.length;
+  await view.rebootAfterRestore();
+  assert.deepEqual(prompts.slice(beforeBack).map(prompt => prompt.confirmLabel),
+    ['Download Models and Reboot', 'Reboot Now', 'Download Models and Reboot', 'Reboot Now'], 'Back returns to the choice');
+  assert.deepEqual(finishes, [false, false]);
   assert.equal(view.deviceRestoreReady, false);
   downloadModels = true;
   await view.onDeviceRestoreFile(event());
-  assert.deepEqual(finishes, [false, true]);
+  assert.deepEqual(finishes, [false, false, true]);
   assert.equal(view.deviceBackupBusy, 'models', 'poll until model downloads finish');
   status = {stage:'error', message:'Model unavailable', models:[{key:'a'}]};
   await view.loadDeviceRestoreStatus();
@@ -63,7 +78,7 @@ vm.runInContext(source + '\nthis.view = SystemTools;', ctx);
   assert.equal(view.deviceBackupBusy, '');
   view.isOnroad = true;
   await view.rebootAfterRestore();
-  assert.equal(finishes.length, 2);
+  assert.equal(finishes.length, 3);
   view.isOnroad = false;
   finishFails = true;
   await view.rebootAfterRestore();
@@ -89,11 +104,11 @@ vm.runInContext(source + '\nthis.view = SystemTools;', ctx);
   const network = {FormData, fetch:async (url, options) => {calls.push({url, options}); return {ok:true, json:async()=>({success:true})};}};
   vm.createContext(network);
   vm.runInContext(fs.readFileSync(path.join(base, 'api.js'), 'utf8').replace(/export /g, '') + '\nthis.client=api;', network);
-  await network.client.restoreDevice(new Blob(['zip']));
+  const zip = new Blob(['zip']);
+  await network.client.restoreDevice(zip);
   assert.equal(calls[0].url, '/api/device_backup/restore');
-  assert.ok(calls[0].options.body instanceof FormData);
-  assert.ok(calls[0].options.body.get('backup'));
-  assert.equal(calls[0].options.headers, undefined);
+  assert.equal(calls[0].options.body, zip, 'raw body so the server streams it to /data');
+  assert.equal(calls[0].options.headers['Content-Type'], 'application/zip');
   await network.client.rebootAfterDeviceRestore(true);
   assert.equal(calls[1].url, '/api/device_backup/reboot');
   assert.deepEqual(JSON.parse(calls[1].options.body), {downloadModels:true});
@@ -101,5 +116,5 @@ vm.runInContext(source + '\nthis.view = SystemTools;', ctx);
   assert.deepEqual(JSON.parse(calls[2].options.body), {downloadModels:false});
   const modalSource = fs.readFileSync(path.join(base,'components/GalaxyModal.js'),'utf8');
   assert.match(modalSource, /@click.self="dismissible && cancel\(\)"/);
-  console.log('Inline restore choices, both reboot paths, progress polling, retry, guards and upload passed');
+  console.log('Inline restore choices, confirmed reboot paths, progress polling, retry, guards and raw upload passed');
 })().catch(error => {console.error(error); process.exitCode = 1;});
