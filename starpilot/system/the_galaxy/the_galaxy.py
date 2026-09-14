@@ -11,6 +11,7 @@ import platform
 import sys
 import sysconfig
 import tarfile
+import tempfile
 
 import io
 from io import BytesIO
@@ -170,7 +171,7 @@ from openpilot.starpilot.common.testing_grounds import (
 )
 from openpilot.starpilot.navigation.destination_store import normalize_destination_payload, routing_configured, update_recent_destinations
 from openpilot.starpilot.system.the_galaxy.factory_reset import remove_path as _run_factory_reset_delete
-from openpilot.starpilot.system.the_galaxy import flm_workspace, utilities
+from openpilot.starpilot.system.the_galaxy import device_backup, flm_workspace, restore_models, utilities
 from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interrupted_update, public_recovery_status, recover_interrupted_update
 from openpilot.starpilot.system.bluetooth import BluetoothClient
 from openpilot.starpilot.system.wheel_controls import (
@@ -10260,6 +10261,146 @@ def setup(app):
     params.put("SecOCKey", value)
 
     return "", 204
+
+  device_backup_lock = threading.Lock()
+  device_restore_ready = False
+  device_restore_state = {"stage": "idle", "message": "", "models": []}
+
+  @app.route("/device_backup")
+  def device_backup_page():
+    return "", 302, {"Location": "/#/system"}
+
+  def device_backup_context():
+    if _personality_settings_write_locked():
+      raise ValueError("Park the vehicle with off-road state confirmed before backup or restore.")
+    if flm_workspace.flm_analyzer_running():
+      raise ValueError("Wait for FLM analysis to finish before backup or restore.")
+    roots = {"flm": flm_workspace.get_flm_workspace_root(),
+             "themes": THEME_SAVE_PATH, "active_theme": ACTIVE_THEME_PATH, "profiles": TOGGLE_BACKUPS}
+    keys = {key.decode() if isinstance(key, bytes) else key for key in _params_raw.all_keys()}
+    keys = device_backup.eligible_keys(key for key in keys if _params_raw.get_key_flag(key) & ParamKeyFlag.PERSISTENT)
+    return roots, keys
+
+  @app.route("/api/device_backup/download", methods=["POST"])
+  def download_device_backup():
+    if not device_backup_lock.acquire(blocking=False):
+      return jsonify(success=False, message="A device backup or restore is already running."), 409
+    temporary = None
+    try:
+      roots, keys = device_backup_context()
+      workdir = MODELS_PATH.parent / "device_backup_work"
+      workdir.mkdir(parents=True, exist_ok=True)
+      temporary = tempfile.TemporaryFile(dir=workdir)
+      device_backup.create_backup(temporary, roots, _params_raw, keys, models=device_backup.saved_models(get_model_catalog()))
+      device_backup_context()
+      temporary.seek(0)
+      response = send_file(temporary, as_attachment=True,
+                           download_name=f"starpilot-device-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip",
+                           mimetype="application/zip")
+      response.call_on_close(temporary.close)
+      return response
+    except Exception as exc:
+      if temporary is not None:
+        temporary.close()
+      cloudlog.exception("Device backup failed")
+      return jsonify(success=False, message=str(exc)), 400
+    finally:
+      device_backup_lock.release()
+
+  @app.route("/api/device_backup/restore", methods=["POST"])
+  def restore_device_backup():
+    nonlocal device_restore_ready
+    if not device_backup_lock.acquire(blocking=False):
+      return jsonify(success=False, message="A device backup or restore is already running."), 409
+    try:
+      roots, keys = device_backup_context()
+      upload = request.files.get("backup")
+      if upload is None:
+        raise ValueError("Choose a full StarPilot backup ZIP file.")
+      workdir = MODELS_PATH.parent / "device_backup_work"
+      workdir.mkdir(parents=True, exist_ok=True)
+      device_restore_ready = False
+      device_restore_state.update(stage="restoring", message="Restoring backup...", models=[])
+      models = []
+      with _PERSONALITY_PROFILES_WRITE_LOCK:
+        count, files = device_backup.restore_backup(upload.stream, roots, _params_raw, keys, workdir, device_backup_context, models_out=models)
+      device_restore_ready = True
+      message = f"Restored {count} settings and {files} files. Choose whether to download the {len(models)} saved model(s) before rebooting."
+      device_restore_state.update(stage="awaiting_choice", message=message, models=models)
+      return jsonify(success=True, message=message, models=models)
+    except Exception as exc:
+      device_restore_state.update(stage="restore_error", message=str(exc))
+      cloudlog.exception("Device restore failed")
+      return jsonify(success=False, message=str(exc)), 400
+    finally:
+      device_backup_lock.release()
+
+  def restore_model_download_busy():
+    return bool(params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM)
+                or params_memory.get(MODEL_DOWNLOAD_PARAM)
+                or params_memory.get(MODEL_LAB_DOWNLOAD_PARAM))
+
+  def queue_restore_model(key, variant):
+    params_memory.remove(MODEL_CANCEL_DOWNLOAD_PARAM)
+    params_memory.put_bool(ALLOW_GPU_DOWNLOAD_WITHOUT_GPU_PARAM, True)
+    params_memory.put(MODEL_DOWNLOAD_PROGRESS_PARAM, "Downloading restored model...")
+    params_memory.put(MODEL_LAB_DOWNLOAD_PARAM if variant == "lab" else MODEL_DOWNLOAD_PARAM, key)
+
+  def request_restore_reboot():
+    if _personality_settings_write_locked():
+      raise ValueError("Park the vehicle before rebooting.")
+    _params_raw.put_bool("DoReboot", True)
+    device_restore_state.update(stage="rebooting", message="Reboot requested. Keep ignition off and wait for Galaxy to reconnect.")
+
+  def run_restore_model_downloads():
+    try:
+      restore_models.download_saved_models(
+        device_restore_state["models"], catalog=get_model_catalog, queue=queue_restore_model,
+        busy=restore_model_download_busy,
+        progress=lambda: params_memory.get(MODEL_DOWNLOAD_PROGRESS_PARAM, encoding="utf-8") or "",
+        check_parked=device_backup_context, reboot=request_restore_reboot,
+        report=lambda message: device_restore_state.update(message=message),
+      )
+    except Exception as exc:
+      params_memory.put_bool(MODEL_CANCEL_DOWNLOAD_PARAM, True)
+      device_restore_state.update(stage="error", message=str(exc))
+      cloudlog.exception("Restore model download failed")
+    finally:
+      device_backup_lock.release()
+
+  @app.route("/api/device_backup/status", methods=["GET"])
+  def device_restore_status():
+    status = dict(device_restore_state)
+    if status["stage"] == "downloading":
+      status["downloadProgress"] = params_memory.get(MODEL_DOWNLOAD_PROGRESS_PARAM, encoding="utf-8") or ""
+    return jsonify(status)
+
+  @app.route("/api/device_backup/reboot", methods=["POST"])
+  def reboot_after_device_restore():
+    if not device_backup_lock.acquire(blocking=False):
+      return jsonify(success=False, message="Wait for the device backup, restore, or model downloads to finish."), 409
+    worker_started = False
+    try:
+      if not device_restore_ready:
+        return jsonify(success=False, message="Complete a full restore before requesting its reboot."), 409
+      if _personality_settings_write_locked():
+        return jsonify(success=False, message="Park the vehicle before rebooting."), 403
+      data = request.get_json(silent=True) or {}
+      if type(data.get("downloadModels")) is not bool:
+        return jsonify(success=False, message="Choose whether to download saved models before rebooting."), 400
+      if restore_model_download_busy():
+        return jsonify(success=False, message="Wait for the current model download to finish."), 409
+      if data["downloadModels"]:
+        device_restore_state.update(stage="downloading", message="Checking saved models before download...")
+        worker = threading.Thread(target=run_restore_model_downloads, name="restore-models", daemon=True)
+        worker.start()
+        worker_started = True
+      else:
+        request_restore_reboot()
+      return jsonify(success=True, **dict(device_restore_state))
+    finally:
+      if not worker_started:
+        device_backup_lock.release()
 
   @app.route("/api/toggles/backup", methods=["POST"])
   def backup_toggle_values():

@@ -222,6 +222,21 @@ export const api = {
     if (!response.ok) throw new Error("System monitor unavailable")
     return response.json()
   },
+  async backupDevice() {
+    const res = await fetch("/api/device_backup/download", { method: "POST" })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data?.message || "Failed to create full backup.")
+    }
+    return res.blob()
+  },
+  deviceRestoreStatus() { return request("/api/device_backup/status", { cache: "no-store" }) },
+  rebootAfterDeviceRestore(downloadModels) { return request("/api/device_backup/reboot", { method: "POST", data: { downloadModels } }) },
+  restoreDevice(file) {
+    const form = new FormData()
+    form.append("backup", file)
+    return request("/api/device_backup/restore", { method: "POST", form })
+  },
   async backupToggles() {
     const res = await fetch("/api/toggles/backup", { method: "POST" })
     if (!res.ok) {

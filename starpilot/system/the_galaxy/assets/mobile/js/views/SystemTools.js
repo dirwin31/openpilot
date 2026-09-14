@@ -95,6 +95,11 @@ export const SystemTools = {
       autoUpdateBusy: false,
       profiles: [],
       profileBusy: "",
+      deviceBackupBusy: "",
+      deviceBackupMessage: "",
+      deviceBackupError: false,
+      deviceRestoreReady: false,
+      deviceRestoreModels: [],
       tailscaleInstalled: false,
       tailscaleLoaded: false,
       tailscaleBusy: false,
@@ -116,6 +121,11 @@ export const SystemTools = {
       })
       this.poll.start()
     })
+    this.restorePoll = usePolling(() => this.loadDeviceRestoreStatus(), {
+      interval: 1000,
+      enabled: () => this.deviceBackupBusy === "models",
+    })
+    this.restorePoll.start()
   },
   mounted() {
     this.rebootReady.then(() => {
@@ -123,11 +133,13 @@ export const SystemTools = {
       this.loadBranches()
       this.loadProfiles()
       this.loadTailscale()
+      this.loadDeviceRestoreStatus({ prompt: true })
     })
   },
   beforeUnmount() {
     this.rebootScopeCancelled = true
     this.poll?.destroy()
+    this.restorePoll?.destroy()
     this.resetVersions()
   },
   computed: {
@@ -246,6 +258,102 @@ export const SystemTools = {
       this.rebootOfflineSeen = false
       clearRebootMarker(this.rebootStorageScope)
       if (showNotice) this.reconnectedNotice = true
+    },
+    async backupDevice() {
+      if (this.deviceBackupBusy || this.isOnroad) return
+      this.deviceBackupBusy = "backup"
+      this.deviceBackupError = false
+      this.deviceBackupMessage = "Creating full backup. Model files are excluded; keep this page open until the download starts."
+      try {
+        const blob = await api.backupDevice()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = `starpilot-device-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 60000)
+        this.deviceBackupMessage = "Backup download started. Verify the ZIP is saved on your phone or computer before switching forks."
+      } catch (e) {
+        this.deviceBackupError = true
+        this.deviceBackupMessage = e?.message || "Full backup failed."
+      } finally {
+        this.deviceBackupBusy = ""
+      }
+    },
+    async onDeviceRestoreFile(e) {
+      const file = e.target.files[0]
+      e.target.value = ""
+      if (!file || this.deviceBackupBusy || this.isOnroad) return
+      if (!(await GalaxyConfirm({
+        title: "Restore full StarPilot backup?",
+        message: "This replaces saved settings, tunings, and matching files. Current credentials and Galaxy pairing are preserved. Reboot while parked after restoring.",
+        confirmLabel: "Restore Backup",
+        danger: true,
+      }))) return
+      if (this.deviceBackupBusy || this.isOnroad) return
+      this.deviceRestoreReady = false
+      this.deviceBackupBusy = "restore"
+      this.deviceBackupError = false
+      this.deviceBackupMessage = "Uploading and restoring backup. Keep this page open and the vehicle parked."
+      try {
+        const result = await api.restoreDevice(file)
+        if (result?.success !== true) throw new Error(result?.message || "Full restore did not complete.")
+        this.deviceRestoreReady = true
+        this.deviceRestoreModels = result.models || []
+        this.deviceBackupMessage = result?.message || "Full backup restored. Reboot while parked before driving."
+        await this.loadProfiles()
+      } catch (error) {
+        this.deviceBackupError = true
+        this.deviceBackupMessage = error?.message || "Full restore failed."
+      } finally {
+        this.deviceBackupBusy = ""
+      }
+      if (this.deviceRestoreReady) await this.rebootAfterRestore()
+    },
+    async loadDeviceRestoreStatus({ prompt = false } = {}) {
+      try {
+        const result = await api.deviceRestoreStatus()
+        if (!result || result.stage === "idle") return
+        this.deviceRestoreModels = result.models || []
+        this.deviceRestoreReady = ["awaiting_choice", "error"].includes(result.stage)
+        this.deviceBackupMessage = [result.message, result.downloadProgress].filter(Boolean).join(" — ")
+        this.deviceBackupError = ["error", "restore_error"].includes(result.stage)
+        this.deviceBackupBusy = result.stage === "downloading" ? "models" : ""
+        if (prompt && this.deviceRestoreReady) await this.rebootAfterRestore()
+      } catch (error) {
+        if (this.deviceBackupBusy === "models") {
+          this.deviceBackupMessage = "Connection lost while checking downloads. Reconnecting; the device will reboot after successful downloads."
+        }
+      }
+    },
+    async rebootAfterRestore() {
+      if (!this.deviceRestoreReady || this.deviceBackupBusy || this.isOnroad) return
+      const downloadModels = await GalaxyConfirm({
+        title: "Restore complete — finish and reboot",
+        message: `${this.deviceRestoreModels.length} saved model(s). Download any missing models before rebooting, or reboot without downloading. Downloads require internet access and may take several minutes. Keep the vehicle parked with ignition off.`,
+        confirmLabel: "Download Models and Reboot",
+        cancelLabel: "Reboot Without Downloading",
+        dismissible: false,
+      })
+      if (this.deviceBackupBusy || this.isOnroad) return
+      this.deviceBackupBusy = "reboot"
+      this.deviceBackupError = false
+      try {
+        const result = await api.rebootAfterDeviceRestore(downloadModels)
+        this.deviceBackupMessage = result?.message || "Finishing restore..."
+        this.deviceRestoreReady = false
+        this.deviceBackupBusy = result?.stage === "downloading" ? "models" : ""
+        if (result?.stage === "error") {
+          this.deviceRestoreReady = true
+          this.deviceBackupError = true
+        }
+      } catch (error) {
+        this.deviceBackupBusy = ""
+        this.deviceBackupError = true
+        this.deviceBackupMessage = `Backup restored, but the final step could not be confirmed: ${error?.message || "connection failed"}. Check the connection and retry.`
+      }
     },
     async backupToggles() {
       try {
@@ -731,7 +839,7 @@ export const SystemTools = {
       </GalaxySection>
 
       <GalaxySection title="Backup & Restore" icon="bi-arrow-repeat" :collapsible="false">
-        <div style="padding: var(--sp-3);">
+        <div style="padding: var(--sp-3); border-bottom:1px solid var(--border-color, rgba(255,255,255,.08));">
           <h4 style="margin:0 0 4px;">Settings Profiles</h4>
           <p class="gx-note" style="margin:0 0 10px;">Keep two local configurations for different vehicles, drivers, or troubleshooting. Profiles never include pairing or sensitive device data.</p>
           <GxNotice v-if="isOnroad" text="Park the vehicle to save or load a profile." style="margin-bottom:12px;" />
@@ -752,29 +860,35 @@ export const SystemTools = {
             </div>
           </div>
         </div>
-        <div style="padding: var(--sp-3); display:flex; gap:8px; flex-wrap:wrap;">
-          <button type="button" class="gx-btn" @click="backupToggles"><i class="bi bi-download"></i> Backup Toggles</button>
-          <button type="button" class="gx-btn gx-btn--tonal" @click="$refs.restoreInput.click()"><i class="bi bi-upload"></i> Restore Toggles</button>
-          <button type="button" class="gx-btn gx-btn--tonal" @click="resetDefault">Reset to Default</button>
-          <button type="button" class="gx-btn gx-btn--danger" @click="deleteAllDrivingRoutes">Delete All Driving Routes</button>
-          <input ref="restoreInput" type="file" accept=".json" style="display:none;" @change="onRestoreFile" />
+        <div style="padding: var(--sp-3); border-bottom:1px solid var(--border-color, rgba(255,255,255,.08));">
+          <h4 style="margin:0 0 4px;">Toggles Backup</h4>
+          <p class="gx-note">Save your toggle settings as a JSON file, or restore a previously saved toggle backup.</p>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="gx-btn" @click="backupToggles"><i class="bi bi-download"></i> Backup Toggles</button>
+            <button type="button" class="gx-btn gx-btn--tonal" @click="$refs.restoreInput.click()"><i class="bi bi-upload"></i> Restore Toggles</button>
+            <input ref="restoreInput" type="file" accept=".json" style="display:none;" @change="onRestoreFile" />
+          </div>
         </div>
-        <p class="gx-note" style="padding: 0 var(--sp-4);">Backup downloads your toggle settings as a JSON file. Restore re-applies one, and Reset to Default clears them back to stock and reboots.</p>
-
-        <div v-if="factoryResetStatus" style="padding: var(--sp-3); border-top: 1px solid var(--border-color, rgba(255,255,255,.08));">
-          <div class="gx-section__header">
-            <i class="bi bi-arrow-repeat" :class="{ 'gx-spin': factoryResetStatus.running }"></i>
-            <span class="gx-section__title">Factory Reset Status</span>
-            <span class="gx-chip">{{ factoryResetStatus.progressStep }}/{{ factoryResetStatus.progressTotalSteps }}{{ factoryResetStatus.progressLabel ? ' · ' + factoryResetStatus.progressLabel : '' }}</span>
+        <div style="padding: var(--sp-3);">
+          <h4 style="margin:0 0 4px;">Full Backup</h4>
+          <p class="gx-note">Save toggles, your installed-model list, FLM tunings and workspace, themes, saved profiles, calibration, and driving statistics in one ZIP.</p>
+          <p class="gx-note">Save it to your phone or computer before switching forks. After reinstalling StarPilot, restore it here, then choose Download Models and Reboot or Reboot Without Downloading. The download option waits for all requested models to finish and be verified before rebooting. Failed downloads do not reboot the device. Existing model files are kept. Missing models require internet access and must still be available to download.</p>
+          <p class="gx-note"><strong>Not included:</strong> Model files (only the installed-model list is saved), API keys and other credentials, Galaxy pairing and session tokens, device identity, saved navigation destinations, Wi-Fi/Bluetooth system configuration, driving recordings, offline maps, and the installed fork or operating system. Restore keeps current credentials and pairing unchanged.</p>
+          <p class="gx-note">FLM reports and statistics can contain route names, timestamps, and vehicle details. Keep your backup private. Avoid changing settings, downloading models, or running FLM analysis during backup or restore.</p>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="gx-btn" :disabled="!!deviceBackupBusy || isOnroad" @click="backupDevice">
+              <i class="bi bi-download"></i> {{ deviceBackupBusy === 'backup' ? 'Creating Backup...' : 'Download Full Backup' }}
+            </button>
+            <button type="button" class="gx-btn gx-btn--tonal" :disabled="!!deviceBackupBusy || isOnroad" @click="$refs.deviceRestoreInput.click()">
+              <i class="bi bi-upload"></i> {{ deviceBackupBusy === 'restore' ? 'Restoring...' : 'Restore Full Backup' }}
+            </button>
+            <button v-if="deviceRestoreReady" type="button" class="gx-btn" :disabled="!!deviceBackupBusy || isOnroad" @click="rebootAfterRestore">
+              Finish Restore and Reboot
+            </button>
+            <input ref="deviceRestoreInput" type="file" accept=".zip" style="display:none;" @change="onDeviceRestoreFile" />
           </div>
-          <div style="padding: var(--sp-3);">
-            <div style="height:8px; border-radius:999px; background:var(--surface, rgba(255,255,255,.1)); overflow:hidden;">
-              <div :style="{ height: '100%', width: factoryResetStatus.progressPercent + '%', background: factoryResetStatus.stage === 'error' ? 'var(--error)' : 'var(--primary)', transition: 'width .4s' }"></div>
-            </div>
-            <p v-if="factoryResetStatus.message" style="margin:8px 0 0;">{{ factoryResetStatus.message }}</p>
-            <p v-if="factoryResetStatus.progressDetail" class="gx-note" style="margin:4px 0 0;">{{ factoryResetStatus.progressDetail }}</p>
-            <p v-if="factoryResetStatus.lastError" class="gx-note gx-note--danger" style="margin:4px 0 0;">Last Error: {{ factoryResetStatus.lastError }}</p>
-          </div>
+          <p v-if="isOnroad" class="gx-note">Park the vehicle before backup or restore.</p>
+          <p v-if="deviceBackupMessage" class="gx-note" :role="deviceBackupError ? 'alert' : 'status'" aria-live="polite">{{ deviceBackupMessage }}</p>
         </div>
       </GalaxySection>
 
@@ -805,7 +919,27 @@ export const SystemTools = {
       </GalaxySection>
 
       <GalaxySection title="Danger Zone" icon="bi-exclamation-triangle" :collapsible="false">
+        <div v-if="factoryResetStatus" style="padding: var(--sp-3); border-top: 1px solid var(--border-color, rgba(255,255,255,.08));">
+          <div class="gx-section__header">
+            <i class="bi bi-arrow-repeat" :class="{ 'gx-spin': factoryResetStatus.running }"></i>
+            <span class="gx-section__title">Factory Reset Status</span>
+            <span class="gx-chip">{{ factoryResetStatus.progressStep }}/{{ factoryResetStatus.progressTotalSteps }}{{ factoryResetStatus.progressLabel ? ' · ' + factoryResetStatus.progressLabel : '' }}</span>
+          </div>
+          <div style="padding: var(--sp-3);">
+            <div style="height:8px; border-radius:999px; background:var(--surface, rgba(255,255,255,.1)); overflow:hidden;">
+              <div :style="{ height: '100%', width: factoryResetStatus.progressPercent + '%', background: factoryResetStatus.stage === 'error' ? 'var(--error)' : 'var(--primary)', transition: 'width .4s' }"></div>
+            </div>
+            <p v-if="factoryResetStatus.message" style="margin:8px 0 0;">{{ factoryResetStatus.message }}</p>
+            <p v-if="factoryResetStatus.progressDetail" class="gx-note" style="margin:4px 0 0;">{{ factoryResetStatus.progressDetail }}</p>
+            <p v-if="factoryResetStatus.lastError" class="gx-note gx-note--danger" style="margin:4px 0 0;">Last Error: {{ factoryResetStatus.lastError }}</p>
+          </div>
+        </div>
         <div style="padding: var(--sp-3); display:grid; gap:12px;">
+          <p class="gx-note" style="margin:0;">Reset toggles to their default values and reboot, or remove all driving recordings.</p>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="gx-btn gx-btn--tonal" @click="resetDefault">Reset Toggles to Default</button>
+            <button type="button" class="gx-btn gx-btn--warning" @click="deleteAllDrivingRoutes">Delete All Driving Routes</button>
+          </div>
           <p class="gx-note" style="margin:0;">Last resort only. <strong>Factory Reset (also known as SAVE ME)</strong> wipes params, backups, themes, models, maps, and route data, then reboots the device. This cannot be undone.</p>
           <button type="button" class="gx-btn gx-btn--danger" style="justify-self:start;" @click="factoryReset">Factory Reset Device (SAVE ME)</button>
         </div>
