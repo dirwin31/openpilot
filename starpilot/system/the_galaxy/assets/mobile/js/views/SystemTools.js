@@ -263,11 +263,11 @@ export const SystemTools = {
       if (this.deviceBackupBusy || this.isOnroad) return
       this.deviceBackupBusy = "backup"
       this.deviceBackupError = false
-      this.deviceBackupMessage = "Creating full backup. Model files are excluded; keep this page open until the download starts."
+      this.deviceBackupMessage = "Creating the backup ZIP. Keep this page open until the download starts."
       try {
         const blob = await api.backupDevice()
         downloadBlob(blob, `starpilot-device-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`)
-        this.deviceBackupMessage = "Backup download started. Verify the ZIP is saved on your phone or computer before switching forks."
+        this.deviceBackupMessage = "Download started. Check that the ZIP file saved to your phone or computer before switching forks. To restore, upload this ZIP file as is, without unzipping it."
       } catch (e) {
         this.deviceBackupError = true
         this.deviceBackupMessage = e?.message || "Full backup failed."
@@ -870,10 +870,13 @@ export const SystemTools = {
         </div>
         <div style="padding: var(--sp-3);">
           <h4 style="margin:0 0 4px;">Full Backup</h4>
-          <p class="gx-note">Save toggles, your installed-model list, FLM tunings and workspace, themes, saved profiles and toggle backups, calibration, and driving statistics in one ZIP.</p>
-          <p class="gx-note">Save it to your phone or computer before switching forks. After reinstalling StarPilot, restore it here, then choose Download Models and Reboot or Reboot Without Downloading. The download option installs each saved model the catalog still offers and verifies it before rebooting; models no longer offered are skipped and listed. Failed downloads do not reboot the device. Existing model files are kept. Settings that no longer fit this StarPilot version keep their current values and are listed after restore.</p>
-          <p class="gx-note"><strong>Not included:</strong> Model files (only the installed-model list is saved), API keys and other credentials, Galaxy pairing and session tokens, device identity, saved navigation destinations, Wi-Fi/Bluetooth system configuration, driving recordings, offline maps, and the installed fork or operating system. Restore keeps current credentials and pairing unchanged.</p>
-          <p class="gx-note">FLM reports and statistics can contain route names, timestamps, and vehicle details. Keep your backup private. Avoid changing settings, downloading models, or running FLM analysis during backup or restore.</p>
+          <div style="display:grid; gap:var(--sp-3); margin:var(--sp-2) 0 var(--sp-4);">
+            <p class="gx-note" style="margin:0;">Download one ZIP file to your phone or computer before switching forks, then restore it after reinstalling StarPilot.</p>
+            <p class="gx-note" style="margin:0;"><strong>Included:</strong> Toggles, saved profiles and toggle backups, FLM tunings and workspace, themes, calibration and learned tuning, driving statistics, and your list of installed models.</p>
+            <p class="gx-note" style="margin:0;"><strong>Not included:</strong> Model files, API keys and other credentials, Galaxy pairing, device identity, saved navigation destinations, Wi-Fi and Bluetooth settings, driving recordings, offline maps, and the fork or operating system. Restoring keeps your current credentials and pairing.</p>
+            <p class="gx-note" style="margin:0;"><strong>To restore:</strong> Tap Restore Full Backup and choose the ZIP file you downloaded, not an unzipped folder. Then choose Download Models and Reboot to reinstall any missing models, or Reboot Without Downloading. Models no longer offered and settings that don't fit this version are skipped and listed. If a download fails, the device doesn't reboot.</p>
+            <p class="gx-note" style="margin:0;">Keep the vehicle parked, and don't change settings, download models, or run FLM analysis while backing up or restoring. The ZIP can include route names, timestamps, and vehicle details, so keep it private.</p>
+          </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
             <button type="button" class="gx-btn" :disabled="!!deviceBackupBusy || isOnroad" @click="backupDevice">
               <i class="bi bi-download"></i> {{ deviceBackupBusy === 'backup' ? 'Creating Backup...' : 'Download Full Backup' }}
@@ -886,8 +889,8 @@ export const SystemTools = {
             </button>
             <input ref="deviceRestoreInput" type="file" accept=".zip" style="display:none;" @change="onDeviceRestoreFile" />
           </div>
-          <p v-if="isOnroad" class="gx-note">Park the vehicle before backup or restore.</p>
-          <p v-if="deviceBackupMessage" class="gx-note" :role="deviceBackupError ? 'alert' : 'status'" aria-live="polite">{{ deviceBackupMessage }}</p>
+          <p v-if="isOnroad" class="gx-note" style="margin-top:var(--sp-3);">Park the vehicle before backup or restore.</p>
+          <p v-if="deviceBackupMessage" class="gx-note" style="margin-top:var(--sp-3);" :role="deviceBackupError ? 'alert' : 'status'" aria-live="polite">{{ deviceBackupMessage }}</p>
         </div>
       </GalaxySection>
 
