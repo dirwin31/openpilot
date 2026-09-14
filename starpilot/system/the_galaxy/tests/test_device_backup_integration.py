@@ -178,3 +178,102 @@ def test_completion_report_survives_server_restart(device_client):
   status = restarted_app.test_client().get("/api/device_backup/status").json
   assert status["stage"] == "complete"
   assert "Restored" in status["message"]
+  # Once read, the report is not repeated after later restarts.
+  assert not list(Path(server.MODELS_PATH.parent).glob("device_backup_work/last_restore.json"))
+  later_app = server.Flask("backup-result-after-second-restart")
+  server.setup(later_app)
+  assert later_app.test_client().get("/api/device_backup/status").json["stage"] == "idle"
+
+
+class LosePower:
+  """Delegates to real Params but dies after the first setting write, like a power cut mid-restore."""
+
+  def __init__(self, params):
+    self.params = params
+    self.writes = 0
+
+  def __getattr__(self, name):
+    return getattr(self.params, name)
+
+  def put(self, key, value):
+    self.writes += 1
+    if self.writes > 1:
+      raise KeyboardInterrupt
+    self.params.put(key, value)
+
+
+def interrupt_restore(client, params, root):
+  params.put_bool("IsMetric", True)
+  params.put_int("ScreenBrightness", 65)
+  tune = root / "flm/saved_tunes/my-car.json"
+  tune.parent.mkdir(parents=True, exist_ok=True)
+  tune.write_text("saved")
+  content = export(client)
+  params.put_bool("IsMetric", False)
+  params.put_int("ScreenBrightness", 20)
+  tune.write_text("before restore")
+  roots = {"flm": root / "flm", "themes": root / "themes", "profiles": root / "toggle_backups"}
+  keys = server.device_backup.eligible_keys(key.decode() if isinstance(key, bytes) else key for key in params.all_keys())
+  with pytest.raises(KeyboardInterrupt):
+    server.device_backup.restore_backup(io.BytesIO(content), roots, LosePower(params), keys, root / "device_backup_work", lambda: None)
+  assert tune.read_text() == "saved", "the power cut happened after files were replaced"
+  assert params.get_bool("IsMetric") is True, "and after the first setting was written"
+  return tune
+
+
+def wait_for_stage(client, stage, timeout=5.0):
+  import time
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    status = client.get("/api/device_backup/status").json
+    if status["stage"] == stage:
+      return status
+    time.sleep(0.02)
+  pytest.fail(f"stage stayed {status}")
+
+
+def wait_for_message(client, text, timeout=5.0):
+  import time
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    message = client.get("/api/device_backup/status").json["message"]
+    if text in message:
+      return message
+    time.sleep(0.02)
+  pytest.fail(f"message stayed {message!r}")
+
+
+def test_interrupted_restore_is_rolled_back_on_next_start(device_client):
+  client, params, root = device_client
+  tune = interrupt_restore(client, params, root)
+  restarted = server.Flask("after-power-loss")
+  server.setup(restarted)
+  restarted_client = restarted.test_client()
+  status = wait_for_stage(restarted_client, "rolled_back")
+  assert "Restore the backup again" in status["message"]
+  assert tune.read_text() == "before restore"
+  assert params.get_bool("IsMetric") is False
+  assert params.get_int("ScreenBrightness") == 20
+  assert not server.device_backup.pending_recoveries(root / "device_backup_work")
+  # The backup workflow is available again afterwards.
+  assert restarted_client.post("/api/device_backup/download").status_code == 200
+
+
+def test_interrupted_restore_rollback_waits_until_parked(device_client, monkeypatch):
+  client, params, root = device_client
+  tune = interrupt_restore(client, params, root)
+  monkeypatch.setattr(server, "_RESTORE_RECOVERY_POLL_SECONDS", 0.02)
+  params.put_bool("IsOnroad", True)
+  params.put_bool("IsOffroad", False)
+  restarted = server.Flask("after-power-loss-onroad")
+  server.setup(restarted)
+  restarted_client = restarted.test_client()
+  wait_for_stage(restarted_client, "restore_error")
+  assert "once the vehicle is parked" in wait_for_message(restarted_client, "once the vehicle is parked")
+  assert tune.read_text() == "saved", "nothing is written while driving"
+  assert server.device_backup.pending_recoveries(root / "device_backup_work")
+  params.put_bool("IsOnroad", False)
+  params.put_bool("IsOffroad", True)
+  wait_for_stage(restarted_client, "rolled_back")
+  assert tune.read_text() == "before restore"
+  assert params.get_bool("IsMetric") is False

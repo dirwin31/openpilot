@@ -248,7 +248,7 @@ def test_model_inventory_validation_precedes_restore(tmp_path):
 
 class TypedParams:
   """Mirrors native Params: typed get/put, serialized store files, and cpp2python returning None on a bad cast."""
-  decoders = {1: lambda v: v == b"1", 2: lambda v: int(v.decode()), 5: json.loads}
+  decoders = {0: lambda v: v.decode(), 1: lambda v: v == b"1", 2: lambda v: int(v.decode()), 3: float, 5: json.loads}
 
   def __init__(self, store, types):
     self.store = store
@@ -271,7 +271,7 @@ class TypedParams:
     return self.values.get(key)
 
   def put(self, key, value):
-    assert type(value) in {1: (bool,), 2: (int,), 5: (dict, list)}[self.types[key]]
+    assert type(value) in {0: (str,), 1: (bool,), 2: (int,), 3: (float,), 5: (dict, list)}[self.types[key]]
     self.values[key] = value
 
   def remove(self, key):
@@ -467,3 +467,130 @@ def test_disk_budget_accounts_for_larger_existing_files(tmp_path, monkeypatch):
   with pytest.raises(ValueError, match="free space"):
     restore_backup(archive, {"flm": root}, params, {"IsMetric"}, tmp_path, lambda: None)
   assert (root / "tune.json").stat().st_size == 10000
+
+
+def interrupted_restore(tmp_path):
+  """Simulate power loss mid-restore: files replaced and one setting written, then the process dies."""
+  archive, root, params = backup_archive(tmp_path)
+  (root / "tune.json").write_text("before")
+  (root / "added-later.json").unlink(missing_ok=True)
+  params.values = {"IsMetric": b"0", "FLMActiveOverrides": b"before"}
+  put = params.put
+  writes = []
+
+  def lose_power(key, value):
+    if writes:
+      raise KeyboardInterrupt  # Not an Exception: the in-process rollback never runs, like a crash.
+    writes.append(key)
+    put(key, value)
+
+  params.put = lose_power
+  with pytest.raises(KeyboardInterrupt):
+    restore_backup(archive, {"flm": root}, params, {"IsMetric", "FLMActiveOverrides"}, tmp_path, lambda: None)
+  params.put = put
+  return root, params
+
+
+def test_interrupted_restore_is_rolled_back_from_its_recovery_record(tmp_path):
+  from starpilot.system.the_galaxy.device_backup import pending_recoveries, recover_restore
+  root, params = interrupted_restore(tmp_path)
+  assert (root / "tune.json").read_text() == "{}", "the crash happened after files were replaced"
+  [record] = pending_recoveries(tmp_path)
+  recover_restore(record, params)
+  assert (root / "tune.json").read_text() == "before"
+  assert params.values == {"IsMetric": b"0", "FLMActiveOverrides": b"before"}
+  assert not pending_recoveries(tmp_path)
+  assert not list(tmp_path.glob("restore-*"))
+
+
+def test_recovery_that_cannot_restore_a_file_keeps_its_copies(tmp_path):
+  from starpilot.system.the_galaxy.device_backup import pending_recoveries, recover_restore
+  root, params = interrupted_restore(tmp_path)
+  [record] = pending_recoveries(tmp_path)
+  (record.parent / "old/flm/tune.json").unlink()
+  with pytest.raises(RuntimeError, match="Recovery copies kept"):
+    recover_restore(record, params)
+  assert record.exists()
+  assert params.values == {"IsMetric": b"0", "FLMActiveOverrides": b"before"}, "settings are still rolled back"
+
+
+@pytest.mark.parametrize("group,types,saved,bad", [
+  ({"FLMActiveOverrides", "FLMActiveProfileId", "FLMTrialBaseline", "FLMTrialApplied"},
+   {"FLMActiveOverrides": 5, "FLMActiveProfileId": 0, "FLMTrialBaseline": 5, "FLMTrialApplied": 1},
+   {"FLMActiveOverrides": b'{"a":1}', "FLMActiveProfileId": b"saved", "FLMTrialBaseline": b'{"b":2}', "FLMTrialApplied": b"1"},
+   ("FLMTrialApplied", b"yes")),
+  ({"SafeMode", "SafeModeBackup"}, {"SafeMode": 1, "SafeModeBackup": 5},
+   {"SafeMode": b"1", "SafeModeBackup": b'{"Model":"x"}'}, ("SafeModeBackup", b"not json")),
+])
+def test_coupled_settings_keep_current_values_together(tmp_path, group, types, saved, bad):
+  import base64
+  store = tmp_path / "store"
+  store.mkdir()
+  for key, value in {**saved, "IsMetric": b"1"}.items():
+    (store / key).write_bytes(value)
+  types = {**types, "IsMetric": 1}
+  output = io.BytesIO()
+  create_backup(output, {}, TypedParams(store, types), set(types))
+  damaged = io.BytesIO()
+  with zipfile.ZipFile(output) as source, zipfile.ZipFile(damaged, "w") as target:
+    manifest = json.loads(source.read("manifest.json"))
+    manifest["params"][bad[0]] = base64.b64encode(bad[1]).decode()
+    target.writestr("manifest.json", json.dumps(manifest))
+  params = TypedParams(store, types)
+  params.values = {key: f"current {key}" for key in group}
+  restored, _, skipped = restore_backup(damaged, {}, params, set(types), tmp_path, lambda: None)
+  assert set(skipped) == group, "one undecodable member must not split its group"
+  assert restored == 1
+  assert params.values == {**{key: f"current {key}" for key in group}, "IsMetric": True}
+
+
+def test_oversized_saved_profile_is_rejected_on_backup_and_restore(tmp_path, monkeypatch):
+  import hashlib
+  from starpilot.system.the_galaxy import device_backup
+  monkeypatch.setattr(device_backup, "PROFILE_MAX_BYTES", 200)
+  profiles = tmp_path / "profiles"
+  profiles.mkdir()
+  slot = json.dumps({"format": "starpilot-params-profile", "version": 1, "slot": "a",
+                     "settings": {"IsMetric": {"type": 1, "value": "1" * 400}}}).encode()
+  (profiles / ".params-profile-a.json").write_bytes(slot)
+  with pytest.raises(ValueError, match="size limit"):
+    create_backup(io.BytesIO(), {"profiles": profiles}, Params(), {"IsMetric"})
+  archive = io.BytesIO()
+  name = "profiles/.params-profile-a.json"
+  with zipfile.ZipFile(archive, "w") as output:
+    output.writestr(name, slot)
+    output.writestr("manifest.json", json.dumps({"format": "starpilot-device-backup", "version": 3, "params": {}, "keys": [],
+                                                 "files": {name: {"size": len(slot), "sha256": hashlib.sha256(slot).hexdigest()}}}))
+  (profiles / ".params-profile-a.json").write_text("current")
+  with pytest.raises(ValueError, match="size limit"):
+    restore_backup(archive, {"profiles": profiles}, Params(), {"IsMetric"}, tmp_path, lambda: None)
+  assert (profiles / ".params-profile-a.json").read_text() == "current"
+
+
+def test_backup_larger_than_archive_limit_is_refused(tmp_path, monkeypatch):
+  from starpilot.system.the_galaxy import device_backup
+  monkeypatch.setattr(device_backup, "MAX_ARCHIVE_BYTES", 4096)
+  flm = tmp_path / "flm"
+  flm.mkdir()
+  (flm / "report.html").write_bytes(b"x" * 8192)
+  with pytest.raises(ValueError, match="limited to 8 GiB"):
+    create_backup(io.BytesIO(), {"flm": flm}, Params(), set())
+
+
+@pytest.mark.parametrize("kind,raw,expected", [
+  (3, b"1.5", 1.5), (3, b"inf", None), (3, b"nan", None), (3, b"-inf", None),
+  (1, b"1", True), (1, b"0", False), (1, b"true", None), (1, b"", None),
+  (5, b'{"a":1}', {"a": 1}), (5, b"70", None), (5, b"not json", None),
+  (2, b"70", 70), (2, b"seventy", None), (0, b"\xff", None),
+])
+def test_decode_rejects_non_finite_numbers_loose_booleans_and_wrong_json_shapes(tmp_path, kind, raw, expected):
+  from starpilot.system.the_galaxy.device_backup import decode_param
+
+  class StrictParams(TypedParams):
+    def cpp2python(self, key, value):
+      try:
+        return self.decoders[self.types[key]](value)
+      except (ValueError, UnicodeError):
+        return None
+
+  assert decode_param(StrictParams(tmp_path, {"Key": kind}), "Key", raw) == expected

@@ -21,8 +21,11 @@ Model files are deliberately excluded to keep the ZIP small. The archive records
 installed model identifiers, versions, and standard/eGPU variants. Downloading
 requires internet access. Model Manager always serves the catalog's current
 version, so a newer version of a saved model is downloaded; saved versions are
-informational. The catalog is refreshed before downloading, including on fresh installs where
-Galaxy initially shows only its built-in model. An unavailable catalog produces a
+informational. The catalog is refreshed only when it has not been fetched yet (a
+fresh install shows only Galaxy's built-in model); a populated catalog is used as
+is, because a refresh can migrate or remove model files and download the selected
+model itself. That refresh runs under the same parked and timeout checks as the
+downloads and is cancelled if either fails. An unavailable catalog produces a
 retryable error instead of silently skipping every saved model. Manually installed or removed models may need manual
 reinstallation. Stock models
 are supplied by the installed fork. Choosing not to download does not change the
@@ -43,10 +46,13 @@ through RAM-backed `/tmp`. Uploads (including chunked bodies) are limited to 8 G
 and checked against available storage before and during receipt. Restore reserves
 space for staged data, the actual existing files that need rollback copies, an
 atomic replacement, and a margin. Profile JSON uses the existing 2 MB profile limit.
-Recovery metadata and copies are written before live changes. A failed rollback
-keeps them and reports the recovery directory rather than silently discarding them.
-An interrupted restore is flagged on the next server start; power-loss recovery
-is not automatic and still needs device validation.
+Recovery metadata and copies are written before live changes. If a restore is
+interrupted (power loss or a crash), Galaxy rolls it back from that record the next
+time it starts, once the vehicle is parked with ignition off; nothing is written
+while driving, and backup/restore stay unavailable until the rollback finishes. The
+System page then asks you to restore the backup again. A rollback that cannot
+complete keeps the recovery copies, reports the recovery directory, and is retried
+on the next start.
 
 ## Data audit (September 2026)
 
@@ -128,4 +134,12 @@ failed downloads that continue to the next model, driving-state changes, and
 timeouts; only an owned download request can be cancelled, and failed downloads never
 request reboot. Galaxy reserves the model workflow during restore downloads so
 other browser download/refresh/delete operations cannot interfere. The completion
-summary, including skipped models/settings, remains visible after server restart.
+summary, including skipped models/settings, is shown after the restore's reboot and
+then discarded once read, so later restarts do not repeat it. Further checks cover
+automatic rollback of an interrupted restore (including waiting until parked and
+keeping copies when a file cannot be restored), coupled settings kept together, the
+profile and archive size limits, strict decoding of booleans, non-finite numbers and
+JSON shapes, refresh only for an unfetched catalog and its cancellation when parking
+or timeout checks fail, a user cancelling a restore download, the downloader
+refusing a request mid-restore, and the page-load restore states. The route
+integration tests need native Params and run on the device or a Linux build.

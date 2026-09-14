@@ -134,3 +134,112 @@ def test_download_that_replaces_our_finished_request_is_never_cancelled():
                           busy=lambda: active[0] is not token, progress=lambda: "", check_parked=lambda: None,
                           reboot=lambda _: pytest.fail("must not reboot over a user's download"), report=lambda _: None, sleep=sleep)
   assert not cancelled
+
+
+def test_populated_catalog_is_not_refreshed():
+  # A refresh can migrate or delete artifacts, so it only runs when the manifest was never fetched.
+  calls, error = run_job(refreshed=[entry("extra")])
+  assert error is None
+  assert "refresh" not in calls
+
+
+def run_supervised_refresh(*, parked_after_start=True, finishes=False):
+  import threading
+  started = threading.Event()
+  release = threading.Event()
+  events = []
+  ticks = [0]
+
+  def refresh():
+    started.set()
+    release.wait(5)
+    events.append("refresh finished")
+
+  def parked():
+    if not parked_after_start and started.is_set():
+      raise ValueError("Vehicle is onroad")
+
+  def monotonic():
+    ticks[0] += 1
+    if finishes and ticks[0] > 2:
+      release.set()
+    return ticks[0]
+
+  def abort():
+    events.append("abort")
+    release.set()
+
+  entries = [entry("stock", builtin=True, installed=True, modelLabArtifactAvailable=False)]
+  with pytest.raises(ValueError) as error:
+    download_saved_models([{"key": "a", "standard": True, "lab": False}], catalog=lambda: entries,
+                          queue=lambda *_: pytest.fail("must not queue"), cancel=lambda _: None, owns=lambda _: False,
+                          busy=lambda: False, progress=lambda: "", check_parked=parked,
+                          reboot=lambda _: pytest.fail("must not reboot"), report=lambda _: None,
+                          refresh=refresh, abort_refresh=abort, monotonic=monotonic, timeout=50 if finishes else 2)
+  return str(error.value), events
+
+
+def test_refresh_is_cancelled_when_the_vehicle_leaves_park():
+  message, events = run_supervised_refresh(parked_after_start=False)
+  assert "onroad" in message
+  assert events[0] == "abort"
+
+
+def test_refresh_is_cancelled_when_it_times_out():
+  message, events = run_supervised_refresh()
+  assert "Timed out refreshing" in message
+  assert events[0] == "abort"
+
+
+def test_refresh_that_finishes_without_models_reports_the_unavailable_catalog():
+  message, events = run_supervised_refresh(finishes=True)
+  assert "catalog is unavailable" in message
+  assert events == ["refresh finished"]
+
+
+def test_user_cancelling_a_restore_download_stops_the_job_without_reboot():
+  active = []
+  with pytest.raises(ValueError, match="were cancelled"):
+    download_saved_models([{"key": "a", "standard": True, "lab": False}], catalog=lambda: [entry()],
+                          queue=lambda *_: active.append("ours") or "ours", cancel=lambda _: None,
+                          owns=lambda token: token in active, busy=lambda: bool(active), progress=lambda: "Download cancelled...",
+                          check_parked=lambda: None, reboot=lambda _: pytest.fail("must not reboot"), report=lambda _: None,
+                          cancelled=lambda: True, sleep=lambda _: active.clear())
+
+
+def test_queue_refusal_is_reported_and_remaining_models_still_download():
+  saved = [{"key": "a", "standard": True, "lab": False}, {"key": "b", "standard": True, "lab": False}]
+  entries = [entry(), entry("b")]
+  active = []
+  queued = []
+
+  def queue(key, _variant):
+    if key == "a":
+      raise ValueError("This model requires a detected external GPU.")
+    queued.append(key)
+    active.append(key)
+    return key
+
+  def sleep(_):
+    entries[1]["installed"] = True
+    active.clear()
+
+  with pytest.raises(ValueError, match="Could not download 'a' \\(This model requires a detected external GPU.\\)"):
+    download_saved_models(saved, catalog=lambda: entries, queue=queue, cancel=lambda _: None, owns=lambda token: token in active,
+                          busy=lambda: bool(active), progress=lambda: "", check_parked=lambda: None,
+                          reboot=lambda _: pytest.fail("must not reboot"), report=lambda _: None, sleep=sleep)
+  assert queued == ["b"]
+
+
+def test_queue_refused_because_a_user_download_started_stops_the_job():
+  active = []
+
+  def queue(*_):
+    active.append("user")  # A user request won the race for the downloader.
+    raise ValueError("A model download is already in progress.")
+
+  with pytest.raises(ValueError, match="Another model download started"):
+    download_saved_models([{"key": "a", "standard": True, "lab": False}], catalog=lambda: [entry()], queue=queue,
+                          cancel=lambda _: pytest.fail("must not cancel the user's download"), owns=lambda _: False,
+                          busy=lambda: bool(active), progress=lambda: "", check_parked=lambda: None,
+                          reboot=lambda _: pytest.fail("must not reboot"), report=lambda _: None)

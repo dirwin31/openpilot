@@ -1597,6 +1597,7 @@ def _model_download_busy(*, include_restore=True):
 _MODEL_QUEUE_LOCK = threading.RLock()
 _MODEL_QUEUE_OWNER = None
 _MODEL_RESTORE_ACTIVE = False
+_RESTORE_RECOVERY_POLL_SECONDS = 5.0
 
 
 def _queue_model_download(model_key, *, lab=False, allow_gpu_without_gpu=False, restore_job=False):
@@ -10295,14 +10296,36 @@ def setup(app):
   device_backup_workdir = MODELS_PATH.parent / "device_backup_work"
   device_restore_result_path = device_backup_workdir / "last_restore.json"
   try:
+    # The report survives the restore's reboot; the status route discards it once it has been read.
     previous_result = json.loads(device_restore_result_path.read_text())
     if isinstance(previous_result, dict) and isinstance(previous_result.get("message"), str):
       device_restore_state.update(stage="complete", message=previous_result["message"])
   except (OSError, ValueError):
     pass
-  recovery_records = list(device_backup_workdir.glob("restore-*/recovery.json"))
-  if recovery_records:
-    device_restore_state.update(stage="restore_error", message="An interrupted restore has recovery copies in device_backup_work. Resolve it before driving.")
+
+  def recover_interrupted_restores(records):
+    """Roll back restores interrupted by power loss or a crash, once parked, before any new backup work."""
+    with device_backup_lock:
+      while _personality_settings_write_locked():
+        device_restore_state.update(stage="restore_error", message="An interrupted restore will be rolled back once the vehicle is parked with ignition off.")
+        time.sleep(_RESTORE_RECOVERY_POLL_SECONDS)
+      failures = []
+      with _PERSONALITY_PROFILES_WRITE_LOCK:
+        for record in records:
+          try:
+            device_backup.recover_restore(record, _params_raw)
+          except Exception as exc:
+            cloudlog.exception("Device restore recovery failed")
+            failures.append(str(exc))
+      if failures:
+        device_restore_state.update(stage="restore_error", message=f"An interrupted restore could not be fully rolled back. {' '.join(failures)}")
+      else:
+        device_restore_state.update(stage="rolled_back", message=(
+          "An interrupted restore was rolled back, so your previous settings and files are back. Restore the backup again."))
+
+  if pending_recoveries := device_backup.pending_recoveries(device_backup_workdir):
+    device_restore_state.update(stage="restore_error", message="Rolling back an interrupted restore...")
+    threading.Thread(target=recover_interrupted_restores, args=(pending_recoveries,), name="restore-recovery", daemon=True).start()
 
   def check_device_backup_parked():
     if _personality_settings_write_locked():
@@ -10415,6 +10438,7 @@ def setup(app):
     try:
       roots, keys = device_backup_context()
       device_restore_ready = False
+      device_restore_result_path.unlink(missing_ok=True)
       device_restore_state.update(stage="restoring", message="Restoring backup...", models=[])
       models = []
       with tempfile.TemporaryFile(dir=device_backup_workdir) as upload:
@@ -10467,6 +10491,8 @@ def setup(app):
         check_parked=check_device_backup_parked, reboot=request_restore_reboot,
         report=lambda message: device_restore_state.update(message=message),
         refresh=refresh_model_manifest, canonical=canonical_model_key,
+        # The refresh can download the selected model outside the request params; the cancel flag stops it.
+        abort_refresh=lambda: params_memory.put_bool(MODEL_CANCEL_DOWNLOAD_PARAM, True),
       )
     except Exception as exc:
       device_restore_state.update(stage="error", message=str(exc))
@@ -10478,6 +10504,9 @@ def setup(app):
   @app.route("/api/device_backup/status", methods=["GET"])
   def device_restore_status():
     status = dict(device_restore_state)
+    if status["stage"] == "complete":
+      # Shown for the rest of this session only; later restarts must not repeat an old report.
+      device_restore_result_path.unlink(missing_ok=True)
     if status["stage"] == "downloading":
       status["downloadProgress"] = params_memory.get(MODEL_DOWNLOAD_PROGRESS_PARAM, encoding="utf-8") or ""
     return jsonify(status)

@@ -133,6 +133,45 @@ def write_param(params, key, raw):
   params.put(key, value)
 
 
+def rollback(params, previous, files):
+  """Put back saved Params and (target, copy, existed) files; returns what could not be restored."""
+  failures = []
+  for key, value in previous.items():
+    try:
+      write_param(params, key, value)
+    except Exception:
+      failures.append(key)
+  for target, old, existed in reversed(files):
+    try:
+      if existed:
+        shutil.copy2(old, target)
+      else:
+        target.unlink(missing_ok=True)
+    except OSError:
+      failures.append(str(target))
+  return failures
+
+
+def pending_recoveries(workdir):
+  return sorted(Path(workdir).glob("restore-*/recovery.json"))
+
+
+def recover_restore(record, params):
+  """Roll back a restore interrupted by power loss or a crash, using its recovery record.
+
+  Which files were already replaced is unknown, so every planned file is put back from its copy.
+  Raises with the recovery directory kept when anything cannot be restored.
+  """
+  record = Path(record)
+  data = json.loads(record.read_text())
+  previous = {key: base64.b64decode(value) if value is not None else None for key, value in data["params"].items()}
+  files = [(Path(item["target"]), Path(item["copy"]), item["existed"]) for item in data["files"]]
+  failures = rollback(params, previous, files)
+  if failures:
+    raise RuntimeError(f"Could not roll back {', '.join(failures)}. Recovery copies kept at {record.parent}.")
+  shutil.rmtree(record.parent)
+
+
 @contextmanager
 def restore_workspace(workdir):
   stage = Path(tempfile.mkdtemp(prefix="restore-", dir=workdir))
@@ -343,24 +382,11 @@ def restore_backup(source, roots, params, keys, workdir, check_parked, models_ou
         else:
           params.remove(key)
     except Exception as error:
-      failures = []
-      for key, value in previous.items():
-        try:
-          write_param(params, key, value)
-        except Exception:
-          failures.append(key)
-      for target, old, existed in reversed(applied):
-        try:
-          if existed:
-            shutil.copy2(old, target)
-          else:
-            target.unlink(missing_ok=True)
-        except OSError:
-          failures.append(str(target))
+      failures = rollback(params, previous, applied)
       if failures:
         raise RuntimeError(
           f"Restore failed and rollback was incomplete. Recovery copies kept at {stage}. "
-          + "Do not reboot; resolve the storage error first."
+          + "Galaxy retries the rollback when it next starts while parked; free storage first if it is full."
         ) from error
       recovery.unlink()
       raise

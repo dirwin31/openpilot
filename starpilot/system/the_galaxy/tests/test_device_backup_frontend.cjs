@@ -96,6 +96,17 @@ vm.runInContext(source + '\nthis.view = SystemTools;', ctx);
   assert.equal(finishes.length, finishCount);
   await view.backupDevice();
   assert.equal(view.deviceBackupMessage, 'Not enough space');
+  // Reports found when the page opens: a finished restore, an automatic rollback, or a pending/failed rollback.
+  for (const [stage, error] of [['complete', false], ['rolled_back', false], ['restore_error', true]]) {
+    const before = prompts.length;
+    status = {stage, message:`${stage} message`};
+    await view.loadDeviceRestoreStatus({prompt:true});
+    assert.equal(view.deviceBackupMessage, `${stage} message`);
+    assert.equal(view.deviceBackupError, error, `${stage} error styling`);
+    assert.equal(view.deviceRestoreReady, false, `${stage} must not offer the reboot choice`);
+    assert.equal(view.deviceBackupBusy, '');
+    assert.equal(prompts.length, before, `${stage} must not prompt`);
+  }
   const section = ctx.view.template.split('title="Backup & Restore"')[1].split('</GalaxySection>')[0];
   assert.match(section, /@click="backupDevice"/);
   assert.match(section, /@change="onDeviceRestoreFile"/);
