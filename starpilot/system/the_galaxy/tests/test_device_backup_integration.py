@@ -256,7 +256,7 @@ def test_interrupted_restore_is_rolled_back_on_next_start(device_client):
   assert params.get_int("ScreenBrightness") == 20
   assert not server.device_backup.pending_recoveries(root / "device_backup_work")
   # The backup workflow is available again afterwards.
-  assert restarted_client.post("/api/device_backup/download").status_code == 200
+  assert export(restarted_client)
 
 
 def test_interrupted_restore_rollback_waits_until_parked(device_client, monkeypatch):
@@ -277,3 +277,20 @@ def test_interrupted_restore_rollback_waits_until_parked(device_client, monkeypa
   wait_for_stage(restarted_client, "rolled_back")
   assert tune.read_text() == "before restore"
   assert params.get_bool("IsMetric") is False
+
+
+def test_failed_startup_rollback_blocks_backup_and_restore(device_client):
+  client, params, root = device_client
+  interrupt_restore(client, params, root)
+  [record] = server.device_backup.pending_recoveries(root / "device_backup_work")
+  data = json.loads(record.read_text())
+  old = next(item["copy"] for item in data["files"] if item["existed"])
+  Path(old).unlink()
+  restarted = server.Flask("failed-recovery")
+  server.setup(restarted)
+  restarted_client = restarted.test_client()
+  wait_for_message(restarted_client, "could not be fully rolled back")
+  for route in ("download", "restore"):
+    response = restarted_client.post(f"/api/device_backup/{route}")
+    assert response.status_code in (400, 409)
+  assert record.exists()

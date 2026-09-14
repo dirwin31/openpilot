@@ -594,3 +594,25 @@ def test_decode_rejects_non_finite_numbers_loose_booleans_and_wrong_json_shapes(
         return None
 
   assert decode_param(StrictParams(tmp_path, {"Key": kind}), "Key", raw) == expected
+
+
+def test_rollback_checks_parked_before_each_write(tmp_path):
+  from starpilot.system.the_galaxy.device_backup import rollback
+  params = Params()
+  target = tmp_path / "tune.json"
+  target.write_text("current")
+  checks = []
+
+  def parked():
+    checks.append(True)
+    if len(checks) >= 2:
+      raise ValueError("ignition on")
+
+  with pytest.raises(ValueError, match="ignition on"):
+    rollback(params, {"IsMetric": b"0", "ScreenBrightness": b"20"}, [(target, None, False)], parked)
+  assert params.values["IsMetric"] == b"0"
+  assert "ScreenBrightness" not in params.values
+  assert target.read_text() == "current"
+
+  with pytest.raises(ValueError, match="ignition on"):
+    rollback(params, {}, [(target, None, False)], parked)

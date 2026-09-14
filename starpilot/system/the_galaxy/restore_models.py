@@ -33,7 +33,8 @@ def _supervised(task, *, check_parked, abort, monotonic, timeout, poll=0.5):
       worker.join(poll)
   except BaseException:
     abort()
-    worker.join(30)  # Let the downloader observe cancellation before the model workflow is released.
+    # Keep ownership until refresh exits: releasing it early permits concurrent model mutations.
+    worker.join()
     raise
   return outcome[0] if outcome else None
 

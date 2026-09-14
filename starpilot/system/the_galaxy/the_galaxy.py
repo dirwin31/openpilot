@@ -10305,15 +10305,18 @@ def setup(app):
 
   def recover_interrupted_restores(records):
     """Roll back restores interrupted by power loss or a crash, once parked, before any new backup work."""
-    with device_backup_lock:
+    def wait_until_parked():
       while _personality_settings_write_locked():
         device_restore_state.update(stage="restore_error", message="An interrupted restore will be rolled back once the vehicle is parked with ignition off.")
         time.sleep(_RESTORE_RECOVERY_POLL_SECONDS)
+
+    with device_backup_lock:
+      wait_until_parked()
       failures = []
       with _PERSONALITY_PROFILES_WRITE_LOCK:
         for record in records:
           try:
-            device_backup.recover_restore(record, _params_raw)
+            device_backup.recover_restore(record, _params_raw, wait_until_parked)
           except Exception as exc:
             cloudlog.exception("Device restore recovery failed")
             failures.append(str(exc))
@@ -10335,6 +10338,8 @@ def setup(app):
 
   def device_backup_context():
     check_device_backup_parked()
+    if device_backup.pending_recoveries(device_backup_workdir):
+      raise ValueError("An interrupted restore needs rollback. Restart Galaxy while parked to retry recovery before backup or restore.")
     # Theme packs in /data/themes are the source of truth; the active theme is rebuilt from Params on boot.
     roots = {"flm": flm_workspace.get_flm_workspace_root(), "themes": THEME_SAVE_PATH, "profiles": TOGGLE_BACKUPS}
     keys = device_backup.eligible_keys(key.decode() if isinstance(key, bytes) else key for key in _params_raw.all_keys())

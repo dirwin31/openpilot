@@ -52,7 +52,9 @@ time it starts, once the vehicle is parked with ignition off; nothing is written
 while driving, and backup/restore stay unavailable until the rollback finishes. The
 System page then asks you to restore the backup again. A rollback that cannot
 complete keeps the recovery copies, reports the recovery directory, and is retried
-on the next start.
+on the next start. New backups and restores remain blocked while recovery records
+remain, including after a failed rollback. Startup recovery rechecks parking before
+each setting or file write and waits again if ignition comes on.
 
 ## Data audit (September 2026)
 

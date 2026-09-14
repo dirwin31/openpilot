@@ -133,15 +133,17 @@ def write_param(params, key, raw):
   params.put(key, value)
 
 
-def rollback(params, previous, files):
+def rollback(params, previous, files, check_parked=lambda: None):
   """Put back saved Params and (target, copy, existed) files; returns what could not be restored."""
   failures = []
   for key, value in previous.items():
+    check_parked()
     try:
       write_param(params, key, value)
     except Exception:
       failures.append(key)
   for target, old, existed in reversed(files):
+    check_parked()
     try:
       if existed:
         shutil.copy2(old, target)
@@ -156,7 +158,7 @@ def pending_recoveries(workdir):
   return sorted(Path(workdir).glob("restore-*/recovery.json"))
 
 
-def recover_restore(record, params):
+def recover_restore(record, params, check_parked=lambda: None):
   """Roll back a restore interrupted by power loss or a crash, using its recovery record.
 
   Which files were already replaced is unknown, so every planned file is put back from its copy.
@@ -166,7 +168,7 @@ def recover_restore(record, params):
   data = json.loads(record.read_text())
   previous = {key: base64.b64decode(value) if value is not None else None for key, value in data["params"].items()}
   files = [(Path(item["target"]), Path(item["copy"]), item["existed"]) for item in data["files"]]
-  failures = rollback(params, previous, files)
+  failures = rollback(params, previous, files, check_parked)
   if failures:
     raise RuntimeError(f"Could not roll back {', '.join(failures)}. Recovery copies kept at {record.parent}.")
   shutil.rmtree(record.parent)
