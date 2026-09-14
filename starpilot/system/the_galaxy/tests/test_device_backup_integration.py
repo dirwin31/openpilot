@@ -53,7 +53,7 @@ def rewrite_manifest(content, edit):
 
 def test_real_routes_round_trip_with_repository_theme_layout(device_client):
   client, params, root = device_client
-  # This is the real shipped layout that made the first implementation fail.
+  # The shipped active-theme symlinks once broke every backup.
   active = Path(__file__).resolve().parents[3] / "assets" / "active_theme"
   assert (active / "colors").is_symlink()
   params.put_bool("IsMetric", True)
@@ -255,7 +255,6 @@ def test_interrupted_restore_is_rolled_back_on_next_start(device_client):
   assert params.get_bool("IsMetric") is False
   assert params.get_int("ScreenBrightness") == 20
   assert not server.device_backup.pending_recoveries(root / "device_backup_work")
-  # The backup workflow is available again afterwards.
   assert export(restarted_client)
 
 

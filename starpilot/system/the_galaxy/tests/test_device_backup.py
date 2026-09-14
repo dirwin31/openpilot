@@ -137,7 +137,7 @@ def test_old_archive_cannot_restore_or_clear_credentials(tmp_path):
   manifest = {"format": "starpilot-device-backup", "version": 1, "params": {
     key: base64.b64encode(b"old").decode() for key in SENSITIVE_KEYS | {"IsMetric"}
   }, "files": {}}
-  # A prior broad archive can contain credentials both in raw auto backups and JSON slots.
+  # Older, broader archives could carry credentials in raw auto backups and slot JSON.
   files = {"profiles/2026-09-13_auto/StarPilotApiToken": b"old-secret", "flm/glxysession": b"old-session",
            "profiles/.params-profile-a.json": json.dumps({"format": "starpilot-params-profile", "settings": {
              "StarPilotApiToken": {"value": "old-secret"}, "IsMetric": {"value": "1"},
@@ -247,7 +247,7 @@ def test_model_inventory_validation_precedes_restore(tmp_path):
 
 
 class TypedParams:
-  """Mirrors native Params: typed get/put, serialized store files, and cpp2python returning None on a bad cast."""
+  """Native-like Params: typed get/put, file-backed store, cpp2python returns None on a bad cast."""
   decoders = {0: lambda v: v.decode(), 1: lambda v: v == b"1", 2: lambda v: int(v.decode()), 3: float, 5: json.loads}
 
   def __init__(self, store, types):
@@ -325,7 +325,7 @@ def test_backup_skips_linked_theme_assets_instead_of_failing(tmp_path):
   pack = themes / "theme_packs" / "space"
   pack.mkdir(parents=True)
   (pack / "colors.json").write_text("{}")
-  # Theme manager links active assets into place; the link targets are archived through their real path.
+  # Theme manager symlinks active assets; only the real files are archived.
   (themes / "active_colors").symlink_to(pack, target_is_directory=True)
   (themes / "wheel.png").symlink_to(pack / "colors.json")
   output = io.BytesIO()

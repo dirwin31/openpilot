@@ -18,15 +18,15 @@ from openpilot.starpilot.common.param_profiles import PROFILE_MAX_BYTES
 
 FORMAT = "starpilot-device-backup"
 VERSION = 3
-# Every persistent Param is explicitly included or excluded; tests fail until a new one is reviewed.
+# Every persistent Param is listed as include or exclude; a test enforces it.
 POLICY = json.loads(Path(__file__).with_name("device_backup_keys.json").read_text())
 BACKUP_KEYS = frozenset(POLICY["include"])
 AUTH_FILES = {"glxyauth", "glxysession", "glxyslug", "sentry_vapid_private.pem", "sentry_push_subscriptions.json"}
+# flm/progress.json is persistent tuning progression (job status lives in /tmp), so it is backed up.
 ROOT_LABELS = ("flm", "themes", "profiles")
 # Older archives may list these; their contents are never restored.
 LEGACY_LABELS = {"models", "active_theme"}
 PROFILE_DOCUMENTS = {".params-profile-a.json", ".params-profile-b.json"}
-# FLM progress.json is persistent per-vehicle tuning progression. Live job status lives in /tmp.
 MAX_ARCHIVE_BYTES = 8 * 1024 ** 3
 PARAM_GROUPS = (
   {"LongitudinalPersonalityProfiles", "CustomPersonalities"},
@@ -50,7 +50,7 @@ def allowed_file(name, keys):
     return False
   if parts[0] != "profiles":
     return True
-  # Slot documents, or raw Params files in automatic and user-named toggle backups.
+  # Profile slot documents, or raw Params files inside toggle backup folders.
   if len(parts) == 2:
     return parts[1] in PROFILE_DOCUMENTS
   return len(parts) == 3 and not parts[1].endswith("_in_progress") and parts[2] in keys
@@ -106,7 +106,7 @@ def read_param(params, key):
 
 
 def decode_param(params, key, raw):
-  """Use native deserialization, rejecting permissive BOOL casts and non-finite numbers."""
+  """Native deserialization that rejects loose booleans and non-finite floats; None if incompatible."""
   if not hasattr(params, "cpp2python"):
     return raw
   try:
@@ -134,7 +134,7 @@ def write_param(params, key, raw):
 
 
 def rollback(params, previous, files, check_parked=lambda: None):
-  """Put back saved Params and (target, copy, existed) files; returns what could not be restored."""
+  """Restore saved Params and (target, copy, existed) files; returns what failed."""
   failures = []
   for key, value in previous.items():
     check_parked()
@@ -159,11 +159,7 @@ def pending_recoveries(workdir):
 
 
 def recover_restore(record, params, check_parked=lambda: None):
-  """Roll back a restore interrupted by power loss or a crash, using its recovery record.
-
-  Which files were already replaced is unknown, so every planned file is put back from its copy.
-  Raises with the recovery directory kept when anything cannot be restored.
-  """
+  """Roll back an interrupted restore from its record. Progress is unknown, so every planned file is restored."""
   record = Path(record)
   data = json.loads(record.read_text())
   previous = {key: base64.b64decode(value) if value is not None else None for key, value in data["params"].items()}
@@ -180,13 +176,13 @@ def restore_workspace(workdir):
   try:
     yield stage
   finally:
-    # Preserve recovery copies when the rollback itself encounters a write failure.
+    # A remaining recovery record means rollback is incomplete; keep its copies.
     if not (stage / "recovery.json").exists():
       shutil.rmtree(stage)
 
 
 def backup_files(root):
-  """Regular files under root. Symbolic links (such as linked theme assets) are never followed or archived."""
+  """Regular files under root; symlinks (such as linked theme assets) are skipped."""
   root = Path(root)
   if root.is_symlink() or not root.is_dir():
     return
@@ -238,9 +234,8 @@ def create_backup(destination, roots, params, keys, models=()):
 
 
 def restore_backup(source, roots, params, keys, workdir, check_parked, models_out=None, validate=None):
-  """Validate fully, then replace files with rollback on application errors.
+  """Validate everything, then apply with rollback. Incompatible or rejected settings keep current values.
 
-  Settings that no longer fit their current type, or that `validate` rejects, keep their current value.
   Returns (restored setting count, restored file count, skipped setting names).
   """
   keys = eligible_keys(keys)
@@ -263,7 +258,7 @@ def restore_backup(source, roots, params, keys, workdir, check_parked, models_ou
         raise ValueError("Invalid backup contents")
       if set(names) != set(files) | {"manifest.json"}:
         raise ValueError("Backup file list does not match manifest")
-      # Only a recorded scope can distinguish intentionally absent values from settings added later.
+      # The recorded scope separates cleared settings from ones added after the backup.
       scope = manifest.get("keys", list(raw_params))
       if not isinstance(scope, list) or any(not isinstance(key, str) for key in scope) or not set(raw_params) <= set(scope):
         raise ValueError("Invalid backup setting list")
@@ -281,7 +276,7 @@ def restore_backup(source, roots, params, keys, workdir, check_parked, models_ou
         except (TypeError, ValueError):
           pass
       skipped = (set(raw_params) & restore_keys) - set(values)
-      # Preserve coupled settings together when one cannot be decoded.
+      # Keep coupled settings together when one is skipped.
       for group in PARAM_GROUPS:
         if group & skipped:
           skipped.update(group & restore_keys)
@@ -298,7 +293,7 @@ def restore_backup(source, roots, params, keys, workdir, check_parked, models_ou
       restore_keys -= skipped
       values = {key: value for key, value in values.items() if key in restore_keys}
 
-      # Validate paths and reserve space for staging, the actual OLD files, and the largest atomic replacement.
+      # Budget space for staged files, rollback copies, and the largest atomic replacement.
       selected = []
       for name, metadata in files.items():
         relative = PurePosixPath(name)
@@ -352,7 +347,7 @@ def restore_backup(source, roots, params, keys, workdir, check_parked, models_ou
           os.fsync(snapshot.fileno())
       plans.append((staged, target, old, existed))
     recovery = stage / "recovery.json"
-    # Write recovery metadata before mutating live data, while free space is still reserved.
+    # Persist the recovery record before any live change.
     with recovery.open("w") as output:
       json.dump({
         "params": {key: base64.b64encode(value).decode() if value is not None else None for key, value in previous.items()},

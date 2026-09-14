@@ -324,7 +324,7 @@ export const SystemTools = {
     async rebootAfterRestore() {
       if (!this.deviceRestoreReady || this.deviceBackupBusy || this.isOnroad) return
       let downloadModels = false
-      // Rebooting without downloads is the modal's secondary action, so it gets its own confirmation.
+      // The no-download reboot is the secondary button, so confirm it separately.
       for (;;) {
         downloadModels = await GalaxyConfirm({
           title: "Restore complete — finish and reboot",

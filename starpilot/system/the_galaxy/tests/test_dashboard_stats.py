@@ -403,7 +403,7 @@ def _install_server_import_stubs():
   sys.modules["openpilot.starpilot.system.the_galaxy.flm_workspace"] = _simple_module(
     "openpilot.starpilot.system.the_galaxy.flm_workspace",
   )
-  # Load the real backup services from this checkout, not a stale host-runtime mirror.
+  # Use this checkout's backup modules, not a stale runtime copy.
   services = {
     "openpilot.starpilot.system.the_galaxy.device_backup": MODULE_DIR / "device_backup.py",
     "openpilot.starpilot.system.the_galaxy.restore_models": MODULE_DIR / "restore_models.py",

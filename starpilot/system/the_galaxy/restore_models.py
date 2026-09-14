@@ -4,15 +4,14 @@ import time
 
 
 def _downloadable(entries):
-  # Even an unloaded Galaxy catalog contains its synthetic built-in model.
+  # An unfetched catalog still lists Galaxy's built-in model.
   return any(not model.get("builtin") or model.get("modelLabArtifactAvailable") for model in entries)
 
 
 def _supervised(task, *, check_parked, abort, monotonic, timeout, poll=0.5):
-  """Run a blocking task under the parked and timeout guards; returns the task's own exception, if any.
+  """Run a blocking task under the parked and timeout guards, calling `abort` if either fails.
 
-  A manifest refresh can migrate artifacts and download the selected model synchronously, outside the
-  download-request params, so `abort` must stop it through the downloader's cancel flag.
+  Returns the task's own exception, if any.
   """
   outcome = []
 
@@ -33,7 +32,7 @@ def _supervised(task, *, check_parked, abort, monotonic, timeout, poll=0.5):
       worker.join(poll)
   except BaseException:
     abort()
-    # Keep ownership until refresh exits: releasing it early permits concurrent model mutations.
+    # Hold the model workflow until the refresh exits.
     worker.join()
     raise
   return outcome[0] if outcome else None
@@ -42,17 +41,16 @@ def _supervised(task, *, check_parked, abort, monotonic, timeout, poll=0.5):
 def download_saved_models(models, *, catalog, queue, cancel, owns, busy, progress, check_parked, reboot, report,
                           refresh=None, abort_refresh=lambda: None, canonical=str, cancelled=lambda: False,
                           sleep=time.sleep, monotonic=time.monotonic, timeout=1800):
-  """Only request catalog IDs; archives cannot supply download URLs or commands.
+  """Download saved models by catalog ID (archives never supply URLs), then reboot.
 
-  Models the catalog no longer offers are skipped and reported. The downloader always serves the
-  catalog's current version, so saved versions are informational. Reboot is requested only when
-  every attempted download is verified installed.
+  Unoffered models are skipped and reported; saved versions are informational since the downloader
+  serves the catalog's version. Reboot only after every attempted download is verified.
   """
   check_parked()
   if busy():
     raise ValueError("Another model download is active. Wait for it to finish and retry.")
   entries = catalog()
-  # Refresh only when the manifest was never fetched (fresh install): a refresh can delete stale artifacts.
+  # Refresh only an unfetched catalog: a refresh can migrate artifacts and download the selected model itself.
   if models and refresh is not None and not _downloadable(entries):
     report("Refreshing the model list...")
     error = _supervised(refresh, check_parked=check_parked, abort=abort_refresh, monotonic=monotonic, timeout=timeout)
@@ -104,7 +102,7 @@ def download_saved_models(models, *, catalog, queue, cancel, owns, busy, progres
           raise ValueError(f"Timed out downloading '{label}'. Check Model Manager before retrying.")
         sleep(1)
     except BaseException:
-      cancel(token)  # An ownership token prevents cancelling a newer user request.
+      cancel(token)  # Cancels only our request, never a newer one.
       raise
     if cancelled():
       raise ValueError("Restore model downloads were cancelled. Retry or reboot without downloading.")

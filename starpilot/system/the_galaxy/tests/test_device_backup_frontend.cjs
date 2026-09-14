@@ -96,7 +96,7 @@ vm.runInContext(source + '\nthis.view = SystemTools;', ctx);
   assert.equal(finishes.length, finishCount);
   await view.backupDevice();
   assert.equal(view.deviceBackupMessage, 'Not enough space');
-  // Reports found when the page opens: a finished restore, an automatic rollback, or a pending/failed rollback.
+  // Page-load reports: finished restore, automatic rollback, pending or failed rollback.
   for (const [stage, error] of [['complete', false], ['rolled_back', false], ['restore_error', true]]) {
     const before = prompts.length;
     status = {stage, message:`${stage} message`};

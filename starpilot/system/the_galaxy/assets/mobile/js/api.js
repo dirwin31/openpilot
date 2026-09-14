@@ -232,7 +232,7 @@ export const api = {
   },
   deviceRestoreStatus() { return request("/api/device_backup/status", { cache: "no-store" }) },
   rebootAfterDeviceRestore(downloadModels) { return request("/api/device_backup/reboot", { method: "POST", data: { downloadModels } }) },
-  // Raw body, not multipart: the server streams it to /data instead of spooling it in RAM.
+  // Raw body, not multipart, so the server can stream it to /data.
   restoreDevice(file) { return request("/api/device_backup/restore", { method: "POST", form: file, headers: { "Content-Type": "application/zip" } }) },
   async backupToggles() {
     const res = await fetch("/api/toggles/backup", { method: "POST" })

@@ -137,7 +137,6 @@ def test_download_that_replaces_our_finished_request_is_never_cancelled():
 
 
 def test_populated_catalog_is_not_refreshed():
-  # A refresh can migrate or delete artifacts, so it only runs when the manifest was never fetched.
   calls, error = run_job(refreshed=[entry("extra")])
   assert error is None
   assert "refresh" not in calls

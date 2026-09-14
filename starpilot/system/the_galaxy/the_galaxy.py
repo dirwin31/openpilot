@@ -10304,7 +10304,7 @@ def setup(app):
     pass
 
   def recover_interrupted_restores(records):
-    """Roll back restores interrupted by power loss or a crash, once parked, before any new backup work."""
+    """Once parked, roll back restores interrupted by a crash or power loss."""
     def wait_until_parked():
       while _personality_settings_write_locked():
         device_restore_state.update(stage="restore_error", message="An interrupted restore will be rolled back once the vehicle is parked with ignition off.")
@@ -10340,7 +10340,7 @@ def setup(app):
     check_device_backup_parked()
     if device_backup.pending_recoveries(device_backup_workdir):
       raise ValueError("An interrupted restore needs rollback. Restart Galaxy while parked to retry recovery before backup or restore.")
-    # Theme packs in /data/themes are the source of truth; the active theme is rebuilt from Params on boot.
+    # The active theme is symlinks rebuilt from Params on boot, so only theme packs are backed up.
     roots = {"flm": flm_workspace.get_flm_workspace_root(), "themes": THEME_SAVE_PATH, "profiles": TOGGLE_BACKUPS}
     keys = device_backup.eligible_keys(key.decode() if isinstance(key, bytes) else key for key in _params_raw.all_keys())
     device_backup_workdir.mkdir(parents=True, exist_ok=True)
@@ -10415,7 +10415,7 @@ def setup(app):
       device_backup_lock.release()
 
   def receive_device_backup_upload(output):
-    """Bound raw uploads and stream directly to /data, including chunked HTTP bodies."""
+    """Stream the raw ZIP body (sized or chunked) to /data within the size limit."""
     if request.mimetype != "application/zip":
       raise ValueError("Upload the backup as an application/zip body.")
     size = request.content_length
@@ -10471,7 +10471,6 @@ def setup(app):
   def request_restore_reboot(note=""):
     if _personality_settings_write_locked():
       raise ValueError("Park the vehicle before rebooting.")
-    # Keep the skipped-model/setting report visible after the server restarts.
     summary = " ".join(filter(None, [device_restore_state.get("settingsSummary", "Restore completed."), note]))
     result_temp = device_restore_result_path.with_suffix(".tmp")
     with result_temp.open("w") as output:
@@ -10496,7 +10495,7 @@ def setup(app):
         check_parked=check_device_backup_parked, reboot=request_restore_reboot,
         report=lambda message: device_restore_state.update(message=message),
         refresh=refresh_model_manifest, canonical=canonical_model_key,
-        # The refresh can download the selected model outside the request params; the cancel flag stops it.
+        # Stops a refresh-triggered download, which has no request ownership.
         abort_refresh=lambda: params_memory.put_bool(MODEL_CANCEL_DOWNLOAD_PARAM, True),
       )
     except Exception as exc:
@@ -10510,7 +10509,6 @@ def setup(app):
   def device_restore_status():
     status = dict(device_restore_state)
     if status["stage"] == "complete":
-      # Shown for the rest of this session only; later restarts must not repeat an old report.
       device_restore_result_path.unlink(missing_ok=True)
     if status["stage"] == "downloading":
       status["downloadProgress"] = params_memory.get(MODEL_DOWNLOAD_PROGRESS_PARAM, encoding="utf-8") or ""
