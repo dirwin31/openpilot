@@ -44,6 +44,8 @@ class BluetoothDevice:
   uuids: tuple[str, ...] = ()
   audio: bool = False
   controller: bool = False
+  uniden: bool = False
+  services_resolved: bool = False
 
   @classmethod
   def from_dict(cls, value: dict[str, Any]) -> "BluetoothDevice":
@@ -58,6 +60,8 @@ class BluetoothDevice:
       uuids=tuple(str(uuid).lower() for uuid in value.get("uuids", ())),
       audio=bool(value.get("audio", False)),
       controller=bool(value.get("controller", False)),
+      uniden=bool(value.get("uniden", False)),
+      services_resolved=bool(value.get("services_resolved", False)),
     )
 
 
@@ -68,6 +72,7 @@ class BluetoothStatus:
   powered: bool = False
   discovering: bool = False
   offroad: bool = False
+  setup_allowed: bool = False
   selected_audio: str = ""
   pairing_address: str = ""
   devices: tuple[BluetoothDevice, ...] = ()
@@ -88,6 +93,7 @@ class BluetoothStatus:
       powered=bool(value.get("powered", False)),
       discovering=bool(value.get("discovering", False)),
       offroad=bool(value.get("offroad", False)),
+      setup_allowed=bool(value.get("setup_allowed", value.get("offroad", False))),
       selected_audio=str(value.get("selected_audio", "")),
       pairing_address=str(value.get("pairing_address", "")),
       devices=tuple(BluetoothDevice.from_dict(device) for device in value.get("devices", ())),
@@ -110,13 +116,22 @@ def device_capabilities(uuids: list[str] | tuple[str, ...], bluetooth_class: int
   return audio, controller
 
 
+UNIDEN_NAME_KEYS = ("R1@", "R3@", "R4@", "R5@", "R7@", "R8@", "R8W@", "R9@", "UNIDEN")
+
+
+def is_uniden_device(name: str) -> bool:
+  # Same advertisement names the Uniden tab's Scan & Pair looks for (R4W@ etc. match R4@ via W@).
+  upper = name.strip().upper()
+  return any(key in upper for key in UNIDEN_NAME_KEYS) or any(f"R{n}W@" in upper for n in (4, 8, 9))
+
+
 def show_pairing_device(address: str, name: str, paired: bool, trusted: bool, connected: bool, blocked: bool,
-                        audio: bool, controller: bool, discovering: bool = False) -> bool:
+                        audio: bool, controller: bool, discovering: bool = False, uniden: bool = False) -> bool:
   known = paired or trusted or connected
   normalized_address = "".join(character for character in address.upper() if character.isalnum())
   normalized_name = "".join(character for character in name.upper() if character.isalnum())
   named = bool(name) and name != "Unknown device" and normalized_name != normalized_address
-  return known or (named and not blocked and (audio or controller))
+  return known or (named and not blocked and (audio or controller or uniden or is_uniden_device(name)))
 
 
 class _DesktopFakeBluetooth:
@@ -144,6 +159,7 @@ class _DesktopFakeBluetooth:
         discovering=self._discovering,
         # Desktop demos do not run bluetooth_managerd, so keep the mock usable from Settings.
         offroad=True,
+        setup_allowed=True,
         selected_audio=self._selected_audio,
         companion_enabled=self._companion_enabled,
         companion_pairing=pairing_remaining > 0,

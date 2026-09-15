@@ -2160,3 +2160,149 @@ def test_audio_address_decodes_device_params_bytes():
   params = FakeParams(BluetoothEnabled=True, BluetoothAudioAddress=b"00:11:22:33:44:55")
   sink = BluetoothAudioSink(params, start_thread=False)
   assert sink.desired_address() == "00:11:22:33:44:55"
+
+
+def test_bluetooth_setup_requires_fresh_stationary_park():
+  from cereal import car
+  params = FakeParams(IsOffroad=False, BluetoothEnabled=True)
+  client = FakeBlueZ()
+  controller = BluetoothController(params, lambda: client, FakeRadio(), FakeParams())
+  vehicle = SimpleNamespace(standstill=True, gearShifter=car.CarState.GearShifter.park)
+
+  class VehicleState(dict):
+    seen = {"carState": True}
+    alive = {"carState": True}
+    valid = {"carState": True}
+    def update(self, timeout):
+      pass
+
+  sm = VehicleState(carState=vehicle)
+  controller._vehicle_state = sm
+  assert controller.status()["setup_allowed"]
+  assert not controller.status()["offroad"]
+  controller.handle({"command": "start_scan"})
+  assert client.discovering
+  vehicle.gearShifter = car.CarState.GearShifter.drive
+  assert not controller._setup_allowed()
+  with pytest.raises(RuntimeError, match="Park"):
+    controller.handle({"command": "start_scan"})
+  controller._maintain_scan(controller.status(), time.monotonic())
+  assert not client.discovering
+  vehicle.gearShifter = car.CarState.GearShifter.park
+  vehicle.standstill = False
+  assert not controller._setup_allowed()
+  vehicle.standstill = True
+  for flags in [sm.seen, sm.alive, sm.valid]:
+    flags["carState"] = False
+    assert not controller._setup_allowed()
+    flags["carState"] = True
+
+
+def test_bluez_status_delivers_prompt_while_pair_reply_is_pending():
+  from jeepney.low_level import HeaderFields, MessageType
+  client = object.__new__(BlueZClient)
+  client._request_lock = threading.RLock()
+  client.agent = PairingAgent()
+  pending, release, status_done = threading.Event(), threading.Event(), threading.Event()
+  objects = {
+    "/adapter": {"org.bluez.Adapter1": {"Powered": True}},
+    "/device": {"org.bluez.Device1": {"Address": "00:11:22:33:44:55", "Name": "Keyboard"}},
+  }
+
+  def reply(message, timeout):
+    if message.header.fields[HeaderFields.member] == "Pair":
+      client.agent.display("display_passkey", "/device", "123456")
+      pending.set()
+      release.wait(2)
+    return SimpleNamespace(header=SimpleNamespace(message_type=MessageType.method_return), body=(objects,))
+
+  client.router = SimpleNamespace(send_and_get_reply=reply)
+  pair_worker = threading.Thread(target=lambda: client._call("/device", "org.bluez.Device1", "Pair"))
+  results = []
+  status_worker = threading.Thread(target=lambda: (results.append(client.status()), status_done.set()))
+  pair_worker.start()
+  try:
+    assert pending.wait(1)
+    status_worker.start()
+    assert status_done.wait(1), "Status must not wait for Pair to finish"
+    assert results[0]["prompt"]["value"] == "123456"
+  finally:
+    release.set()
+    pair_worker.join(timeout=3)
+    if status_worker.ident is not None:
+      status_worker.join(timeout=3)
+
+
+def test_phone_prompt_identity_is_preserved_during_detector_pairing():
+  client = FakeBlueZ()
+  phone = "00:11:22:33:44:66"
+  client.status = lambda: {"powered": True, "devices": [client.device], "prompt": {"address": phone, "name": "iPhone"}}
+  controller = BluetoothController(FakeParams(IsOffroad=True, BluetoothEnabled=True), lambda: client, FakeRadio(), FakeParams())
+  controller._pairing_address = client.device["address"]
+  assert controller.status()["prompt"] == {"address": phone, "name": "iPhone"}
+
+
+def test_uniden_connect_waits_for_services(monkeypatch):
+  client = object.__new__(BlueZClient)
+  states = iter((False, False, True))
+  client.device_for_address = lambda _address: {
+    "path": "/detector", "connected": True, "uniden": True, "services_resolved": next(states),
+  }
+  client._call = lambda *_args, **_kwargs: None
+  sleeps = []
+  monkeypatch.setattr("openpilot.starpilot.system.bluetooth.bluez.time.sleep", sleeps.append)
+  client.connect("00:11:22:33:44:55")
+  assert sleeps == [0.1]
+
+
+@pytest.mark.parametrize("name", ["R4@1234", "R8@1234", "R9@1234", "Uniden R4"])
+def test_uniden_discovery_preserves_phone_and_audio_classification(name):
+  client = object.__new__(BlueZClient)
+  objects = {
+    "/detector": {"org.bluez.Device1": {"Address": "00:11:22:33:44:55", "Name": name, "Alias": "My detector"}},
+    "/phone": {"org.bluez.Device1": {"Address": "00:11:22:33:44:66", "Name": "iPhone"}},
+    "/speaker": {"org.bluez.Device1": {"Address": "00:11:22:33:44:77", "Name": "Speaker", "UUIDs": [A2DP_SINK_UUID]}},
+  }
+  devices = client.devices(objects, include_discovering=True)
+  assert {device["name"] for device in devices} == {"My detector", "Speaker"}
+  detector = next(device for device in devices if device["uniden"])
+  assert not detector["audio"] and not detector["controller"]
+  assert BluetoothDevice.from_dict(detector).uniden
+  objects["/detector"]["org.bluez.Device1"]["Blocked"] = True
+  assert not any(device["uniden"] for device in client.devices(objects))
+
+
+def test_uniden_failed_service_resolution_releases_link_for_retry(monkeypatch):
+  client = object.__new__(BlueZClient)
+  device = {"path": "/detector", "connected": True, "uniden": True, "services_resolved": False}
+  client.device_for_address = lambda _address: dict(device)
+  calls = []
+
+  def call(_path, _interface, method, **_kwargs):
+    calls.append(method)
+    if method == "Disconnect":
+      device["connected"] = False
+
+  client._call = call
+  monkeypatch.setattr("openpilot.starpilot.system.bluetooth.bluez.DEVICE_STATE_TIMEOUT", 0.0)
+  with pytest.raises(RuntimeError, match="Uniden Bluetooth services"):
+    client.connect("00:11:22:33:44:55")
+  assert calls == ["Connect", "Disconnect"]
+  assert not device["connected"]
+
+
+def test_uniden_pair_connect_keeps_companion_service_and_audio_selection():
+  phone = "00:11:22:33:44:66"
+  params = FakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionDevices=[phone], BluetoothAudioAddress="speaker")
+  client = FakeBlueZ()
+  client.device.update(name="R4@1234", audio=False, uniden=True)
+  companions = []
+  controller = BluetoothController(params, lambda: client, FakeRadio(), FakeParams(),
+                                   companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1])
+  controller.status()
+  client.actions.clear()
+  controller._pair_worker(client.device["address"])
+  assert client.actions == [("pair", client.device["address"]), ("connect", client.device["address"]), ("stop_scan", "")]
+  assert len(companions) == 1 and not companions[0].closed
+  assert params.get("BluetoothCompanionDevices") == [phone]
+  assert params.get("BluetoothAudioAddress") == "speaker"

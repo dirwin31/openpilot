@@ -19,6 +19,7 @@ OFFROAD_COMMANDS = {
   "set_power", "start_scan", "stop_scan", "pair", "forget", "test_audio", "pairing_response",
   "set_companion", "start_companion_pairing", "stop_companion_pairing",
 }
+PARKED_COMMANDS = {"set_power", "start_scan", "stop_scan", "pair", "forget", "pairing_response"}
 SCAN_DURATION = 20.0
 COMPANION_PAIRING_DURATION = 120.0
 AUDIO_TEST_START_DELAY = 3.0
@@ -59,6 +60,7 @@ class BluetoothController:
     self._policy_disconnected: set[str] = set()
     self._policy_disconnect_retry_after: dict[str, float] = {}
     self._scan_deadline = 0.0
+    self._vehicle_state = None
     self._audio_test_deadline = 0.0
     self._sleep = sleep
     self.params.put_bool("BluetoothCompanionEnabled", bool(self._companion_addresses()))
@@ -291,6 +293,23 @@ class BluetoothController:
   def _offroad(self) -> bool:
     return self.params.get_bool("IsOffroad")
 
+  def _setup_allowed(self) -> bool:
+    if self._offroad():
+      return True
+    # Ignition-powered detectors need setup with the ignition on. Do not infer
+    # parked from ignition or zero speed alone (e.g. a red light).
+    try:
+      from cereal import car, messaging
+      with self._lock:
+        if self._vehicle_state is None:
+          self._vehicle_state = messaging.SubMaster(["carState"])
+        sm = self._vehicle_state
+        sm.update(0)
+        return bool(sm.seen["carState"] and sm.alive["carState"] and sm.valid["carState"] and
+                    sm["carState"].standstill and sm["carState"].gearShifter == car.CarState.GearShifter.park)
+    except Exception:
+      return False
+
   def status(self) -> dict[str, Any]:
     # Status lazily initializes the radio, so serialize it with power changes.
     with self._lock:
@@ -302,6 +321,7 @@ class BluetoothController:
         "powered": False,
         "discovering": False,
         "offroad": self._offroad(),
+        "setup_allowed": self._setup_allowed(),
         "selected_audio": self.params.get("BluetoothAudioAddress", encoding="utf-8") or "",
         "devices": [],
         "prompt": None,
@@ -325,7 +345,7 @@ class BluetoothController:
           for device in result["devices"]
         )
         prompt = result.get("prompt")
-        if prompt is not None and self._pairing_address:
+        if prompt is not None and self._pairing_address and not prompt.get("address"):
           prompt["address"] = self._pairing_address
           device = next((item for item in result["devices"] if item["address"].upper() == self._pairing_address.upper()), None)
           prompt["name"] = device["name"] if device else self._pairing_address
@@ -336,13 +356,22 @@ class BluetoothController:
       return result
 
   def _require_offroad(self, command: str) -> None:
+    if command in PARKED_COMMANDS:
+      if not self._setup_allowed():
+        raise RuntimeError("Bluetooth setup requires offroad or a stationary vehicle in Park")
+      return
     if command in OFFROAD_COMMANDS and not self._offroad():
       raise RuntimeError("Bluetooth settings can only be changed offroad")
 
   def _pair_worker(self, address: str) -> None:
+    client = None
     try:
-      self._client().pair(address)
-      status = self._client().device_for_address(address)
+      client = self._client()
+      client.pair(address)
+      status = client.device_for_address(address)
+      if status.get("uniden"):
+        # Confirm the detector is reachable with its services resolved before reporting success.
+        client.connect(address)
       if status.get("audio") and not self.params.get("BluetoothAudioAddress", encoding="utf-8"):
         self.params.put("BluetoothAudioAddress", address)
       self._pairing_error = ""
@@ -351,7 +380,8 @@ class BluetoothController:
       cloudlog.exception("Bluetooth pairing failed")
     finally:
       try:
-        self._client().stop_discovery()
+        if client is not None:
+          client.stop_discovery()
       except Exception:
         pass
       self._pairing_address = ""
@@ -541,7 +571,7 @@ class BluetoothController:
   def _maintain_scan(self, status: dict[str, Any], now: float) -> None:
     if not status["discovering"]:
       self._scan_deadline = 0.0
-    elif not status["offroad"] or (self._scan_deadline and now >= self._scan_deadline):
+    elif not status.get("setup_allowed", status["offroad"]) or (self._scan_deadline and now >= self._scan_deadline):
       self._client().stop_discovery()
       self._scan_deadline = 0.0
 
@@ -596,7 +626,7 @@ class BluetoothController:
         self._companion_pairing_deadline = 0.0
         self._pending_companion_paths.clear()
 
-  def _maintain_reconnects(self, status: dict[str, Any], now: float, suspend_controller_reconnect: bool) -> None:
+  def _maintain_reconnects(self, status: dict[str, Any], now: float, suspend_controller_reconnect: bool = False) -> None:
     devices = status["devices"]
     devices_by_address = {device["address"].upper(): device for device in devices}
     for address in list(self._policy_disconnected):
