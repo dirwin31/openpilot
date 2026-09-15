@@ -14,7 +14,8 @@ let confirmNoDownload = [];
 const finishes = [];
 const prompts = [];
 const ctx = {
-  GalaxySection: {}, GxNotice: {},
+  GalaxySection: {}, GxNotice: {}, GalaxySelect: {}, VersionHistoryPicker: {},
+  versionTitle: () => "", releaseVersions: commits => commits,
   downloadBlob: () => {},
   GalaxyConfirm: async options => {
     prompts.push(options);
