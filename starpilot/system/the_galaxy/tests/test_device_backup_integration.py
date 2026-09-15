@@ -95,6 +95,77 @@ def test_real_routes_round_trip_with_repository_theme_layout(device_client):
   assert params.get_bool("DoReboot") is True  # Only a temporary Params store, never hardware reboot.
 
 
+def test_restore_merges_history_and_repeated_import_is_idempotent(device_client):
+  client, params, _ = device_client
+  saved = {
+    "GalaxyDashboardStats": {"version": 1, "routes": {"saved": {"duration": 2}, "shared": {"duration": 3}}},
+    "ModelDrivesAndScores": {"saved": {"Drives": 2, "Score": 80}, "shared": {"Drives": 3, "Score": 70}},
+    "StarPilotStats": {"StarPilotMeters": 100, "StarPilotSeconds": 30, "Month": 8,
+                       "CurrentMonthsMeters": 100, "ModelTimes": {"saved": 60, "shared": 20}},
+  }
+  for key, value in saved.items():
+    params.put(key, value)
+  content = export(client)
+
+  current = {
+    "GalaxyDashboardStats": {"version": 1, "routes": {"current": {"duration": 4}, "shared": {"duration": 5}}},
+    "ModelDrivesAndScores": {"current": {"Drives": 4, "Score": 90}, "shared": {"Drives": 5, "Score": 95}},
+    "StarPilotStats": {"StarPilotMeters": 200, "StarPilotSeconds": 10, "Month": 9,
+                       "CurrentMonthsMeters": 20, "ModelTimes": {"current": 5, "shared": 50}},
+  }
+  for key, value in current.items():
+    params.put(key, value)
+
+  for _ in range(2):
+    response = client.post("/api/device_backup/restore", data=content, content_type="application/zip")
+    assert response.status_code == 200, response.json
+    assert params.get("GalaxyDashboardStats")["routes"] == {
+      "saved": {"duration": 2}, "current": {"duration": 4}, "shared": {"duration": 5},
+    }
+    assert params.get("ModelDrivesAndScores") == {
+      "saved": {"Drives": 2, "Score": 80},
+      "current": {"Drives": 4, "Score": 90},
+      "shared": {"Drives": 5, "Score": 95},
+    }
+    assert params.get("StarPilotStats") == {
+      "StarPilotMeters": 200, "StarPilotSeconds": 30, "Month": 9,
+      "CurrentMonthsMeters": 20, "ModelTimes": {"saved": 60, "current": 5, "shared": 50},
+    }
+
+
+def test_restore_rejects_safe_mode_and_pending_safe_mode_restore(device_client):
+  client, params, _ = device_client
+  content = export(client)
+  params.put_int("ScreenBrightness", 20)
+
+  params.put_bool("SafeMode", True)
+  response = client.post("/api/device_backup/restore", data=content, content_type="application/zip")
+  assert response.status_code == 400
+  assert "Safe Mode" in response.json["message"]
+  assert params.get_int("ScreenBrightness") == 20
+
+  params.put_bool("SafeMode", False)
+  params.put("SafeModeBackup", {"Model": {"present": True, "value": "current"}})
+  response = client.post("/api/device_backup/restore", data=content, content_type="application/zip")
+  assert response.status_code == 400
+  assert "Safe Mode" in response.json["message"]
+  assert params.get("SafeModeBackup") == {"Model": {"present": True, "value": "current"}}
+  assert params.get_int("ScreenBrightness") == 20
+
+
+def test_restore_stops_dashboard_analyzer_and_clears_stats_cache(device_client, monkeypatch):
+  client, _, _ = device_client
+  content = export(client)
+  stopped = []
+  monkeypatch.setattr(server.utilities, "stop_dashboard_background_analysis", lambda: stopped.append(True))
+  server._STATS_RESPONSE_CACHE.update({"payload": {"stale": True}, "updated_at": 123.0})
+
+  response = client.post("/api/device_backup/restore", data=content, content_type="application/zip")
+  assert response.status_code == 200, response.json
+  assert stopped == [True]
+  assert server._STATS_RESPONSE_CACHE == {"payload": None, "updated_at": 0.0}
+
+
 def test_incompatible_type_and_bad_boolean_keep_current_values(device_client):
   client, params, _ = device_client
   params.put_bool("IsMetric", True)

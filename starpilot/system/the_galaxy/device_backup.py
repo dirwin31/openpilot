@@ -1,5 +1,6 @@
 """Portable same-device backups. Never extract archive paths into live data."""
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -33,6 +34,7 @@ PARAM_GROUPS = (
   {"FLMActiveOverrides", "FLMActiveProfileId", "FLMTrialBaseline", "FLMTrialApplied"},
   {"SafeMode", "SafeModeBackup"},
 )
+HISTORY_KEYS = frozenset({"GalaxyDashboardStats", "ModelDrivesAndScores", "StarPilotStats"})
 RESTORE_MARGIN_BYTES = 256 * 1024 * 1024
 PYTHON_TYPES = {
   ParamKeyType.STRING: (str,), ParamKeyType.BOOL: (bool,), ParamKeyType.INT: (int,), ParamKeyType.FLOAT: (float,),
@@ -123,14 +125,82 @@ def decode_param(params, key, raw):
     return None
 
 
+class RestoreError(OSError):
+  pass
+
+
+def verify_param(params, key, value):
+  """Confirm a write reached the underlying Params store."""
+  if hasattr(params, "_put_cast"):
+    expected = params._put_cast(key, value) if value is not None else None
+    actual = read_param(params, key)
+  else:
+    expected = value
+    actual = params.get(key)
+  if type(actual) is not type(expected) or actual != expected:
+    raise RestoreError(f"Setting write could not be verified: {key}")
+
+
 def write_param(params, key, raw):
   if raw is None:
     params.remove(key)
+    verify_param(params, key, None)
     return
   value = decode_param(params, key, raw)
   if value is None:
     raise ValueError(f"Cannot roll back incompatible setting: {key}")
   params.put(key, value)
+  verify_param(params, key, value)
+
+
+def merge_history(saved, current):
+  """Union history records by identity, with current values winning conflicts."""
+  if isinstance(saved, dict) and isinstance(current, dict):
+    result = copy.deepcopy(saved)
+    for key, value in current.items():
+      result[key] = merge_history(result[key], value) if key in result else copy.deepcopy(value)
+    return result
+  if isinstance(saved, list) and isinstance(current, list):
+    return copy.deepcopy(current + [value for value in saved if value not in current])
+  return copy.deepcopy(current)
+
+
+def _nonnegative_number(value):
+  try:
+    return type(value) in (int, float) and math.isfinite(value) and value >= 0
+  except OverflowError:
+    return False
+
+
+def _merge_cumulative_history(saved, current):
+  if isinstance(saved, dict) and isinstance(current, dict):
+    return {
+      key: _merge_cumulative_history(saved[key], current[key]) if key in saved and key in current
+      else copy.deepcopy(current[key] if key in current else saved[key])
+      for key in saved.keys() | current.keys()
+    }
+  if _nonnegative_number(saved) and _nonnegative_number(current):
+    return max(saved, current)
+  return copy.deepcopy(current)
+
+
+def merge_history_param(key, saved, current):
+  if not isinstance(saved, dict):
+    return saved
+  current = current if isinstance(current, dict) else {}
+  if key == "StarPilotStats":
+    merged = _merge_cumulative_history(saved, current)
+    if "Month" in current:
+      merged["Month"] = current["Month"]
+      if saved.get("Month") != current["Month"]:
+        merged["CurrentMonthsMeters"] = current.get("CurrentMonthsMeters", 0)
+    return merged
+  merged = merge_history(saved, current)
+  if key == "GalaxyDashboardStats":
+    saved_routes = saved.get("routes", {}) if isinstance(saved.get("routes", {}), dict) else {}
+    current_routes = current.get("routes", {}) if isinstance(current.get("routes", {}), dict) else {}
+    merged["routes"] = {**copy.deepcopy(saved_routes), **copy.deepcopy(current_routes)}
+  return merged
 
 
 def rollback(params, previous, files, check_parked=lambda: None):
@@ -292,6 +362,10 @@ def restore_backup(source, roots, params, keys, workdir, check_parked, models_ou
           skipped.update(group & restore_keys)
       restore_keys -= skipped
       values = {key: value for key, value in values.items() if key in restore_keys}
+      # History from the device and archive is combined so an older backup cannot erase newer records.
+      restore_keys -= HISTORY_KEYS - set(values)
+      for key in HISTORY_KEYS & set(values):
+        values[key] = merge_history_param(key, values[key], params.get(key))
 
       # Budget space for staged files, rollback copies, and the largest atomic replacement.
       selected = []
@@ -376,8 +450,10 @@ def restore_backup(source, roots, params, keys, workdir, check_parked, models_ou
       for key in sorted(restore_keys, key=lambda key: (key == "CustomPersonalities", key)):
         if key in values:
           params.put(key, values[key])
+          verify_param(params, key, values[key])
         else:
           params.remove(key)
+          verify_param(params, key, None)
     except Exception as error:
       failures = rollback(params, previous, applied)
       if failures:

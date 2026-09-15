@@ -10336,6 +10336,16 @@ def setup(app):
     if flm_workspace.flm_analyzer_running():
       raise ValueError("Wait for FLM analysis to finish before backup or restore.")
 
+  def check_device_restore_parked():
+    check_device_backup_parked()
+    try:
+      safe_mode = _params_raw.get_bool("SafeMode")
+      pending_safe_mode_restore = device_backup.read_param(_params_raw, "SafeModeBackup") is not None
+    except Exception as exc:
+      raise ValueError("Confirm Safe Mode is off with no pending Safe Mode restoration before restoring.") from exc
+    if safe_mode or pending_safe_mode_restore:
+      raise ValueError("Turn off Safe Mode and finish its pending restoration before restoring a device backup.")
+
   def device_backup_context():
     check_device_backup_parked()
     if device_backup.pending_recoveries(device_backup_workdir):
@@ -10442,17 +10452,24 @@ def setup(app):
       return jsonify(success=False, message="A device backup or restore is already running."), 409
     try:
       roots, keys = device_backup_context()
+      check_device_restore_parked()
       device_restore_ready = False
       device_restore_result_path.unlink(missing_ok=True)
       device_restore_state.update(stage="restoring", message="Restoring backup...", models=[])
       models = []
       with tempfile.TemporaryFile(dir=device_backup_workdir) as upload:
         receive_device_backup_upload(upload)
-        with _PERSONALITY_PROFILES_WRITE_LOCK:
-          count, files, skipped = device_backup.restore_backup(
-            upload, roots, _params_raw, keys, device_backup_workdir, check_device_backup_parked,
-            models_out=models, validate=validate_device_restore_params,
-          )
+        with _PERSONALITY_PROFILES_WRITE_LOCK, _STATS_RESPONSE_LOCK:
+          check_device_restore_parked()
+          utilities.stop_dashboard_background_analysis()
+          try:
+            count, files, skipped = device_backup.restore_backup(
+              upload, roots, _params_raw, keys, device_backup_workdir, check_device_restore_parked,
+              models_out=models, validate=validate_device_restore_params,
+            )
+          finally:
+            utilities._invalidate_dashboard_cache()
+            _STATS_RESPONSE_CACHE.update({"payload": None, "updated_at": 0.0})
       device_restore_ready = True
       message = f"Restored {count} settings and {files} files."
       if skipped:

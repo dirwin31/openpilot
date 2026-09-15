@@ -41,6 +41,61 @@ def test_round_trip(backup, tmp_path):
   assert (root / "model.bin").read_bytes() == b"model contents"
 
 
+def test_history_merge_keeps_current_records_and_larger_lifetime_totals():
+  from starpilot.system.the_galaxy.device_backup import merge_history_param
+
+  saved_dashboard = {"version": 1, "routes": {"saved": {"duration": 2}, "shared": {"duration": 3}}}
+  current_dashboard = {"version": 1, "routes": {"current": {"duration": 4}, "shared": {"duration": 5}}}
+  dashboard = merge_history_param("GalaxyDashboardStats", saved_dashboard, current_dashboard)
+  assert dashboard["routes"] == {
+    "saved": {"duration": 2}, "current": {"duration": 4}, "shared": {"duration": 5},
+  }
+
+  saved_models = {"saved": {"Drives": 2, "Score": 80}, "shared": {"Drives": 3, "Score": 70}}
+  current_models = {"current": {"Drives": 4, "Score": 90}, "shared": {"Drives": 5, "Score": 95}}
+  models = merge_history_param("ModelDrivesAndScores", saved_models, current_models)
+  assert models == {
+    "saved": {"Drives": 2, "Score": 80},
+    "current": {"Drives": 4, "Score": 90},
+    "shared": {"Drives": 5, "Score": 95},
+  }
+
+  saved_stats = {"StarPilotMeters": 100, "StarPilotSeconds": 30, "Month": 8,
+                 "CurrentMonthsMeters": 100, "ModelTimes": {"saved": 60, "shared": 20}}
+  current_stats = {"StarPilotMeters": 200, "StarPilotSeconds": 10, "Month": 9,
+                   "CurrentMonthsMeters": 20, "ModelTimes": {"current": 5, "shared": 50}}
+  stats = merge_history_param("StarPilotStats", saved_stats, current_stats)
+  assert stats == {"StarPilotMeters": 200, "StarPilotSeconds": 30, "Month": 9,
+                   "CurrentMonthsMeters": 20, "ModelTimes": {"saved": 60, "current": 5, "shared": 50}}
+  assert merge_history_param("StarPilotStats", saved_stats, stats) == stats
+
+
+def test_silent_setting_write_is_detected_and_rolled_back(tmp_path):
+  from starpilot.system.the_galaxy.device_backup import RestoreError
+
+  source = Params()
+  source.values = {"IsMetric": b"1", "ScreenBrightness": b"65"}
+  archive = io.BytesIO()
+  create_backup(archive, {}, source, set(source.values))
+
+  class SilentOnce(Params):
+    def __init__(self):
+      super().__init__()
+      self.values = {"IsMetric": b"0", "ScreenBrightness": b"20"}
+      self.ignored = False
+
+    def put(self, key, value):
+      if key == "ScreenBrightness" and not self.ignored:
+        self.ignored = True
+        return
+      super().put(key, value)
+
+  params = SilentOnce()
+  with pytest.raises(RestoreError, match="could not be verified"):
+    restore_backup(archive, {}, params, set(source.values), tmp_path, lambda: None)
+  assert params.values == {"IsMetric": b"0", "ScreenBrightness": b"20"}
+
+
 @pytest.mark.parametrize("name", ["flm/../../escape", "/flm/escape", "unknown/file", "flm/model.bin"])
 def test_rejects_paths_and_corruption(backup, tmp_path, name):
   archive, root, params = backup
