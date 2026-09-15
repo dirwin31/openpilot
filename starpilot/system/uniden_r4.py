@@ -141,6 +141,28 @@ class _BlueZAgent:
         bus.export(path, self._instance)
 
 
+async def _get_adapter_bool(bus, adapter_path, name):
+    from dbus_fast import Message, MessageType
+    reply = await bus.call(Message(
+        destination="org.bluez", path=adapter_path,
+        interface="org.freedesktop.DBus.Properties", member="Get",
+        signature="ss", body=["org.bluez.Adapter1", name],
+    ))
+    if reply.message_type == MessageType.ERROR or not reply.body:
+        return None
+    return bool(getattr(reply.body[0], "value", False))
+
+
+async def _set_adapter_pairable(bus, adapter_path, pairable):
+    from dbus_fast import Message, MessageType, Variant
+    reply = await bus.call(Message(
+        destination="org.bluez", path=adapter_path,
+        interface="org.freedesktop.DBus.Properties", member="Set",
+        signature="ssv", body=["org.bluez.Adapter1", "Pairable", Variant("b", pairable)],
+    ))
+    return reply.message_type != MessageType.ERROR
+
+
 async def _pairing_flow():
     from dbus_fast import Message, MessageType, unpack_variants, Variant, BusType
     from dbus_fast.aio import MessageBus
@@ -240,10 +262,26 @@ async def _pairing_flow():
 
         _set_pair_state("verifying", f"Found {dev_name}. Establishing secure bond (LTK exchange)...")
         if not target["paired"]:
-            reply = await asyncio.wait_for(bus.call(Message(
-                destination="org.bluez", path=dev_path,
-                interface="org.bluez.Device1", member="Pair",
-            )), timeout=90.0)
+            # bluetooth_managerd keeps the adapter non-bondable outside its phone
+            # pairing window, and the kernel then refuses LE bonding, so Pair()
+            # fails with AuthenticationFailed. Open bonding just for this Pair().
+            made_pairable = False
+            if await _get_adapter_bool(bus, adapter_path, "Pairable") is False:
+                made_pairable = await _set_adapter_pairable(bus, adapter_path, True)
+            try:
+                reply = await asyncio.wait_for(bus.call(Message(
+                    destination="org.bluez", path=dev_path,
+                    interface="org.bluez.Device1", member="Pair",
+                )), timeout=90.0)
+            finally:
+                # Leave it open if bluetooth_managerd started its own phone pairing
+                # window (Discoverable) meanwhile; closing it would break that pairing.
+                if made_pairable:
+                    try:
+                        if not await _get_adapter_bool(bus, adapter_path, "Discoverable"):
+                            await _set_adapter_pairable(bus, adapter_path, False)
+                    except Exception:
+                        pass
             if reply.message_type == MessageType.ERROR:
                 raise RuntimeError(reply.error_name or "pairing rejected")
 

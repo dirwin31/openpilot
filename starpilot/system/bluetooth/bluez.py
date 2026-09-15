@@ -400,13 +400,28 @@ class BlueZClient:
   def pair(self, address: str, device_path: str | None = None) -> None:
     self._register_agent()
     device = {"path": device_path} if device_path else self.device_for_address(address)
+    # The companion keeps the adapter non-bondable outside its pairing window, and the
+    # kernel then refuses LE bonding (AuthenticationFailed). Open bonding for this Pair().
+    opened_bonding = not self.adapter()[1].get("Pairable", False)
+    if opened_bonding:
+      self.set_adapter_property("Pairable", "b", True)
     self.agent.set_auto_accept(device["path"], True)
     try:
       self._call(device["path"], DEVICE_IFACE, "Pair", timeout=90.0)
     finally:
       self.agent.set_auto_accept(device["path"], False)
+      if opened_bonding:
+        self._close_bonding_after_pair()
     self.set_device_property(address, "Trusted", "b", True)
     self.agent.clear()
+
+  def _close_bonding_after_pair(self) -> None:
+    try:
+      # A companion pairing window (Discoverable) opened meanwhile still needs bonding.
+      if not self.adapter()[1].get("Discoverable", False):
+        self.set_adapter_property("Pairable", "b", False)
+    except Exception:
+      pass
 
   def connect(self, address: str, timeout: float = 30.0) -> None:
     device = self.device_for_address(address)

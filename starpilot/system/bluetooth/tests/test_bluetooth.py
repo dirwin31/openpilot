@@ -1145,6 +1145,79 @@ def test_bluez_companion_lookup_requires_persisted_bond():
   }
 
 
+def _pairing_bluez(adapter_props, pair_error=None, discoverable_during_pair=False):
+  client = object.__new__(BlueZClient)
+  events = []
+
+  class Agent:
+    def set_auto_accept(self, path, enabled):
+      events.append(("auto_accept", path, enabled))
+
+    def clear(self):
+      events.append(("clear",))
+
+  def call(path, interface, member, *_args, **_kwargs):
+    events.append((member, adapter_props["Pairable"]))
+    if member == "Pair":
+      if discoverable_during_pair:
+        adapter_props["Discoverable"] = True
+      if pair_error is not None:
+        raise pair_error
+
+  def set_adapter_property(name, _signature, value):
+    events.append(("adapter", name, value))
+    adapter_props[name] = value
+
+  client.agent = Agent()
+  client._register_agent = lambda: None
+  client.adapter = lambda: ("/org/bluez/hci0", dict(adapter_props))
+  client.set_adapter_property = set_adapter_property
+  client.set_device_property = lambda *args: events.append(("device", *args))
+  client._call = call
+  return client, events
+
+
+def test_bluez_pair_opens_bonding_when_adapter_is_not_pairable():
+  adapter_props = {"Pairable": False, "Discoverable": False}
+  client, events = _pairing_bluez(adapter_props)
+
+  client.pair("00:11:22:33:44:55", "/controller")
+
+  assert ("Pair", True) in events
+  assert events.index(("adapter", "Pairable", True)) < events.index(("Pair", True)) < events.index(("adapter", "Pairable", False))
+  assert adapter_props["Pairable"] is False
+
+
+def test_bluez_pair_closes_bonding_after_failed_pair():
+  adapter_props = {"Pairable": False, "Discoverable": False}
+  client, events = _pairing_bluez(adapter_props, pair_error=BlueZError("org.bluez.Error.AuthenticationFailed", "Authentication Failed"))
+
+  with pytest.raises(RuntimeError, match="Authentication Failed"):
+    client.pair("00:11:22:33:44:55", "/controller")
+
+  assert adapter_props["Pairable"] is False
+  assert ("auto_accept", "/controller", False) in events
+
+
+def test_bluez_pair_keeps_bonding_open_for_companion_pairing_window():
+  adapter_props = {"Pairable": False, "Discoverable": False}
+  client, _events = _pairing_bluez(adapter_props, discoverable_during_pair=True)
+
+  client.pair("00:11:22:33:44:55", "/controller")
+
+  assert adapter_props["Pairable"] is True
+
+
+def test_bluez_pair_leaves_already_pairable_adapter_alone():
+  adapter_props = {"Pairable": True, "Discoverable": False}
+  client, events = _pairing_bluez(adapter_props)
+
+  client.pair("00:11:22:33:44:55", "/controller")
+
+  assert not [event for event in events if event[0] == "adapter"]
+  assert adapter_props["Pairable"] is True
+
+
 def test_bluez_start_discovery_is_idempotent_when_already_discovering():
   client = object.__new__(BlueZClient)
   client.adapter = lambda: ("/org/bluez/hci0", {"Discovering": True})
