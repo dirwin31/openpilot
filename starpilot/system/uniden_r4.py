@@ -229,37 +229,28 @@ def set_param(name, value):
         return False
 
 def discover_uniden_device():
-    """Dynamically discover any paired or connected Uniden R-series detector (R4@*, R8@*, R9@*, etc.)"""
+    """Find the paired Uniden R-series detector (R4@*, R8@*, R9@*, etc.) through bluetooth_managerd."""
+    from openpilot.starpilot.system.bluetooth.protocol import BluetoothClient
+
     configured_mac = get_param("UnidenR4Mac", "")
-    
-    # Check what devices BlueZ actually has paired/known
-    paired_devices = {}
     try:
-        out = subprocess.check_output(['bluetoothctl', 'devices'], stderr=subprocess.DEVNULL, timeout=2).decode()
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) >= 2 and parts[0].lower() == "device":
-                mac = parts[1].strip()
-                name = " ".join(parts[2:]) if len(parts) > 2 else ""
-                paired_devices[mac] = name
+        status = BluetoothClient().status()
     except Exception:
-        pass
+        return configured_mac
+    # Radio off or still starting at boot - that is not proof the bond is gone.
+    if not status.enabled or not status.powered or status.error:
+        return configured_mac
 
-    # If a configured MAC was saved, make sure it actually exists in BlueZ paired devices
-    if configured_mac:
-        if configured_mac in paired_devices:
-            return configured_mac
-        else:
-            # Device was forgotten from Bluetooth! Clear stale param
-            set_param("UnidenR4Mac", "")
+    paired = [device for device in status.devices if device.paired]
+    if configured_mac and any(device.address.upper() == configured_mac.upper() for device in paired):
+        return configured_mac
 
-    # Fallback: Check if any known BlueZ device looks like a Uniden detector
-    for mac, name in paired_devices.items():
-        if _uniden_name_match(name):
-            set_param("UnidenR4Mac", mac)
-            return mac
-
-    return ""
+    # Saved detector was forgotten (or never saved) - adopt any other paired detector.
+    detector = next((device for device in paired if device.uniden or _uniden_name_match(device.name)), None)
+    mac = detector.address if detector is not None else ""
+    if mac != configured_mac:
+        set_param("UnidenR4Mac", mac)
+    return mac
 
 def get_char_write_path(mac=None):
     """Dynamically resolve the BlueZ D-Bus object path for the detector's command characteristic."""
@@ -379,14 +370,11 @@ def get_connection_status():
 
 def trigger_action(action):
     if action == "connect":
-        # Signal the background daemon to initiate connection immediately (even offroad)
+        # uniden_radar_d owns the connection - resume auto-connect if Disconnect paused it
+        set_shm_param("UnidenAutoConnectPaused", False)
         set_shm_param("UnidenManualConnectTrigger", True)
         mac = discover_uniden_device()
         if mac:
-            try:
-                subprocess.run(['bluetoothctl', 'connect', mac], check=False, timeout=5)
-            except Exception:
-                pass
             return {"status": "ok", "message": f"Connecting to {mac}..."}
         return {"status": "ok", "message": "Scanning and connecting to nearby Uniden detector..."}
 
@@ -407,6 +395,8 @@ def trigger_action(action):
         return {"status": "ok", "message": f"Forgot detector {mac or ''}."}
         
     elif action == "disconnect":
+        # Otherwise uniden_radar_d reconnects right away. Cleared by Connect, Scan & Pair, or a reboot.
+        set_shm_param("UnidenAutoConnectPaused", True)
         mac = discover_uniden_device()
         if mac:
             try:
