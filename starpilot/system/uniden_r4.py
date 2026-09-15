@@ -165,11 +165,10 @@ async def _pairing_flow():
             signature="os", body=[agent_path, "NoInputNoOutput"],
         ))
         agent_registered = True
-        await bus.call(Message(
-            destination="org.bluez", path="/org/bluez",
-            interface="org.bluez.AgentManager1", member="RequestDefaultAgent",
-            signature="o", body=[agent_path],
-        ))
+        # Deliberately NOT RequestDefaultAgent: BlueZ routes Device1.Pair() to the
+        # agent owned by the calling connection, so this agent still handles the
+        # Uniden bond, while bluetooth_managerd's agent stays the default for
+        # phone companion pairing instead of being auto-accepted here.
 
         try:
             await bus.call(Message(
