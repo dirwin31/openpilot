@@ -19,11 +19,32 @@ except ImportError:
     bleak = None
 
 from openpilot.common.params import Params
-from starpilot.system.uniden_r4 import discover_uniden_device, DEFAULTS, get_param, set_param
+from starpilot.system.uniden_r4 import _uniden_name_match, DEFAULTS, get_param, set_param
 from starpilot.system.uniden_protocol import parse_alerts, parse_telemetry
 
 # Use uniden_shm for cross-process shared memory
 from starpilot.system.uniden_shm import set_shm_param, get_shm_param
+from starpilot.system.bluetooth.protocol import BluetoothClient
+
+
+def _select_detector(status, configured_mac):
+    """Pick the bonded detector out of bluetooth_managerd status: the saved MAC first,
+    else any paired, uniden-looking device."""
+    detectors = [device for device in status.devices if device.uniden or _uniden_name_match(device.name)]
+    configured = (configured_mac or "").upper()
+    if configured:
+        match = next((device for device in detectors if device.address.upper() == configured), None)
+        if match is not None:
+            return match
+    return next((device for device in detectors if device.paired), None)
+
+
+async def _manager_status(client):
+    return await asyncio.to_thread(client.status)
+
+
+async def _manager_call(client, name, *args):
+    return await asyncio.to_thread(getattr(client, name), *args)
 
 
 async def _resolve_device(mac: str):
@@ -86,39 +107,39 @@ async def run_uniden_daemon():
     clear_active_alert()
     set_shm_param("UnidenRadarConnected", False)
     update_heartbeat()
-    
+
     params = Params()
+    manager = BluetoothClient()
     last_alert_time = 0.0
     last_sound_time = 0.0
     last_sound_tier = 0
     was_onroad = False
     onroad_start_time = 0.0
     manual_window_start = 0.0
+    last_error = ""
 
     while True:
         client = None
+        address = ""
         try:
             update_heartbeat()
 
             # 1. Respect StarPilot global Bluetooth toggle
-            bt_enabled = params.get_bool("BluetoothEnabled")
-            if not bt_enabled:
+            if not params.get_bool("BluetoothEnabled"):
                 clear_active_alert()
                 set_shm_param("UnidenRadarConnected", False)
                 await asyncio.sleep(4.0)
                 continue
 
             # 2. Respect Uniden specific toggle
-            enabled = get_param("UnidenR4Enabled", True)
-            if not enabled:
+            if not get_param("UnidenR4Enabled", True):
                 clear_active_alert()
                 set_shm_param("UnidenRadarConnected", False)
                 await asyncio.sleep(4.0)
                 continue
 
             # 3. Check manual connect trigger from Galaxy WebUI
-            manual_connect = get_shm_param("UnidenManualConnectTrigger", False)
-            if manual_connect:
+            if get_shm_param("UnidenManualConnectTrigger", False):
                 set_shm_param("UnidenManualConnectTrigger", False)
                 manual_window_start = time.monotonic()
                 print("[uniden_radar_d] Manual connection requested by user (Galaxy UI)!")
@@ -130,7 +151,6 @@ async def run_uniden_daemon():
                 print("[uniden_radar_d] Car transitioned ONROAD! Starting 3-minute connection window...")
             elif not is_onroad:
                 onroad_start_time = 0.0
-
             was_onroad = is_onroad
 
             # Connection criteria:
@@ -138,30 +158,82 @@ async def run_uniden_daemon():
             # - Car is onroad (connects in initial 3-minute window or retries during drive)
             is_manual_active = manual_window_start > 0 and (time.monotonic() - manual_window_start < 60.0)
             is_onroad_active = is_onroad and (time.monotonic() - onroad_start_time <= ONROAD_CONNECT_WINDOW_SEC or is_onroad)
+            should_connect = is_manual_active or is_onroad_active
 
-            if not is_manual_active and not is_onroad_active:
+            # bluetooth_managerd is the single owner of the adapter: it handles
+            # discovery, pairing and the device link. This process only consumes the
+            # established link, so it never competes with the phone companion for the
+            # radio (no independent scan / connect / bluetoothctl calls).
+            status = await _manager_status(manager)
+            if not status.available:
+                clear_active_alert()
+                set_shm_param("UnidenRadarConnected", False)
+                await asyncio.sleep(4.0)
+                continue
+
+            detector = _select_detector(status, get_param("UnidenR4Mac", ""))
+            if detector is None:
+                if not should_connect:
+                    clear_active_alert()
+                    set_shm_param("UnidenRadarConnected", False)
+                await asyncio.sleep(3.0)
+                continue
+
+            address = detector.address
+            if (get_param("UnidenR4Mac", "") or "").upper() != address.upper():
+                set_param("UnidenR4Mac", address)
+
+            if not should_connect:
+                if detector.connected:
+                    try:
+                        await _manager_call(manager, "disconnect", address)
+                    except Exception:
+                        pass
                 clear_active_alert()
                 set_shm_param("UnidenRadarConnected", False)
                 await asyncio.sleep(2.0)
                 continue
 
-            mac = discover_uniden_device()
-            if not mac or bleak is None:
-                clear_active_alert()
+            if not detector.connected or not detector.services_resolved:
+                if not status.concurrent_roles and status.companion_connected:
+                    # The adapter cannot hold the phone (peripheral) and the detector
+                    # (central) at once; keep the phone link and retry later.
+                    clear_active_alert()
+                    set_shm_param("UnidenRadarConnected", False)
+                    await asyncio.sleep(3.0)
+                    continue
+                if not last_error:
+                    print(f"[uniden_radar_d] Asking bluetooth_managerd to connect {address}...")
+                try:
+                    await _manager_call(manager, "connect", address)
+                except Exception as error:
+                    message = str(error) or repr(error)
+                    if message != last_error:
+                        print(f"[uniden_radar_d] Connection attempt failed: {message}")
+                    last_error = message
+                    set_shm_param("UnidenRadarConnected", False)
+                    await asyncio.sleep(2.0)
+                    continue
+                status = await _manager_status(manager)
+                detector = _select_detector(status, address)
+                if detector is None or not detector.connected or not detector.services_resolved:
+                    await asyncio.sleep(1.0)
+                    continue
+
+            if bleak is None:
                 await asyncio.sleep(3.0)
                 continue
+            last_error = ""
 
-            print(f"[uniden_radar_d] Attempting connection to {mac}...")
-            # Resolve BlueZ device path and create BLEDevice so bleak doesn't
-            # need an active scan (device is already known/bonded to BlueZ)
-            device = await _resolve_device(mac)
+            # Resolve the BlueZ device path so bleak attaches to the link the manager
+            # established instead of initiating its own connection or scan.
+            device = await _resolve_device(address)
             if device is None:
-                print(f"[uniden_radar_d] Device {mac} not found in BlueZ, trying scan...")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)
                 continue
             client = bleak.BleakClient(device, timeout=12.0)
             await client.connect()
-            print(f"[uniden_radar_d] Connected to {mac}!")
+            print(f"[uniden_radar_d] Consuming detector {address} (link owned by bluetooth_managerd)")
             set_shm_param("UnidenRadarConnected", True)
             update_heartbeat()
 

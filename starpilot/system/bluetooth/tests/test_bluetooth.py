@@ -1863,6 +1863,49 @@ def test_reconnect_maintenance_connects_audio_and_controllers_but_not_phone_cent
   assert not any(action[0] == "connect" for action in client.actions)
 
 
+def test_reconnect_maintenance_skips_saved_companion_phones_with_audio_capability():
+  address = "00:11:22:33:44:55"
+  params = FakeParams(IsOffroad=True, BluetoothEnabled=True, BluetoothCompanionDevices=[address])
+  client = FakeBlueZ()
+  # A phone that advertises audio capabilities must still never be dialled out to.
+  client.device.update({"address": address, "name": "iPhone", "audio": True, "controller": False, "connected": False})
+  controller = BluetoothController(params, lambda: client, FakeRadio())
+
+  controller._maintain_reconnects(controller.status(), controller._last_reconnect + 15.0)
+
+  assert not any(action[0] == "connect" for action in client.actions)
+
+
+def test_companion_advertisement_rearms_when_bluez_reports_no_active_instance():
+  address = "00:11:22:33:44:55"
+  params = TypedJsonFakeParams(
+    IsOffroad=True,
+    BluetoothEnabled=True,
+    BluetoothCompanionEnabled=True,
+    BluetoothCompanionDevices=[address],
+  )
+  client = FakeBlueZ()
+  client.device.update({"name": "iPhone", "audio": False, "controller": False, "connected": True})
+  companions = []
+  controller = BluetoothController(
+    params, lambda: client, FakeRadio(),
+    companion_factory=lambda *args: companions.append(FakeCompanion(*args)) or companions[-1],
+  )
+
+  status = dict(controller.status())
+  status["advertising_active"] = True
+  controller._maintain_companion_advertisement(status)
+  assert companions[-1].rearmed == 0
+
+  status["advertising_active"] = False
+  controller._maintain_companion_advertisement(status)
+  assert companions[-1].rearmed == 1
+
+  # Rate-limited: a second pass does not hammer RegisterAdvertisement.
+  controller._maintain_companion_advertisement(status)
+  assert companions[-1].rearmed == 1
+
+
 def test_companion_advertisement_rearms_when_saved_phone_disconnects():
   address = "00:11:22:33:44:55"
   params = TypedJsonFakeParams(

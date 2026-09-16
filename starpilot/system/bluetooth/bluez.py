@@ -17,6 +17,7 @@ BLUEZ = "org.bluez"
 OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
 ADAPTER_IFACE = "org.bluez.Adapter1"
 DEVICE_IFACE = "org.bluez.Device1"
+ADVERTISING_MANAGER_IFACE = "org.bluez.LEAdvertisingManager1"
 AGENT_MANAGER_IFACE = "org.bluez.AgentManager1"
 AGENT_IFACE = "org.bluez.Agent1"
 AGENT_PATH = "/link/firestar/starpilot/agent"
@@ -286,16 +287,21 @@ class BlueZClient:
 
   def status(self) -> dict[str, Any]:
     objects = self.managed_objects()
-    _, adapter = self.adapter(objects)
+    adapter_path, adapter = self.adapter(objects)
     prompt = self.agent.prompt
     if prompt is not None:
       prompt = dict(prompt)
       device = objects.get(prompt.get("device_path", ""), {}).get(DEVICE_IFACE, {})
       prompt["address"] = str(device.get("Address", ""))
       prompt["name"] = str(device.get("Alias") or device.get("Name") or prompt["address"] or "Bluetooth device")
+    roles = [str(role).lower() for role in adapter.get("Roles", [])]
+    advertising = objects.get(adapter_path, {}).get(ADVERTISING_MANAGER_IFACE, {})
     return {
       "powered": bool(adapter.get("Powered", False)),
       "discovering": bool(adapter.get("Discovering", False)),
+      "roles": roles,
+      "concurrent_roles": "central-peripheral" in roles,
+      "advertising_active": int(advertising.get("ActiveInstances", 0) or 0) > 0,
       "devices": self.devices(objects, include_discovering=bool(adapter.get("Discovering", False))),
       "prompt": prompt,
     }

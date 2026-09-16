@@ -84,6 +84,7 @@ class BluetoothStatus:
   companion_service_uuid: str = ""
   companion_devices: tuple[str, ...] = ()
   companion_connected: bool = False
+  concurrent_roles: bool = False
 
   @classmethod
   def from_dict(cls, value: dict[str, Any]) -> "BluetoothStatus":
@@ -105,6 +106,7 @@ class BluetoothStatus:
       companion_service_uuid=str(value.get("companion_service_uuid", "")),
       companion_devices=tuple(str(address) for address in value.get("companion_devices", ())),
       companion_connected=bool(value.get("companion_connected", False)),
+      concurrent_roles=bool(value.get("concurrent_roles", False)),
     )
 
 

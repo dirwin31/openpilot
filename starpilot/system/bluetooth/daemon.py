@@ -29,6 +29,7 @@ CONTROLLER_RECONNECT_INTERVAL_SECONDS = 5.0
 RECONNECT_MAX_BACKOFF_SECONDS = 300.0
 MANUAL_DISCONNECT_SUPPRESSION_SECONDS = 300.0
 CONTROLLER_OFFROAD_DISCONNECT_DELAY_SECONDS = 120.0
+ADVERTISEMENT_REARM_INTERVAL_SECONDS = 5.0
 # Companion phones are centrals and cannot be connected through Device1.Connect.
 PROFILE_UNAVAILABLE_ERROR = "profile-unavailable"
 PHONE_RECONNECT_HINT = "{name} has to connect from the phone. Open Bluetooth on the phone and select StarPilot."
@@ -53,6 +54,8 @@ class BluetoothController:
     self._pending_companion_paths: set[str] = set()
     self._connected_companions: set[str] = set()
     self._connected_published: bool | None = None
+    self._advertisement_rearm_after = 0.0
+    self._concurrent_roles_warned = False
     self._last_reconnect = 0.0
     self._reconnect_backoff: dict[str, tuple[int, float]] = {}
     self._manual_disconnect_until: dict[str, float] = {}
@@ -333,6 +336,7 @@ class BluetoothController:
         "companion_service_uuid": COMPANION_SERVICE_UUID,
         "companion_devices": companion_addresses,
         "companion_connected": False,
+        "concurrent_roles": False,
       }
       if not result["enabled"]:
         return result
@@ -642,7 +646,12 @@ class BluetoothController:
       return
 
     selected = str(status["selected_audio"])
-    candidates = [device for device in devices if device["paired"] and device["trusted"] and not device["connected"]]
+    # Saved phones are LE peripherals (they connect to us); connecting them as a
+    # central would race the companion link. Only reconnect devices we initiate to.
+    companions = {address.upper() for address in self._companion_addresses()}
+    candidates = [device for device in devices
+                  if device["paired"] and device["trusted"] and not device["connected"]
+                  and device["address"].upper() not in companions]
     candidates.sort(key=lambda device: device["address"].upper() != selected.upper())
     controller_candidates = {
       device["address"].upper() for device in candidates
@@ -684,7 +693,8 @@ class BluetoothController:
         cloudlog.warning(f"Bluetooth reconnect failed for {address}; retrying in {delay:.0f}s")
 
   def _maintain_companion_advertisement(self, status: dict[str, Any]) -> None:
-    # Re-arm advertising after a companion disconnects.
+    # Re-arm advertising after a companion disconnects, or if BlueZ dropped the
+    # advertisement while a radar (LE central) link was active.
     with self._lock:
       companion = self._companion
     if companion is None:
@@ -698,12 +708,30 @@ class BluetoothController:
     }
     dropped = self._connected_companions - connected
     self._connected_companions = connected
-    if not dropped:
+    now = time.monotonic()
+    advertisement_lost = not bool(status.get("advertising_active", True))
+    if not dropped and not advertisement_lost:
       return
+    if not dropped and now < self._advertisement_rearm_after:
+      return
+    self._advertisement_rearm_after = now + ADVERTISEMENT_REARM_INTERVAL_SECONDS
     try:
       companion.rearm_advertisement()
     except Exception:
-      cloudlog.exception("Unable to re-arm the Bluetooth companion advertisement after a phone disconnect")
+      cloudlog.exception("Unable to re-arm the Bluetooth companion advertisement")
+
+  def _warn_if_roles_conflict(self, status: dict[str, Any]) -> None:
+    # A phone companion (LE peripheral) and a radar detector (LE central) can only
+    # run together when the controller advertises concurrent central+peripheral.
+    if status.get("concurrent_roles", True) or self._concurrent_roles_warned:
+      return
+    has_companion = bool(self._companion_addresses())
+    has_detector = any(device.get("uniden") and device.get("paired") for device in status.get("devices", []))
+    if has_companion and has_detector:
+      self._concurrent_roles_warned = True
+      cloudlog.warning(
+        "Bluetooth adapter does not report central-peripheral roles; the phone companion and the Uniden detector cannot stay connected simultaneously"
+      )
 
   def _publish_connected(self, connected: bool) -> None:
     if connected != self._connected_published:
@@ -723,6 +751,7 @@ class BluetoothController:
         self._publish_connected(any(device.get("connected") for device in status["devices"]))
         if not status["available"] or not status["powered"]:
           continue
+        self._warn_if_roles_conflict(status)
         self._maintain_scan(status, now)
         self._maintain_pending_companions()
         self._maintain_companion_pairing(now, status["offroad"])

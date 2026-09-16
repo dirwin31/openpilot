@@ -169,3 +169,18 @@ def test_setup_refusal_is_reported(harness):
 
   assert result.state == "failed"
   assert "stationary vehicle in Park" in result.message
+
+
+def test_select_detector_prefers_saved_mac_then_paired():
+  from openpilot.starpilot.system.uniden_radar_d import _select_detector
+
+  other = BluetoothDevice(address="AA:BB:CC:DD:EE:09", name="R8@9999", uniden=True, paired=True)
+  saved = BluetoothDevice(address=DETECTOR, name="R4@1234", uniden=True, paired=True)
+  status = BluetoothStatus(devices=(other, saved))
+
+  assert _select_detector(status, DETECTOR).address == DETECTOR
+  assert _select_detector(status, "").address == "AA:BB:CC:DD:EE:09"
+
+  no_detector = BluetoothStatus(devices=(BluetoothDevice(address=PHONE, name="iPhone", paired=True),))
+  assert _select_detector(no_detector, "") is None
+

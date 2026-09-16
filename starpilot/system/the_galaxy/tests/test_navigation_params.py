@@ -150,6 +150,7 @@ def test_bluetooth_status_api(monkeypatch):
     "companion_pairing": False,
     "companion_pairing_remaining": 0,
     "companion_service_uuid": "",
+    "concurrent_roles": False,
     "devices": [],
     "discovering": False,
     "enabled": True,
@@ -159,6 +160,7 @@ def test_bluetooth_status_api(monkeypatch):
     "powered": True,
     "prompt": None,
     "selected_audio": "",
+    "setup_allowed": False,
   }
 
 

@@ -231,7 +231,7 @@ def set_param(name, value):
 def discover_uniden_device():
     """Dynamically discover any paired or connected Uniden R-series detector (R4@*, R8@*, R9@*, etc.)"""
     configured_mac = get_param("UnidenR4Mac", "")
-    
+
     # Check what devices BlueZ actually has paired/known
     paired_devices = {}
     try:
@@ -245,13 +245,10 @@ def discover_uniden_device():
     except Exception:
         pass
 
-    # If a configured MAC was saved, make sure it actually exists in BlueZ paired devices
+    # Keep the saved selection through transient BlueZ/adapter failures. It is only
+    # cleared by an explicit forget, never by a failed query.
     if configured_mac:
-        if configured_mac in paired_devices:
-            return configured_mac
-        else:
-            # Device was forgotten from Bluetooth! Clear stale param
-            set_param("UnidenR4Mac", "")
+        return configured_mac
 
     # Fallback: Check if any known BlueZ device looks like a Uniden detector
     for mac, name in paired_devices.items():
@@ -377,18 +374,23 @@ def get_connection_status():
         pass
     return status
 
+def _bluetooth_client():
+    try:
+        from openpilot.starpilot.system.bluetooth.protocol import BluetoothClient
+    except ImportError:
+        from starpilot.system.bluetooth.protocol import BluetoothClient
+    return BluetoothClient()
+
+
 def trigger_action(action):
     if action == "connect":
-        # Signal the background daemon to initiate connection immediately (even offroad)
+        # Signal uniden_radar_d, which asks bluetooth_managerd (the adapter's single
+        # owner) to establish the link without racing the phone companion.
         set_shm_param("UnidenManualConnectTrigger", True)
         mac = discover_uniden_device()
         if mac:
-            try:
-                subprocess.run(['bluetoothctl', 'connect', mac], check=False, timeout=5)
-            except Exception:
-                pass
             return {"status": "ok", "message": f"Connecting to {mac}..."}
-        return {"status": "ok", "message": "Scanning and connecting to nearby Uniden detector..."}
+        return {"status": "ok", "message": "Looking for a bonded Uniden detector..."}
 
     elif action == "pair":
         return scan_and_pair_uniden()
@@ -397,8 +399,7 @@ def trigger_action(action):
         mac = get_param("UnidenR4Mac", "") or discover_uniden_device()
         if mac:
             try:
-                subprocess.run(['bluetoothctl', 'disconnect', mac], check=False, timeout=3)
-                subprocess.run(['bluetoothctl', 'remove', mac], check=False, timeout=3)
+                _bluetooth_client().forget(mac)
             except Exception:
                 pass
         set_param("UnidenR4Mac", "")
@@ -410,7 +411,7 @@ def trigger_action(action):
         mac = discover_uniden_device()
         if mac:
             try:
-                subprocess.run(['bluetoothctl', 'disconnect', mac], check=False, timeout=5)
+                _bluetooth_client().disconnect(mac)
                 return {"status": "ok", "message": f"Disconnected from {mac}."}
             except Exception as e:
                 return {"status": "error", "message": str(e)}
