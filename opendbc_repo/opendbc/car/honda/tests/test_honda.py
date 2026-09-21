@@ -1,7 +1,9 @@
 import re
 from types import SimpleNamespace
+import numpy as np
 import pytest
 
+from opendbc.can import CANPacker
 from opendbc.car import Bus, structs
 from opendbc.car.structs import CarParams
 from opendbc.car import gen_empty_fingerprint
@@ -16,7 +18,7 @@ from opendbc.car.honda.carcontroller import (
   update_honda_bosch_braking,
   update_honda_bosch_live_learning,
 )
-from opendbc.car.honda.hondacan import create_acc_commands, create_lkas_hud
+from opendbc.car.honda.hondacan import create_acc_commands, create_lkas_hud, create_steering_control
 from opendbc.car.honda.fingerprints import FW_VERSIONS
 from opendbc.car.honda.values import CAR, DBC, HONDA_BOSCH, HONDA_BOSCH_TJA_CONTROL, CarControllerParams, HondaFlags, HondaSafetyFlags, \
                                      HondaStarPilotFlags
@@ -310,6 +312,120 @@ class TestHondaFingerprint:
 
     assert controller.bosch_gas_factor == pytest.approx(1.25)
     assert controller.bosch_wind_factor == pytest.approx(0.85)
+
+  def test_honda_civic_2022_max_steer_torque_is_adjustable(self):
+    toggles = get_test_toggles()
+
+    def build(car):
+      CP = CarInterface.get_params(car, gen_empty_fingerprint(), [], True, False, False, toggles)
+      return CarController(DBC[CP.carFingerprint], CP)
+
+    swept = [i / 20.0 for i in range(-20, 21)]
+    civic = build(CAR.HONDA_CIVIC_2022)
+
+    # Stock is identity-with-clamp at +-4096.
+    civic._update_max_steer_torque(SimpleNamespace(honda_max_steer_torque=4096.0))
+    stock = [civic._torque_to_can(lt) for lt in swept]
+    assert stock == [int(np.interp(-lt * 4096.0, [-4096.0, 0.0, 4096.0], [-4096.0, 0.0, 4096.0])) for lt in swept]
+    assert max(stock) == 4096
+    assert min(stock) == -4096
+
+    # Lookup-rebuild regression: the ceiling must exceed the stock cap.
+    civic._update_max_steer_torque(SimpleNamespace(honda_max_steer_torque=5120.0))
+    assert civic.effective_max_steer_torque == pytest.approx(5120.0)
+    assert civic._torque_to_can(-1.0) == 5120
+    assert civic._torque_to_can(1.0) == -5120
+    assert max(abs(civic._torque_to_can(lt)) for lt in swept) > 4096
+
+    # Each case starts elsewhere so the isclose early-return cannot mask the clamp.
+    for start, bad, expected in ((5120.0, 0.0, 1024.0), (5120.0, -1.0, 1024.0),
+                                 (1024.0, 1e9, 5120.0), (5120.0, float("nan"), 4096.0)):
+      civic._update_max_steer_torque(SimpleNamespace(honda_max_steer_torque=start))
+      civic._update_max_steer_torque(SimpleNamespace(honda_max_steer_torque=bad))
+      assert civic.effective_max_steer_torque == pytest.approx(expected)
+
+    civic._update_max_steer_torque(SimpleNamespace(honda_max_steer_torque=5120.0))
+    civic._update_steer_strength(SimpleNamespace(honda_lateral_pid_kp_scale=1.1))
+    assert civic._published_steer_strength == pytest.approx(1.375)  # 1.25 x 1.10
+    civic._update_steer_strength(SimpleNamespace(honda_lateral_pid_kp_scale=1.0))
+    assert civic._published_steer_strength == pytest.approx(1.25)
+
+    # Other platforms unaffected, including a non-linear table (MDX 4G).
+    for car in (CAR.HONDA_ACCORD, CAR.ACURA_MDX_4G):
+      other = build(car)
+      base_max = other.effective_max_steer_torque
+      base_can = other._torque_to_can(-1.0)
+      other._update_max_steer_torque(SimpleNamespace(honda_max_steer_torque=5120.0))
+      assert other.effective_max_steer_torque == pytest.approx(base_max)
+      assert other._torque_to_can(-1.0) == base_can
+
+    # Non-Civic Hondas ignore the torque field, so strength is Kp scale alone.
+    accord = build(CAR.HONDA_ACCORD)
+    accord._update_steer_strength(SimpleNamespace(honda_lateral_pid_kp_scale=1.1))
+    assert accord._published_steer_strength == pytest.approx(1.1)
+
+  def test_honda_steer_strength_publishes_first_value_even_at_stock(self):
+    toggles = get_test_toggles()
+    CP = CarInterface.get_params(CAR.HONDA_CIVIC_2022, gen_empty_fingerprint(), [], True, False, False, toggles)
+    controller = CarController(DBC[CP.carFingerprint], CP)
+
+    writes = []
+    controller.param_store = SimpleNamespace(put_nonblocking=lambda key, value: writes.append((key, value)))
+    controller._update_steer_strength(SimpleNamespace(honda_lateral_pid_kp_scale=1.0))
+
+    assert writes == [("HondaSteerStrength", 1.0)]
+    assert controller._published_steer_strength == pytest.approx(1.0)
+
+  def test_honda_civic_2022_raised_torque_reaches_the_can_bus(self, monkeypatch):
+    # STEER_TORQUE is 16@0- with DBC metadata of [-4096|4096], and nothing clamps to it, so 5120
+    # goes out literally. Drives the real update() -> packer path, not just _torque_to_can().
+    toggles = get_test_toggles()
+    CP = CarInterface.get_params(CAR.HONDA_CIVIC_2022, gen_empty_fingerprint(), [], True, False, False, toggles)
+    steering_addr = CANPacker(DBC[CP.carFingerprint][Bus.pt]).make_can_msg("STEERING_CONTROL", 0, {})[0]
+
+    def drive_to_saturation(max_steer_torque, commanded_torque):
+      controller = CarController(DBC[CP.carFingerprint], CP)
+      controller.param_store = SimpleNamespace(put_nonblocking=lambda key, value: None)
+      monkeypatch.setattr("opendbc.car.honda.carcontroller.hondacan.create_acc_commands", lambda *a, **k: [])
+
+      CC = structs.CarControl.new_message()
+      CC.enabled = True
+      CC.latActive = True
+      CC.longActive = False
+      CC.hudControl.speedVisible = False
+      CC.hudControl.visualAlert = structs.CarControl.HUDControl.VisualAlert.none
+      CC.actuators.torque = commanded_torque
+      CS = SimpleNamespace(
+        out=SimpleNamespace(vEgo=25.0, aEgo=0.0, steeringPressed=False, gasPressed=False, brakePressed=False),
+        v_cruise_factor=1.0,
+      )
+      live_toggles = SimpleNamespace(honda_max_steer_torque=max_steer_torque, honda_lateral_pid_kp_scale=1.0)
+
+      # Normalized rate limit is 0.03/tick, so ~34 ticks reaches full command.
+      for _ in range(40):
+        controller.frame = 2
+        new_actuators, can_sends = controller.update(CC.as_reader(), CS, 0, live_toggles)
+      steering = [msg for msg in can_sends if msg[0] == steering_addr]
+      assert len(steering) == 1, "expected exactly one STEERING_CONTROL message per frame"
+      return new_actuators.torqueOutputCan, steering[0][1]
+
+    stock_torque, stock_data = drive_to_saturation(4096.0, -1.0)
+    assert stock_torque == 4096
+    assert stock_data[:4] == bytes([0x10, 0x00, 0x80, 0x00])  # 0x1000 == 4096
+
+    raised_torque, raised_data = drive_to_saturation(5120.0, -1.0)
+    assert raised_torque == 5120
+    assert raised_data[:4] == bytes([0x14, 0x00, 0x80, 0x00])  # 0x1400 == 5120
+
+    raised_left, raised_left_data = drive_to_saturation(5120.0, 1.0)
+    assert raised_left == -5120
+    assert raised_left_data[:4] == bytes([0xEC, 0x00, 0x80, 0x00])  # 0xEC00 == -5120 as int16
+
+    # Trailing byte is COUNTER << 4 | CHECKSUM, so pin the full payload at known counters.
+    packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
+    controller = CarController(DBC[CP.carFingerprint], CP)
+    frames = [create_steering_control(packer, controller.CAN, -5120, True, controller.tja_control)[1] for _ in range(2)]
+    assert frames == [bytes([0xEC, 0x00, 0x80, 0x00, 0x04]), bytes([0xEC, 0x00, 0x80, 0x00, 0x13])]
 
   def test_honda_bosch_controller_does_not_deepen_planner_braking(self, monkeypatch):
     toggles = get_test_toggles()

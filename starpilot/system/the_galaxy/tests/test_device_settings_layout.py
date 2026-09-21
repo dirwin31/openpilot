@@ -7,6 +7,9 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 LAYOUT_PATH = REPO_ROOT / "starpilot/common/assets/device_settings_layout.json"
 PARAM_KEYS_PATH = REPO_ROOT / "common/params_keys.h"
 
+# CarMake comes from the fingerprint prefix, so Honda-brand Acura platforms report "Acura".
+HONDA_MAKES = ["Acura", "Honda"]
+
 
 def _layout():
   return json.loads(LAYOUT_PATH.read_text(encoding="utf-8"))
@@ -385,6 +388,88 @@ def test_honda_pid_scale_controls_use_galaxy_fine_granularity():
     assert setting["step"] == 0.01
     assert setting["precision"] == 2
     assert setting["settings_tier"] == "advanced"
+    assert setting["vehicle_makes"] == HONDA_MAKES
+
+
+def test_honda_wide_lateral_rows_are_visible_on_acura():
+  # These three apply brand-wide, so a ["Honda"]-only filter would hide working controls on every
+  # Acura. HondaMaxSteerTorque is excluded on purpose: it is fingerprint-gated, tested below.
+  developer = _params_by_section(_layout())["Developer"]
+
+  for key in ("HondaLateralPidKpScale", "HondaLateralPidKiScale", "HondaSteerStrength"):
+    setting = developer[key]
+    assert setting["vehicle_makes"] == HONDA_MAKES, f"{key} must stay visible on Acura"
+    assert "visible_when_key" not in setting, f"{key} applies brand-wide and must not be model-gated"
+
+  values_src = (REPO_ROOT / "opendbc_repo/opendbc/car/honda/values.py").read_text(encoding="utf-8")
+  assert re.search(r"^  ACURA_\w+ = Honda\w*PlatformConfig", values_src, re.MULTILINE)
+
+
+def test_honda_max_steer_torque_is_hidden_outside_the_civic():
+  # CarModel holds the raw fingerprint from all three writers: auto-detect, Galaxy, on-device.
+  setting = _params_by_section(_layout())["Developer"]["HondaMaxSteerTorque"]
+
+  assert setting["visible_when_key"] == "CarModel"
+  assert setting["visible_when_values"] == ["HONDA_CIVIC_2022"]
+
+  controller_src = (REPO_ROOT / "opendbc_repo/opendbc/car/honda/carcontroller.py").read_text(encoding="utf-8")
+  gate = re.search(r"self\.max_steer_torque_active = CP\.carFingerprint == CAR\.(\w+)", controller_src)
+  assert gate is not None, "controller no longer gates the ceiling on a fingerprint"
+  assert setting["visible_when_values"] == [gate.group(1)], "UI gate drifted from the controller gate"
+
+
+def test_honda_max_steer_torque_is_a_developer_only_civic_field():
+  developer = _params_by_section(_layout())["Developer"]
+  setting = developer["HondaMaxSteerTorque"]
+
+  assert setting["label"] == "Honda Max Steering Torque"
+  assert setting["data_type"] == "float"
+  assert setting["ui_type"] == "numeric"
+  assert setting["settings_tier"] == "advanced"
+  assert setting["vehicle_makes"] == HONDA_MAKES
+  assert setting["min"] == 1024.0
+  assert setting["max"] == 5120.0
+  assert setting["step"] == 64.0
+  assert _declared_default("HondaMaxSteerTorque") == "4096.0"
+
+  strength = developer["HondaSteerStrength"]
+  assert strength["label"] == "Honda Steer Strength (\u00d7 stock)"
+  assert strength["data_type"] == "float"
+  assert strength["ui_type"] == "readout"
+  assert strength["precision"] == 2
+  assert strength["settings_tier"] == "advanced"
+  assert strength["vehicle_makes"] == HONDA_MAKES
+  assert _declared_default("HondaSteerStrength") == "1.0"
+
+
+def test_honda_steer_torque_bounds_agree_across_sources():
+  controller_src = (REPO_ROOT / "opendbc_repo/opendbc/car/honda/carcontroller.py").read_text(encoding="utf-8")
+  min_val = float(re.search(r"^MIN_STEER_TORQUE = ([\d.]+)", controller_src, re.MULTILINE).group(1))
+  max_val = float(re.search(r"^MAX_STEER_TORQUE = ([\d.]+)", controller_src, re.MULTILINE).group(1))
+
+  setting = _params_by_section(_layout())["Developer"]["HondaMaxSteerTorque"]
+  assert setting["min"] == min_val
+  assert setting["max"] == max_val
+
+  variables_src = (REPO_ROOT / "starpilot/common/starpilot_variables.py").read_text(encoding="utf-8")
+  assert re.search(rf"min={min_val},\s*max={max_val}", variables_src)
+  assert "np.clip(value, MIN_STEER_TORQUE, MAX_STEER_TORQUE)" in controller_src
+
+
+def test_honda_steer_toggle_plumbing_matches_between_variables_and_controller():
+  # A rename on either side would silently fall back to stock with a green suite. Lives here, not
+  # beside starpilot_variables, because this module needs no native extensions to import.
+  variables_src = (REPO_ROOT / "starpilot/common/starpilot_variables.py").read_text(encoding="utf-8")
+  controller_src = (REPO_ROOT / "opendbc_repo/opendbc/car/honda/carcontroller.py").read_text(encoding="utf-8")
+
+  for attr, param_key in (("honda_max_steer_torque", "HondaMaxSteerTorque"),
+                          ("honda_lateral_pid_kp_scale", "HondaLateralPidKpScale")):
+    assert re.search(rf"toggle\.{attr}\s*=\s*self\.get_value\(\s*\"{param_key}\"", variables_src), \
+      f"StarPilotVariables no longer reads {param_key} into {attr}"
+    assert f'getattr(starpilot_toggles, "{attr}"' in controller_src, f"carcontroller no longer reads {attr}"
+
+  assert _declared_default("HondaSteerStrength") is not None
+  assert 'put_nonblocking("HondaSteerStrength"' in controller_src
 
 
 def test_hidden_feature_defaults_remain_enabled():

@@ -26,6 +26,10 @@ LongCtrlState = structs.CarControl.Actuators.LongControlState
 BOSCH_BRAKE_FORCE_ON = -0.12
 BOSCH_BRAKE_FORCE_RELEASE = -0.02
 
+# Bounds for the Civic 2022 steer ceiling. The floor matters too: 0 gives duplicate lookup breakpoints.
+MIN_STEER_TORQUE = 1024.0
+MAX_STEER_TORQUE = 5120.0
+
 
 def update_honda_bosch_braking(braking: bool, gas_pedal_force: float, stopping: bool, long_active: bool) -> bool:
   """Select Bosch brake mode from the same road-load-adjusted force used for gas."""
@@ -264,6 +268,55 @@ class CarController(CarControllerBase):
     self.mvl_brake_pid = PIDController(k_p=0.0, k_i=1.0, pos_limit=0.0, neg_limit=-2.0, rate=50)
     self.mvl_brake_pid.reset()
 
+    # Cache the stock table: raising STEER_MAX alone does nothing, the lookup clamps it straight
+    # back. An EPS-modified Civic keeps this 4096 table, so the field stacks on top of that.
+    self.max_steer_torque_active = CP.carFingerprint == CAR.HONDA_CIVIC_2022
+    self.base_steer_max = float(self.params.STEER_MAX)
+    self.base_steer_lookup_bp = list(self.params.STEER_LOOKUP_BP)
+    self.base_steer_lookup_v = list(self.params.STEER_LOOKUP_V)
+    self.effective_max_steer_torque = self.base_steer_max
+    self._published_steer_strength = None
+
+  def _update_max_steer_torque(self, starpilot_toggles) -> None:
+    if not self.max_steer_torque_active:
+      return
+
+    value = getattr(starpilot_toggles, "honda_max_steer_torque", self.base_steer_max)
+    try:
+      value = float(value)
+    except (TypeError, ValueError):
+      value = self.base_steer_max
+    if not math.isfinite(value):
+      value = self.base_steer_max
+    value = float(np.clip(value, MIN_STEER_TORQUE, MAX_STEER_TORQUE))
+    if math.isclose(value, self.effective_max_steer_torque):
+      return
+
+    self.effective_max_steer_torque = value
+    scale = value / self.base_steer_max
+    self.params.STEER_MAX = value
+    self.params.STEER_LOOKUP_BP = [bp * scale for bp in self.base_steer_lookup_bp]
+    self.params.STEER_LOOKUP_V = [v * scale for v in self.base_steer_lookup_v]
+
+  def _update_steer_strength(self, starpilot_toggles) -> None:
+    try:
+      kp_scale = float(getattr(starpilot_toggles, "honda_lateral_pid_kp_scale", 1.0))
+    except (TypeError, ValueError):
+      kp_scale = 1.0
+    if not math.isfinite(kp_scale):
+      kp_scale = 1.0
+
+    # Proportional strength vs stock. None, not 1.0, so a stock first drive still clears a stale value.
+    strength = (self.effective_max_steer_torque / self.base_steer_max) * kp_scale
+    if self._published_steer_strength is not None and math.isclose(strength, self._published_steer_strength):
+      return
+
+    self._published_steer_strength = strength
+    self.param_store.put_nonblocking("HondaSteerStrength", float(strength))
+
+  def _torque_to_can(self, limited_torque: float) -> int:
+    return int(np.interp(-limited_torque * self.params.STEER_MAX, self.params.STEER_LOOKUP_BP, self.params.STEER_LOOKUP_V))
+
   def _modified_civic_standard_active(self) -> bool:
     return self.CP.carFingerprint == CAR.HONDA_CIVIC_BOSCH and bool(self.CP.flags & HondaFlags.EPS_MODIFIED)
 
@@ -279,6 +332,9 @@ class CarController(CarControllerBase):
     return steering_pressed
 
   def update(self, CC, CS, now_nanos, starpilot_toggles):
+    self._update_max_steer_torque(starpilot_toggles)
+    self._update_steer_strength(starpilot_toggles)
+
     actuators = CC.actuators
     hud_control = CC.hudControl
     hud_v_cruise = hud_control.setSpeed / CS.v_cruise_factor if hud_control.speedVisible else 255
@@ -333,7 +389,7 @@ class CarController(CarControllerBase):
     # **** process the car messages ****
 
     # steer torque is converted back to CAN reference (positive when steering right)
-    apply_torque = int(np.interp(-limited_torque * self.params.STEER_MAX, self.params.STEER_LOOKUP_BP, self.params.STEER_LOOKUP_V))
+    apply_torque = self._torque_to_can(limited_torque)
 
     # Send CAN commands
     can_sends = []
