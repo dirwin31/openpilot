@@ -44,6 +44,16 @@ class UIStallMonitor:
     self._stalled_phase = self._phase
     self._context: dict[str, Any] = {}
 
+    # TEMPORARY (onroad FPS investigation): accumulate every phase duration, not just hitches, so a
+    # periodic summary shows where frame time actually goes. Set UI_PHASE_PROFILE_INTERVAL=0 to disable.
+    # Remove this block, the one in progress(), and _format_phase_profile() to revert.
+    self._profile_interval_s = float(os.getenv("UI_PHASE_PROFILE_INTERVAL", "20"))
+    self._profile_top_n = max(1, int(os.getenv("UI_PHASE_PROFILE_TOP", "8")))
+    self._profile_frame_phase = os.getenv("UI_PHASE_PROFILE_FRAME_PHASE", "ui.loop_iteration")
+    self._profile_time_s: Counter[str] = Counter()
+    self._profile_frames = 0
+    self._profile_started = now
+
     self._hitch_counts: Counter[str] = Counter()
     self._hitch_max_s: dict[str, float] = {}
     self._recent_hitches = deque(maxlen=max(1, int(os.getenv("UI_HITCH_HISTORY_LEN", "16"))))
@@ -76,6 +86,7 @@ class UIStallMonitor:
     now = time.monotonic()
     recovered = None
     hitch_warning = None
+    profile_report = None
 
     with self._lock:
       previous_phase = self._phase
@@ -85,6 +96,18 @@ class UIStallMonitor:
         self._phase_entered = now
         self._history.append((now, phase))
       self._last_progress = now
+
+      # TEMPORARY (onroad FPS investigation) -- see __init__.
+      if self._profile_interval_s > 0.0:
+        self._profile_time_s[previous_phase] += phase_duration_s
+        if phase == self._profile_frame_phase:
+          self._profile_frames += 1
+        profile_elapsed_s = now - self._profile_started
+        if profile_elapsed_s >= self._profile_interval_s:
+          profile_report = (profile_elapsed_s, self._profile_frames, self._profile_time_s)
+          self._profile_time_s = Counter()
+          self._profile_frames = 0
+          self._profile_started = now
 
       if self._hitch_threshold_s > 0.0 and phase_duration_s >= self._hitch_threshold_s:
         self._hitch_counts[previous_phase] += 1
@@ -110,6 +133,24 @@ class UIStallMonitor:
     if recovered is not None:
       stalled_for_s, stalled_phase, current_phase = recovered
       cloudlog.warning(f"{self._name} stall recovered after {stalled_for_s:.1f}s (stalled_phase={stalled_phase}, current_phase={current_phase})")
+
+    if profile_report is not None:
+      cloudlog.warning(self._format_phase_profile(*profile_report))
+
+  # TEMPORARY (onroad FPS investigation) -- see __init__.
+  def _format_phase_profile(self, elapsed_s: float, frames: int, totals: Counter) -> str:
+    fps = frames / elapsed_s if elapsed_s > 0 else 0.0
+    accounted_s = sum(totals.values())
+    parts = []
+    for name, seconds in totals.most_common(self._profile_top_n):
+      per_frame_ms = (seconds / frames * 1000.0) if frames else 0.0
+      share = (seconds / accounted_s * 100.0) if accounted_s > 0 else 0.0
+      parts.append(f"{name} {per_frame_ms:.2f}ms/f {share:.0f}%")
+    if frames:
+      header = f"{self._name} phase profile {elapsed_s:.1f}s: {frames} frames {fps:.1f}fps budget {accounted_s / frames * 1000.0:.1f}ms/f"
+    else:
+      header = f"{self._name} phase profile {elapsed_s:.1f}s: no frames"
+    return f"{header} | " + " | ".join(parts)
 
   def _run(self) -> None:
     while not self._stop_event.wait(self._poll_s):
