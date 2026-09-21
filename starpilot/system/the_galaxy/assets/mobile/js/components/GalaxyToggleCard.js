@@ -42,6 +42,12 @@ export const GalaxyToggleCard = {
   computed: {
     displayParam() { return resolveVehicleUnitParam(this.param, this.values) },
     bounds() { return numericBounds(this.displayParam, this.values) },
+    // Optional coarse/fine split: drag moves in `step`, hold-to-scrub moves in `fine_step`.
+    fineBounds() {
+      const fine = Number(this.displayParam.fine_step)
+      return Number.isFinite(fine) && fine > 0 ? { ...this.bounds, step: fine } : this.bounds
+    },
+    sliderStep() { return this.isFineScrubbing ? this.fineBounds.step : this.bounds.step },
     precision() { return stepPrecision(this.bounds.step, this.displayParam.precision) },
     epsilon() { return numericEpsilon(this.precision) },
     isSlider() { return this.isNumeric },
@@ -126,16 +132,16 @@ export const GalaxyToggleCard = {
       this.commit(normalizeHexColor(e.target.value) || getColorDefault(this.param))
     },
     beginInteract() { this.interacting = true },
-    flushSlider(rawValue) {
-      const next = snapNumericToBoundsAndStep(rawValue, this.bounds, this.precision)
+    flushSlider(rawValue, fine = false) {
+      const next = this.snap(rawValue, fine)
       this.preview = undefined
       if (next === null) return
-      const current = this.snap(this.value)
+      const current = this.snap(this.value, fine)
       if (Math.abs(next - current) <= this.epsilon) return
       this.commit(next)
     },
-    snap(raw) {
-      return snapNumericToBoundsAndStep(raw, this.bounds, this.precision)
+    snap(raw, fine = false) {
+      return snapNumericToBoundsAndStep(raw, fine ? this.fineBounds : this.bounds, this.precision)
     },
     clearHoldTimer() {
       if (this._holdTimer) {
@@ -153,7 +159,7 @@ export const GalaxyToggleCard = {
     activateFineScrub() {
       if (!this.fineScrub || this.fineScrub.active) return
       this.fineScrub.active = true
-      this.fineScrub.baseValue = this.snap(this.currentValue) ?? Number(this.bounds.min)
+      this.fineScrub.baseValue = this.snap(this.currentValue, true) ?? Number(this.bounds.min)
       this.fineScrub.baseX = this.fineScrub.lastX
       this.isFineScrubbing = true
       try { navigator.vibrate?.(15) } catch (_) {}
@@ -208,7 +214,7 @@ export const GalaxyToggleCard = {
       const totalSpan = scrub.max - scrub.min
       const dx = e.clientX - scrub.baseX
       const raw = scrub.baseValue + (dx * totalSpan) / scrub.track / FINE_SCRUB_FACTOR
-      const next = this.snap(raw)
+      const next = this.snap(raw, true)
       if (next === null) return
       this.preview = next
       if (this.$refs.slider) this.$refs.slider.value = next
@@ -222,7 +228,7 @@ export const GalaxyToggleCard = {
       try { (e?.target || this.$refs.slider)?.releasePointerCapture?.(pid) } catch (_) {}
       this.interacting = false
       if (wasFine || this.preview !== undefined) {
-        this.flushSlider(this.currentValue)
+        this.flushSlider(this.currentValue, wasFine)
       }
     },
     async resetToDefault() {
@@ -303,7 +309,7 @@ export const GalaxyToggleCard = {
             </div>
             <button class="gx-slider-reset" :disabled="locked || updating" @click="resetToDefault">{{ tr("Default") }}</button>
           </div>
-          <input ref="slider" type="range" class="gx-slider" :min="bounds.min" :max="bounds.max" :step="bounds.step"
+          <input ref="slider" type="range" class="gx-slider" :min="bounds.min" :max="bounds.max" :step="sliderStep"
             :value="currentValue" :disabled="locked"
             @input="onSliderInput" @change="onSliderCommit" @blur="onSliderBlur"
             @pointerdown="onSliderPointerDown" @pointermove="onSliderPointerMove"

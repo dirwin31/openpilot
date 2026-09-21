@@ -396,7 +396,7 @@ def test_honda_wide_lateral_rows_are_visible_on_acura():
   # Acura. HondaMaxSteerTorque is excluded on purpose: it is fingerprint-gated, tested below.
   developer = _params_by_section(_layout())["Developer"]
 
-  for key in ("HondaLateralPidKpScale", "HondaLateralPidKiScale", "HondaSteerStrength"):
+  for key in ("HondaLateralPidKpScale", "HondaLateralPidKiScale"):
     setting = developer[key]
     assert setting["vehicle_makes"] == HONDA_MAKES, f"{key} must stay visible on Acura"
     assert "visible_when_key" not in setting, f"{key} applies brand-wide and must not be model-gated"
@@ -432,13 +432,29 @@ def test_honda_max_steer_torque_is_a_developer_only_civic_field():
   assert setting["step"] == 64.0
   assert _declared_default("HondaMaxSteerTorque") == "4096.0"
 
+  # Coarse drag / hold-to-fine-scrub. Both grids must land on stock and on the ceiling.
+  assert setting["fine_step"] == 8
+  assert (setting["max"] - setting["min"]) % setting["step"] == 0
+  for grid in (setting["step"], setting["fine_step"]):
+    assert (4096 - setting["min"]) % grid == 0, f"stock 4096 is off the {grid} grid"
+    assert (setting["max"] - setting["min"]) % grid == 0, f"the ceiling is off the {grid} grid"
+
+  card = (REPO_ROOT / "starpilot/system/the_galaxy/assets/mobile/js/components/GalaxyToggleCard.js").read_text(encoding="utf-8")
+  assert "fine_step" in card, "the mobile slider no longer honours fine_step"
+
+  # The readout hangs off the torque row, so it inherits that row's Civic gate. Both UIs only draw
+  # a Manage button when a child exists; the desktop one also needs is_parent_toggle.
+  assert setting["is_parent_toggle"] is True
+
   strength = developer["HondaSteerStrength"]
-  assert strength["label"] == "Honda Steer Strength (\u00d7 stock)"
+  assert strength["label"] == "Steer Strength (\u00d7 stock)"
   assert strength["data_type"] == "float"
   assert strength["ui_type"] == "readout"
   assert strength["precision"] == 2
   assert strength["settings_tier"] == "advanced"
   assert strength["vehicle_makes"] == HONDA_MAKES
+  assert strength["parent_key"] == "HondaMaxSteerTorque"
+  assert "visible_when_key" not in strength, "the parent's gate already applies"
   assert _declared_default("HondaSteerStrength") == "1.0"
 
 

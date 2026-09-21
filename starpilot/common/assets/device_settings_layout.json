@@ -5151,28 +5151,31 @@
       {
         "key": "HondaMaxSteerTorque",
         "label": "Honda Max Steering Torque",
-        "description": "Raise the Honda steering torque ceiling above the stock 4096. Applies live. Effective strength = (torque / 4096) x Honda PID Kp Scale, so 5120 with Kp 1.10 = 1.25 x 1.10 = 1.38x stock. Higher values increase peak torque and overall steering strength. 5120 is the highest validated value.",
+        "description": "Raise the Honda steering torque ceiling above the stock 4096. Applies live. Effective strength = (torque / 4096) x Honda PID Kp Scale, so 5120 with Kp 1.10 = 1.25 x 1.10 = 1.38x stock. Higher values increase peak torque and overall steering strength. 5120 is the highest validated value.\n\nDrag the slider to move in steps of 64. Hold it to fine scrub in steps of 8. Stock 4096 and the 5120 ceiling land exactly on both.",
         "data_type": "float",
         "ui_type": "numeric",
         "min": 1024,
         "max": 5120,
         "step": 64,
+        "fine_step": 8,
         "precision": 0,
         "settings_tier": "advanced",
         "vehicle_makes": ["Acura", "Honda"],
         "visible_when_key": "CarModel",
-        "visible_when_values": ["HONDA_CIVIC_2022"]
+        "visible_when_values": ["HONDA_CIVIC_2022"],
+        "is_parent_toggle": true
       },
       {
         "key": "HondaSteerStrength",
-        "label": "Honda Steer Strength (\u00d7 stock)",
-        "description": "Live estimate of effective proportional steering strength vs stock: (Honda Max Steering Torque / 4096) x Honda PID Kp Scale. On the 2022+ Civic the torque term applies; other Hondas use the Kp scale alone. Example: 5120 with Kp 1.10 = 1.25 x 1.10 = 1.38x. Proportional term only; Ki Scale is separate.",
+        "label": "Steer Strength (\u00d7 stock)",
+        "description": "Effective proportional steering strength vs stock: (Honda Max Steering Torque / 4096) x Honda PID Kp Scale. Example: 5120 with Kp 1.10 = 1.25 x 1.10 = 1.38x. Proportional term only; Ki Scale is separate.\n\nThis is published by the car controller while the car is running, so it only changes once you are driving. Offroad it holds the last value from your previous drive.",
         "data_type": "float",
         "ui_type": "readout",
         "precision": 2,
         "unit": "\u00d7",
         "settings_tier": "advanced",
-        "vehicle_makes": ["Acura", "Honda"]
+        "vehicle_makes": ["Acura", "Honda"],
+        "parent_key": "HondaMaxSteerTorque"
       },
       {
         "key": "AllowImpossibleAcceleration",
