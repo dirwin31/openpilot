@@ -47,7 +47,7 @@ def test_parse_config_kill_switch_ignores_other_variables():
 
 def test_parse_config_available_by_default():
   # The streamer starts on demand, so an unset STREAM means "available".
-  expected = StreamConfig(bind="0.0.0.0", port=8091, quality=60, fps=10, width=1280)
+  expected = StreamConfig(bind="0.0.0.0", port=8091, quality=60, fps=20, width=1280)
   assert ui_stream.parse_config({}) == expected
   assert ui_stream.parse_config({"STREAM": "1"}) == expected
   assert ui_stream.parse_config({"STREAM_PORT": "1234"}).port == 1234
@@ -621,6 +621,68 @@ def test_capture_pacing(make_stream):
     time.sleep(0.01)
   assert stream.maybe_capture(now + 0.01, 4, 4, _reader(b"\x00" * 64)) is False
   assert stream.status()["counters"]["skippedPacing"] == 1
+
+
+def _wait_slot_free(stream: UiStream) -> None:
+  deadline = time.monotonic() + 2.0
+  while stream._slot.state != ui_stream._SlotState.FREE and time.monotonic() < deadline:
+    time.sleep(0.005)
+
+
+def test_capture_pacing_tolerates_render_jitter(make_stream):
+  # A 20 fps stream on a 20 fps UI must take every frame even when a frame
+  # lands a couple of ms early; strict pacing would halve the rate.
+  stream = make_stream(fps=20)
+  _demand_snapshot(stream)
+  t0 = time.monotonic()
+  taken = 0
+  for i, jitter in enumerate((0.0, -0.003, 0.002, -0.004, 0.001, -0.002)):
+    _wait_slot_free(stream)
+    taken += stream.maybe_capture(t0 + i * 0.05 + jitter, 4, 4, _reader(b"\x00" * 64))
+  assert taken == 6
+  assert stream.status()["counters"]["skippedPacing"] == 0
+
+
+def test_capture_pacing_does_not_drift_faster_than_target(make_stream):
+  # A 60 fps UI streaming at 20 fps takes every third frame, not every other.
+  stream = make_stream(fps=20)
+  _demand_snapshot(stream)
+  t0 = time.monotonic()
+  taken = 0
+  for i in range(60):
+    _wait_slot_free(stream)
+    taken += stream.maybe_capture(t0 + i / 60, 4, 4, _reader(b"\x00" * 64))
+  assert taken == 20
+
+
+def test_output_size_scales_evenly_and_never_upscales(make_stream):
+  stream = make_stream(width=1280)
+  assert stream.output_size(2160, 1080) == (1280, 640)
+  assert stream.output_size(536, 240) == (536, 240)
+  assert make_stream(width=0).output_size(2160, 1080) == (2160, 1080)
+
+
+def test_top_down_capture_is_not_flipped(make_stream):
+  pytest.importorskip("cv2")
+  stream = make_stream(width=0, quality=95)
+  _demand_snapshot(stream)
+  width, height = 8, 8
+  raw = bytearray(width * height * 4)
+  for y in range(height):
+    color = bytes((255, 0, 0, 255)) if y < height // 2 else bytes((0, 0, 255, 255))
+    raw[y * width * 4:(y + 1) * width * 4] = color * width
+
+  assert stream.maybe_capture(time.monotonic(), width, height, _reader(bytes(raw)),
+                              bottom_up=False, source_size=(16, 16)) is True
+  frame = stream.wait_for_frame(-1, 2.0)
+  assert frame is not None
+  status = stream.status()
+  assert (status["sourceWidth"], status["sourceHeight"]) == (16, 16)
+
+  import cv2
+  decoded = cv2.imdecode(np.frombuffer(frame.jpeg, np.uint8), cv2.IMREAD_COLOR)
+  assert decoded[0, 0][2] > 200 and decoded[0, 0][0] < 50    # top stays red
+  assert decoded[-1, 0][0] > 200 and decoded[-1, 0][2] < 50  # bottom stays blue
 
 
 def test_capture_publishes_encoded_frame(make_stream):
