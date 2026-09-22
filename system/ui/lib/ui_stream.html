@@ -75,8 +75,8 @@
   </header>
   <main id="workspace">
     <aside id="telemetry-device" class="telemetry" aria-label="Device telemetry"></aside>
-    <div id="stage">
-      <img id="cam" alt="Live comma UI">
+    <div id="stage" role="img" aria-label="Live comma UI">
+      <img id="cam" alt="" role="presentation">
       <div id="cover"><div class="box">
         <strong id="cover-title">Connecting…</strong>
         <div id="cover-body">Waiting for the first frame from your comma.</div>
@@ -94,7 +94,15 @@
   var STALE_MS = 2000;
   var STATUS_MS = 1000;
   var TELEMETRY_MS = 500;
-  var BACKOFF = [500, 1000, 2000, 5000];
+  var STATUS_DEADLINE_MS = 2500;
+  var BACKOFF = [250, 500, 1000, 2000, 5000];
+  // A single dropped connection or slow /status on busy Wi-Fi is routine. Keep
+  // the last frame up and reconnect quietly; only this many failures in a row
+  // is reported as unreachable.
+  var ERROR_AFTER_FAILURES = 3;
+  // Polls in a row where the streamer reports no active stream while we think
+  // ours is open: the connection died without an error event (frozen image).
+  var ORPHAN_POLLS = 2;
   // How long to keep a connection open against a paused streamer. Holding it is
   // the image demand that makes the comma resume rendering with the panel still
   // off, so a viewer arriving while the screen is asleep needs this to get its
@@ -123,6 +131,8 @@
 
   var streamActive = false;
   var streamFailures = 0;
+  var statusFailures = 0;
+  var orphanPolls = 0;
   var pausedSince = 0;
   var lastSeq = -1;
   var lastFrameAt = 0;
@@ -189,6 +199,14 @@
     el.cam.src = "/stream?t=" + Date.now();
   }
 
+  // Swap to a fresh connection without clearing src, so the last frame stays on
+  // screen instead of flashing to black while the new stream connects.
+  function restartStream() {
+    streamActive = false;
+    orphanPolls = 0;
+    beginStream();
+  }
+
   function endStream() {
     streamActive = false;
     el.cam.removeAttribute("src");
@@ -211,8 +229,7 @@
       // Do not reconnect into a pause that is not going to lift: that would
       // hold image demand on a parked car indefinitely.
       if (streamState === "paused" && !pausedWaiting()) return;
-      endStream();
-      beginStream();
+      restartStream();
     }, delay);
   }
 
@@ -229,23 +246,36 @@
     }
   });
   el.cam.addEventListener("error", function () {
-    endStream();
+    streamActive = false;
     if (streamState === "paused") {
       // A paused streamer answers 503 until rendering resumes. That is expected,
       // not a connection failure, so keep the screen-asleep cover in place.
       scheduleReconnect();
       return;
     }
-    setState("error", "stream error");
-    showCover("Can’t reach the live UI", "The stream connection was lost. Retrying…");
-    el.retry.style.display = "";
+    if (streamFailures + 1 >= ERROR_AFTER_FAILURES) {
+      setState("error", "stream error");
+      showCover("Can’t reach the live UI", "The stream connection was lost. Retrying…");
+      el.retry.style.display = "";
+    } else if (streamState !== "error") {
+      setState("connecting", "reconnecting");
+    }
     scheduleReconnect();
   });
 
   function pollStatus() {
     if (document.hidden || inflight.status) return;
-    inflight.status = fetchWithDeadline("/status", 1500).then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
+    inflight.status = fetchWithDeadline("/status", STATUS_DEADLINE_MS).then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
       if (!s) { throw new Error("status unavailable"); }
+      statusFailures = 0;
+      // The streamer counts our connection; if it has none, ours is dead even
+      // though the browser never fired error. Reconnect instead of freezing.
+      if (streamActive && s.activeStreams === 0 && s.state !== "paused") {
+        orphanPolls += 1;
+        if (orphanPolls >= ORPHAN_POLLS) restartStream();
+      } else {
+        orphanPolls = 0;
+      }
       lastSeq = typeof s.frameSequence === "number" ? s.frameSequence : lastSeq;
       var age = typeof s.frameAgeMs === "number" ? s.frameAgeMs : null;
       if (s.state === "paused") {
@@ -277,6 +307,10 @@
         setState("connecting", "");
       }
     }).catch(function () {
+      // /status shares the link with the MJPEG stream, so one slow poll on busy
+      // Wi-Fi says nothing about reachability. Leave a working stream alone.
+      statusFailures += 1;
+      if (statusFailures < ERROR_AFTER_FAILURES) return;
       setState("error", "disconnected");
       showCover("Can’t connect to your comma", UNREACHABLE_BODY);
       el.retry.style.display = "";
@@ -370,6 +404,7 @@
 
   el.retry.addEventListener("click", function () {
     streamFailures = 0;
+    statusFailures = 0;
     pausedSince = 0;
     endStream();
     if (!document.hidden) { beginStream(); pollStatus(); }
@@ -443,6 +478,7 @@
     } else {
       hideCover();
       pausedSince = 0;
+      statusFailures = 0;
       setState("connecting");
       beginStream();
       startTimers();

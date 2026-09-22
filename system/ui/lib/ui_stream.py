@@ -43,13 +43,25 @@ from openpilot.common.swaglog import cloudlog
 DEFAULT_BIND = "0.0.0.0"
 DEFAULT_PORT = 8091
 DEFAULT_QUALITY = 60
-DEFAULT_FPS = 10
+DEFAULT_FPS = 20  # matches the tici/tizi UI render rate, so pacing never beats against it
 DEFAULT_WIDTH = 1280
 
 TOTAL_HANDLER_PERMITS = 8
 MAX_STREAMS = 3
 REQUEST_QUEUE_SIZE = 8
 SOCKET_TIMEOUT = 2.0
+# An MJPEG write may legitimately block for a while on congested Wi-Fi. The 2 s
+# request timeout would drop the viewer ("Can't reach the live UI") on a brief
+# stall, so streams get a longer write deadline once the headers are sent.
+STREAM_WRITE_TIMEOUT = 10.0
+# Cap the kernel send buffer so a slow link drops frames at the source instead
+# of queueing seconds of stale video (Linux autotunes it up to megabytes).
+# The kernel doubles this value, so ~2-3 JPEG frames can be in flight.
+STREAM_SNDBUF = 128 * 1024
+# Pacing tolerance as a fraction of the capture interval. Render frames jitter by
+# a few ms; without slack a frame arriving just before the deadline is skipped
+# and the effective rate collapses to every other frame.
+PACING_SLACK = 0.25
 
 STREAM_FIRST_FRAME_WAIT = 2.0
 STREAM_IDLE_DEADLINE = 5.0
@@ -142,7 +154,7 @@ class _RawSlot:
   while ``ENCODING``. No other party may touch ``buffer`` in those states.
   """
 
-  __slots__ = ("state", "buffer", "width", "height", "generation", "captured_at")
+  __slots__ = ("state", "buffer", "width", "height", "generation", "captured_at", "bottom_up")
 
   def __init__(self) -> None:
     self.state = _SlotState.FREE
@@ -151,6 +163,7 @@ class _RawSlot:
     self.height = 0
     self.generation = 0
     self.captured_at = 0.0
+    self.bottom_up = True
 
 
 class _Frame(NamedTuple):
@@ -398,13 +411,31 @@ class UiStream:
 
   # ------------------------------------------------------------------ capture
 
+  def output_size(self, width: int, height: int) -> tuple[int, int]:
+    """Encoded dimensions for a ``width`` x ``height`` source (never upscaled).
+
+    The render thread uses this to downscale on the GPU before readback, which
+    is far cheaper than reading the full texture and resizing on the CPU.
+    """
+    target = self.config.width
+    if not target or target >= width:
+      return width, height
+    new_w = max(2, target - (target % 2))
+    new_h = max(2, int(round(height * new_w / width)))
+    new_h -= new_h % 2
+    return new_w, new_h
+
   def maybe_capture(self, now: float, width: int, height: int,
-                    read: Callable[[bytearray], bool]) -> bool:
+                    read: Callable[[bytearray], bool], bottom_up: bool = True,
+                    source_size: tuple[int, int] | None = None) -> bool:
     """Reserve the slot and perform a render-thread readback if due.
 
     ``read`` receives the owned buffer and must fill ``width * height * 4``
     bytes of RGBA, returning ``True`` on success. It is only called on
     demand, on the caller's thread, and never while the slot is busy.
+    ``bottom_up`` says the rows arrive in GL order (a plain render-texture
+    readback) and need a vertical flip; a GPU blit can deliver them top-down.
+    ``source_size`` is the UI resolution when the capture is already scaled.
     """
     with self._lock:
       if self._stopping or self._paused or self._capture_failed:
@@ -412,13 +443,14 @@ class UiStream:
       if not self._image_demand_locked(now):
         self._schedule_idle_release_locked(now)
         return False
-      if now < self._next_capture_at:
+      slack = self._interval * PACING_SLACK
+      if now + slack < self._next_capture_at:
         self._skipped_pacing += 1
         return False
       slot = self._slot
       if slot.state != _SlotState.FREE:
         self._dropped_busy += 1
-        self._next_capture_at = now + self._interval
+        self._next_capture_at = now + self._interval - slack
         return False
       self._cancel_idle_release_locked()
 
@@ -427,10 +459,14 @@ class UiStream:
       slot.height = height
       slot.generation = self._generation
       slot.captured_at = now
+      slot.bottom_up = bottom_up
       self._captures += 1
-      self._next_capture_at = now + self._interval
-      self._source_width = width
-      self._source_height = height
+      # Advance on the schedule, not from "now", so render jitter does not
+      # accumulate into drift; after a long gap, restart from now.
+      self._next_capture_at += self._interval
+      if self._next_capture_at <= now:
+        self._next_capture_at = now + self._interval
+      self._source_width, self._source_height = source_size or (width, height)
       buffer = slot.buffer
       if buffer is None or len(buffer) != width * height * 4:
         buffer = None
@@ -510,13 +546,13 @@ class UiStream:
         if slot.state != _SlotState.ENCODING:
           continue
         buffer, width, height = slot.buffer, slot.width, slot.height
-        captured_at, generation = slot.captured_at, slot.generation
+        captured_at, generation, bottom_up = slot.captured_at, slot.generation, slot.bottom_up
 
       jpeg = None
       encoded_width, encoded_height = width, height
       try:
         if buffer is not None:
-          result = self._encode(buffer, width, height)
+          result = self._encode(buffer, width, height, bottom_up)
           if result is not None:
             # Downscaling changes the published dimensions; /status and the
             # viewer report what was actually encoded, not the capture size.
@@ -537,7 +573,8 @@ class UiStream:
         if self._slot is slot and slot.state == _SlotState.ENCODING:
           slot.state = _SlotState.FREE
 
-  def _encode(self, buffer: bytearray, width: int, height: int) -> tuple[bytes, int, int] | None:
+  def _encode(self, buffer: bytearray, width: int, height: int,
+              bottom_up: bool = True) -> tuple[bytes, int, int] | None:
     """Return the JPEG with the dimensions it was actually encoded at."""
     import cv2
     import numpy as np
@@ -553,19 +590,20 @@ class UiStream:
       self._resized = None
 
     cv2.cvtColor(src, cv2.COLOR_RGBA2BGR, self._bgr)
-    cv2.flip(self._bgr, 0, self._flipped)
+    if bottom_up:
+      cv2.flip(self._bgr, 0, self._flipped)
+      upright = self._flipped
+    else:
+      upright = self._bgr
 
-    target = self.config.width
-    if target and target < width:
-      new_w = max(2, target - (target % 2))
-      new_h = max(2, int(round(height * new_w / width)))
-      new_h -= new_h % 2
+    new_w, new_h = self.output_size(width, height)
+    if new_w != width:
       if self._resized is None or self._resized.shape[0] != new_h or self._resized.shape[1] != new_w:
         self._resized = np.empty((new_h, new_w, 3), np.uint8)
-      cv2.resize(self._flipped, (new_w, new_h), self._resized, interpolation=cv2.INTER_AREA)
+      cv2.resize(upright, (new_w, new_h), self._resized, interpolation=cv2.INTER_AREA)
       frame = self._resized
     else:
-      frame = self._flipped
+      frame = upright
 
     ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.config.quality])
     if not ok:
@@ -927,6 +965,7 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
       self.send_header("Connection", "close")
       self.end_headers()
       self.close_connection = True
+      self._tune_stream_socket()
 
       last_seq = -1
       while True:
@@ -940,11 +979,25 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
     finally:
       stream.end_stream()
 
+  def _tune_stream_socket(self) -> None:
+    """Low-latency settings for a long-lived MJPEG response. Best effort."""
+    connection = self.connection
+    for level, option, value in ((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),
+                                 (socket.SOL_SOCKET, socket.SO_SNDBUF, STREAM_SNDBUF)):
+      try:
+        connection.setsockopt(level, option, value)
+      except OSError:
+        pass
+    try:
+      connection.settimeout(STREAM_WRITE_TIMEOUT)
+    except OSError:
+      pass
+
   def _write_frame(self, frame: _Frame) -> None:
+    # One write per part: the unbuffered socket writer would otherwise issue
+    # three sends, and Nagle + delayed ACK can hold the small trailer back.
     header = b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame.jpeg)).encode() + b"\r\n\r\n"
-    self.wfile.write(header)
-    self.wfile.write(frame.jpeg)
-    self.wfile.write(b"\r\n")
+    self.wfile.write(b"".join((header, frame.jpeg, b"\r\n")))
     self.wfile.flush()
 
   def _handle_snapshot(self) -> None:
