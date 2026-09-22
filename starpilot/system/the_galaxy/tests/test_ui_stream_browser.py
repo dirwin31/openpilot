@@ -1,0 +1,177 @@
+"""Optional real-browser checks: run with pytest + Playwright and its browsers installed.
+
+UI_STREAM_BROWSER selects chromium (default) or webkit. No comma is required:
+two localhost origins serve the real Vue wrapper/viewer with synthetic frames.
+"""
+import json
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[4]
+SVG = b'''<svg xmlns="http://www.w3.org/2000/svg" width="2160" height="1080" viewBox="0 0 2160 1080">
+<rect width="2160" height="1080" fill="#121a23"/><path d="M650 1080L1000 200M1510 1080L1160 200" stroke="#60df9d" stroke-width="32"/>
+<text x="1080" y="160" text-anchor="middle" fill="white" font-size="120">71 mph</text>
+<text x="1080" y="930" text-anchor="middle" fill="white" font-size="70">Synthetic UI test frame</text></svg>'''
+
+
+@pytest.fixture(scope="module")
+def browser():
+  playwright = pytest.importorskip("playwright.sync_api")
+  with playwright.sync_playwright() as pw:
+    engine = getattr(pw, os.getenv("UI_STREAM_BROWSER", "chromium"))
+    options = {}
+    chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    if engine.name == "chromium" and chrome.exists():
+      options["executable_path"] = str(chrome)
+    instance = engine.launch(**options)
+    yield instance
+    instance.close()
+
+
+@pytest.fixture(scope="module")
+def viewer_site():
+  counts = {"stream": 0}
+  stream_port = 0
+
+  class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+      pass
+
+    def do_POST(self):
+      self.respond({"streamState": "running", "streamSequence": 1})
+
+    def respond(self, body, mime="application/json"):
+      if isinstance(body, dict):
+        body = json.dumps(body).encode()
+      self.send_response(200)
+      self.send_header("Content-Type", mime)
+      self.send_header("Content-Length", str(len(body)))
+      self.end_headers()
+      self.wfile.write(body)
+
+    def do_GET(self):
+      path = urlsplit(self.path).path
+      if path == "/fixture":
+        self.respond(b'''<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/starpilot/system/the_galaxy/assets/mobile/css/material.css">
+<style>body{margin:0}.fixture-shell{padding:16px;contain:layout style;transform:translateZ(0)}</style>
+<script type="importmap">{"imports":{"vue":"/starpilot/system/the_galaxy/assets/vendor/vue/vue.esm-browser.js"}}</script>
+<div id="root" class="fixture-shell"></div><script type="module">
+import {createApp} from '/starpilot/system/the_galaxy/assets/vendor/vue/vue.esm-browser.js';
+import {UiStream} from '/starpilot/system/the_galaxy/assets/mobile/js/views/UiStream.js';
+window.testApp=createApp(UiStream);window.testApp.mount('#root');
+</script>''', "text/html")
+      elif path == "/api/device/status":
+        self.respond({"streamPort": stream_port, "streamState": "running", "streamSequence": 1})
+      elif path == "/status":
+        self.respond({"state": "ready", "frameSequence": 1, "frameAgeMs": 10, "outputWidth": 2160, "outputHeight": 1080})
+      elif path == "/telemetry":
+        self.respond({"schemaVersion": 1, "isMetric": False, "vEgo": 31.7, "setSpeed": 72,
+                      "leadDist": 30, "brake": 0, "engaged": True, "driveState": "enabled",
+                      "cpuTempC": 50, "cpuUsagePercent": 27, "memoryUsagePercent": 44,
+                      "modelExecMs": 19, "frameDropPerc": 0})
+      elif path == "/stream":
+        counts["stream"] += 1
+        self.respond(SVG, "image/svg+xml")
+      else:
+        target = ROOT / ("system/ui/lib/ui_stream.html" if path == "/" else path.lstrip("/"))
+        if not target.resolve().is_relative_to(ROOT) or not target.is_file():
+          self.send_error(404)
+          return
+        mime = {".js": "text/javascript", ".css": "text/css", ".html": "text/html"}.get(target.suffix, "application/octet-stream")
+        self.respond(target.read_bytes(), mime)
+
+  servers = [ThreadingHTTPServer(("127.0.0.1", 0), Handler) for _ in range(2)]
+  stream_port = servers[1].server_port
+  threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
+  for thread in threads:
+    thread.start()
+  yield f"http://127.0.0.1:{servers[0].server_port}/fixture", counts
+  for server, thread in zip(servers, threads, strict=True):
+    server.shutdown()
+    server.server_close()
+    thread.join(2)
+
+
+def open_viewer(browser, viewer_site, width, height, fullscreen=None):
+  page = browser.new_page(viewport={"width": width, "height": height})
+  page.set_default_timeout(5000)
+  page.on("pageerror", lambda error: print(error))
+  if fullscreen:
+    request = "undefined" if fullscreen == "missing" else "() => Promise.reject(new Error('denied'))"
+    page.add_init_script(f'''Object.defineProperty(Element.prototype, 'requestFullscreen', {{configurable:true,value:{request}}});
+Object.defineProperty(Element.prototype, 'webkitRequestFullscreen', {{configurable:true,value:undefined}});''')
+  page.goto(viewer_site[0])
+  page.locator("iframe").wait_for()
+  frame = page.frame_locator("iframe")
+  frame.locator("#cam").evaluate("img => img.decode()")
+  return page, frame
+
+
+@pytest.mark.parametrize("size", [(390, 844), (844, 390), (768, 1024), (568, 320), (1280, 800)])
+def test_telemetry_preserves_portrait_image_and_uses_landscape_sides(browser, viewer_site, size):
+  page, frame = open_viewer(browser, viewer_site, *size)
+  try:
+    visible_width = "img => Math.min(img.clientWidth, img.clientHeight * img.naturalWidth / img.naturalHeight)"
+    before = frame.locator("#cam").evaluate(visible_width)
+    frame.locator("#telemetry-toggle").click()
+    frame.locator("#telemetry-driving").get_by_text("enabled", exact=True).wait_for()
+    stage = frame.locator("#stage").bounding_box()
+    left = frame.locator("#telemetry-device").bounding_box()
+    right = frame.locator("#telemetry-driving").bounding_box()
+    if frame.locator("body").evaluate("() => innerWidth <= innerHeight"):
+      assert frame.locator("#cam").evaluate(visible_width) >= before * 0.90
+      assert left["y"] >= stage["y"] + stage["height"] - 1
+      assert right["y"] == left["y"]
+    else:
+      assert left["x"] + left["width"] <= stage["x"]
+      assert stage["x"] + stage["width"] <= right["x"]
+    assert frame.locator("body").evaluate("el => el.scrollWidth <= innerWidth")
+  finally:
+    page.close()
+
+
+@pytest.mark.parametrize("fullscreen", ["missing", "rejected"])
+def test_fullscreen_fallback_preserves_stream_and_exits(browser, viewer_site, fullscreen):
+  page, frame = open_viewer(browser, viewer_site, 390, 844, fullscreen)
+  try:
+    frame.locator("body").evaluate("() => { window.streamIdentity = 123; }")
+    frame.locator("#fs").click()
+    page.locator("dialog:modal").wait_for()
+    assert page.locator("iframe").bounding_box() == {"x": 0, "y": 0, "width": 390, "height": 844}
+    assert frame.locator("body").evaluate("() => window.streamIdentity") == 123
+    frame.get_by_role("button", name="Exit expanded view").click()
+    page.locator("dialog:modal").wait_for(state="hidden")
+    assert page.locator("body").evaluate("el => el.style.overflow") == ""
+    frame.locator("#fs").click()
+    page.locator("dialog:modal").wait_for()
+    page.keyboard.press("Escape")
+    page.locator("dialog:modal").wait_for(state="hidden")
+    frame.locator("#fs").click()
+    page.locator("dialog:modal").wait_for()
+    page.evaluate("window.testApp.unmount()")
+    assert page.locator("dialog").count() == 0
+    assert page.locator("body").evaluate("el => el.style.overflow") == ""
+  finally:
+    page.close()
+
+
+def test_fullscreen_uses_native_api_when_available_and_rejects_spoofed_messages(browser, viewer_site):
+  page, frame = open_viewer(browser, viewer_site, 844, 390)
+  try:
+    # A source tag alone cannot expand Galaxy: require the actual iframe window.
+    page.evaluate('''() => window.postMessage({source:'starpilot-ui-stream',type:'fullscreen',expanded:true}, location.origin)''')
+    assert page.locator("dialog:modal").count() == 0
+    frame.locator("#fs").click()
+    frame.get_by_role("button", name="Exit expanded view").wait_for()
+    assert frame.locator("body").evaluate('''() => !!(document.fullscreenElement || document.webkitFullscreenElement) ||
+      document.documentElement.classList.contains('expanded')''')
+    frame.get_by_role("button", name="Exit expanded view").click()
+    frame.get_by_role("button", name="Fullscreen", exact=True).wait_for()
+  finally:
+    page.close()
