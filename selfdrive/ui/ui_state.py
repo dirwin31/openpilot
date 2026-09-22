@@ -22,6 +22,11 @@ from openpilot.starpilot.common.screen_settings import (
 
 BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
 
+# How long the UI keeps rendering for a streaming viewer while the display is
+# off and the ignition is off. Bounds battery drain from a browser tab left
+# open on a parked car; with ignition on there is no cap.
+STREAM_OFFROAD_HOLD_MAX = 600.0
+
 
 def _noop_progress(_phase: str) -> None:
   pass
@@ -322,6 +327,9 @@ class Device:
     self._interactive_timeout_callbacks: list[Callable] = []
     self._prev_timed_out = False
     self._awake: bool = True
+    self._render_awake: bool = True
+    self._stream_hold_since: float = 0.0
+    self._stream_hold_used: float = 0.0
     self._params = ui_state.ui_params
 
     self._screen_settings_refresh_time: float = 0.0
@@ -574,12 +582,66 @@ class Device:
   def _visible_onroad_alert(self):
     return bool(self._active_standby_alerts() & self._wake_keys)
 
+  def _stream_holds_render(self, display_awake: bool) -> bool:
+    """Keep rendering for a watching browser while the display sleeps.
+
+    Streaming needs frames, not a lit panel, so the backlight policy is left
+    exactly as it was: no burn-in and no backlight power. Offroad the hold is
+    capped, because a browser tab left open on a parked car would otherwise
+    render indefinitely; with ignition on there is no cap.
+
+    The offroad cap is a *budget of held seconds* per screen-off period, not a
+    deadline from the first hold. Viewers come and go -- a stream reconnect, a
+    snapshot, a tab returning from the background -- and a momentary gap in
+    demand must neither refill the budget (a reconnecting viewer would then
+    hold rendering forever) nor spend it while nothing is watching. Waking the
+    display is what clears it.
+    """
+    if display_awake:
+      self._stream_hold_since = 0.0
+      self._stream_hold_used = 0.0
+      return False
+
+    try:
+      wants_frames = gui_app.ui_stream_wants_frames()
+    except Exception:
+      wants_frames = False
+
+    now = time.monotonic()
+    if not wants_frames:
+      # Bank what this hold spent and stop the clock.
+      if self._stream_hold_since != 0.0:
+        self._stream_hold_used += max(0.0, now - self._stream_hold_since)
+        self._stream_hold_since = 0.0
+      return False
+
+    if self._stream_hold_since == 0.0:
+      self._stream_hold_since = now
+
+    if ui_state.ignition:
+      # Running engine: no drain to bound, so nothing is charged.
+      self._stream_hold_used = 0.0
+      self._stream_hold_since = now
+      return True
+
+    return self._stream_hold_used + (now - self._stream_hold_since) <= STREAM_OFFROAD_HOLD_MAX
+
   def _set_awake(self, on: bool):
     if on != self._awake:
       self._awake = on
       cloudlog.debug(f"setting display power {int(on)}")
       HARDWARE.set_display_power(on)
-      gui_app.set_should_render(on)
+
+    # Rendering is decided separately: a streaming viewer keeps frames coming
+    # even while the panel is off. Evaluate the hold unconditionally -- it also
+    # clears the offroad timer when the display is awake, which `or`
+    # short-circuiting would skip.
+    stream_hold = self._stream_holds_render(on)
+    render = on or stream_hold
+    if render != self._render_awake:
+      self._render_awake = render
+      cloudlog.debug(f"setting ui rendering {int(render)}")
+      gui_app.set_should_render(render)
 
 
 # Global instance

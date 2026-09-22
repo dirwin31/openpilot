@@ -1,0 +1,991 @@
+"""Read-only MJPEG mirror of the StarPilot UI over the local network.
+
+Opt-in via ``STREAM=1``. This module owns:
+
+* validated configuration parsed from the environment,
+* a bounded ``ThreadingHTTPServer`` (8 handler permits, 3 stream slots),
+* demand tracking (image streams, snapshot leases, telemetry interest),
+* a single reused raw capture slot with strict ownership handoff
+  (``FREE -> CAPTURING -> ENCODING -> FREE``),
+* one demand-driven JPEG encoder worker.
+
+Design constraints:
+
+* No sockets, threads or image allocations happen at import time.
+* All GPU readback stays on the caller's render thread. The worker never
+  touches pyray, freed CFFI pointers, cereal readers or GL.
+* Nothing is captured or encoded unless a browser is actively requesting
+  images, so an enabled but idle streamer costs ~one attribute check per frame.
+* numpy/OpenCV are imported lazily by the worker only after the first demand.
+
+Adapted from peterclampton/Comma4-UI-Streamer (MIT), pinned at commit
+4cd44f05083df45eee18c39af0d895329b07758a, with native lifecycle integration,
+bounded resources, per-client sequence tracking and in-memory telemetry.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import socket
+import threading
+import time
+import urllib.parse
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from enum import IntEnum
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
+from typing import NamedTuple
+
+from openpilot.common.swaglog import cloudlog
+
+DEFAULT_BIND = "0.0.0.0"
+DEFAULT_PORT = 8091
+DEFAULT_QUALITY = 60
+DEFAULT_FPS = 10
+DEFAULT_WIDTH = 1280
+
+TOTAL_HANDLER_PERMITS = 8
+MAX_STREAMS = 3
+REQUEST_QUEUE_SIZE = 8
+SOCKET_TIMEOUT = 2.0
+
+STREAM_FIRST_FRAME_WAIT = 2.0
+STREAM_IDLE_DEADLINE = 5.0
+SNAPSHOT_MAX_AGE = 1.0
+SNAPSHOT_WAIT = 2.0
+SNAPSHOT_LEASE = 3.0
+TELEMETRY_MAX_AGE = 2.0
+TELEMETRY_INTEREST = 3.0
+IDLE_RELEASE_GRACE = 5.0
+IDLE_SELF_STOP = 60.0  # no image demand and no telemetry interest for this long -> self-stop
+
+MIN_PORT = 1024
+MAX_PORT = 65535
+MIN_QUALITY = 1
+MAX_QUALITY = 95
+MIN_FPS = 1
+MAX_FPS = 30
+MIN_WIDTH = 160
+MAX_WIDTH = 2160
+
+_SCHEMA_VERSION = 1
+
+
+class StreamConfigError(ValueError):
+  """Raised when enabled streamer configuration is invalid."""
+
+
+@dataclass(frozen=True)
+class StreamConfig:
+  bind: str = DEFAULT_BIND
+  port: int = DEFAULT_PORT
+  quality: int = DEFAULT_QUALITY
+  fps: int = DEFAULT_FPS
+  width: int = DEFAULT_WIDTH
+
+  def __str__(self) -> str:
+    return f"{self.bind}:{self.port} quality={self.quality} fps={self.fps} width={self.width or 'source'}"
+
+
+def _env_int(env: Mapping[str, str], key: str, default: int, low: int, high: int) -> int:
+  raw = env.get(key)
+  if raw is None or raw == "":
+    return default
+  try:
+    value = int(raw)
+  except ValueError as exc:
+    raise StreamConfigError(f"{key}={raw!r} is not an integer") from exc
+  if not (low <= value <= high):
+    raise StreamConfigError(f"{key}={value} is outside {low}..{high}")
+  return value
+
+
+def parse_config(env: Mapping[str, str]) -> StreamConfig | None:
+  """Return validated configuration, or ``None`` when killed by ``STREAM=0``.
+
+  Raises :class:`StreamConfigError` for an invalid configuration. The streamer
+  starts on demand (a browser opening the page posts ``UiStreamRequested``),
+  so an unset ``STREAM`` means "available with defaults"; the literal ``0``
+  is the kill switch. When killed, the remaining variables are ignored.
+  """
+  if env.get("STREAM", "1") == "0":
+    return None
+
+  bind = env.get("STREAM_BIND", DEFAULT_BIND).strip()
+  try:
+    ipaddress.IPv4Address(bind)
+  except ValueError as exc:
+    raise StreamConfigError(f"STREAM_BIND={bind!r} is not an IPv4 address") from exc
+
+  port = _env_int(env, "STREAM_PORT", DEFAULT_PORT, MIN_PORT, MAX_PORT)
+  quality = _env_int(env, "STREAM_QUALITY", DEFAULT_QUALITY, MIN_QUALITY, MAX_QUALITY)
+  fps = _env_int(env, "STREAM_FPS", DEFAULT_FPS, MIN_FPS, MAX_FPS)
+  width = _env_int(env, "STREAM_WIDTH", DEFAULT_WIDTH, 0, MAX_WIDTH)
+  if width != 0 and width < MIN_WIDTH:
+    raise StreamConfigError(f"STREAM_WIDTH={width} must be 0 or at least {MIN_WIDTH}")
+
+  return StreamConfig(bind=bind, port=port, quality=quality, fps=fps, width=width)
+
+
+class _SlotState(IntEnum):
+  FREE = 0
+  CAPTURING = 1
+  ENCODING = 2
+
+
+class _RawSlot:
+  """The single reusable raw RGBA slot.
+
+  The render thread owns it while ``CAPTURING``; the encoder worker owns it
+  while ``ENCODING``. No other party may touch ``buffer`` in those states.
+  """
+
+  __slots__ = ("state", "buffer", "width", "height", "generation", "captured_at")
+
+  def __init__(self) -> None:
+    self.state = _SlotState.FREE
+    self.buffer: bytearray | None = None
+    self.width = 0
+    self.height = 0
+    self.generation = 0
+    self.captured_at = 0.0
+
+
+class _Frame(NamedTuple):
+  jpeg: bytes
+  seq: int
+  captured_at: float
+  width: int
+  height: int
+
+
+def _load_viewer_html() -> bytes:
+  return files(__package__).joinpath("ui_stream.html").read_bytes()
+
+
+_viewer_html: bytes | None = None
+
+
+def viewer_html() -> bytes:
+  global _viewer_html
+  if _viewer_html is None:
+    _viewer_html = _load_viewer_html()
+  return _viewer_html
+
+
+class UiStream:
+  """Bounded MJPEG server, demand tracker and encoder lifecycle."""
+
+  def __init__(self, config: StreamConfig):
+    self.config = config
+    self._interval = 1.0 / config.fps
+
+    self._lock = threading.RLock()
+    self._frame_cv = threading.Condition(self._lock)
+    self._encode_signal = threading.Event()
+    self._stop_signal = threading.Event()
+
+    self._slot = _RawSlot()
+    self._generation = 0
+    self._paused = False
+    self._stopping = False
+    self._bound = False
+    self._serving = False
+
+    self._latest_jpeg: bytes | None = None
+    self._latest_seq = 0
+    self._latest_at = 0.0
+    self._latest_width = 0
+    self._latest_height = 0
+    self._source_width = 0
+    self._source_height = 0
+
+    self._active_streams = 0
+    self._snapshot_waiters = 0
+    self._snapshot_deadline = 0.0
+    self._telemetry_deadline = 0.0
+    self._telemetry_payload: bytes | None = None
+    self._telemetry_at = 0.0
+
+    self._next_capture_at = 0.0
+    self._idle_release_at = 0.0
+    self._idle_since = 0.0
+    self._capture_failed = False
+    self._capture_error = ""
+
+    self._captures = 0
+    self._encoded = 0
+    self._published = 0
+    self._dropped_busy = 0
+    self._skipped_pacing = 0
+    self._capture_errors = 0
+    self._encode_errors = 0
+
+    self._worker: threading.Thread | None = None
+    self._serve_thread: threading.Thread | None = None
+    self._bgr = None
+    self._flipped = None
+    self._resized = None
+
+    self._server = _BoundedHTTPServer(self, config)
+    self._bound = True
+    cloudlog.warning(f"UI streamer bound to {config}")
+
+  @classmethod
+  def from_env(cls, env: Mapping[str, str] | None = None) -> UiStream | None:
+    import os
+    try:
+      config = parse_config(os.environ if env is None else env)
+    except StreamConfigError as exc:
+      cloudlog.error(f"UI streamer disabled: {exc}")
+      return None
+    if config is None:
+      return None
+    try:
+      return cls(config)
+    except OSError as exc:
+      cloudlog.error(f"UI streamer disabled: cannot bind {config.bind}:{config.port}: {exc}")
+      return None
+
+  @property
+  def port(self) -> int:
+    return int(self._server.server_address[1])
+
+  # ------------------------------------------------------------------ lifecycle
+
+  def serve(self) -> None:
+    """Start accepting connections. Idempotent."""
+    with self._lock:
+      if self._serving or self._stopping:
+        return
+      self._serving = True
+      # Arm the idle clock so a start request that never gets a viewer still
+      # self-stops (see IDLE_SELF_STOP).
+      self._schedule_idle_release_locked(time.monotonic())
+    # Only retain threads whose start succeeded. shutdown() would wait forever
+    # if the HTTP thread existed but never entered serve_forever().
+    worker = threading.Thread(target=self._encode_worker, name="ui_stream_encode", daemon=True)
+    worker.start()
+    self._worker = worker
+    server_thread = threading.Thread(target=self._serve_forever, name="ui_stream_http", daemon=True)
+    server_thread.start()
+    self._serve_thread = server_thread
+
+  def _serve_forever(self) -> None:
+    try:
+      self._server.serve_forever(poll_interval=0.5)
+    except Exception as exc:  # pragma: no cover - defensive
+      cloudlog.error(f"UI streamer server stopped: {exc}")
+
+  def stop(self) -> None:
+    """Idempotent shutdown. Safe even if the window is already gone."""
+    with self._lock:
+      if self._stopping:
+        return
+      self._stopping = True
+      self._serving = False
+      self._generation += 1
+      self._active_streams = 0
+      self._snapshot_waiters = 0
+      self._snapshot_deadline = 0.0
+      self._telemetry_deadline = 0.0
+      self._idle_since = 0.0
+      self._latest_jpeg = None
+      if self._slot.state == _SlotState.FREE:
+        self._slot.buffer = None
+      self._frame_cv.notify_all()
+
+    self._encode_signal.set()
+    self._stop_signal.set()
+
+    server = self._server
+    server.close_connections()
+    if self._serve_thread is not None:
+      try:
+        server.shutdown()
+      except Exception:  # pragma: no cover - defensive
+        pass
+    try:
+      server.server_close()
+    except Exception:  # pragma: no cover - defensive
+      pass
+
+    for thread in (self._serve_thread, self._worker):
+      if thread is not None:
+        thread.join(timeout=3.0)
+
+    worker_alive = self._worker is not None and self._worker.is_alive()
+    with self._lock:
+      if not worker_alive:
+        self._bgr = self._flipped = self._resized = None
+      if self._slot.state == _SlotState.FREE:
+        self._slot.buffer = None
+    self._serve_thread = None
+    self._worker = None
+
+  def pause(self) -> None:
+    """Screen is off: invalidate the latest frame and stop capturing."""
+    with self._frame_cv:
+      if self._paused or self._stopping:
+        return
+      self._paused = True
+      self._generation += 1
+      self._latest_jpeg = None
+      # Arm the grace period now: while the screen is off the render loop no
+      # longer calls maybe_capture, but the worker still evaluates this deadline.
+      self._schedule_idle_release_locked(time.monotonic())
+      self._frame_cv.notify_all()
+
+  def resume(self) -> None:
+    with self._frame_cv:
+      if not self._paused or self._stopping:
+        return
+      self._paused = False
+      self._generation += 1
+      # Wake starts a fresh idle window: a page that reconnects on wake must not
+      # be killed by idle time accumulated while the screen was off.
+      self._idle_since = 0.0
+      self._frame_cv.notify_all()
+
+  def is_paused(self) -> bool:
+    with self._lock:
+      return self._paused
+
+  def is_stopping(self) -> bool:
+    with self._lock:
+      return self._stopping
+
+  # ------------------------------------------------------------------- demand
+
+  def image_demand_active(self, now: float | None = None) -> bool:
+    now = time.monotonic() if now is None else now
+    with self._lock:
+      return self._image_demand_locked(now)
+
+  def _image_demand_locked(self, now: float) -> bool:
+    return not self._capture_failed and (self._active_streams > 0 or now < self._snapshot_deadline)
+
+  def telemetry_due(self, now: float | None = None) -> bool:
+    now = time.monotonic() if now is None else now
+    with self._lock:
+      return not self._stopping and now < self._telemetry_deadline
+
+  def extend_telemetry_interest(self, now: float | None = None) -> None:
+    now = time.monotonic() if now is None else now
+    with self._lock:
+      self._telemetry_deadline = max(self._telemetry_deadline, now + TELEMETRY_INTEREST)
+
+  def set_telemetry(self, payload: bytes, now: float | None = None) -> None:
+    now = time.monotonic() if now is None else now
+    with self._lock:
+      self._telemetry_payload = payload
+      self._telemetry_at = now
+
+  def begin_stream(self) -> bool:
+    with self._lock:
+      if self._stopping or self._active_streams >= MAX_STREAMS:
+        return False
+      self._active_streams += 1
+      self._cancel_idle_release_locked()
+      return True
+
+  def end_stream(self) -> None:
+    with self._lock:
+      self._active_streams = max(0, self._active_streams - 1)
+      self._schedule_idle_release_locked(time.monotonic())
+
+  # ------------------------------------------------------------------ capture
+
+  def maybe_capture(self, now: float, width: int, height: int,
+                    read: Callable[[bytearray], bool]) -> bool:
+    """Reserve the slot and perform a render-thread readback if due.
+
+    ``read`` receives the owned buffer and must fill ``width * height * 4``
+    bytes of RGBA, returning ``True`` on success. It is only called on
+    demand, on the caller's thread, and never while the slot is busy.
+    """
+    with self._lock:
+      if self._stopping or self._paused or self._capture_failed:
+        return False
+      if not self._image_demand_locked(now):
+        self._schedule_idle_release_locked(now)
+        return False
+      if now < self._next_capture_at:
+        self._skipped_pacing += 1
+        return False
+      slot = self._slot
+      if slot.state != _SlotState.FREE:
+        self._dropped_busy += 1
+        self._next_capture_at = now + self._interval
+        return False
+      self._cancel_idle_release_locked()
+
+      slot.state = _SlotState.CAPTURING
+      slot.width = width
+      slot.height = height
+      slot.generation = self._generation
+      slot.captured_at = now
+      self._captures += 1
+      self._next_capture_at = now + self._interval
+      self._source_width = width
+      self._source_height = height
+      buffer = slot.buffer
+      if buffer is None or len(buffer) != width * height * 4:
+        buffer = None
+
+    if buffer is None:
+      try:
+        buffer = bytearray(width * height * 4)
+      except (MemoryError, OverflowError):
+        self._abort_capture(slot, error=True)
+        cloudlog.error("UI streamer: unable to allocate capture buffer")
+        return False
+      with self._lock:
+        if slot.state != _SlotState.CAPTURING:
+          return False
+        slot.buffer = buffer
+
+    ok = False
+    try:
+      ok = bool(read(buffer))
+    except Exception as exc:
+      self._abort_capture(slot, error=True)
+      cloudlog.error(f"UI streamer readback failed: {exc}")
+      return False
+
+    if not ok:
+      self._abort_capture(slot, error=True)
+      return False
+
+    with self._lock:
+      if slot.state != _SlotState.CAPTURING:
+        return False
+      slot.state = _SlotState.ENCODING
+    self._encode_signal.set()
+    return True
+
+  def _abort_capture(self, slot: _RawSlot, error: bool) -> None:
+    with self._lock:
+      if slot.state == _SlotState.CAPTURING:
+        slot.state = _SlotState.FREE
+      if error:
+        self._capture_errors += 1
+
+  def fail_capture(self, reason: str) -> None:
+    """Permanently disable capture (e.g. unsupported texture format).
+
+    The server keeps serving status so clients can show the error, but no
+    further readback is attempted.
+    """
+    with self._frame_cv:
+      if self._capture_failed:
+        return
+      self._capture_failed = True
+      self._capture_error = reason
+      self._latest_jpeg = None
+      self._frame_cv.notify_all()
+    cloudlog.error(f"UI streamer capture disabled: {reason}")
+
+  # ------------------------------------------------------------------- worker
+
+  def _encode_worker(self) -> None:
+    # numpy/OpenCV are intentionally NOT imported here: they are imported by
+    # _encode() on the first real frame, so serve() stays cheap and a streamer
+    # nobody watches never pays for the encoder dependencies.
+    while not self._stop_signal.is_set():
+      self._encode_signal.wait(0.5)
+      if self._stop_signal.is_set():
+        return
+      self._encode_signal.clear()
+
+      # The worker owns _bgr/_flipped/_resized, so idle release happens here and
+      # not on the render thread. It also runs while the screen is off, because
+      # this loop keeps waking even when rendering is paused.
+      self._maybe_release_idle(time.monotonic())
+
+      with self._lock:
+        slot = self._slot
+        if slot.state != _SlotState.ENCODING:
+          continue
+        buffer, width, height = slot.buffer, slot.width, slot.height
+        captured_at, generation = slot.captured_at, slot.generation
+
+      jpeg = None
+      encoded_width, encoded_height = width, height
+      try:
+        if buffer is not None:
+          result = self._encode(buffer, width, height)
+          if result is not None:
+            # Downscaling changes the published dimensions; /status and the
+            # viewer report what was actually encoded, not the capture size.
+            jpeg, encoded_width, encoded_height = result
+      except ImportError as exc:
+        # Missing encoder dependencies are permanent; report through /status
+        # instead of retrying every frame.
+        self.fail_capture(f"encoder dependencies missing: {exc}")
+      except Exception as exc:
+        with self._lock:
+          self._encode_errors += 1
+        cloudlog.error(f"UI streamer encode failed: {exc}")
+
+      if jpeg is not None:
+        self._publish(jpeg, captured_at, generation, encoded_width, encoded_height)
+
+      with self._lock:
+        if self._slot is slot and slot.state == _SlotState.ENCODING:
+          slot.state = _SlotState.FREE
+
+  def _encode(self, buffer: bytearray, width: int, height: int) -> tuple[bytes, int, int] | None:
+    """Return the JPEG with the dimensions it was actually encoded at."""
+    import cv2
+    import numpy as np
+
+    expected = width * height * 4
+    if len(buffer) < expected:
+      return None
+    src = np.frombuffer(buffer, dtype=np.uint8, count=expected).reshape(height, width, 4)
+
+    if self._bgr is None or self._bgr.shape[0] != height or self._bgr.shape[1] != width:
+      self._bgr = np.empty((height, width, 3), np.uint8)
+      self._flipped = np.empty((height, width, 3), np.uint8)
+      self._resized = None
+
+    cv2.cvtColor(src, cv2.COLOR_RGBA2BGR, self._bgr)
+    cv2.flip(self._bgr, 0, self._flipped)
+
+    target = self.config.width
+    if target and target < width:
+      new_w = max(2, target - (target % 2))
+      new_h = max(2, int(round(height * new_w / width)))
+      new_h -= new_h % 2
+      if self._resized is None or self._resized.shape[0] != new_h or self._resized.shape[1] != new_w:
+        self._resized = np.empty((new_h, new_w, 3), np.uint8)
+      cv2.resize(self._flipped, (new_w, new_h), self._resized, interpolation=cv2.INTER_AREA)
+      frame = self._resized
+    else:
+      frame = self._flipped
+
+    ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.config.quality])
+    if not ok:
+      return None
+    return encoded.tobytes(), frame.shape[1], frame.shape[0]
+
+  def _publish(self, jpeg: bytes, captured_at: float, generation: int, width: int, height: int) -> None:
+    with self._frame_cv:
+      if self._stopping or self._paused or generation != self._generation:
+        return
+      self._latest_jpeg = jpeg
+      self._latest_seq += 1
+      self._latest_at = captured_at
+      self._latest_width = width
+      self._latest_height = height
+      self._published += 1
+      self._encoded += 1
+      self._frame_cv.notify_all()
+
+  def publish_encoded_frame(self, jpeg: bytes, captured_at: float | None = None) -> None:
+    """Publish an already-encoded JPEG.
+
+    Used by tests and synthetic sources. Real captures flow through
+    :meth:`maybe_capture` and the encoder worker.
+    """
+    now = time.monotonic() if captured_at is None else captured_at
+    with self._lock:
+      generation = self._generation
+      width, height = self._source_width, self._source_height
+    self._publish(jpeg, now, generation, width, height)
+
+  # -------------------------------------------------------------- frame access
+
+  def latest_frame(self, max_age: float) -> _Frame | None:
+    now = time.monotonic()
+    with self._lock:
+      if self._paused or self._stopping or self._latest_jpeg is None:
+        return None
+      if now - self._latest_at > max_age:
+        return None
+      return self._frame_locked()
+
+  def current_sequence(self) -> int:
+    with self._lock:
+      return self._latest_seq
+
+  def acquire_snapshot_frame(self, timeout: float) -> _Frame | None:
+    """Take a one-frame lease and wait for the next published frame.
+
+    The lease ends when the wait does -- on the frame, on the timeout, or on a
+    dropped connection -- so a single snapshot costs a single capture.
+    ``SNAPSHOT_LEASE`` is only the upper bound for a waiter that never returns.
+    Concurrent snapshots share one lease and one frame.
+    """
+    with self._lock:
+      if self._stopping or self._capture_failed:
+        return None
+      now = time.monotonic()
+      self._snapshot_waiters += 1
+      self._snapshot_deadline = max(self._snapshot_deadline, now + SNAPSHOT_LEASE)
+      self._cancel_idle_release_locked()
+      after_seq = self._latest_seq
+    try:
+      return self.wait_for_frame(after_seq, timeout)
+    finally:
+      with self._lock:
+        self._snapshot_waiters = max(0, self._snapshot_waiters - 1)
+        if self._snapshot_waiters == 0:
+          self._snapshot_deadline = 0.0
+          self._schedule_idle_release_locked(time.monotonic())
+
+  def wait_for_frame(self, after_seq: int, timeout: float) -> _Frame | None:
+    """Wait for a frame newer than ``after_seq``, or ``None`` on timeout.
+
+    A paused streamer is waited through rather than refused: holding a stream
+    slot is the image demand that makes the screen policy resume rendering with
+    the panel still off (``_stream_holds_render``). Refusing immediately would
+    mean a viewer connecting while the display sleeps could never generate the
+    demand that produces its first frame.
+    """
+    deadline = time.monotonic() + timeout
+    with self._frame_cv:
+      while True:
+        if self._stopping or self._capture_failed:
+          return None
+        if self._latest_jpeg is not None and self._latest_seq > after_seq:
+          return self._frame_locked()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+          return None
+        self._frame_cv.wait(remaining)
+
+  def _frame_locked(self) -> _Frame:
+    return _Frame(self._latest_jpeg, self._latest_seq, self._latest_at,
+                  self._latest_width, self._latest_height)
+
+  # ------------------------------------------------------------------ telemetry
+
+  def telemetry_snapshot(self, max_age: float) -> bytes | None:
+    now = time.monotonic()
+    with self._lock:
+      if self._stopping or self._telemetry_payload is None:
+        return None
+      if now - self._telemetry_at > max_age:
+        return None
+      return self._telemetry_payload
+
+  # --------------------------------------------------------------------- idle
+
+  def _cancel_idle_release_locked(self) -> None:
+    self._idle_release_at = 0.0
+
+  def _schedule_idle_release_locked(self, now: float) -> None:
+    if self._idle_release_at == 0.0:
+      self._idle_release_at = now + IDLE_RELEASE_GRACE
+
+  def _maybe_release_idle(self, now: float) -> None:
+    with self._lock:
+      if self._idle_release_at == 0.0 or now < self._idle_release_at:
+        return
+      if self._image_demand_locked(now) or now < self._telemetry_deadline:
+        self._cancel_idle_release_locked()
+        return
+      self._idle_release_at = 0.0
+      self._latest_jpeg = None
+      if self._slot.state == _SlotState.FREE:
+        self._slot.buffer = None
+        self._bgr = self._flipped = self._resized = None
+
+  def self_stop_due(self, now: float | None = None) -> bool:
+    """True once nothing has wanted the streamer for ``IDLE_SELF_STOP`` seconds.
+
+    Polled by the render loop, which owns teardown. Any image demand or
+    telemetry interest resets the clock, so a viewer sitting between frames
+    never trips it; a start request that never gets a viewer does.
+    """
+    now = time.monotonic() if now is None else now
+    with self._lock:
+      if self._stopping or not self._serving:
+        return False
+      if self._image_demand_locked(now) or now < self._telemetry_deadline:
+        self._idle_since = 0.0
+        return False
+      if self._idle_since == 0.0:
+        self._idle_since = now
+        return False
+      return (now - self._idle_since) >= IDLE_SELF_STOP
+
+  def _idle_seconds_locked(self, now: float) -> float:
+    return 0.0 if self._idle_since == 0.0 else max(0.0, now - self._idle_since)
+
+  # ------------------------------------------------------------------- status
+
+  def status(self) -> dict[str, object]:
+    now = time.monotonic()
+    with self._lock:
+      if self._stopping:
+        state = "stopped"
+      elif self._capture_failed:
+        state = "error"
+      elif self._paused:
+        state = "paused"
+      elif self._latest_jpeg is not None:
+        state = "ready"
+      else:
+        state = "starting"
+      frame_age = None if self._latest_jpeg is None else round((now - self._latest_at) * 1000)
+      telemetry_age = None if self._telemetry_payload is None else round((now - self._telemetry_at) * 1000)
+      return {
+        "schemaVersion": _SCHEMA_VERSION,
+        "state": state,
+        "paused": self._paused,
+        "stopping": self._stopping,
+        "captureFailed": self._capture_failed,
+        "captureError": self._capture_error,
+        "frameSequence": self._latest_seq,
+        "frameAgeMs": frame_age,
+        "sourceWidth": self._source_width,
+        "sourceHeight": self._source_height,
+        "outputWidth": self._latest_width,
+        "outputHeight": self._latest_height,
+        "activeStreams": self._active_streams,
+        "maxStreams": MAX_STREAMS,
+        "telemetryAgeMs": telemetry_age,
+        "telemetryInterested": now < self._telemetry_deadline,
+        "idleSeconds": round(self._idle_seconds_locked(now), 1),
+        "idleSelfStopSeconds": IDLE_SELF_STOP,
+        "quality": self.config.quality,
+        "fps": self.config.fps,
+        "counters": {
+          "captured": self._captures,
+          "encoded": self._encoded,
+          "published": self._published,
+          "droppedBusy": self._dropped_busy,
+          "skippedPacing": self._skipped_pacing,
+          "captureErrors": self._capture_errors,
+          "encodeErrors": self._encode_errors,
+        },
+      }
+
+
+class _BoundedHTTPServer(ThreadingHTTPServer):
+  """ThreadingHTTPServer with a hard cap on concurrent handlers.
+
+  The permit is acquired before a worker thread is spawned, so a flood of
+  connections cannot create unbounded threads. When saturated the accepted
+  socket is closed immediately.
+  """
+
+  daemon_threads = True
+  allow_reuse_address = True
+  request_queue_size = REQUEST_QUEUE_SIZE
+
+  def __init__(self, stream: UiStream, config: StreamConfig):
+    self.stream = stream
+    self._permits = threading.BoundedSemaphore(TOTAL_HANDLER_PERMITS)
+    self._conn_lock = threading.Lock()
+    self._connections: set[socket.socket] = set()
+    super().__init__((config.bind, config.port), _StreamRequestHandler)
+
+  def process_request(self, request, client_address) -> None:
+    if not self._permits.acquire(blocking=False):
+      try:
+        request.close()
+      except OSError:
+        pass
+      return
+    try:
+      super().process_request(request, client_address)
+    except Exception:
+      self._permits.release()
+      raise
+
+  def process_request_thread(self, request, client_address) -> None:
+    try:
+      super().process_request_thread(request, client_address)
+    finally:
+      self._permits.release()
+
+  def register_connection(self, connection: socket.socket) -> None:
+    with self._conn_lock:
+      self._connections.add(connection)
+
+  def unregister_connection(self, connection: socket.socket) -> None:
+    with self._conn_lock:
+      self._connections.discard(connection)
+
+  def close_connections(self) -> None:
+    with self._conn_lock:
+      connections = list(self._connections)
+    for connection in connections:
+      try:
+        connection.shutdown(socket.SHUT_RDWR)
+      except OSError:
+        pass
+
+
+class _StreamRequestHandler(BaseHTTPRequestHandler):
+  protocol_version = "HTTP/1.1"
+  timeout = SOCKET_TIMEOUT
+
+  def setup(self) -> None:
+    super().setup()
+    self.server.register_connection(self.connection)
+
+  def finish(self) -> None:
+    try:
+      super().finish()
+    except Exception:  # pragma: no cover - already-broken connections
+      pass
+    finally:
+      self.server.unregister_connection(self.connection)
+
+  def log_message(self, *args) -> None:
+    pass
+
+  @property
+  def stream(self) -> UiStream:
+    return self.server.stream
+
+  # ------------------------------------------------------------------ routing
+
+  def do_GET(self) -> None:
+    self._route(head_only=False)
+
+  def do_HEAD(self) -> None:
+    # HEAD is deliberately supported only for finite, no-demand responses.
+    # Stream/snapshot/telemetry are rejected so a HEAD can never create demand.
+    self._route(head_only=True)
+
+  def _route(self, head_only: bool) -> None:
+    path = urllib.parse.urlsplit(self.path).path
+    try:
+      if path == "/":
+        self._send_bytes(200, "text/html; charset=utf-8", viewer_html())
+      elif path == "/status":
+        self._handle_status()
+      elif path == "/stream":
+        if head_only:
+          self._method_not_allowed()  # HEAD must not reserve demand
+        else:
+          self._handle_stream()
+      elif path == "/snapshot":
+        if head_only:
+          self._method_not_allowed()
+        else:
+          self._handle_snapshot()
+      elif path == "/telemetry":
+        if head_only:
+          self._method_not_allowed()
+        else:
+          self._handle_telemetry()
+      else:
+        self._send_plain(404, "not found")
+    except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+      self.close_connection = True
+
+  def do_POST(self) -> None:
+    self._method_not_allowed()
+
+  def do_PUT(self) -> None:
+    self._method_not_allowed()
+
+  def do_DELETE(self) -> None:
+    self._method_not_allowed()
+
+  def do_PATCH(self) -> None:
+    self._method_not_allowed()
+
+  def do_OPTIONS(self) -> None:
+    self._method_not_allowed()
+
+  def _method_not_allowed(self) -> None:
+    try:
+      self._send_plain(405, "method not allowed", headers={"Allow": "GET"})
+    except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+      self.close_connection = True
+
+  # ----------------------------------------------------------------- handlers
+
+  def _handle_stream(self) -> None:
+    stream = self.stream
+    if not stream.begin_stream():
+      self._send_plain(503, "stream limit reached", headers={"Retry-After": "1"})
+      return
+    try:
+      # Serve an already-fresh frame immediately; otherwise wait for a genuinely
+      # new one so a stale buffered frame is never sent as the opening part.
+      frame = stream.latest_frame(SNAPSHOT_MAX_AGE)
+      if frame is None:
+        frame = stream.wait_for_frame(stream.current_sequence(), STREAM_FIRST_FRAME_WAIT)
+      if frame is None:
+        self._send_plain(503, "no frame available", headers={"Retry-After": "1"})
+        return
+
+      self.send_response(200)
+      self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+      self.send_header("Cache-Control", "no-store")
+      self.send_header("Connection", "close")
+      self.end_headers()
+      self.close_connection = True
+
+      last_seq = -1
+      while True:
+        if stream.is_stopping() or stream.is_paused():
+          break
+        self._write_frame(frame)
+        last_seq = frame.seq
+        frame = stream.wait_for_frame(last_seq, STREAM_IDLE_DEADLINE)
+        if frame is None:
+          break
+    finally:
+      stream.end_stream()
+
+  def _write_frame(self, frame: _Frame) -> None:
+    header = b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame.jpeg)).encode() + b"\r\n\r\n"
+    self.wfile.write(header)
+    self.wfile.write(frame.jpeg)
+    self.wfile.write(b"\r\n")
+    self.wfile.flush()
+
+  def _handle_snapshot(self) -> None:
+    stream = self.stream
+    frame = stream.latest_frame(SNAPSHOT_MAX_AGE)
+    if frame is None:
+      frame = stream.acquire_snapshot_frame(SNAPSHOT_WAIT)
+    if frame is None:
+      self._send_plain(503, "no frame available", headers={"Retry-After": "1"})
+      return
+    self._send_bytes(200, "image/jpeg", frame.jpeg)
+
+  def _handle_telemetry(self) -> None:
+    stream = self.stream
+    stream.extend_telemetry_interest()
+    payload = stream.telemetry_snapshot(TELEMETRY_MAX_AGE)
+    if payload is None:
+      self._send_plain(503, "no telemetry available", headers={"Retry-After": "1"})
+      return
+    self._send_bytes(200, "application/json; charset=utf-8", payload)
+
+  def _handle_status(self) -> None:
+    payload = json.dumps(self.stream.status(), allow_nan=False).encode()
+    self._send_bytes(200, "application/json; charset=utf-8", payload)
+
+  # ----------------------------------------------------------------- response
+
+  def _send_bytes(self, status: int, content_type: str, body: bytes,
+                  headers: Mapping[str, str] | None = None) -> None:
+    self.send_response(status)
+    self.send_header("Content-Type", content_type)
+    self.send_header("Content-Length", str(len(body)))
+    self.send_header("Cache-Control", "no-store")
+    self.send_header("Connection", "close")
+    for key, value in (headers or {}).items():
+      self.send_header(key, value)
+    self.end_headers()
+    self.close_connection = True
+    if self.command != "HEAD":
+      self.wfile.write(body)
+
+  def _send_plain(self, status: int, message: str,
+                  headers: Mapping[str, str] | None = None) -> None:
+    self._send_bytes(status, "text/plain; charset=utf-8", message.encode(), headers)
