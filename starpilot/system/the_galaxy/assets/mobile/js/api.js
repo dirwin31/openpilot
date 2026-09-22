@@ -80,7 +80,8 @@ export const api = {
   saveFavoritesSlots(slots) { return request("/api/favorites/slots", { method: "PUT", data: { slots } }) },
   activateFavoriteAction(key, value) { return request("/api/favorites/action", { method: "POST", data: { key, ...(value == null ? {} : { value }) } }) },
 
-  getDeviceStatus() { return requestOk("/api/device/status") },
+  getDeviceStatus(opts) { return requestOk("/api/device/status", opts) },
+  startUiStream(opts) { return request("/api/ui_stream/start", { ...opts, method: "POST" }) },
   getStats() { return requestOk("/api/stats") },
   setDriveStats(action, routeNames) { return request(`/api/stats/${action}_drive`, { method: "POST", data: { routeNames } }) },
 

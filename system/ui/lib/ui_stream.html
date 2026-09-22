@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<!--
+  StarPilot Live UI viewer.
+
+  Adapted from peterclampton/Comma4-UI-Streamer (MIT), pinned at
+  4cd44f05083df45eee18c39af0d895329b07758a, reworked for native StarPilot
+  lifecycle, independent units, frame freshness and bounded reconnects.
+
+  The image already contains the driving HUD. The optional telemetry panel is
+  deliberately rendered outside the image so it can never obscure alerts.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>StarPilot Live UI</title>
+<style>
+  :root{--bg:#0b0d10;--panel:#15181d;--line:#262b33;--text:#e8eaed;--dim:#9aa0a6;--good:#4caf50;--warn:#f5a623;--bad:#f44336;--accent:#4fc3f7}
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+  #app{display:flex;flex-direction:column;height:100%}
+  header{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);flex:0 0 auto}
+  header .title{font-weight:600;letter-spacing:.3px}
+  .pill{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;padding:3px 9px;border-radius:999px;background:var(--panel);color:var(--dim);border:1px solid var(--line)}
+  .pill.ready{color:var(--good);border-color:color-mix(in srgb,var(--good) 45%,transparent)}
+  .pill.paused{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
+  .pill.error{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent)}
+  header .spacer{flex:1}
+  button{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  main{position:relative;flex:1 1 auto;display:flex;align-items:center;justify-content:center;background:#000;min-height:0}
+  #stage{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+  #cam{max-width:100%;max-height:100%;object-fit:contain;display:block}
+  #cover{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:24px;background:rgba(0,0,0,.82);color:var(--dim)}
+  #cover.show{display:flex}
+  #cover .box{max-width:520px}
+  #cover .box strong{display:block;color:var(--text);font-size:16px;margin-bottom:8px}
+  #cover .hint{margin-top:10px;font-size:12px;line-height:1.5}
+  #telemetry{flex:0 0 auto;display:none;border-top:1px solid var(--line);background:var(--panel);padding:10px 12px;max-height:42%;overflow:auto}
+  #telemetry.show{display:block}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}
+  .cell{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px}
+  .cell .k{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim)}
+  .cell .v{font-size:16px;font-weight:600;margin-top:2px}
+  .cell .v.bad{color:var(--bad)}
+  .cell .v.dim{color:var(--dim);font-weight:500}
+  footer{flex:0 0 auto;font-size:11px;color:var(--dim);padding:5px 12px;border-top:1px solid var(--line)}
+  @media (max-width:600px){header .title{display:none}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span class="title">StarPilot Live UI</span>
+    <span id="state" class="pill">connecting</span>
+    <span id="meta" class="pill" style="display:none"></span>
+    <span class="spacer"></span>
+    <button id="telemetry-toggle" type="button" aria-pressed="false">Telemetry</button>
+    <button id="retry" type="button" style="display:none">Retry</button>
+    <button id="fs" type="button" title="Fullscreen">&#x26F6;</button>
+  </header>
+  <main>
+    <div id="stage">
+      <img id="cam" alt="Live comma UI">
+      <div id="cover"><div class="box">
+        <strong id="cover-title">Connecting…</strong>
+        <div id="cover-body">Waiting for the first frame from your comma.</div>
+        <div class="hint">The live UI is available on the same local network (LAN) as your comma.</div>
+      </div></div>
+    </div>
+  </main>
+  <div id="telemetry" aria-live="off"></div>
+  <footer>Read-only mirror of the on-device UI. Alerts are shown inside the image. Local network only.</footer>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  var STALE_MS = 2000;
+  var STATUS_MS = 1000;
+  var TELEMETRY_MS = 500;
+  var BACKOFF = [500, 1000, 2000, 5000];
+  // How long to keep a connection open against a paused streamer. Holding it is
+  // the image demand that makes the comma resume rendering with the panel still
+  // off, so a viewer arriving while the screen is asleep needs this to get its
+  // first frame. Bounded: once the offroad hold cap has expired, rendering is
+  // not coming back and waiting would just spin.
+  var PAUSED_GRACE_MS = 5000;
+  // The streamer stops itself once nobody is watching, so reloading this page
+  // cannot bring it back on its own -- only a start request through Galaxy can.
+  // Embedded, the wrapper issues that automatically when we report an error.
+  var UNREACHABLE_BODY = "Connect this phone or computer to the same local network (LAN) as your comma, then try again. The streamer also stops itself when no one is watching: open Live UI in Galaxy to start it again.";
+
+  var el = {
+    cam: document.getElementById("cam"),
+    state: document.getElementById("state"),
+    meta: document.getElementById("meta"),
+    cover: document.getElementById("cover"),
+    coverTitle: document.getElementById("cover-title"),
+    coverBody: document.getElementById("cover-body"),
+    telemetry: document.getElementById("telemetry"),
+    telemetryToggle: document.getElementById("telemetry-toggle"),
+    retry: document.getElementById("retry"),
+    fs: document.getElementById("fs")
+  };
+
+  var streamActive = false;
+  var streamFailures = 0;
+  var pausedSince = 0;
+  var lastSeq = -1;
+  var lastFrameAt = 0;
+  var streamState = "connecting";
+  var telemetryOn = false;
+  var telemetryFrame = null;
+  var timers = { status: null, telemetry: null, reconnect: null };
+  var inflight = { status: null, telemetry: null };
+  var lastChildPost = 0;
+
+  function isEmbedded() {
+    return window.parent !== window;
+  }
+
+  // Target the Galaxy origin explicitly instead of "*". The wrapper appends
+  // ?parentOrigin=<origin>; document.referrer is a fallback. The payload is
+  // non-sensitive state, but a targeted origin is still the correct default.
+  function resolveParentOrigin() {
+    try {
+      var explicit = new URLSearchParams(window.location.search).get("parentOrigin");
+      if (explicit) return new URL(explicit).origin;
+    } catch (e) { /* ignore */ }
+    try {
+      if (document.referrer) return new URL(document.referrer).origin;
+    } catch (e) { /* ignore */ }
+    return "*";
+  }
+
+  var PARENT_ORIGIN = resolveParentOrigin();
+
+  function postToParent(type, extra) {
+    if (!isEmbedded()) return;
+    var msg = { source: "starpilot-ui-stream", type: type, state: streamState };
+    if (extra) { for (var k in extra) { if (Object.prototype.hasOwnProperty.call(extra, k)) msg[k] = extra[k]; } }
+    try { window.parent.postMessage(msg, PARENT_ORIGIN); } catch (e) { /* ignore */ }
+  }
+
+  function fetchWithDeadline(url, ms) {
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, ms);
+    return fetch(url, { cache: "no-store", signal: ctrl.signal }).finally(function () { clearTimeout(timer); });
+  }
+
+  function setState(state, detail) {
+    streamState = state;
+    el.state.className = "pill " + (state === "ready" ? "ready" : state === "paused" ? "paused" : state === "error" ? "error" : "");
+    el.state.textContent = state === "ready" ? "live" : state;
+    if (detail) { el.meta.style.display = ""; el.meta.textContent = detail; }
+    else { el.meta.style.display = "none"; }
+    postToParent("status", { frameSequence: lastSeq, frameAgeMs: lastFrameAt ? Date.now() - lastFrameAt : null });
+  }
+
+  function showCover(title, body) {
+    el.coverTitle.textContent = title;
+    el.coverBody.textContent = body;
+    el.cover.classList.add("show");
+  }
+
+  function hideCover() { el.cover.classList.remove("show"); }
+
+  function beginStream() {
+    if (streamActive || document.hidden) return;
+    streamActive = true;
+    el.cam.src = "/stream?t=" + Date.now();
+  }
+
+  function endStream() {
+    streamActive = false;
+    el.cam.removeAttribute("src");
+    lastSeq = -1;
+    lastFrameAt = 0;
+  }
+
+  // True while a paused streamer is still worth holding a connection against.
+  function pausedWaiting() {
+    return pausedSince !== 0 && Date.now() - pausedSince < PAUSED_GRACE_MS;
+  }
+
+  function scheduleReconnect() {
+    if (timers.reconnect || document.hidden) return;
+    var delay = BACKOFF[Math.min(streamFailures, BACKOFF.length - 1)];
+    streamFailures += 1;
+    timers.reconnect = setTimeout(function () {
+      timers.reconnect = null;
+      if (document.hidden) return;
+      // Do not reconnect into a pause that is not going to lift: that would
+      // hold image demand on a parked car indefinitely.
+      if (streamState === "paused" && !pausedWaiting()) return;
+      endStream();
+      beginStream();
+    }, delay);
+  }
+
+  // Browsers fire load per frame for multipart streams, but that is not
+  // guaranteed. We treat load as a hint and rely on /status for freshness.
+  el.cam.addEventListener("load", function () {
+    if (el.cam.naturalWidth > 0) {
+      lastFrameAt = Date.now();
+      streamFailures = 0;
+      pausedSince = 0;
+      hideCover();
+      if (streamState !== "paused") setState("ready");
+    }
+  });
+  el.cam.addEventListener("error", function () {
+    endStream();
+    if (streamState === "paused") {
+      // A paused streamer answers 503 until rendering resumes. That is expected,
+      // not a connection failure, so keep the screen-asleep cover in place.
+      scheduleReconnect();
+      return;
+    }
+    setState("error", "stream error");
+    showCover("Can’t reach the live UI", "The stream connection was lost. Retrying…");
+    el.retry.style.display = "";
+    scheduleReconnect();
+  });
+
+  function pollStatus() {
+    if (document.hidden || inflight.status) return;
+    inflight.status = fetchWithDeadline("/status", 1500).then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
+      if (!s) { throw new Error("status unavailable"); }
+      lastSeq = typeof s.frameSequence === "number" ? s.frameSequence : lastSeq;
+      var age = typeof s.frameAgeMs === "number" ? s.frameAgeMs : null;
+      if (s.state === "paused") {
+        if (!pausedSince) pausedSince = Date.now();
+        var waking = Date.now() - pausedSince < PAUSED_GRACE_MS;
+        if (waking) {
+          // Keep asking: the connection itself is what resumes rendering.
+          if (!streamActive) beginStream();
+          setState("paused", "waking");
+          showCover("Screen asleep", "The comma display is off. Waiting for it to resume streaming with the panel still dark…");
+        } else {
+          endStream();
+          setState("paused", "screen asleep");
+          showCover("Screen asleep", "The comma display is off and streaming did not resume. Touch the comma screen to wake it, then this will reconnect.");
+        }
+        el.retry.style.display = "";
+      } else if (s.state === "error" || s.captureFailed) {
+        endStream();
+        setState("error", "capture failed");
+        showCover("Stream unavailable", s.captureError || "The comma could not capture its display. Check the streamer configuration on the device.");
+      } else if (s.state === "ready" && age !== null && age <= STALE_MS) {
+        if (!streamActive) beginStream();
+        hideCover();
+        el.retry.style.display = "none";
+        setState("ready", s.outputWidth ? s.outputWidth + "×" + s.outputHeight : "");
+      } else {
+        if (!streamActive) beginStream();
+        showCover("Waiting for frames…", "Connected to the streamer, but no recent frame has arrived yet.");
+        setState("connecting", "");
+      }
+    }).catch(function () {
+      setState("error", "disconnected");
+      showCover("Can’t connect to your comma", UNREACHABLE_BODY);
+      el.retry.style.display = "";
+      endStream();
+      scheduleReconnect();
+    }).finally(function () { inflight.status = null; });
+  }
+
+  function fmt(value, digits, unit) {
+    if (value === null || value === undefined || (typeof value === "number" && !isFinite(value))) return "--";
+    var v = (typeof value === "number") ? value.toFixed(digits) : String(value);
+    return unit ? v + " " + unit : v;
+  }
+
+  function cell(key, value, cls) {
+    return '<div class="cell"><div class="k">' + key + '</div><div class="v ' + (cls || "") + '">' + value + '</div></div>';
+  }
+
+  function renderTelemetry() {
+    var d = telemetryFrame;
+    if (!d || d.schemaVersion === undefined) {
+      el.telemetry.innerHTML = '<div class="grid">' + cell("Telemetry", "unavailable", "dim") + '</div>';
+      return;
+    }
+    var metric = d.isMetric === true;
+    var speedUnit = metric ? "km/h" : "mph";
+    var distUnit = metric ? "m" : "ft";
+    var tempUnit = metric ? "°C" : "°F";
+
+    var speed = d.vEgo === null || d.vEgo === undefined ? null : (metric ? d.vEgo * 3.6 : d.vEgo * 2.236936);
+    var setSpeed = d.setSpeed === null || d.setSpeed === undefined ? null : d.setSpeed;
+    var lead = d.leadDist === null || d.leadDist === undefined ? null : (metric ? d.leadDist : d.leadDist * 3.28084);
+    var temp = d.cpuTempC === null || d.cpuTempC === undefined ? null : (metric ? d.cpuTempC : d.cpuTempC * 9 / 5 + 32);
+
+    var engage = d.driveState ? d.driveState : (d.engaged ? "enabled" : "disabled");
+    var engageCls = (d.engaged === true) ? "" : "dim";
+    var cells = "";
+    cells += cell("Engaged", engage, engageCls);
+    cells += cell("Speed", fmt(speed, 0, speedUnit));
+    cells += cell("Set", setSpeed === null ? "--" : fmt(setSpeed, 0, speedUnit), setSpeed === null ? "dim" : "");
+    cells += cell("Lead", lead === null ? "--" : fmt(lead, 0, distUnit), lead === null ? "dim" : "");
+    cells += cell("Brake", fmt(d.brake, 0, "%"), "");
+    var pedals = [];
+    if (d.gasPressed) pedals.push("gas");
+    if (d.brakePressed) pedals.push("brake");
+    cells += cell("Pedals", pedals.length ? pedals.join("+") : "--", pedals.length ? "" : "dim");
+    cells += cell("CPU", fmt(d.cpuUsagePercent, 0, "%"));
+    cells += cell("Mem", fmt(d.memoryUsagePercent, 0, "%"));
+    cells += cell("CPU temp", fmt(temp, 0, tempUnit));
+    cells += cell("Model", fmt(d.modelExecMs, 1, "ms"));
+    cells += cell("Drops", fmt(d.frameDropPerc, 1, "%"));
+    el.telemetry.innerHTML = '<div class="grid">' + cells + '</div>';
+  }
+
+  function pollTelemetry() {
+    if (document.hidden || !telemetryOn || inflight.telemetry) return;
+    inflight.telemetry = fetchWithDeadline("/telemetry", 1500).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      telemetryFrame = d;
+      renderTelemetry();
+    }).catch(function () {
+      telemetryFrame = null;
+      renderTelemetry();
+    }).finally(function () { inflight.telemetry = null; });
+  }
+
+  function startTimers() {
+    stopTimers();
+    if (document.hidden) return;
+    timers.status = setInterval(pollStatus, STATUS_MS);
+    timers.telemetry = setInterval(pollTelemetry, TELEMETRY_MS);
+    pollStatus();
+    if (telemetryOn) pollTelemetry();
+  }
+
+  function stopTimers() {
+    if (timers.status) { clearInterval(timers.status); timers.status = null; }
+    if (timers.telemetry) { clearInterval(timers.telemetry); timers.telemetry = null; }
+    if (timers.reconnect) { clearTimeout(timers.reconnect); timers.reconnect = null; }
+  }
+
+  el.telemetryToggle.addEventListener("click", function () {
+    telemetryOn = !telemetryOn;
+    el.telemetryToggle.setAttribute("aria-pressed", telemetryOn ? "true" : "false");
+    el.telemetry.classList.toggle("show", telemetryOn);
+    if (telemetryOn) pollTelemetry();
+  });
+
+  el.retry.addEventListener("click", function () {
+    streamFailures = 0;
+    pausedSince = 0;
+    endStream();
+    if (!document.hidden) { beginStream(); pollStatus(); }
+  });
+
+  el.fs.addEventListener("click", function () {
+    var root = document.documentElement;
+    try {
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        if (root.requestFullscreen) root.requestFullscreen();
+        else if (root.webkitRequestFullscreen) root.webkitRequestFullscreen();
+      } else if (document.exitFullscreen) { document.exitFullscreen(); }
+      else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }
+    } catch (e) { /* best effort only */ }
+  });
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) {
+      stopTimers();
+      endStream();
+      showCover("Paused", "Live UI is paused while this tab is in the background. Return to resume.");
+    } else {
+      hideCover();
+      pausedSince = 0;
+      setState("connecting");
+      beginStream();
+      startTimers();
+    }
+  });
+
+  window.addEventListener("beforeunload", function () {
+    stopTimers();
+    endStream();
+  });
+
+  // Announce readiness so the Galaxy wrapper can validate the handshake.
+  setState("connecting");
+  beginStream();
+  startTimers();
+  postToParent("ready", { generation: Date.now() });
+  setInterval(function () {
+    var now = Date.now();
+    if (now - lastChildPost >= 2000) { lastChildPost = now; postToParent("status"); }
+  }, 2000);
+})();
+</script>
+</body>
+</html>
