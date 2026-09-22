@@ -523,6 +523,8 @@ class GuiApplication:
     self._ui_stream = None
     self._ui_stream_pending = False
     self._ui_stream_owns_texture = False
+    self._ui_stream_texture: rl.RenderTexture | None = None
+    self._ui_stream_scale_failed = False
     self._ui_stream_error = ""
     self._stream_paused = False
     self._progress_hook: Callable[[str], None] | None = None
@@ -1145,9 +1147,55 @@ class GuiApplication:
 
   def _read_stream_texture(self, buffer: bytearray) -> bool:
     """Render-thread readback of the main UI texture into owned storage."""
+    return self._read_texture_into(self._render_texture.texture, buffer)
+
+  def _read_scaled_stream_texture(self, buffer: bytearray) -> bool:
+    """Downscale the UI into the stream texture on the GPU, then read it back.
+
+    Reading back only the encoded size moves a fraction of the bytes across
+    the GPU->CPU readback (which blocks the render thread) and leaves the
+    worker nothing to resize. Drawing with a positive source height also
+    lands the rows top-down, so the worker skips its vertical flip.
+    """
+    target = self._ui_stream_texture
+    width, height = target.texture.width, target.texture.height
+    rl.begin_texture_mode(target)
+    rl.clear_background(rl.BLACK)
+    rl.draw_texture_pro(self._render_texture.texture,
+                        rl.Rectangle(0, 0, float(self._render_texture_width), float(self._render_texture_height)),
+                        rl.Rectangle(0, 0, float(width), float(height)), rl.Vector2(0, 0), 0.0, rl.WHITE)
+    rl.end_texture_mode()
+    return self._read_texture_into(target.texture, buffer)
+
+  def _ensure_stream_texture(self, width: int, height: int) -> bool:
+    """Keep a ``width`` x ``height`` render texture for GPU downscaling.
+
+    Returns ``False`` when it cannot be allocated; the caller then falls back
+    to a full-size readback with a CPU resize, which is slower but correct.
+    """
+    current = self._ui_stream_texture
+    if current is not None and current.texture.width == width and current.texture.height == height:
+      return True
+    self._release_stream_texture()
+    render_texture = rl.load_render_texture(width, height)
+    texture = getattr(render_texture, "texture", None)
+    if texture is None or getattr(texture, "id", 0) == 0:
+      self._unload_render_texture(render_texture)
+      cloudlog.error(f"UI streamer: {width}x{height} scaling texture unavailable, using CPU resize")
+      return False
+    self._ui_stream_texture = render_texture
+    return True
+
+  def _release_stream_texture(self) -> None:
+    render_texture = self._ui_stream_texture
+    self._ui_stream_texture = None
+    if render_texture is not None and rl.is_window_ready():
+      self._unload_render_texture(render_texture)
+
+  def _read_texture_into(self, source: rl.Texture, buffer: bytearray) -> bool:
     image = None
     try:
-      image = rl.load_image_from_texture(self._render_texture.texture)
+      image = rl.load_image_from_texture(source)
       if image is None or image.data == rl.ffi.NULL or image.width <= 0 or image.height <= 0:
         return False
       if image.format != rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8:
@@ -1190,12 +1238,22 @@ class GuiApplication:
         cloudlog.warning("UI streamer stopping: idle with no viewers")
         self.stop_ui_stream()
       elif capture and self._render_texture is not None:
-        stream.maybe_capture(time.monotonic(), self._render_texture_width, self._render_texture_height,
-                             self._read_stream_texture)
+        self._capture_into(stream)
     except Exception as exc:
       cloudlog.error(f"UI streamer disabled after capture error: {exc}")
       self.stop_ui_stream()
     self._mark_progress("gui_app.after_stream_capture")
+
+  def _capture_into(self, stream) -> None:
+    source = (self._render_texture_width, self._render_texture_height)
+    width, height = stream.output_size(*source)
+    if (width, height) != source and self._ui_stream_texture is None and not self._ui_stream_scale_failed:
+      self._ui_stream_scale_failed = not self._ensure_stream_texture(width, height)
+    if (width, height) != source and self._ui_stream_texture is not None:
+      stream.maybe_capture(time.monotonic(), width, height, self._read_scaled_stream_texture,
+                           bottom_up=False, source_size=source)
+    else:
+      stream.maybe_capture(time.monotonic(), *source, self._read_stream_texture)
 
   def _record_frame(self) -> None:
     """Hand one rendered frame to the ffmpeg writer thread.
@@ -1224,6 +1282,10 @@ class GuiApplication:
     self._stream_paused = False
     if stream is not None:
       stream.stop()
+    # Unlike the main texture this one is only read, never composited, so
+    # freeing it costs nothing visible; it is small and cheap to re-create.
+    self._release_stream_texture()
+    self._ui_stream_scale_failed = False
 
   def stream_telemetry_due(self, now: float) -> bool:
     stream = self._ui_stream

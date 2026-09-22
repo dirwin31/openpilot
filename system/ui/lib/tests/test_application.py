@@ -145,6 +145,8 @@ def _bare_app() -> application.GuiApplication:
   app._ui_stream = None
   app._ui_stream_pending = False
   app._ui_stream_owns_texture = False
+  app._ui_stream_texture = None
+  app._ui_stream_scale_failed = False
   app._ui_stream_error = ""
   app._stream_paused = False
   app._progress_hook = None
@@ -368,10 +370,52 @@ def test_capture_stream_frame_delegates_with_texture_dims():
   app._render_texture_height = 50
   calls = []
   app._ui_stream = SimpleNamespace(self_stop_due=lambda: False,
-                                   maybe_capture=lambda now, w, h, read: calls.append((w, h, read)))
+                                   output_size=lambda w, h: (w, h),
+                                   maybe_capture=lambda now, w, h, read, **kw: calls.append((w, h, read)))
 
   app._capture_stream_frame()
   assert calls and calls[0][0] == 100 and calls[0][1] == 50
+
+
+def test_capture_stream_frame_downscales_on_gpu(monkeypatch):
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._render_texture_width = 2160
+  app._render_texture_height = 1080
+  scaled = SimpleNamespace(texture=SimpleNamespace(id=2, width=1280, height=640))
+  monkeypatch.setattr(application.rl, "load_render_texture", lambda w, h: scaled)
+  calls = []
+  app._ui_stream = SimpleNamespace(self_stop_due=lambda: False, output_size=lambda w, h: (1280, 640),
+                                   maybe_capture=lambda now, w, h, read, **kw: calls.append((w, h, read, kw)))
+
+  app._capture_stream_frame()
+  assert app._ui_stream_texture is scaled
+  w, h, read, kw = calls[0]
+  assert (w, h) == (1280, 640)
+  assert read == app._read_scaled_stream_texture
+  assert kw == {"bottom_up": False, "source_size": (2160, 1080)}
+
+
+def test_capture_stream_frame_falls_back_to_cpu_resize(monkeypatch):
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._render_texture_width = 2160
+  app._render_texture_height = 1080
+  allocations = []
+
+  def dead(w, h):
+    allocations.append((w, h))
+    return SimpleNamespace(texture=SimpleNamespace(id=0))
+  monkeypatch.setattr(application.rl, "load_render_texture", dead)
+  monkeypatch.setattr(application.rl, "unload_render_texture", lambda rt: None)
+  calls = []
+  app._ui_stream = SimpleNamespace(self_stop_due=lambda: False, output_size=lambda w, h: (1280, 640),
+                                   maybe_capture=lambda now, w, h, read, **kw: calls.append((w, h, read)))
+
+  app._capture_stream_frame()
+  app._capture_stream_frame()
+  assert allocations == [(1280, 640)]  # one attempt, not one per frame
+  assert all((w, h, read) == (2160, 1080, app._read_stream_texture) for w, h, read in calls)
 
 
 def test_capture_stream_frame_noop_without_texture():
@@ -381,7 +425,8 @@ def test_capture_stream_frame_noop_without_texture():
   app._render_texture_height = 50
   calls = []
   app._ui_stream = SimpleNamespace(self_stop_due=lambda: False,
-                                   maybe_capture=lambda now, w, h, read: calls.append(1))
+                                   output_size=lambda w, h: (w, h),
+                                   maybe_capture=lambda now, w, h, read, **kw: calls.append(1))
   app._capture_stream_frame()
   assert calls == []
 
@@ -396,7 +441,8 @@ def test_service_ui_stream_stops_when_idle_without_capturing(monkeypatch):
   captures = []
   stops = []
   app._ui_stream = SimpleNamespace(self_stop_due=lambda: True,
-                                   maybe_capture=lambda now, w, h, read: captures.append(1),
+                                   output_size=lambda w, h: (w, h),
+                                   maybe_capture=lambda now, w, h, read, **kw: captures.append(1),
                                    stop=lambda: stops.append(1))
 
   app._service_ui_stream(capture=False)
@@ -411,7 +457,8 @@ def test_service_ui_stream_skips_capture_while_screen_is_off():
   app._render_texture_height = 50
   captures = []
   app._ui_stream = SimpleNamespace(self_stop_due=lambda: False,
-                                   maybe_capture=lambda now, w, h, read: captures.append(1),
+                                   output_size=lambda w, h: (w, h),
+                                   maybe_capture=lambda now, w, h, read, **kw: captures.append(1),
                                    stop=lambda: None)
 
   app._service_ui_stream(capture=False)
@@ -440,7 +487,8 @@ def test_render_loop_starts_and_services_the_stream_while_screen_is_off(monkeypa
   stream = SimpleNamespace(pause=lambda: events.append("pause"),
                            resume=lambda: events.append("resume"),
                            self_stop_due=lambda: True,
-                           maybe_capture=lambda now, w, h, read: events.append("capture"),
+                           output_size=lambda w, h: (w, h),
+                                   maybe_capture=lambda now, w, h, read, **kw: events.append("capture"),
                            stop=lambda: events.append("stop"))
 
   def fake_start():
