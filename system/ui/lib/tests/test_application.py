@@ -1,3 +1,4 @@
+import queue
 from importlib.resources import as_file
 from types import SimpleNamespace
 
@@ -134,3 +135,411 @@ def test_brand_font_is_not_replaced_by_language_fallback(monkeypatch):
 
   assert application.font_fallback(brand_font) is brand_font
   assert application.font_fallback(SimpleNamespace(texture=SimpleNamespace(id=3))) is unifont
+
+
+# ------------------------------------------------------------- ui streamer hooks
+
+
+def _bare_app() -> application.GuiApplication:
+  app = object.__new__(application.GuiApplication)
+  app._ui_stream = None
+  app._ui_stream_pending = False
+  app._ui_stream_owns_texture = False
+  app._ui_stream_error = ""
+  app._stream_paused = False
+  app._progress_hook = None
+  return app
+
+
+class _FakeStream:
+  """Minimal stand-in for ui_stream.UiStream."""
+
+  def __init__(self, config=None, serve_error: Exception | None = None):
+    self.config = config
+    self.port = 8091
+    self.serve_error = serve_error
+    self.served = 0
+    self.stopped = 0
+
+  def serve(self):
+    self.served += 1
+    if self.serve_error is not None:
+      raise self.serve_error
+
+  def stop(self):
+    self.stopped += 1
+
+
+def test_request_ui_stream_only_marks_pending():
+  # request_ui_stream is called from the UI loop thread, so it must not bind,
+  # allocate or touch GL -- only flag the render thread to do that.
+  app = _bare_app()
+  app.request_ui_stream()
+  assert app._ui_stream_pending is True
+  assert app._ui_stream is None
+
+
+def test_request_ui_stream_ignored_while_running():
+  app = _bare_app()
+  app._ui_stream = SimpleNamespace()
+  app.request_ui_stream()
+  assert app._ui_stream_pending is False
+
+
+def test_start_pending_ui_stream_clears_flag_when_disabled(monkeypatch):
+  # STREAM=0 kills the feature: the request is consumed, nothing starts, and
+  # the flag does not survive to retry every frame.
+  monkeypatch.setenv("STREAM", "0")
+  app = _bare_app()
+  app._ui_stream_pending = True
+  app._start_pending_ui_stream()
+  assert app._ui_stream_pending is False
+  assert app._ui_stream is None
+
+
+def test_ui_stream_state_reports_off_starting_running_and_error():
+  # Galaxy loads the viewer page -- which the listener itself serves -- only
+  # once this says "running", so the four states must be distinguishable.
+  app = _bare_app()
+  assert app.ui_stream_state() == ("off", "", 0)
+
+  app.request_ui_stream()
+  assert app.ui_stream_state() == ("starting", "", 0)
+
+  app._ui_stream = _FakeStream()
+  assert app.ui_stream_state() == ("running", "", 8091)
+
+  app._ui_stream = None
+  app._ui_stream_pending = False
+  app._ui_stream_error = "cannot bind 0.0.0.0:8091: in use"
+  state, detail, port = app.ui_stream_state()
+  assert state == "error" and "in use" in detail and port == 0
+
+
+def test_request_ui_stream_clears_a_previous_failure():
+  app = _bare_app()
+  app._ui_stream_error = "cannot bind"
+  app.request_ui_stream()
+  assert app.ui_stream_state()[0] == "starting"
+
+
+def test_start_pending_ui_stream_contains_gl_exceptions(monkeypatch):
+  # A GL failure must disable streaming, not escape into the render loop.
+  monkeypatch.delenv("STREAM", raising=False)
+  monkeypatch.setattr(application, "DEVICE_TYPE", "tici")
+  app = _bare_app()
+  app._render_texture = None
+  app._render_texture_width = 64
+  app._render_texture_height = 32
+  app._ui_stream_pending = True
+
+  def explode(width, height):
+    raise RuntimeError("gl exploded")
+
+  monkeypatch.setattr(application.rl, "load_render_texture", explode)
+
+  app._start_pending_ui_stream()  # must not raise
+  assert app._ui_stream is None
+  assert app._render_texture is None
+  state, detail, _ = app.ui_stream_state()
+  assert state == "error" and "gl exploded" in detail
+
+
+def test_start_pending_ui_stream_rolls_back_a_dead_texture(monkeypatch):
+  monkeypatch.delenv("STREAM", raising=False)
+  monkeypatch.setattr(application, "DEVICE_TYPE", "tici")
+  app = _bare_app()
+  app._render_texture = None
+  app._render_texture_width = 64
+  app._render_texture_height = 32
+  app._ui_stream_pending = True
+
+  dead = SimpleNamespace(texture=SimpleNamespace(id=0))
+  unloaded = []
+  monkeypatch.setattr(application.rl, "load_render_texture", lambda w, h: dead)
+  monkeypatch.setattr(application.rl, "unload_render_texture", lambda rt: unloaded.append(rt))
+
+  app._start_pending_ui_stream()
+  assert unloaded == [dead]
+  assert app._ui_stream is None and app._render_texture is None
+  assert app.ui_stream_state()[0] == "error"
+
+
+def test_start_pending_ui_stream_rolls_back_a_failed_thread_start(monkeypatch):
+  # serve() starts threads. If that fails the listener is already bound, so the
+  # rollback has to close it instead of leaving a half-built streamer behind.
+  monkeypatch.delenv("STREAM", raising=False)
+  from openpilot.system.ui.lib import ui_stream as ui_stream_module
+
+  created: list[_FakeStream] = []
+
+  def factory(config):
+    stream = _FakeStream(config, serve_error=RuntimeError("no threads"))
+    created.append(stream)
+    return stream
+
+  monkeypatch.setattr(ui_stream_module, "UiStream", factory)
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._render_texture_width = 64
+  app._render_texture_height = 32
+  app._ui_stream_pending = True
+
+  app._start_pending_ui_stream()
+  assert created and created[0].stopped == 1
+  assert app._ui_stream is None
+  state, detail, _ = app.ui_stream_state()
+  assert state == "error" and "no threads" in detail
+
+
+def test_read_stream_texture_copies_rgba(monkeypatch):
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._ui_stream = SimpleNamespace(fail_capture=lambda reason: None)
+
+  raw = application.rl.ffi.new("unsigned char[]", 16)
+  for i in range(16):
+    raw[i] = i
+  image = SimpleNamespace(data=raw, width=2, height=2,
+                          format=application.rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
+  unloaded = []
+  monkeypatch.setattr(application.rl, "load_image_from_texture", lambda texture: image)
+  monkeypatch.setattr(application.rl, "unload_image", lambda img: unloaded.append(img))
+
+  out = bytearray(16)
+  assert app._read_stream_texture(out) is True
+  assert out == bytearray(range(16))
+  assert unloaded == [image]
+
+
+def test_read_stream_texture_rejects_non_rgba_and_disables(monkeypatch):
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  failures = []
+  app._ui_stream = SimpleNamespace(fail_capture=lambda reason: failures.append(reason))
+
+  raw = application.rl.ffi.new("unsigned char[]", 16)
+  image = SimpleNamespace(data=raw, width=2, height=2,
+                          format=application.rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8)
+  monkeypatch.setattr(application.rl, "load_image_from_texture", lambda texture: image)
+  monkeypatch.setattr(application.rl, "unload_image", lambda img: None)
+
+  assert app._read_stream_texture(bytearray(16)) is False
+  assert failures and "format" in failures[0]
+
+
+def test_read_stream_texture_dimension_mismatch_disables(monkeypatch):
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  failures = []
+  app._ui_stream = SimpleNamespace(fail_capture=lambda reason: failures.append(reason))
+
+  raw = application.rl.ffi.new("unsigned char[]", 64)
+  image = SimpleNamespace(data=raw, width=4, height=4,
+                          format=application.rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
+  monkeypatch.setattr(application.rl, "load_image_from_texture", lambda texture: image)
+  monkeypatch.setattr(application.rl, "unload_image", lambda img: None)
+
+  # Buffer sized for 2x2 (16 bytes) but the readback is 4x4 (64 bytes).
+  assert app._read_stream_texture(bytearray(16)) is False
+  assert failures and "mismatch" in failures[0]
+
+
+def test_read_stream_texture_unloads_on_failure(monkeypatch):
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._ui_stream = SimpleNamespace(fail_capture=lambda reason: None)
+  unloaded = []
+  monkeypatch.setattr(application.rl, "load_image_from_texture",
+                      lambda texture: (_ for _ in ()).throw(RuntimeError("gl")))
+  monkeypatch.setattr(application.rl, "unload_image", lambda img: unloaded.append(img))
+
+  try:
+    app._read_stream_texture(bytearray(16))
+  except RuntimeError:
+    pass
+  assert unloaded == []
+
+
+def test_capture_stream_frame_delegates_with_texture_dims():
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._render_texture_width = 100
+  app._render_texture_height = 50
+  calls = []
+  app._ui_stream = SimpleNamespace(self_stop_due=lambda: False,
+                                   maybe_capture=lambda now, w, h, read: calls.append((w, h, read)))
+
+  app._capture_stream_frame()
+  assert calls and calls[0][0] == 100 and calls[0][1] == 50
+
+
+def test_capture_stream_frame_noop_without_texture():
+  app = _bare_app()
+  app._render_texture = None
+  app._render_texture_width = 100
+  app._render_texture_height = 50
+  calls = []
+  app._ui_stream = SimpleNamespace(self_stop_due=lambda: False,
+                                   maybe_capture=lambda now, w, h, read: calls.append(1))
+  app._capture_stream_frame()
+  assert calls == []
+
+
+def test_service_ui_stream_stops_when_idle_without_capturing(monkeypatch):
+  # The skipped-frame path: idle shutdown must run while the screen is off, and
+  # there is no new frame to read back.
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._render_texture_width = 100
+  app._render_texture_height = 50
+  captures = []
+  stops = []
+  app._ui_stream = SimpleNamespace(self_stop_due=lambda: True,
+                                   maybe_capture=lambda now, w, h, read: captures.append(1),
+                                   stop=lambda: stops.append(1))
+
+  app._service_ui_stream(capture=False)
+  assert captures == [] and stops == [1]
+  assert app._ui_stream is None
+
+
+def test_service_ui_stream_skips_capture_while_screen_is_off():
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._render_texture_width = 100
+  app._render_texture_height = 50
+  captures = []
+  app._ui_stream = SimpleNamespace(self_stop_due=lambda: False,
+                                   maybe_capture=lambda now, w, h, read: captures.append(1),
+                                   stop=lambda: None)
+
+  app._service_ui_stream(capture=False)
+  assert captures == []
+
+
+def test_render_loop_starts_and_services_the_stream_while_screen_is_off(monkeypatch):
+  # Galaxy can request the stream while the display is asleep. Rendering only
+  # resumes once a viewer pulls images, and a viewer needs a bound listener, so
+  # the skipped-frame path must still start it -- and still run idle shutdown.
+  app = _bare_app()
+  app._window_close_requested = False
+  app._adaptive_rendering = False
+  app._should_render = False
+  app._target_fps = 10_000
+  app._profile_render_frames = 0
+  app._frame = 0
+  app._mouse = SimpleNamespace(_handle_mouse_event=lambda: None, get_events=list)
+  app._ui_stream_pending = True
+
+  closes = iter([False, True])
+  monkeypatch.setattr(application.rl, "window_should_close", lambda: next(closes))
+  monkeypatch.setattr(application.rl, "poll_input_events", lambda: None)
+
+  events = []
+  stream = SimpleNamespace(pause=lambda: events.append("pause"),
+                           resume=lambda: events.append("resume"),
+                           self_stop_due=lambda: True,
+                           maybe_capture=lambda now, w, h, read: events.append("capture"),
+                           stop=lambda: events.append("stop"))
+
+  def fake_start():
+    events.append("start")
+    app._ui_stream_pending = False
+    app._ui_stream = stream
+
+  monkeypatch.setattr(app, "_start_pending_ui_stream", fake_start)
+
+  assert list(app.render()) == [False]
+  assert events == ["start", "pause", "stop"]
+  assert app._ui_stream is None
+
+
+def test_record_frame_noop_without_texture():
+  app = _bare_app()
+  app._render_texture = None
+  app._ffmpeg_queue = None
+  app._record_frame()  # must not raise even though RECORD may be enabled
+
+
+def test_record_frame_noop_without_ffmpeg_queue(monkeypatch):
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._ffmpeg_queue = None
+  called = []
+  monkeypatch.setattr(application.rl, "load_image_from_texture", lambda texture: called.append(1))
+  app._record_frame()
+  assert called == []
+
+
+def test_record_frame_enqueues(monkeypatch):
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  frames = queue.Queue()
+  app._ffmpeg_queue = frames
+
+  raw = application.rl.ffi.new("unsigned char[]", 8)
+  image = SimpleNamespace(data=raw, width=2, height=1)
+  monkeypatch.setattr(application.rl, "load_image_from_texture", lambda texture: image)
+  monkeypatch.setattr(application.rl, "unload_image", lambda img: None)
+
+  app._record_frame()
+  assert frames.get_nowait() == bytes(8)
+
+
+def test_stop_ui_stream_is_idempotent():
+  app = _bare_app()
+  stops = []
+  app._ui_stream = SimpleNamespace(stop=lambda: stops.append(1))
+  app._stream_paused = True
+
+  app.stop_ui_stream()
+  assert stops == [1]
+  assert app._ui_stream is None
+  assert app._stream_paused is False
+
+  app.stop_ui_stream()
+  assert stops == [1]
+
+
+def test_stream_telemetry_narrow_methods():
+  app = _bare_app()
+  published = []
+  app._ui_stream = SimpleNamespace(
+    telemetry_due=lambda now: now > 5.0,
+    set_telemetry=lambda payload: published.append(payload),
+  )
+  assert app.stream_telemetry_due(6.0) is True
+  assert app.stream_telemetry_due(1.0) is False
+  app.publish_stream_telemetry(b"{}")
+  assert published == [b"{}"]
+
+
+def test_stream_telemetry_methods_without_stream():
+  app = _bare_app()
+  assert app.stream_telemetry_due(100.0) is False
+  app.publish_stream_telemetry(b"{}")  # must not raise
+
+
+def test_mici_without_texture_reports_capture_unavailable(monkeypatch):
+  from openpilot.system.ui.lib import ui_stream as ui_stream_module
+
+  monkeypatch.delenv("STREAM", raising=False)
+  monkeypatch.setenv("STREAM_BIND", "127.0.0.1")
+  monkeypatch.setattr(application, "DEVICE_TYPE", "mici")
+  monkeypatch.setattr(application, "MICI_FORCE_RENDER_TEXTURE", False)
+  real_stream = ui_stream_module.UiStream
+  monkeypatch.setattr(ui_stream_module, "UiStream",
+                      lambda config: real_stream(ui_stream_module.StreamConfig(bind="127.0.0.1", port=0)))
+  app = _bare_app()
+  app._render_texture = None
+  app.request_ui_stream()
+  try:
+    app._start_pending_ui_stream()
+    assert app.ui_stream_state()[0] == "running"
+    status = app._ui_stream.status()
+    assert status["state"] == "error"
+    assert "MICI_FORCE_RENDER_TEXTURE=1" in status["captureError"]
+    assert app._render_texture is None
+  finally:
+    app.stop_ui_stream()

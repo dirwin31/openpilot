@@ -8356,13 +8356,66 @@ def setup(app):
     with _STATS_RESPONSE_LOCK:
       return _get_stats_locked()
 
+  def _ui_stream_state():
+    """Readiness the UI process published, as (state, detail, sequence).
+
+    `state` is None when the UI has published nothing yet. This is the only
+    proof the listener is actually bound — the configured port and the consumed
+    request flag are not.
+    """
+    try:
+      raw = params_memory.get("UiStreamState", encoding="utf-8")
+      payload = json.loads(raw) if raw else None
+    except Exception:
+      payload = None
+    if not isinstance(payload, dict):
+      return None, "", 0
+    state = payload.get("state")
+    detail = payload.get("detail") or ""
+    try:
+      sequence = int(payload.get("sequence") or 0)
+    except (TypeError, ValueError):
+      sequence = 0
+    return (state if isinstance(state, str) else None), str(detail), sequence
+
   @app.route("/api/device/status", methods=["GET"])
   def device_status():
+    stream_state, stream_detail, stream_sequence = _ui_stream_state()
     return jsonify({
       "status": "Driving" if params.get_bool("IsOnroad") else "Parked",
       "online": True,
       "lanIp": utilities.get_current_lan_ip(),
       "networkName": utilities.get_current_network_name(),
+      "streamPort": utilities.get_ui_stream_port(),
+      "streamRequested": bool(params_memory.get_bool("UiStreamRequested")),
+      "streamState": stream_state,
+      "streamDetail": stream_detail,
+      "streamSequence": stream_sequence,
+    }), 200
+
+  @app.route("/api/ui_stream/start", methods=["POST"])
+  def start_ui_stream():
+    """Ask the UI process to start its streamer.
+
+    Same handshake as FlashPanda: set the memory param. Unlike the panda flash
+    this must not block the request — the page is waiting on it — so it returns
+    immediately and the client polls. The page then waits for UiStreamState to
+    report a bound listener, not for the request flag to be consumed, so the
+    response carries the state observed now as the client's baseline.
+    """
+    port = utilities.get_ui_stream_port()
+    if port is None:
+      return jsonify({"error": "UI streaming is disabled on this device (STREAM=0)."}), 409
+    stream_state, _, stream_sequence = _ui_stream_state()
+    try:
+      params_memory.put_bool("UiStreamRequested", True)
+    except Exception as exception:
+      return jsonify({"error": f"Could not request the UI stream: {exception}"}), 500
+    return jsonify({
+      "requested": True,
+      "streamPort": port,
+      "streamState": stream_state,
+      "streamSequence": stream_sequence,
     }), 200
 
   @app.route("/api/stats/ignore_drive", methods=["POST"])

@@ -764,6 +764,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"TuningLevelConfirmed", {PERSISTENT, BOOL, "0", "0", 0}},
     {"TurnDesires", {PERSISTENT, BOOL, "0", "0", 2}},
     {"TurnSteeringLimitMuteSpeed", {PERSISTENT, INT, "0", "0", 0}},
+    {"UiStreamRequested", {CLEAR_ON_MANAGER_START, BOOL, "0", "0"}},
+    {"UiStreamState", {CLEAR_ON_MANAGER_START | DONT_LOG, STRING}},
     {"UnlockDoors", {PERSISTENT, BOOL, "1", "0", 0}},
     {"Updated", {PERSISTENT, STRING, "0", "0"}},
     {"UpdateSpeedLimits", {CLEAR_ON_MANAGER_START, BOOL, "0", "0"}},
