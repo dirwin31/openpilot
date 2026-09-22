@@ -88,6 +88,8 @@ export const UiStream = {
       autoRestarts: 0,
       lastVerify: 0,
       verifying: false,
+      expanded: false,
+      previousOverflow: null,
       notice: LOCAL_ONLY_NOTICE,
     }
   },
@@ -174,6 +176,7 @@ export const UiStream = {
     // the iframe connect. The viewer itself is served by the streamer, so the
     // iframe must not load before that listener exists.
     async requestStart() {
+      this.setExpanded(false)
       this.clearStartPoll()
       this.state = "starting"
       this.detail = ""
@@ -294,6 +297,10 @@ export const UiStream = {
       if (!frame || event.source !== frame.contentWindow) return
       if (this.viewerOrigin && event.origin !== this.viewerOrigin) return
 
+      if (data.type === "fullscreen") {
+        this.setExpanded(data.expanded === true)
+        return
+      }
       this.clearReadyTimer()
       if (data.type === "error") {
         this.state = "error"
@@ -322,7 +329,29 @@ export const UiStream = {
       // pause has to start it again rather than just reloading the iframe.
       this.requestStart()
     },
+    setExpanded(value) {
+      const dialog = this.$refs.viewerDialog
+      if (value !== this.expanded && dialog) {
+        dialog.close()
+        if (value) {
+          dialog.showModal()
+          this.previousOverflow = document.body.style.overflow
+          document.body.style.overflow = "hidden"
+        } else {
+          dialog.show()
+        }
+      }
+      if (!value && this.previousOverflow !== null) {
+        document.body.style.overflow = this.previousOverflow
+        this.previousOverflow = null
+      }
+      this.expanded = value
+      this.$refs.frame?.contentWindow?.postMessage({
+        source: "starpilot-ui-stream-wrapper", type: "fullscreen", expanded: value,
+      }, this.viewerOrigin)
+    },
     teardown() {
+      this.setExpanded(false)
       this.clearReadyTimer()
       this.clearStartPoll()
       window.removeEventListener("message", this.onMessage)
@@ -383,15 +412,26 @@ export const UiStream = {
                  NOTE: this template is a JavaScript template literal. A
                  backtick anywhere in it ends the string and breaks module
                  parsing for all of Galaxy, so never use one here. -->
-            <iframe
+            <dialog
               v-if="showFrame"
+              ref="viewerDialog"
+              open
+              aria-label="Live UI viewer"
+              @cancel.prevent="setExpanded(false)"
+              :style="expanded
+                ? 'position:fixed; inset:0; margin:0; width:100vw; height:100dvh; max-width:none; max-height:none; padding:0; border:0; background:#000;'
+                : 'position:static; margin:0; width:100%; height:clamp(420px,72svh,760px); max-width:none; max-height:none; padding:0; border:1px solid var(--border); border-radius:10px; background:#000;'"
+            >
+            <iframe
               :key="iframeKey"
               ref="frame"
               :src="viewerUrl"
               title="StarPilot Live UI"
-              style="width:100%; aspect-ratio:16/9; border:1px solid var(--border, rgba(255,255,255,0.12)); border-radius:10px; background:#000;"
+              style="display:block; width:100%; height:100%; border:0; background:#000;"
               allow="fullscreen"
+              allowfullscreen
             ></iframe>
+            </dialog>
 
             <div style="display:flex; gap:10px; flex-wrap:wrap;">
               <button type="button" class="gx-btn gx-btn--tonal" @click="retry">

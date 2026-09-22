@@ -12,7 +12,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -23,7 +23,7 @@
   *{margin:0;padding:0;box-sizing:border-box}
   html,body{height:100%}
   body{background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden}
-  #app{display:flex;flex-direction:column;height:100%}
+  #app{display:flex;flex-direction:column;height:100%;height:100dvh;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
   header{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);flex:0 0 auto}
   header .title{font-weight:600;letter-spacing:.3px}
   .pill{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;padding:3px 9px;border-radius:999px;background:var(--panel);color:var(--dim);border:1px solid var(--line)}
@@ -33,22 +33,31 @@
   header .spacer{flex:1}
   button{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
   button:hover{border-color:var(--accent)}
-  main{position:relative;flex:1 1 auto;display:flex;align-items:center;justify-content:center;background:#000;min-height:0}
-  #stage{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center}
-  #cam{max-width:100%;max-height:100%;object-fit:contain;display:block}
+  main{position:relative;flex:1 1 auto;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);background:#000;min-height:0;min-width:0}
+  main.with-telemetry{grid-template-columns:clamp(96px,17vw,170px) minmax(0,1fr) clamp(96px,17vw,170px);gap:8px;padding:8px}
+  #stage{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center}
+  #cam{width:100%;height:100%;object-fit:contain;display:block}
   #cover{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:24px;background:rgba(0,0,0,.82);color:var(--dim)}
   #cover.show{display:flex}
   #cover .box{max-width:520px}
   #cover .box strong{display:block;color:var(--text);font-size:16px;margin-bottom:8px}
   #cover .hint{margin-top:10px;font-size:12px;line-height:1.5}
-  #telemetry{flex:0 0 auto;display:none;border-top:1px solid var(--line);background:var(--panel);padding:10px 12px;max-height:42%;overflow:auto}
-  #telemetry.show{display:block}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}
-  .cell{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px}
+  .telemetry{display:none;min-width:0;min-height:0;overflow-y:auto;gap:6px;grid-auto-rows:minmax(48px,1fr);align-content:start}
+  .with-telemetry .telemetry{display:grid}
+  .cell{display:flex;flex-direction:column;justify-content:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 9px;min-width:0}
   .cell .k{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim)}
-  .cell .v{font-size:16px;font-weight:600;margin-top:2px}
+  .cell .v{font-size:clamp(13px,1.8vw,20px);font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px;overflow-wrap:anywhere}
   .cell .v.bad{color:var(--bad)}
   .cell .v.dim{color:var(--dim);font-weight:500}
+  .expanded footer{display:none}
+  @media (orientation:portrait){
+    main.with-telemetry{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
+    .with-telemetry #stage{grid-column:1/-1;grid-row:1;height:auto;aspect-ratio:var(--stream-aspect,2)}
+    .with-telemetry .telemetry{grid-row:2}
+    .cell .v{font-size:17px}
+    header{gap:6px;padding:6px 8px}
+    #meta{display:none!important}
+  }
   footer{flex:0 0 auto;font-size:11px;color:var(--dim);padding:5px 12px;border-top:1px solid var(--line)}
   @media (max-width:600px){header .title{display:none}}
 </style>
@@ -62,9 +71,10 @@
     <span class="spacer"></span>
     <button id="telemetry-toggle" type="button" aria-pressed="false">Telemetry</button>
     <button id="retry" type="button" style="display:none">Retry</button>
-    <button id="fs" type="button" title="Fullscreen">&#x26F6;</button>
+    <button id="fs" type="button" title="Fullscreen" aria-label="Fullscreen" aria-pressed="false">&#x26F6;</button>
   </header>
-  <main>
+  <main id="workspace">
+    <aside id="telemetry-device" class="telemetry" aria-label="Device telemetry"></aside>
     <div id="stage">
       <img id="cam" alt="Live comma UI">
       <div id="cover"><div class="box">
@@ -73,8 +83,8 @@
         <div class="hint">The live UI is available on the same local network (LAN) as your comma.</div>
       </div></div>
     </div>
+    <aside id="telemetry-driving" class="telemetry" aria-label="Driving telemetry"></aside>
   </main>
-  <div id="telemetry" aria-live="off"></div>
   <footer>Read-only mirror of the on-device UI. Alerts are shown inside the image. Local network only.</footer>
 </div>
 <script>
@@ -103,7 +113,9 @@
     cover: document.getElementById("cover"),
     coverTitle: document.getElementById("cover-title"),
     coverBody: document.getElementById("cover-body"),
-    telemetry: document.getElementById("telemetry"),
+    workspace: document.getElementById("workspace"),
+    deviceTelemetry: document.getElementById("telemetry-device"),
+    drivingTelemetry: document.getElementById("telemetry-driving"),
     telemetryToggle: document.getElementById("telemetry-toggle"),
     retry: document.getElementById("retry"),
     fs: document.getElementById("fs")
@@ -208,6 +220,7 @@
   // guaranteed. We treat load as a hint and rely on /status for freshness.
   el.cam.addEventListener("load", function () {
     if (el.cam.naturalWidth > 0) {
+      document.documentElement.style.setProperty("--stream-aspect", el.cam.naturalWidth / el.cam.naturalHeight);
       lastFrameAt = Date.now();
       streamFailures = 0;
       pausedSince = 0;
@@ -285,7 +298,8 @@
   function renderTelemetry() {
     var d = telemetryFrame;
     if (!d || d.schemaVersion === undefined) {
-      el.telemetry.innerHTML = '<div class="grid">' + cell("Telemetry", "unavailable", "dim") + '</div>';
+      el.deviceTelemetry.innerHTML = cell("Device", "unavailable", "dim");
+      el.drivingTelemetry.innerHTML = cell("Driving", "unavailable", "dim");
       return;
     }
     var metric = d.isMetric === true;
@@ -310,12 +324,14 @@
     if (d.gasPressed) pedals.push("gas");
     if (d.brakePressed) pedals.push("brake");
     cells += cell("Pedals", pedals.length ? pedals.join("+") : "--", pedals.length ? "" : "dim");
+    el.drivingTelemetry.innerHTML = cells;
+    cells = "";
     cells += cell("CPU", fmt(d.cpuUsagePercent, 0, "%"));
     cells += cell("Mem", fmt(d.memoryUsagePercent, 0, "%"));
     cells += cell("CPU temp", fmt(temp, 0, tempUnit));
     cells += cell("Model", fmt(d.modelExecMs, 1, "ms"));
     cells += cell("Drops", fmt(d.frameDropPerc, 1, "%"));
-    el.telemetry.innerHTML = '<div class="grid">' + cells + '</div>';
+    el.deviceTelemetry.innerHTML = cells;
   }
 
   function pollTelemetry() {
@@ -347,7 +363,8 @@
   el.telemetryToggle.addEventListener("click", function () {
     telemetryOn = !telemetryOn;
     el.telemetryToggle.setAttribute("aria-pressed", telemetryOn ? "true" : "false");
-    el.telemetry.classList.toggle("show", telemetryOn);
+    el.workspace.classList.toggle("with-telemetry", telemetryOn);
+    renderTelemetry();
     if (telemetryOn) pollTelemetry();
   });
 
@@ -358,15 +375,64 @@
     if (!document.hidden) { beginStream(); pollStatus(); }
   });
 
-  el.fs.addEventListener("click", function () {
+  var expanded = false;
+
+  function setExpanded(value) {
+    expanded = value;
+    document.documentElement.classList.toggle("expanded", value);
+    updateFullscreenButton();
+  }
+
+  function updateFullscreenButton() {
+    var active = expanded || !!(document.fullscreenElement || document.webkitFullscreenElement);
+    el.fs.textContent = active ? "Exit" : "\u26F6";
+    el.fs.title = active ? "Exit expanded view" : "Fullscreen";
+    el.fs.setAttribute("aria-label", el.fs.title);
+    el.fs.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  function expandPage() {
+    // The iframe cannot cover Galaxy itself. Ask the validated parent to put
+    // the existing iframe in its top-layer dialog; this preserves the stream.
+    if (isEmbedded()) postToParent("fullscreen", { expanded: true });
+    else setExpanded(true);
+  }
+
+  window.addEventListener("message", function (event) {
+    if (event.source !== window.parent || event.origin !== PARENT_ORIGIN) return;
+    if (event.data && event.data.source === "starpilot-ui-stream-wrapper" && event.data.type === "fullscreen") {
+      setExpanded(event.data.expanded === true);
+    }
+  });
+
+  el.fs.addEventListener("click", async function () {
     var root = document.documentElement;
+    if (expanded) {
+      if (isEmbedded()) postToParent("fullscreen", { expanded: false });
+      else setExpanded(false);
+      return;
+    }
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      try {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+      } catch (e) { updateFullscreenButton(); }
+      return;
+    }
     try {
-      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-        if (root.requestFullscreen) root.requestFullscreen();
-        else if (root.webkitRequestFullscreen) root.webkitRequestFullscreen();
-      } else if (document.exitFullscreen) { document.exitFullscreen(); }
-      else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }
-    } catch (e) { /* best effort only */ }
+      // Call during the click activation, and handle rejected promises too.
+      if (root.requestFullscreen) await root.requestFullscreen();
+      else if (root.webkitRequestFullscreen) await root.webkitRequestFullscreen();
+      else expandPage();
+    } catch (e) { expandPage(); }
+  });
+  document.addEventListener("fullscreenchange", updateFullscreenButton);
+  document.addEventListener("webkitfullscreenchange", updateFullscreenButton);
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && expanded) {
+      if (isEmbedded()) postToParent("fullscreen", { expanded: false });
+      else setExpanded(false);
+    }
   });
 
   document.addEventListener("visibilitychange", function () {
