@@ -521,11 +521,10 @@ def test_stream_telemetry_methods_without_stream():
   app.publish_stream_telemetry(b"{}")  # must not raise
 
 
-def test_mici_without_texture_reports_capture_unavailable(monkeypatch):
+def test_mici_stream_allocates_texture_on_request_and_reuses_it(monkeypatch):
   from openpilot.system.ui.lib import ui_stream as ui_stream_module
 
   monkeypatch.delenv("STREAM", raising=False)
-  monkeypatch.setenv("STREAM_BIND", "127.0.0.1")
   monkeypatch.setattr(application, "DEVICE_TYPE", "mici")
   monkeypatch.setattr(application, "MICI_FORCE_RENDER_TEXTURE", False)
   real_stream = ui_stream_module.UiStream
@@ -533,13 +532,38 @@ def test_mici_without_texture_reports_capture_unavailable(monkeypatch):
                       lambda config: real_stream(ui_stream_module.StreamConfig(bind="127.0.0.1", port=0)))
   app = _bare_app()
   app._render_texture = None
+  app._render_texture_width = 536
+  app._render_texture_height = 240
+  texture = SimpleNamespace(texture=SimpleNamespace(id=7))
+  allocations = []
+  filters = []
+
+  def allocate(width, height):
+    allocations.append((width, height))
+    return texture
+
+  monkeypatch.setattr(application.rl, "load_render_texture", allocate)
+  monkeypatch.setattr(application.rl, "set_texture_filter", lambda *args: filters.append(args))
   app.request_ui_stream()
+  assert allocations == []  # Request handling itself must not touch GL.
   try:
     app._start_pending_ui_stream()
     assert app.ui_stream_state()[0] == "running"
-    status = app._ui_stream.status()
-    assert status["state"] == "error"
-    assert "MICI_FORCE_RENDER_TEXTURE=1" in status["captureError"]
-    assert app._render_texture is None
+    assert not app._ui_stream.status()["captureFailed"]
+    assert app._render_texture is texture
+    assert allocations == [(536, 240)]
+    assert filters == [(texture.texture, application.rl.TextureFilter.TEXTURE_FILTER_BILINEAR)]
+    captures = []
+    monkeypatch.setattr(app._ui_stream, "maybe_capture", lambda now, w, h, read: captures.append((w, h)))
+    app._capture_stream_frame()
+    assert captures == [(536, 240)]
+
+    app.stop_ui_stream()
+    assert app._render_texture is texture
+    app.request_ui_stream()
+    app._start_pending_ui_stream()
+    assert app.ui_stream_state()[0] == "running"
+    assert not app._ui_stream.status()["captureFailed"]
+    assert allocations == [(536, 240)]
   finally:
     app.stop_ui_stream()

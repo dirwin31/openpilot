@@ -1088,16 +1088,13 @@ class GuiApplication:
       self._ui_stream_error = ""  # STREAM=0 is a deliberate kill switch, not a failure
       return
 
-    # MICI normally draws direct. Switching composition live can corrupt the
-    # live EGL camera pass, so the image stays behind the existing explicit
-    # opt-in there; status and telemetry still work.
-    mici_blocked = DEVICE_TYPE == "mici" and not MICI_FORCE_RENDER_TEXTURE
-    if self._render_texture is None and mici_blocked:
-      cloudlog.warning("UI streamer: image unavailable on mici without MICI_FORCE_RENDER_TEXTURE=1")
-
+    # Opening Live UI opts into the texture path on every device, including
+    # MICI. This runs between frames on the render thread, before drawing into
+    # the new target. Keep it until window close to avoid repeated composition
+    # switches when viewers disconnect and return.
     allocated_texture = False
     render_texture = None
-    if self._render_texture is None and not mici_blocked:
+    if self._render_texture is None:
       render_texture = rl.load_render_texture(self._render_texture_width, self._render_texture_height)
       texture = getattr(render_texture, "texture", None)
       if texture is None or getattr(texture, "id", 0) == 0:
@@ -1119,10 +1116,6 @@ class GuiApplication:
         self._unload_render_texture(render_texture)
       self._fail_ui_stream(f"cannot bind {config.bind}:{config.port}: {exc}")
       return
-
-    if self._render_texture is None and mici_blocked:
-      stream.fail_capture("Image streaming on MICI requires MICI_FORCE_RENDER_TEXTURE=1. " +
-                          "Enable it before restarting the UI; telemetry remains available.")
 
     # Publish the streamer before serve(): a thread-start failure then rolls
     # back through stop_ui_stream(), which closes the listener it already owns.
