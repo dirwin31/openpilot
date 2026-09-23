@@ -449,7 +449,7 @@ export const UiStream = {
 
         <section class="gx-card">
           <div style="padding:var(--sp-4); color:var(--text-muted); font-size:13px; line-height:1.5;">
-            <p style="margin:0 0 8px;">A read-only mirror of the on-device UI. The image already contains the driving HUD and alerts, so nothing is overlaid on it.</p>
+            <p style="margin:0 0 8px;">A live mirror of the on-device UI. The image already contains the driving HUD and alerts, so nothing is overlaid on it. While parked, press Control in the viewer to tap the comma screen remotely.</p>
             <p style="margin:0 0 8px;">It is served over your local network with no authentication. Only enable it on a network you trust.</p>
             <p style="margin:0;">Remote access through Galaxy does not carry the stream. Open Galaxy locally at the comma's IP to use Live UI.</p>
           </div>
