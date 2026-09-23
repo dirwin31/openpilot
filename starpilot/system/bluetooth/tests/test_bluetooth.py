@@ -579,3 +579,20 @@ def test_audio_address_decodes_device_params_bytes():
   params = FakeParams(BluetoothEnabled=True, BluetoothAudioAddress=b"00:11:22:33:44:55")
   sink = BluetoothAudioSink(params, start_thread=False)
   assert sink.desired_address() == "00:11:22:33:44:55"
+
+
+def test_pairing_a_car_head_unit_does_not_take_over_alert_audio():
+  params = FakeParams(IsOffroad=True, BluetoothEnabled=True)
+  client = FakeBlueZ()
+  client.device["uuids"] = ["4de17a00-52cb-11e6-bdf4-0800200c9a66", "0000110b-0000-1000-8000-00805f9b34fb"]
+  controller = BluetoothController(params, lambda: client, FakeRadio(), FakeParams(), sleep=lambda _delay: None)
+
+  controller._pair_worker(client.device["address"])
+  assert params.get("BluetoothAudioAddress") is None
+
+  client.device["uuids"] = ["0000110b-0000-1000-8000-00805f9b34fb"]
+  controller._pair_worker(client.device["address"], select_audio=False)
+  assert params.get("BluetoothAudioAddress") is None
+
+  controller._pair_worker(client.device["address"])
+  assert params.get("BluetoothAudioAddress") == client.device["address"]
