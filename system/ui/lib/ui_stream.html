@@ -9,9 +9,8 @@
   The image already contains the driving HUD. The optional telemetry panel is
   deliberately rendered outside the image so it can never obscure alerts.
 
-  Remote control is opt-in per page load: gestures on the image are only sent
-  after pressing Control, each one whole when the finger lifts, and the comma
-  refuses them while driving.
+  Remote control is opt-in per page load: input on the image is only forwarded
+  after pressing Control, and the comma refuses it while driving.
 -->
 <html lang="en">
 <head>
@@ -419,24 +418,22 @@
 
   // ------------------------------------------------------------ remote control
   //
-  // A gesture is recorded here and sent whole when the finger lifts; the comma
-  // replays it with its original timing. Nothing reaches the comma mid-gesture,
-  // so a gesture interrupted by a lost connection, pointercancel or a hidden
-  // tab is simply discarded -- there is never a half-finished press to undo.
-  // Positions are normalized to the image content (0..1).
+  // Pointer input is forwarded live, normalized to the image content (0..1).
+  // Every gesture has an id: the comma lets one gesture own the pointer at a
+  // time and cancels (never releases) a gesture whose viewer goes quiet, so a
+  // lost connection cannot turn a press into a click. While a finger is down we
+  // send a keepalive whenever the link is idle, well inside the comma's 400 ms.
 
-  var CONTROL_MOVE_MS = 16;  // thin moves to ~60 Hz
-  var CONTROL_MAX_QUEUE = 3;
+  var CONTROL_KEEPALIVE_MS = 100;
+  var CONTROL_MAX_BATCH = 32;
   var TRAIL_FADE_MS = 500;
   var DEFAULT_FOOTER = el.footer.textContent;
-  var CONTROL_FOOTER = "Remote control on: tap, hold or drag on the image. Each gesture is sent when you lift your finger.";
+  var CONTROL_FOOTER = "Remote control on: taps and drags on the image go to the comma as you make them.";
   var controlOn = false;
   var controlAllowed = false;
   var controlReason = "";
-  var maxGestureMs = 3000;
-  var maxEvents = 400;
-  var gesture = null;  // { pointerId, start, events, trail, timer }
-  var outbox = [];
+  var gesture = null;  // { id, pointerId, point, trail, keepalive }
+  var outbox = [];     // { id, event }
   var controlInflight = false;
   var trailClear = null;
   var trailCtx = el.trail.getContext("2d");
@@ -446,19 +443,23 @@
     el.controlToggle.style.display = available ? "" : "none";
     controlAllowed = available && control.allowed === true;
     controlReason = control && control.reason ? control.reason : "";
-    if (control && typeof control.maxGestureSeconds === "number") maxGestureMs = control.maxGestureSeconds * 1000;
-    if (control && typeof control.maxEvents === "number") maxEvents = control.maxEvents;
     el.controlToggle.disabled = !controlAllowed;
     el.controlToggle.title = controlAllowed ? "Tap, hold or drag on the image to control the comma" : (controlReason || "Remote control unavailable");
     if (!controlAllowed && controlOn) setControl(false);
   }
 
   function setControl(on, message) {
-    if (!on) discardGesture();
+    if (!on) cancelGesture();
     controlOn = on;
     el.controlToggle.setAttribute("aria-pressed", on ? "true" : "false");
     el.stage.classList.toggle("controlling", on);
     el.footer.textContent = message || (on ? CONTROL_FOOTER : DEFAULT_FOOTER);
+  }
+
+  function gestureId() {
+    var bytes = new Uint8Array(8);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    return Array.prototype.map.call(bytes, function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
   }
 
   function imagePoint(event) {
@@ -473,7 +474,8 @@
     return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)), inside: x >= 0 && x <= 1 && y >= 0 && y <= 1 };
   }
 
-  function drawTrail(points, sent) {
+  // The trail is drawn locally, so it tracks the finger with no stream latency.
+  function drawTrail(points, fade) {
     if (trailClear) { clearTimeout(trailClear); trailClear = null; }
     var box = el.stage.getBoundingClientRect();
     var dpr = window.devicePixelRatio || 1;
@@ -484,77 +486,77 @@
     trailCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     trailCtx.clearRect(0, 0, box.width, box.height);
     if (!points.length) return;
-    var color = sent ? "rgba(79,195,247,.9)" : "rgba(245,166,35,.9)";
-    trailCtx.strokeStyle = trailCtx.fillStyle = color;
+    trailCtx.strokeStyle = trailCtx.fillStyle = "rgba(245,166,35,.9)";
     trailCtx.lineWidth = 4;
     trailCtx.lineCap = trailCtx.lineJoin = "round";
     trailCtx.beginPath();
     points.forEach(function (p, i) {
-      var x = p.clientX - box.left, y = p.clientY - box.top;
-      if (i === 0) trailCtx.moveTo(x, y); else trailCtx.lineTo(x, y);
+      if (i === 0) trailCtx.moveTo(p.clientX - box.left, p.clientY - box.top);
+      else trailCtx.lineTo(p.clientX - box.left, p.clientY - box.top);
     });
     trailCtx.stroke();
-    var first = points[0];
+    var last = points[points.length - 1];
     trailCtx.beginPath();
-    trailCtx.arc(first.clientX - box.left, first.clientY - box.top, 10, 0, 2 * Math.PI);
+    trailCtx.arc(last.clientX - box.left, last.clientY - box.top, 10, 0, 2 * Math.PI);
     trailCtx.fill();
-    if (sent) trailClear = setTimeout(function () { trailClear = null; drawTrail([]); }, TRAIL_FADE_MS);
+    if (fade) trailClear = setTimeout(function () { trailClear = null; drawTrail([]); }, TRAIL_FADE_MS);
   }
 
-  function record(type, event, point) {
-    var t = Math.round(event.timeStamp - gesture.start);
-    var events = gesture.events;
-    var last = events[events.length - 1];
-    var entry = { type: type, x: point.x, y: point.y, t: Math.max(t, last ? last.t : 0) };
-    // Thin moves, and keep room for the final up within the event budget.
-    if (type === "move" && last.type === "move" && (entry.t - last.t < CONTROL_MOVE_MS || events.length >= maxEvents - 1)) {
-      events[events.length - 1] = entry;
-    } else {
-      events.push(entry);
-    }
-    gesture.trail.push({ clientX: event.clientX, clientY: event.clientY });
-  }
-
-  function discardGesture(message) {
-    if (!gesture) return;
-    var pointer = gesture.pointerId;
-    clearTimeout(gesture.timer);
-    gesture = null;  // first: releasing capture fires lostpointercapture
-    try { el.cam.releasePointerCapture(pointer); } catch (e) { /* ignore */ }
-    drawTrail([]);
-    if (message) el.footer.textContent = message;
-  }
-
-  function sendGesture(events) {
-    if (outbox.length >= CONTROL_MAX_QUEUE) {
-      el.footer.textContent = "Still sending earlier input; that gesture was not sent.";
-      return;
-    }
-    outbox.push(events);
+  function queueControl(id, type, point) {
+    var event = { type: type, x: point.x, y: point.y };
+    var last = outbox[outbox.length - 1];
+    // Coalesce drags and keepalives: only the latest position matters.
+    if (type === "move" && last && last.id === id && last.event.type === "move") last.event = event;
+    else outbox.push({ id: id, event: event });
     flushControl();
   }
 
   function flushControl() {
     if (controlInflight || !outbox.length) return;
+    var id = outbox[0].id;
+    var batch = [];
+    while (outbox.length && outbox[0].id === id && batch.length < CONTROL_MAX_BATCH) batch.push(outbox.shift().event);
     controlInflight = true;
     fetch("/input", {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json", "X-UI-Stream-Control": "1" },
-      body: JSON.stringify({ gesture: outbox.shift() })
+      body: JSON.stringify({ gesture: id, events: batch })
     }).then(function (r) {
-      if (r.ok) { if (controlOn) el.footer.textContent = CONTROL_FOOTER; return; }
+      if (r.ok) return;
       return r.json().catch(function () { return {}; }).then(function (body) {
         var message = body.error || ("Remote control failed (" + r.status + ")");
+        // The comma ended or refused this gesture: stop feeding it.
+        outbox = outbox.filter(function (item) { return item.id !== id; });
+        if (gesture && gesture.id === id) endGesture();
         if (r.status === 403) { outbox = []; controlAllowed = false; setControl(false, message); }
         else el.footer.textContent = message;
       });
     }).catch(function () {
-      el.footer.textContent = "Could not reach the comma; that gesture was not sent.";
+      // A lost request is fine: if the comma stops hearing us it cancels the
+      // gesture itself rather than completing it.
+      el.footer.textContent = "Lost contact with the comma; a held press there will be cancelled.";
     }).finally(function () {
       controlInflight = false;
       flushControl();
     });
+  }
+
+  function endGesture() {
+    if (!gesture) return;
+    var pointer = gesture.pointerId;
+    clearInterval(gesture.keepalive);
+    var trail = gesture.trail;
+    gesture = null;  // first: releasing capture fires lostpointercapture
+    try { el.cam.releasePointerCapture(pointer); } catch (e) { /* ignore */ }
+    drawTrail(trail, true);
+  }
+
+  // Anything but a clean lift cancels: the comma forgets the press, no click.
+  function cancelGesture() {
+    if (!gesture) return;
+    queueControl(gesture.id, "cancel", gesture.point);
+    endGesture();
   }
 
   el.cam.draggable = false;
@@ -567,14 +569,13 @@
     var point = imagePoint(event);
     if (!point || !point.inside) return;
     event.preventDefault();
-    gesture = { pointerId: event.pointerId, start: event.timeStamp, events: [], trail: [], timer: null };
-    record("down", event, point);
+    var id = gestureId();
+    gesture = { id: id, pointerId: event.pointerId, point: point, trail: [{ clientX: event.clientX, clientY: event.clientY }], keepalive: null };
     try { el.cam.setPointerCapture(event.pointerId); } catch (e) { /* ignore */ }
-    // Past the comma's limit the gesture could never be replayed: drop it now
-    // rather than let the user finish a drag that silently does nothing.
-    gesture.timer = setTimeout(function () {
-      discardGesture("That gesture was longer than " + (maxGestureMs / 1000) + " s, so it was not sent.");
-    }, maxGestureMs);
+    queueControl(id, "down", point);
+    gesture.keepalive = setInterval(function () {
+      if (gesture && gesture.id === id && !controlInflight && !outbox.length) queueControl(id, "move", gesture.point);
+    }, CONTROL_KEEPALIVE_MS);
     drawTrail(gesture.trail, false);
   });
 
@@ -583,27 +584,24 @@
     var point = imagePoint(event);
     if (!point) return;
     event.preventDefault();
-    record("move", event, point);
+    gesture.point = point;
+    gesture.trail.push({ clientX: event.clientX, clientY: event.clientY });
+    queueControl(gesture.id, "move", point);
     drawTrail(gesture.trail, false);
   });
 
   el.cam.addEventListener("pointerup", function (event) {
     if (!gesture || event.pointerId !== gesture.pointerId) return;
-    var point = imagePoint(event);
-    if (!point) { discardGesture(); return; }
-    record("up", event, point);
-    var done = gesture;
-    discardGesture();
-    drawTrail(done.trail, true);
-    sendGesture(done.events);
+    var point = imagePoint(event) || gesture.point;
+    queueControl(gesture.id, "up", point);
+    endGesture();
   });
 
-  // Anything but a clean lift discards the gesture: it never leaves the browser.
-  function cancelPointer(event) {
-    if (gesture && event.pointerId === gesture.pointerId) discardGesture();
+  function pointerLost(event) {
+    if (gesture && event.pointerId === gesture.pointerId) cancelGesture();
   }
-  el.cam.addEventListener("pointercancel", cancelPointer);
-  el.cam.addEventListener("lostpointercapture", cancelPointer);
+  el.cam.addEventListener("pointercancel", pointerLost);
+  el.cam.addEventListener("lostpointercapture", pointerLost);
 
   el.controlToggle.addEventListener("click", function () {
     if (!controlAllowed && !controlOn) return;
@@ -680,7 +678,7 @@
 
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) {
-      discardGesture();
+      cancelGesture();
       stopTimers();
       endStream();
       showCover("Paused", "Live UI is paused while this tab is in the background. Return to resume.");
@@ -695,7 +693,7 @@
   });
 
   window.addEventListener("beforeunload", function () {
-    discardGesture();
+    cancelGesture();
     stopTimers();
     endStream();
   });
