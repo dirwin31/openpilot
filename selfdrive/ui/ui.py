@@ -105,6 +105,9 @@ def main():
       ui_state.update(progress_hook=stall_monitor.progress)
       stall_monitor.progress("ui.after_state_update")
       now = time.monotonic()
+      # Remote taps from Live UI are for setting things up while parked. Never
+      # while driving: someone off the car must not change it under the driver.
+      gui_app.set_ui_stream_control(not ui_state.started, "the car is onroad")
 
       # Live UI in Galaxy posts UiStreamRequested. It is consumed whether or
       # not the start succeeds — a stuck flag would re-request every tick — and

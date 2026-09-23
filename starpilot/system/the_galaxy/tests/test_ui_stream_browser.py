@@ -6,6 +6,7 @@ two localhost origins serve the real Vue wrapper/viewer with synthetic frames.
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -35,7 +36,7 @@ def browser():
 
 @pytest.fixture(scope="module")
 def viewer_site():
-  counts = {"stream": 0}
+  counts = {"stream": 0, "input": [], "control_allowed": True}
   stream_port = 0
 
   class Handler(BaseHTTPRequestHandler):
@@ -43,6 +44,11 @@ def viewer_site():
       pass
 
     def do_POST(self):
+      if urlsplit(self.path).path == "/input":
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        counts["input"].append({"header": self.headers.get("X-UI-Stream-Control"), "gesture": body["gesture"]})
+        self.respond({"ok": True, "error": ""})
+        return
       self.respond({"streamState": "running", "streamSequence": 1})
 
     def respond(self, body, mime="application/json"):
@@ -69,7 +75,10 @@ window.testApp=createApp(UiStream);window.testApp.mount('#root');
       elif path == "/api/device/status":
         self.respond({"streamPort": stream_port, "streamState": "running", "streamSequence": 1})
       elif path == "/status":
-        self.respond({"state": "ready", "frameSequence": 1, "frameAgeMs": 10, "outputWidth": 2160, "outputHeight": 1080})
+        allowed = counts["control_allowed"]
+        self.respond({"state": "ready", "frameSequence": 1, "frameAgeMs": 10, "outputWidth": 2160, "outputHeight": 1080,
+                      "control": {"available": True, "allowed": allowed, "reason": "" if allowed else "the car is onroad",
+                                  "maxGestureSeconds": 3.0, "maxEvents": 400}})
       elif path == "/telemetry":
         self.respond({"schemaVersion": 1, "isMetric": False, "vEgo": 31.7, "setSpeed": 72,
                       "leadDist": 30, "brake": 0, "engaged": True, "driveState": "enabled",
@@ -174,4 +183,95 @@ def test_fullscreen_uses_native_api_when_available_and_rejects_spoofed_messages(
     frame.get_by_role("button", name="Exit expanded view").click()
     frame.get_by_role("button", name="Fullscreen", exact=True).wait_for()
   finally:
+    page.close()
+
+
+def _image_content(page, frame):
+  content = frame.locator("#cam").evaluate("""img => {
+    const r = img.getBoundingClientRect(), s = Math.min(r.width / img.naturalWidth, r.height / img.naturalHeight);
+    const w = img.naturalWidth * s, h = img.naturalHeight * s;
+    return {left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h};
+  }""")
+  frame_box = page.locator("iframe").bounding_box()
+  content["left"] += frame_box["x"]
+  content["top"] += frame_box["y"]
+  return content
+
+
+def _wait_for_input(page, counts, n=1):
+  deadline = time.monotonic() + 3.0
+  while time.monotonic() < deadline and len(counts["input"]) < n:
+    page.wait_for_timeout(20)
+
+
+@pytest.mark.parametrize("size", [(390, 844), (1280, 800)])
+def test_control_sends_one_whole_gesture_mapped_through_the_letterbox(browser, viewer_site, size):
+  counts = viewer_site[1]
+  counts["input"].clear()
+  page, frame = open_viewer(browser, viewer_site, *size)
+  try:
+    cam = frame.locator("#cam")
+    # Off by default: a tap on the image sends nothing.
+    box = cam.bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    toggle = frame.locator("#control-toggle")
+    toggle.wait_for()
+    assert counts["input"] == []
+
+    toggle.click()
+    assert toggle.get_attribute("aria-pressed") == "true"
+    content = _image_content(page, frame)
+    x = content["left"] + content["width"] * 0.25
+    y = content["top"] + content["height"] * 0.75
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + content["width"] * 0.25, y, steps=4)
+    page.wait_for_timeout(100)
+    assert counts["input"] == []  # nothing leaves the browser mid-gesture
+    page.mouse.up()
+    _wait_for_input(page, counts)
+
+    assert len(counts["input"]) == 1 and counts["input"][0]["header"] == "1"
+    gesture = counts["input"][0]["gesture"]
+    kinds = [event["type"] for event in gesture]
+    assert kinds[0] == "down" and kinds[-1] == "up" and set(kinds[1:-1]) <= {"move"}
+    assert gesture[0]["t"] == 0 and all(a["t"] <= b["t"] for a, b in zip(gesture, gesture[1:], strict=False))
+    assert gesture[-1]["t"] >= 100  # original timing is preserved for replay
+    assert gesture[0]["x"] == pytest.approx(0.25, abs=0.01) and gesture[0]["y"] == pytest.approx(0.75, abs=0.01)
+    assert gesture[-1]["x"] == pytest.approx(0.5, abs=0.01)
+    assert frame.locator("body").evaluate("el => el.scrollWidth <= innerWidth")
+  finally:
+    page.close()
+
+
+def test_control_interrupted_gesture_is_never_sent(browser, viewer_site):
+  counts = viewer_site[1]
+  counts["input"].clear()
+  page, frame = open_viewer(browser, viewer_site, 844, 390)
+  try:
+    frame.locator("#control-toggle").click()
+    content = _image_content(page, frame)
+    page.mouse.move(content["left"] + content["width"] / 2, content["top"] + content["height"] / 2)
+    page.mouse.down()
+    # The browser takes the pointer away (scroll takeover, lost capture, ...).
+    frame.locator("#cam").dispatch_event("pointercancel", {"pointerId": 1, "bubbles": True})
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    assert counts["input"] == []
+  finally:
+    page.close()
+
+
+def test_control_disables_itself_when_the_comma_refuses(browser, viewer_site):
+  counts = viewer_site[1]
+  page, frame = open_viewer(browser, viewer_site, 844, 390)
+  try:
+    toggle = frame.locator("#control-toggle")
+    toggle.click()
+    counts["control_allowed"] = False
+    frame.locator("#control-toggle[disabled]").wait_for()
+    assert toggle.get_attribute("aria-pressed") == "false"
+    assert "onroad" in toggle.get_attribute("title")
+  finally:
+    counts["control_allowed"] = True
     page.close()

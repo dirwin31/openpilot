@@ -936,3 +936,201 @@ def test_capture_unavailable_reports_reason_without_holding_render(make_stream):
   stream.extend_telemetry_interest()
   stream.set_telemetry(b'{}')
   assert stream.telemetry_snapshot(2) == b'{}'
+
+
+# ------------------------------------------------------------ remote control
+
+
+def test_parse_config_control_kill_switch():
+  assert ui_stream.parse_config({}).control is True
+  assert ui_stream.parse_config({"STREAM_CONTROL": "0"}).control is False
+
+
+def _post_input(stream: UiStream, body, headers: dict[str, str] | None = None, path: str = "/input"):
+  conn = http.client.HTTPConnection("127.0.0.1", stream.port, timeout=5.0)
+  data = body if isinstance(body, bytes) else json.dumps(body).encode()
+  merged = {"Content-Type": "application/json", ui_stream.CONTROL_HEADER: "1"}
+  merged.update(headers or {})
+  try:
+    conn.request("POST", path, body=data, headers={k: v for k, v in merged.items() if v is not None})
+    response = conn.getresponse()
+    return response.status, json.loads(response.read() or b"{}")
+  finally:
+    conn.close()
+
+
+def _gesture(*points):
+  """points: (type, x, y, t_ms)"""
+  return [{"type": kind, "x": x, "y": y, "t": t} for kind, x, y, t in points]
+
+
+def _tap(x=0.5, y=0.5):
+  return {"gesture": _gesture(("down", x, y, 1000), ("up", x, y, 1080))}
+
+
+def test_control_refused_until_the_app_allows_it(make_stream):
+  stream = make_stream()
+  status, body = _post_input(stream, _tap())
+  assert status == 403 and "not ready" in body["error"]
+  assert stream.take_gesture() is None
+
+  stream.set_control_allowed(False, "the car is onroad")
+  status, body = _post_input(stream, _tap())
+  assert status == 403 and "onroad" in body["error"]
+
+
+def test_control_kill_switch_refuses_input(make_stream):
+  stream = make_stream(control=False)
+  stream.set_control_allowed(True)
+  status, body = _post_input(stream, _tap())
+  assert status == 403 and "STREAM_CONTROL=0" in body["error"]
+  assert stream.status()["control"]["available"] is False
+
+
+def test_control_gesture_is_queued_whole_and_rebased(make_stream):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  status, body = _post_input(stream, _tap(0.25, 0.75))
+  assert status == 202 and body == {"ok": True, "error": ""}
+  assert stream.take_gesture() == [ui_stream.ControlEvent("down", 0.25, 0.75, 0.0),
+                                   ui_stream.ControlEvent("up", 0.25, 0.75, pytest.approx(0.08))]
+  assert stream.take_gesture() is None
+
+
+@pytest.mark.parametrize("headers, expected", [
+  ({ui_stream.CONTROL_HEADER: None}, 403),                # a plain cross-site form/fetch cannot add it
+  ({"Content-Type": "text/plain"}, 415),                  # the no-preflight content type
+  ({"Origin": "http://evil.example"}, 403),               # cross-origin page
+  ({"Host": "evil.example"}, 403),                        # DNS rebinding
+])
+def test_control_rejects_requests_a_hostile_page_could_send(make_stream, headers, expected):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  status, _ = _post_input(stream, _tap(), headers=headers)
+  assert status == expected
+  assert stream.take_gesture() is None
+
+
+def test_control_accepts_same_origin_viewer(make_stream):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  status, _ = _post_input(stream, _tap(), headers={"Origin": f"http://127.0.0.1:{stream.port}"})
+  assert status == 202
+
+
+def test_control_preflight_and_get_are_refused(make_stream):
+  stream = make_stream()
+  for method in ("OPTIONS", "GET"):
+    conn = http.client.HTTPConnection("127.0.0.1", stream.port, timeout=5.0)
+    try:
+      conn.request(method, "/input")
+      response = conn.getresponse()
+      assert response.status == 405
+      response.read()
+    finally:
+      conn.close()
+
+
+@pytest.mark.parametrize("gesture", [
+  # A partial gesture is exactly what must never reach the UI.
+  _gesture(("down", 0.5, 0.5, 0)),
+  _gesture(("down", 0.5, 0.5, 0), ("move", 0.6, 0.5, 10)),
+  _gesture(("move", 0.5, 0.5, 0), ("up", 0.5, 0.5, 10)),
+  _gesture(("down", 0.5, 0.5, 0), ("down", 0.5, 0.5, 5), ("up", 0.5, 0.5, 10)),
+  _gesture(("down", 0.5, 0.5, 0), ("up", 0.5, 0.5, 10), ("up", 0.5, 0.5, 20)),
+  _gesture(("down", 0.5, 0.5, 50), ("up", 0.5, 0.5, 10)),
+  _gesture(("down", 0.5, 0.5, 0), ("up", 0.5, 0.5, ui_stream.CONTROL_MAX_GESTURE * 1000 + 1)),
+  _gesture(("down", "0.5", 0.5, 0), ("up", 0.5, 0.5, 10)),
+  _gesture(("down", True, 0.5, 0), ("up", 0.5, 0.5, 10)),
+  [{"type": "down", "x": 0.5, "y": 0.5}, {"type": "up", "x": 0.5, "y": 0.5}],
+  [{"type": "down", "x": 0.5, "y": 0.5, "t": 0}] + [{"type": "move", "x": 0.5, "y": 0.5, "t": 1}] * ui_stream.CONTROL_MAX_EVENTS
+    + [{"type": "up", "x": 0.5, "y": 0.5, "t": 2}],
+  "tap",
+])
+def test_control_rejects_anything_but_one_whole_gesture(make_stream, gesture):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  status, _ = _post_input(stream, {"gesture": gesture})
+  assert status in (400, 413)
+  assert stream.take_gesture() is None
+
+
+def test_control_rejects_malformed_json(make_stream):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  assert _post_input(stream, b"not json")[0] == 400
+  assert _post_input(stream, {"events": _tap()["gesture"]})[0] == 400
+
+
+def test_control_clamps_coordinates():
+  events, error = ui_stream.parse_gesture(_gesture(("down", -3, 9, 0), ("up", 2, 0.5, 5)))
+  assert error == ""
+  assert [(e.x, e.y) for e in events] == [(0.0, 1.0), (1.0, 0.5)]
+
+
+def test_control_gestures_from_several_viewers_stay_whole(make_stream):
+  # Two viewers gesturing at once: each gesture is atomic, so neither can move
+  # or release the other's press. They are replayed one after the other.
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  drag = {"gesture": _gesture(("down", 0.1, 0.1, 0), ("move", 0.5, 0.1, 100), ("up", 0.9, 0.1, 200))}
+  results = []
+  threads = [threading.Thread(target=lambda body=body: results.append(_post_input(stream, body)[0]))
+             for body in (drag, _tap(0.7, 0.7))]
+  for thread in threads:
+    thread.start()
+  for thread in threads:
+    thread.join(5)
+  assert results == [202, 202]
+  gestures = [stream.take_gesture(), stream.take_gesture()]
+  assert sorted(len(g) for g in gestures) == [2, 3]
+  for gesture in gestures:
+    assert [e.kind for e in gesture] in (["down", "up"], ["down", "move", "up"])
+
+
+def test_control_queue_is_bounded(make_stream):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  for _ in range(ui_stream.CONTROL_QUEUE_GESTURES):
+    assert stream.submit_gesture(_tap()["gesture"])[0] == 202
+  assert stream.submit_gesture(_tap()["gesture"])[0] == 429
+
+
+def test_control_stale_gestures_are_dropped(make_stream):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  stream.submit_gesture(_tap(0.1, 0.1)["gesture"], now=100.0)
+  stream.submit_gesture(_tap(0.2, 0.2)["gesture"], now=101.5)
+  gesture = stream.take_gesture(now=100.0 + ui_stream.CONTROL_GESTURE_MAX_WAIT + 0.1)
+  assert gesture[0].x == 0.2
+  assert stream.status()["control"]["dropped"] == 1
+
+
+def test_control_revoked_discards_queued_gestures(make_stream):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  stream.submit_gesture(_tap()["gesture"])
+  stream.set_control_allowed(False, "the car is onroad")
+  assert stream.take_gesture() is None
+  stream.set_control_allowed(True)
+  assert stream.take_gesture() is None  # not resurrected
+
+
+def test_status_reports_control(make_stream):
+  stream = make_stream()
+  control = stream.status()["control"]
+  assert control["available"] is True and control["allowed"] is False
+  assert control["maxGestureSeconds"] == ui_stream.CONTROL_MAX_GESTURE
+  assert control["maxEvents"] == ui_stream.CONTROL_MAX_EVENTS
+  stream.set_control_allowed(True)
+  stream.submit_gesture(_tap()["gesture"])
+  control = stream.status()["control"]
+  assert control["allowed"] is True and control["queued"] == 1
+
+
+def test_viewer_control_is_opt_in_and_preflighted():
+  html = ui_stream.viewer_html().decode()
+  assert 'id="control-toggle"' in html
+  assert ui_stream.CONTROL_HEADER in html
+  assert '"Content-Type": "application/json"' in html
+  assert "var controlOn = false;" in html

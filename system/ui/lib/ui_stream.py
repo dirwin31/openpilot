@@ -1,4 +1,4 @@
-"""Read-only MJPEG mirror of the StarPilot UI over the local network.
+"""MJPEG mirror of the StarPilot UI over the local network, with optional remote touch.
 
 Opt-in via ``STREAM=1``. This module owns:
 
@@ -7,7 +7,8 @@ Opt-in via ``STREAM=1``. This module owns:
 * demand tracking (image streams, snapshot leases, telemetry interest),
 * a single reused raw capture slot with strict ownership handoff
   (``FREE -> CAPTURING -> ENCODING -> FREE``),
-* one demand-driven JPEG encoder worker.
+* one demand-driven JPEG encoder worker,
+* a bounded queue of whole remote gestures (``POST /input``) the UI replays.
 
 Design constraints:
 
@@ -27,10 +28,12 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import socket
 import threading
 import time
 import urllib.parse
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import IntEnum
@@ -82,6 +85,24 @@ MAX_FPS = 30
 MIN_WIDTH = 160
 MAX_WIDTH = 2160
 
+# Remote control. The viewer sends each gesture whole, when the finger lifts,
+# and the UI replays it with its original timing. The comma therefore never
+# holds a partial press: a gesture lost with the connection never arrives, so
+# there is nothing to cancel, and gestures from different viewers cannot mix.
+# Coordinates are normalized to the image, so the viewer never needs the UI
+# resolution or the downscaled stream size.
+CONTROL_HEADER = "X-UI-Stream-Control"
+CONTROL_MAX_EVENTS = 400  # per gesture; the viewer thins moves to ~60 Hz
+CONTROL_MAX_BODY = 48 * 1024
+# Longest gesture accepted. It also bounds how long a physical touch that
+# starts mid-replay is held back (see GuiApplication._arbitrate_input).
+CONTROL_MAX_GESTURE = 3.0
+CONTROL_QUEUE_GESTURES = 4
+# A queued gesture the UI has not started by now is dropped: the screen was
+# busy with physical touches, and a tap replayed long after it was made would
+# land on whatever the screen shows by then.
+CONTROL_GESTURE_MAX_WAIT = 2.0
+
 _SCHEMA_VERSION = 1
 
 
@@ -96,9 +117,11 @@ class StreamConfig:
   quality: int = DEFAULT_QUALITY
   fps: int = DEFAULT_FPS
   width: int = DEFAULT_WIDTH
+  control: bool = True
 
   def __str__(self) -> str:
-    return f"{self.bind}:{self.port} quality={self.quality} fps={self.fps} width={self.width or 'source'}"
+    control = "on" if self.control else "off"
+    return f"{self.bind}:{self.port} quality={self.quality} fps={self.fps} width={self.width or 'source'} control={control}"
 
 
 def _env_int(env: Mapping[str, str], key: str, default: int, low: int, high: int) -> int:
@@ -138,7 +161,9 @@ def parse_config(env: Mapping[str, str]) -> StreamConfig | None:
   if width != 0 and width < MIN_WIDTH:
     raise StreamConfigError(f"STREAM_WIDTH={width} must be 0 or at least {MIN_WIDTH}")
 
-  return StreamConfig(bind=bind, port=port, quality=quality, fps=fps, width=width)
+  control = env.get("STREAM_CONTROL", "1") != "0"
+
+  return StreamConfig(bind=bind, port=port, quality=quality, fps=fps, width=width, control=control)
 
 
 class _SlotState(IntEnum):
@@ -164,6 +189,66 @@ class _RawSlot:
     self.generation = 0
     self.captured_at = 0.0
     self.bottom_up = True
+
+
+class ControlEvent(NamedTuple):
+  """One remote pointer transition in normalized image coordinates (0..1)."""
+  kind: str  # "down" | "move" | "up"
+  x: float
+  y: float
+  t: float = 0.0  # seconds since the gesture's down
+
+
+def _number(value: object) -> float | None:
+  # bool is an int subclass; reject it so {"x": true} is not a coordinate.
+  if isinstance(value, bool) or not isinstance(value, (int, float)):
+    return None
+  value = float(value)
+  return value if math.isfinite(value) else None
+
+
+def parse_gesture(raw: object) -> tuple[list[ControlEvent] | None, str]:
+  """Validate one whole gesture: ``down``, any ``move``s, then ``up``.
+
+  ``t`` is milliseconds from the viewer and must not go backwards. Returns the
+  events rebased to seconds from the down, or ``(None, reason)``.
+  """
+  if not isinstance(raw, list) or not (2 <= len(raw) <= CONTROL_MAX_EVENTS):
+    return None, f"a gesture has 2..{CONTROL_MAX_EVENTS} events"
+  events: list[ControlEvent] = []
+  for index, item in enumerate(raw):
+    if not isinstance(item, dict):
+      return None, "invalid event"
+    expected = "down" if index == 0 else "up" if index == len(raw) - 1 else "move"
+    if item.get("type") != expected:
+      return None, "a gesture is down, moves, then up"
+    x, y, t = _number(item.get("x")), _number(item.get("y")), _number(item.get("t"))
+    if x is None or y is None or t is None:
+      return None, "invalid event"
+    events.append(ControlEvent(expected, min(1.0, max(0.0, x)), min(1.0, max(0.0, y)), t / 1000.0))
+  start = events[0].t
+  events = [event._replace(t=event.t - start) for event in events]
+  if any(later.t < earlier.t for earlier, later in zip(events, events[1:], strict=False)):
+    return None, "event times go backwards"
+  if events[-1].t > CONTROL_MAX_GESTURE:
+    return None, f"gesture longer than {CONTROL_MAX_GESTURE:g} s"
+  return events, ""
+
+
+def _is_local_host(host: str) -> bool:
+  """True for an IP literal, localhost or an mDNS name.
+
+  Rejecting other names defeats DNS rebinding: a page on attacker.example that
+  re-resolves to the comma would otherwise be same-origin with the listener.
+  """
+  hostname = urllib.parse.urlsplit(f"//{host}").hostname or ""
+  if hostname == "localhost" or hostname.endswith(".local"):
+    return True
+  try:
+    ipaddress.ip_address(hostname)
+  except ValueError:
+    return False
+  return True
 
 
 class _Frame(NamedTuple):
@@ -235,6 +320,14 @@ class UiStream:
     self._skipped_pacing = 0
     self._capture_errors = 0
     self._encode_errors = 0
+
+    # Remote control: whole gestures waiting for the UI, with submit times.
+    self._control_allowed = False
+    self._control_reason = "not ready"
+    self._control_gestures: deque[tuple[float, list[ControlEvent]]] = deque()
+    self._control_accepted = 0
+    self._control_rejected = 0
+    self._control_dropped = 0
 
     self._worker: threading.Thread | None = None
     self._serve_thread: threading.Thread | None = None
@@ -755,6 +848,64 @@ class UiStream:
   def _idle_seconds_locked(self, now: float) -> float:
     return 0.0 if self._idle_since == 0.0 else max(0.0, now - self._idle_since)
 
+  # ------------------------------------------------------------------ control
+
+  def set_control_allowed(self, allowed: bool, reason: str = "") -> None:
+    """Render-thread policy gate (e.g. never while driving)."""
+    with self._lock:
+      self._control_allowed = bool(allowed)
+      self._control_reason = "" if allowed else (reason or "unavailable")
+
+  def _control_refusal_locked(self) -> str:
+    if not self.config.control:
+      return "remote control is disabled on this device (STREAM_CONTROL=0)"
+    if self._stopping:
+      return "streamer is stopping"
+    if not self._control_allowed:
+      return f"remote control unavailable: {self._control_reason}"
+    return ""
+
+  def submit_gesture(self, raw: object, now: float | None = None) -> tuple[int, str]:
+    """Validate and queue one whole gesture. HTTP handler threads.
+
+    Returns ``(http_status, error)``; ``error`` is empty on success.
+    """
+    now = time.monotonic() if now is None else now
+    events, error = parse_gesture(raw)
+    if events is None:
+      return 400, error
+    with self._lock:
+      refusal = self._control_refusal_locked()
+      if refusal:
+        self._control_rejected += 1
+        return 403, refusal
+      if len(self._control_gestures) >= CONTROL_QUEUE_GESTURES:
+        self._control_rejected += 1
+        return 429, "the comma is still replaying earlier input"
+      self._control_gestures.append((now, events))
+      self._control_accepted += 1
+    return 202, ""
+
+  def take_gesture(self, now: float | None = None) -> list[ControlEvent] | None:
+    """Next gesture for the UI to replay, or None. Render thread only.
+
+    Refused control (policy gate, kill switch, shutdown) discards everything
+    queued: nothing has reached the UI yet, so there is nothing to undo.
+    Gestures that waited past ``CONTROL_GESTURE_MAX_WAIT`` are dropped.
+    """
+    now = time.monotonic() if now is None else now
+    with self._lock:
+      if self._control_refusal_locked():
+        self._control_dropped += len(self._control_gestures)
+        self._control_gestures.clear()
+        return None
+      while self._control_gestures:
+        submitted_at, events = self._control_gestures.popleft()
+        if now - submitted_at <= CONTROL_GESTURE_MAX_WAIT:
+          return events
+        self._control_dropped += 1
+      return None
+
   # ------------------------------------------------------------------- status
 
   def status(self) -> dict[str, object]:
@@ -793,6 +944,17 @@ class UiStream:
         "idleSelfStopSeconds": IDLE_SELF_STOP,
         "quality": self.config.quality,
         "fps": self.config.fps,
+        "control": {
+          "available": self.config.control,
+          "allowed": not self._control_refusal_locked(),
+          "reason": self._control_refusal_locked(),
+          "queued": len(self._control_gestures),
+          "maxGestureSeconds": CONTROL_MAX_GESTURE,
+          "maxEvents": CONTROL_MAX_EVENTS,
+          "accepted": self._control_accepted,
+          "rejected": self._control_rejected,
+          "dropped": self._control_dropped,
+        },
         "counters": {
           "captured": self._captures,
           "encoded": self._encoded,
@@ -916,13 +1078,22 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
           self._method_not_allowed()
         else:
           self._handle_telemetry()
+      elif path == "/input":
+        self._method_not_allowed(allow="POST")
       else:
         self._send_plain(404, "not found")
     except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
       self.close_connection = True
 
   def do_POST(self) -> None:
-    self._method_not_allowed()
+    path = urllib.parse.urlsplit(self.path).path
+    if path != "/input":
+      self._method_not_allowed()
+      return
+    try:
+      self._handle_control()
+    except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+      self.close_connection = True
 
   def do_PUT(self) -> None:
     self._method_not_allowed()
@@ -936,9 +1107,9 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
   def do_OPTIONS(self) -> None:
     self._method_not_allowed()
 
-  def _method_not_allowed(self) -> None:
+  def _method_not_allowed(self, allow: str = "GET") -> None:
     try:
-      self._send_plain(405, "method not allowed", headers={"Allow": "GET"})
+      self._send_plain(405, "method not allowed", headers={"Allow": allow})
     except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
       self.close_connection = True
 
@@ -1018,6 +1189,49 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
       self._send_plain(503, "no telemetry available", headers={"Retry-After": "1"})
       return
     self._send_bytes(200, "application/json; charset=utf-8", payload)
+
+  def _control_request_error(self) -> tuple[int, str]:
+    """Reject anything a hostile web page could send. Empty error = OK.
+
+    A cross-site page can POST ``text/plain`` without a preflight, but not JSON
+    with a custom header: those force a CORS preflight, and this server answers
+    OPTIONS with 405, so the browser never sends the real request. The Origin
+    and Host checks cover same-origin tricks (DNS rebinding) on top of that.
+    """
+    host = self.headers.get("Host") or ""
+    if not _is_local_host(host):
+      return 403, "host not allowed"
+    origin = self.headers.get("Origin")
+    if origin is not None and urllib.parse.urlsplit(origin).netloc != host:
+      return 403, "cross-origin input refused"
+    if self.headers.get(CONTROL_HEADER) != "1":
+      return 403, f"missing {CONTROL_HEADER} header"
+    content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json":
+      return 415, "expected application/json"
+    return 200, ""
+
+  def _handle_control(self) -> None:
+    status, error = self._control_request_error()
+    if not error:
+      try:
+        length = int(self.headers.get("Content-Length") or "")
+      except ValueError:
+        status, error = 411, "Content-Length required"
+      else:
+        if not (0 < length <= CONTROL_MAX_BODY):
+          status, error = 413, "body too large"
+        else:
+          try:
+            payload = json.loads(self.rfile.read(length))
+          except (ValueError, UnicodeDecodeError):
+            payload = None
+          if not isinstance(payload, dict):
+            status, error = 400, "invalid JSON"
+          else:
+            status, error = self.stream.submit_gesture(payload.get("gesture"))
+    body = json.dumps({"ok": not error, "error": error}).encode()
+    self._send_bytes(status, "application/json; charset=utf-8", body)
 
   def _handle_status(self) -> None:
     payload = json.dumps(self.stream.status(), allow_nan=False).encode()
