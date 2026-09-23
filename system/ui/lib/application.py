@@ -1195,7 +1195,8 @@ class GuiApplication:
     # Resolve configuration before touching GL or binding, so STREAM=0 costs
     # nothing and an invalid configuration cannot leave a half-built streamer.
     try:
-      config = ui_stream_module.parse_config(os.environ)
+      default_fps = ui_stream_module.DEFAULT_FPS if self.big_ui() else ui_stream_module.COMPACT_UI_FPS
+      config = ui_stream_module.parse_config(os.environ, default_fps)
     except ui_stream_module.StreamConfigError as exc:
       self._fail_ui_stream(str(exc))
       return

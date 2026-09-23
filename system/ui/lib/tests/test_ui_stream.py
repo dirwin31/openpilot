@@ -53,6 +53,12 @@ def test_parse_config_available_by_default():
   assert ui_stream.parse_config({"STREAM_PORT": "1234"}).port == 1234
 
 
+def test_parse_config_device_default_fps():
+  # mici passes its own default; an explicit STREAM_FPS still wins.
+  assert ui_stream.parse_config({}, ui_stream.COMPACT_UI_FPS).fps == ui_stream.COMPACT_UI_FPS
+  assert ui_stream.parse_config({"STREAM_FPS": "20"}, ui_stream.COMPACT_UI_FPS).fps == 20
+
+
 def test_parse_config_overrides():
   config = ui_stream.parse_config({
     "STREAM": "1", "STREAM_BIND": "127.0.0.1", "STREAM_PORT": "9000",
@@ -167,7 +173,7 @@ def test_head_supported_for_finite_responses(make_stream):
 def test_head_rejected_for_demand_endpoints(make_stream):
   stream = make_stream()
   stream.publish_encoded_frame(b"\xff\xd8frame\xff\xd9")
-  for path in ("/stream", "/snapshot", "/telemetry", "/nope"):
+  for path in ("/stream", "/frames", "/snapshot", "/telemetry", "/nope"):
     conn = http.client.HTTPConnection("127.0.0.1", stream.port, timeout=5.0)
     try:
       conn.request("HEAD", path)
@@ -359,7 +365,8 @@ def test_snapshot_lease_released_on_timeout(make_stream, monkeypatch):
 # ------------------------------------------------------------------- stream
 
 
-def _read_multipart_frame(response) -> bytes:
+def _read_multipart_part(response) -> tuple[dict[str, str], bytes]:
+  """One part as (lower-cased headers, body)."""
   # Skip status header already parsed; read one part.
   buf = b""
   while b"\r\n\r\n" not in buf:
@@ -368,19 +375,24 @@ def _read_multipart_frame(response) -> bytes:
       break
     buf += chunk
   header, _, rest = buf.partition(b"\r\n\r\n")
-  assert header.startswith(b"--frame")
-  content_length = None
-  for line in header.decode().splitlines():
-    if line.lower().startswith("content-length:"):
-      content_length = int(line.split(":", 1)[1].strip())
-  assert content_length is not None
+  assert header.lstrip(b"\r\n").startswith(b"--frame")
+  headers = {}
+  for line in header.decode().splitlines()[1:]:
+    key, _, value = line.partition(":")
+    headers[key.strip().lower()] = value.strip()
+  content_length = int(headers["content-length"])
   body = rest
   while len(body) < content_length:
     chunk = response.read(content_length - len(body))
     if not chunk:
       break
     body += chunk
-  return body[:content_length]
+  assert response.read(2) == b"\r\n"
+  return headers, body[:content_length]
+
+
+def _read_multipart_frame(response) -> bytes:
+  return _read_multipart_part(response)[1]
 
 
 def test_stream_multipart_delivery(make_stream, monkeypatch):
@@ -400,6 +412,63 @@ def test_stream_multipart_delivery(make_stream, monkeypatch):
   while stream._active_streams and time.monotonic() < deadline:
     time.sleep(0.02)
   assert stream._active_streams == 0
+
+
+def test_stream_parts_carry_sequence_and_capture_time(make_stream, monkeypatch):
+  # The viewer paces playback by capture time, so every part carries it.
+  monkeypatch.setattr(ui_stream, "STREAM_IDLE_DEADLINE", 0.5)
+  stream = make_stream()
+  stream.publish_encoded_frame(b"\xff\xd8one\xff\xd9", captured_at=time.monotonic())
+  conn, response = get(stream, "/stream")
+  try:
+    headers, _ = _read_multipart_part(response)
+    first_capture = float(headers["x-capture-ms"])
+    assert int(headers["x-frame-seq"]) == stream.current_sequence()
+    assert first_capture == pytest.approx(stream._latest_at * 1000, abs=0.1)
+    stream.publish_encoded_frame(b"\xff\xd8two\xff\xd9", captured_at=time.monotonic() + 0.05)
+    headers, body = _read_multipart_part(response)
+    assert body == b"\xff\xd8two\xff\xd9"
+    assert int(headers["x-frame-seq"]) == stream.current_sequence()
+    assert float(headers["x-capture-ms"]) - first_capture == pytest.approx(50, abs=5)
+  finally:
+    conn.close()
+
+
+def test_frames_endpoint_is_the_stream_under_a_plain_type(make_stream, monkeypatch):
+  # WebKit consumes multipart/x-mixed-replace itself, so the viewer's player
+  # reads the same framing from /frames.
+  monkeypatch.setattr(ui_stream, "STREAM_IDLE_DEADLINE", 0.5)
+  stream = make_stream()
+  frame = b"\xff\xd8frames\xff\xd9"
+  stream.publish_encoded_frame(frame)
+  conn, response = get(stream, "/frames")
+  try:
+    assert response.status == 200
+    assert response.getheader("Content-Type") == "application/octet-stream"
+    assert response.getheader("X-Content-Type-Options") == "nosniff"
+    assert _read_multipart_frame(response) == frame
+  finally:
+    conn.close()
+
+
+def test_stream_socket_limits_unsent_bytes(monkeypatch):
+  class Connection:
+    def __init__(self):
+      self.options = {}
+
+    def setsockopt(self, level, option, value):
+      self.options[(level, option)] = value
+
+    def settimeout(self, timeout):
+      self.timeout = timeout
+
+  handler = object.__new__(ui_stream._StreamRequestHandler)
+  handler.connection = Connection()
+  monkeypatch.setattr(ui_stream, "_TCP_NOTSENT_LOWAT", 25)
+  handler._tune_stream_socket()
+  assert handler.connection.options[(socket.IPPROTO_TCP, 25)] == ui_stream.STREAM_NOTSENT_LOWAT
+  assert handler.connection.options[(socket.IPPROTO_TCP, socket.TCP_NODELAY)] == 1
+  assert handler.connection.timeout == ui_stream.STREAM_WRITE_TIMEOUT
 
 
 def test_stream_rejects_stale_first_frame(make_stream, monkeypatch):

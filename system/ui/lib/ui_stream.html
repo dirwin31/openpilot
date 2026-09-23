@@ -80,7 +80,7 @@
     #telemetry-driving .cell{padding:10px;border-radius:12px;background:linear-gradient(180deg,#1a1e24,#13161a)}
     #telemetry-driving .cell .v{font-size:21px}
     .with-telemetry .telemetry .cell .v{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
-    #telemetry-driving .cell .v.good,#telemetry-driving .cell .v.dim{font-size:14px}
+    #telemetry-driving .cell .v.good,#telemetry-driving .cell .v.dim{font-size:clamp(12px,3.4vw,14px);white-space:normal;line-height:1.25}
     header{gap:6px;padding:6px 8px}
     #meta{display:none!important}
   }
@@ -168,6 +168,8 @@
   var pausedSince = 0;
   var lastSeq = -1;
   var lastFrameAt = 0;
+  var shownWidth = 0;
+  var shownHeight = 0;
   var streamState = "connecting";
   var telemetryOn = false;
   var telemetryFrame = null;
@@ -225,14 +227,310 @@
 
   function hideCover() { el.cover.classList.remove("show"); }
 
+  // ------------------------------------------------------------------ player
+  //
+  // Where the browser allows it, the viewer reads the MJPEG stream itself
+  // instead of handing it to an <img>. Wi-Fi delivers frames in bunches and an
+  // <img> shows each one the moment it lands, so a steady stream looks uneven.
+  // Here frames are decoded off the main thread and shown on the display
+  // refresh with the spacing the comma captured them at, behind a playout
+  // delay sized to the link's recent jitter: about zero on a clean link, never
+  // more than PLAYOUT_MAX_MS on a bad one. Browsers without the pieces keep the
+  // <img> path, and ?player=img forces it for comparison.
+
+  var PLAYOUT_WINDOW = 90;       // transit samples kept, ~3 s at 30 fps
+  var PLAYOUT_PERCENTILE = 0.9;  // jitter absorbed; rarer spikes show late instead of stalling playback
+  var PLAYOUT_MAX_MS = 100;      // remote control feels any delay, so cap it
+  var PLAYOUT_DECAY_MS = 0.5;    // per frame: the delay grows at once and shrinks gently
+  var PLAYOUT_MAX_QUEUE = 8;     // beyond this, jump to the newest frame
+  var MAX_DECODES = 2;
+  var MAX_PART_HEADER = 1024;
+  var MAX_PART_BYTES = 8 * 1024 * 1024;
+
+  function playerSupported() {
+    try {
+      if (new URLSearchParams(window.location.search).get("player") === "img") return false;
+      return typeof window.createImageBitmap === "function" && typeof window.ReadableStream === "function" &&
+        typeof window.AbortController === "function" && typeof window.requestAnimationFrame === "function" &&
+        "body" in Response.prototype;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Splits the multipart body into parts. The comma always sends
+  // Content-Length, so nothing ever scans inside a JPEG for the boundary.
+  function PartParser() {
+    this.buf = new Uint8Array(256 * 1024);
+    this.start = 0;
+    this.end = 0;
+    this.headers = null;
+    this.length = 0;
+  }
+
+  PartParser.prototype.push = function (chunk) {
+    var used = this.end - this.start;
+    if (this.end + chunk.length > this.buf.length) {
+      if (used + chunk.length > this.buf.length) {
+        var grown = new Uint8Array(Math.max(this.buf.length * 2, used + chunk.length));
+        grown.set(this.buf.subarray(this.start, this.end));
+        this.buf = grown;
+      } else {
+        this.buf.copyWithin(0, this.start, this.end);
+      }
+      this.start = 0;
+      this.end = used;
+    }
+    this.buf.set(chunk, this.end);
+    this.end += chunk.length;
+  };
+
+  // The next complete part as { headers, body }, or null until more arrives.
+  PartParser.prototype.next = function () {
+    var buf = this.buf;
+    if (!this.headers) {
+      var limit = Math.min(this.end, this.start + MAX_PART_HEADER);
+      var at = -1;
+      for (var i = this.start; i + 3 < limit; i++) {
+        if (buf[i] === 13 && buf[i + 1] === 10 && buf[i + 2] === 13 && buf[i + 3] === 10) { at = i; break; }
+      }
+      if (at < 0) {
+        if (limit - this.start >= MAX_PART_HEADER) throw new Error("malformed stream part");
+        return null;
+      }
+      var headers = {};
+      String.fromCharCode.apply(null, buf.subarray(this.start, at)).split("\r\n").forEach(function (line) {
+        var colon = line.indexOf(":");
+        if (colon > 0) headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
+      });
+      var length = parseInt(headers["content-length"], 10);
+      if (!(length > 0 && length <= MAX_PART_BYTES)) throw new Error("stream part without a usable length");
+      this.headers = headers;
+      this.length = length;
+      this.start = at + 4;
+    }
+    if (this.end - this.start < this.length) return null;
+    var part = { headers: this.headers, body: new Blob([buf.subarray(this.start, this.start + this.length)], { type: "image/jpeg" }) };
+    this.start += this.length;
+    this.headers = null;
+    if (this.start === this.end) this.start = this.end = 0;
+    return part;
+  };
+
+  // Returns null when the canvas cannot be drawn to; the <img> path stays.
+  function createPlayer(canvas, callbacks) {
+    var ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) return null;
+    var generation = 0;
+    var controller = null;
+    var queue = [];      // decoded frames waiting for their turn, oldest first
+    var decoding = 0;
+    var waiting = null;  // the newest part, held while the decoder is busy
+    var transits = [];
+    var base = 0;
+    var delay = 0;
+    var raf = 0;
+    var lastTick = 0;
+    var refresh = 1000 / 60;  // measured display refresh interval
+    var phase = 0;            // how far before its due time the last frame was shown
+    var lastShownSeq = -1;
+    var stats = { presented: 0, skipped: 0, lastAt: 0, intervals: [] };
+
+    async function read(gen, signal) {
+      // /frames is /stream's multipart framing under a plain type: WebKit
+      // consumes multipart/x-mixed-replace itself and fetch cannot read it.
+      var response = await fetch("/frames?t=" + Date.now(), { cache: "no-store", signal: signal });
+      if (!response.ok || !response.body) throw new Error("stream unavailable");
+      var reader = response.body.getReader();
+      var parser = new PartParser();
+      for (;;) {
+        var result = await reader.read();
+        if (gen !== generation) return;
+        if (result.done) throw new Error("stream ended");
+        parser.push(result.value);
+        for (var part = parser.next(); part; part = parser.next()) receive(gen, part);
+      }
+    }
+
+    function receive(gen, part) {
+      var item = {
+        gen: gen,
+        body: part.body,
+        seq: parseInt(part.headers["x-frame-seq"], 10),
+        capture: parseFloat(part.headers["x-capture-ms"])
+      };
+      if (decoding < MAX_DECODES) {
+        decode(item);
+      } else {
+        // The phone is decoding slower than frames arrive: keep only the newest.
+        if (waiting) stats.skipped += 1;
+        waiting = item;
+      }
+    }
+
+    function decode(item) {
+      decoding += 1;
+      createImageBitmap(item.body).then(function (bitmap) {
+        if (item.gen === generation) enqueue(item, bitmap, performance.now());
+        else bitmap.close();
+      }, function () {
+        // A frame that fails to decode is skipped; the next one replaces it.
+      }).then(function () {
+        decoding -= 1;
+        if (waiting && decoding < MAX_DECODES) {
+          var next = waiting;
+          waiting = null;
+          decode(next);
+        }
+      });
+    }
+
+    function enqueue(item, bitmap, arrival) {
+      if (item.seq <= lastShownSeq) {
+        bitmap.close();
+        stats.skipped += 1;
+        return;
+      }
+      // Without a capture time (an older comma) frames play as they arrive.
+      var capture = isFinite(item.capture) ? item.capture : arrival;
+      // Transit includes the unknown offset between the comma's clock and this
+      // one; only its variation matters. The fastest recent frame sets the
+      // baseline and the delay covers most of the spread above it.
+      transits.push(arrival - capture);
+      if (transits.length > PLAYOUT_WINDOW) transits.shift();
+      base = Math.min.apply(null, transits);
+      var spread = transits.map(function (t) { return t - base; }).sort(function (a, b) { return a - b; });
+      var target = Math.min(PLAYOUT_MAX_MS, spread[Math.floor((spread.length - 1) * PLAYOUT_PERCENTILE)]);
+      delay = target >= delay ? target : Math.max(target, delay - PLAYOUT_DECAY_MS);
+      var i = queue.length;
+      while (i > 0 && queue[i - 1].capture > capture) i -= 1;
+      queue.splice(i, 0, { bitmap: bitmap, seq: item.seq, capture: capture });
+    }
+
+    // Runs every display refresh while streaming, so the refresh interval is
+    // always measured; with nothing queued it returns at once.
+    function tick(now) {
+      raf = requestAnimationFrame(tick);
+      if (lastTick) {
+        var interval = now - lastTick;
+        if (interval > 2 && interval < 50) refresh += (interval - refresh) * 0.05;
+      }
+      lastTick = now;
+      if (!queue.length) return;
+      // Phase lock: a frame is shown on the refresh nearest its due time, but
+      // "nearest" is judged around where the previous frame landed. When due
+      // times sit on a refresh boundary, a fixed cut-off would flip frames
+      // between neighbouring refreshes on every millisecond of jitter and
+      // alternate 1- and 3-refresh gaps. Clamped, so a frame is never shown
+      // more than one refresh early or late.
+      var lead = Math.min(refresh, Math.max(0, phase + refresh / 2));
+      var dueCapture = now + lead - base - delay;
+      // Show the newest frame whose turn has come; older ones are superseded.
+      var pick = -1;
+      for (var i = 0; i < queue.length && queue[i].capture <= dueCapture; i++) pick = i;
+      if (queue.length > PLAYOUT_MAX_QUEUE) pick = queue.length - 1;
+      if (pick >= 0) {
+        for (var j = 0; j < pick; j++) queue[j].bitmap.close();
+        stats.skipped += pick;
+        phase = queue[pick].capture + base + delay - now;
+        present(queue[pick], now);
+        queue.splice(0, pick + 1);
+      }
+    }
+
+    function present(frame, now) {
+      var bitmap = frame.bitmap;
+      var width = bitmap.width, height = bitmap.height;
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      ctx.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      lastShownSeq = frame.seq;
+      if (stats.lastAt) {
+        stats.intervals.push(now - stats.lastAt);
+        if (stats.intervals.length > 120) stats.intervals.shift();
+      }
+      stats.lastAt = now;
+      stats.presented += 1;
+      callbacks.shown(width, height);
+    }
+
+    // Drops the connection and anything queued. clear also blanks the canvas;
+    // a restart keeps the last frame up while the new connection opens.
+    function stop(clear) {
+      generation += 1;
+      if (controller) {
+        controller.abort();
+        controller = null;
+      }
+      queue.forEach(function (frame) { frame.bitmap.close(); });
+      queue = [];
+      waiting = null;
+      if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+      stats.lastAt = 0;
+      if (clear) canvas.width = canvas.height = 0;
+    }
+
+    function start() {
+      stop(false);
+      var gen = generation;
+      controller = new AbortController();
+      transits = [];
+      delay = 0;
+      lastShownSeq = -1;
+      lastTick = 0;
+      phase = 0;
+      raf = requestAnimationFrame(tick);
+      read(gen, controller.signal).catch(function () {
+        if (gen !== generation) return;
+        cancelAnimationFrame(raf);
+        raf = 0;
+        callbacks.failed();
+      });
+    }
+
+    function describe() {
+      if (stats.intervals.length < 10) return "";
+      var sorted = stats.intervals.slice().sort(function (a, b) { return a - b; });
+      var median = sorted[Math.floor(sorted.length / 2)];
+      return Math.round(1000 / median) + " fps · " + Math.round(delay) + " ms buffer";
+    }
+
+    // Read-only numbers for devtools and the browser tests.
+    window.uiStreamStats = function () {
+      return { presented: stats.presented, skipped: stats.skipped, delayMs: delay, intervals: stats.intervals.slice() };
+    };
+
+    return { start: start, stop: stop, describe: describe };
+  }
+
+  var player = null;
+  if (playerSupported()) {
+    var canvas = document.createElement("canvas");
+    canvas.id = "cam";
+    canvas.setAttribute("role", "presentation");
+    canvas.width = canvas.height = 0;
+    player = createPlayer(canvas, { shown: frameShown, failed: streamFailed });
+    if (player) {
+      el.cam.replaceWith(canvas);
+      el.cam = canvas;
+    }
+  }
+
   function beginStream() {
     if (streamActive || document.hidden) return;
     streamActive = true;
-    el.cam.src = "/stream?t=" + Date.now();
+    if (player) player.start();
+    else el.cam.src = "/stream?t=" + Date.now();
   }
 
-  // Swap to a fresh connection without clearing src, so the last frame stays on
-  // screen instead of flashing to black while the new stream connects.
+  // Swap to a fresh connection without clearing the image, so the last frame
+  // stays on screen instead of flashing to black while the new stream connects.
   function restartStream() {
     streamActive = false;
     orphanPolls = 0;
@@ -241,7 +539,10 @@
 
   function endStream() {
     streamActive = false;
-    el.cam.removeAttribute("src");
+    if (player) player.stop(true);
+    else el.cam.removeAttribute("src");
+    el.cam.removeAttribute("data-live");
+    shownWidth = shownHeight = 0;
     lastSeq = -1;
     lastFrameAt = 0;
   }
@@ -265,19 +566,23 @@
     }, delay);
   }
 
-  // Browsers fire load per frame for multipart streams, but that is not
-  // guaranteed. We treat load as a hint and rely on /status for freshness.
-  el.cam.addEventListener("load", function () {
-    if (el.cam.naturalWidth > 0) {
-      document.documentElement.style.setProperty("--stream-aspect", el.cam.naturalWidth / el.cam.naturalHeight);
-      lastFrameAt = Date.now();
-      streamFailures = 0;
-      pausedSince = 0;
-      hideCover();
-      if (streamState !== "paused") setState("ready");
+  // Runs for every frame shown, so it only touches the page when something
+  // changed: steady playback must not restyle the document 30 times a second.
+  function frameShown(width, height) {
+    lastFrameAt = Date.now();
+    streamFailures = 0;
+    pausedSince = 0;
+    if (width !== shownWidth || height !== shownHeight) {
+      shownWidth = width;
+      shownHeight = height;
+      document.documentElement.style.setProperty("--stream-aspect", width / height);
     }
-  });
-  el.cam.addEventListener("error", function () {
+    if (!el.cam.hasAttribute("data-live")) el.cam.setAttribute("data-live", "");
+    if (el.cover.classList.contains("show")) hideCover();
+    if (streamState !== "ready" && streamState !== "paused") setState("ready");
+  }
+
+  function streamFailed() {
     streamActive = false;
     if (streamState === "paused") {
       // A paused streamer answers 503 until rendering resumes. That is expected,
@@ -293,7 +598,16 @@
       setState("connecting", "reconnecting");
     }
     scheduleReconnect();
-  });
+  }
+
+  if (!player) {
+    // Browsers fire load per frame for multipart streams, but that is not
+    // guaranteed. We treat load as a hint and rely on /status for freshness.
+    el.cam.addEventListener("load", function () {
+      if (el.cam.naturalWidth > 0) frameShown(el.cam.naturalWidth, el.cam.naturalHeight);
+    });
+    el.cam.addEventListener("error", streamFailed);
+  }
 
   function pollStatus() {
     if (document.hidden || inflight.status) return;
@@ -333,7 +647,8 @@
         if (!streamActive) beginStream();
         hideCover();
         el.retry.style.display = "none";
-        setState("ready", s.outputWidth ? s.outputWidth + "×" + s.outputHeight : "");
+        var size = s.outputWidth ? s.outputWidth + "×" + s.outputHeight : "";
+        setState("ready", [size, player ? player.describe() : ""].filter(Boolean).join(" · "));
       } else {
         if (!streamActive) beginStream();
         showCover("Waiting for frames…", "Connected to the streamer, but no recent frame has arrived yet.");
@@ -389,7 +704,8 @@
     var lead = d.leadDist === null || d.leadDist === undefined ? null : (metric ? d.leadDist : d.leadDist * 3.28084);
     var temp = d.cpuTempC === null || d.cpuTempC === undefined ? null : (metric ? d.cpuTempC : d.cpuTempC * 9 / 5 + 32);
 
-    var engage = d.driveState ? d.driveState : (d.engaged ? "enabled" : "disabled");
+    // "softDisabling" -> "soft disabling" so the status can wrap in a narrow tile.
+    var engage = d.driveState ? String(d.driveState).replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase() : (d.engaged ? "enabled" : "disabled");
     var engageCls = (d.engaged === true) ? "good" : "dim";
     var cells = "";
     cells += cell("Speed", fmt(speed, 0, speedUnit));
@@ -492,7 +808,7 @@
   }
 
   function imagePoint(event) {
-    var nw = el.cam.naturalWidth, nh = el.cam.naturalHeight;
+    var nw = shownWidth, nh = shownHeight;
     var r = el.cam.getBoundingClientRect();
     if (!nw || !nh || !r.width || !r.height) return null;
     // object-fit: contain letterboxes the frame inside the element box.

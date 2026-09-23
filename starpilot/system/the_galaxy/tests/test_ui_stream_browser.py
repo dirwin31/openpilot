@@ -34,9 +34,22 @@ def browser():
     instance.close()
 
 
+STREAM_FPS = 30
+
+
 @pytest.fixture(scope="module")
-def viewer_site():
-  counts = {"stream": 0, "input": [], "control_allowed": True}
+def jpeg(browser):
+  page = browser.new_page(viewport={"width": 2160, "height": 1080})
+  page.set_content(f'<body style="margin:0">{SVG.decode()}</body>')
+  frame = page.screenshot(type="jpeg", quality=70)
+  page.close()
+  return frame
+
+
+@pytest.fixture(scope="module")
+def viewer_site(jpeg):
+  # burst: deliver frames in pairs, the way congested Wi-Fi bunches them.
+  counts = {"stream": 0, "input": [], "control_allowed": True, "burst": False}
   stream_port = 0
 
   class Handler(BaseHTTPRequestHandler):
@@ -61,6 +74,21 @@ def viewer_site():
       self.end_headers()
       self.wfile.write(body)
 
+    def stream(self, mime):
+      self.send_response(200)
+      self.send_header("Content-Type", mime)
+      self.end_headers()
+      start = time.monotonic()
+      try:
+        for seq in range(1, STREAM_FPS * 20):
+          captured = start + seq / STREAM_FPS
+          sent = start + (seq + seq % 2) / STREAM_FPS if counts["burst"] else captured
+          time.sleep(max(0.0, sent - time.monotonic()))
+          header = b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\nX-Frame-Seq: %d\r\nX-Capture-Ms: %.1f\r\n\r\n"
+          self.wfile.write(header % (len(jpeg), seq, captured * 1000) + jpeg + b"\r\n")
+      except OSError:
+        pass
+
     def do_GET(self):
       path = urlsplit(self.path).path
       if path == "/fixture":
@@ -84,9 +112,9 @@ window.testApp=createApp(UiStream);window.testApp.mount('#root');
                       "leadDist": 30, "brake": 0, "engaged": True, "driveState": "enabled",
                       "cpuTempC": 50, "cpuUsagePercent": 27, "memoryUsagePercent": 44,
                       "modelExecMs": 19, "frameDropPerc": 0})
-      elif path == "/stream":
+      elif path in ("/stream", "/frames"):
         counts["stream"] += 1
-        self.respond(SVG, "image/svg+xml")
+        self.stream("multipart/x-mixed-replace; boundary=frame" if path == "/stream" else "application/octet-stream")
       else:
         target = ROOT / ("system/ui/lib/ui_stream.html" if path == "/" else path.lstrip("/"))
         if not target.resolve().is_relative_to(ROOT) or not target.is_file():
@@ -107,10 +135,16 @@ window.testApp=createApp(UiStream);window.testApp.mount('#root');
     thread.join(2)
 
 
-def open_viewer(browser, viewer_site, width, height, fullscreen=None):
+# Frame size for either display element: the player's canvas or the <img>.
+FRAME_SIZE = "const nw = el.naturalWidth || el.width, nh = el.naturalHeight || el.height;"
+
+
+def open_viewer(browser, viewer_site, width, height, fullscreen=None, player=True):
   page = browser.new_page(viewport={"width": width, "height": height})
   page.set_default_timeout(5000)
   page.on("pageerror", lambda error: print(error))
+  if not player:
+    page.add_init_script("delete window.createImageBitmap")
   if fullscreen:
     request = "undefined" if fullscreen == "missing" else "() => Promise.reject(new Error('denied'))"
     page.add_init_script(f'''Object.defineProperty(Element.prototype, 'requestFullscreen', {{configurable:true,value:{request}}});
@@ -118,7 +152,7 @@ Object.defineProperty(Element.prototype, 'webkitRequestFullscreen', {{configurab
   page.goto(viewer_site[0])
   page.locator("iframe").wait_for()
   frame = page.frame_locator("iframe")
-  frame.locator("#cam").evaluate("img => img.decode()")
+  frame.locator("#cam[data-live]").wait_for()
   return page, frame
 
 
@@ -126,7 +160,7 @@ Object.defineProperty(Element.prototype, 'webkitRequestFullscreen', {{configurab
 def test_telemetry_preserves_portrait_image_and_uses_landscape_sides(browser, viewer_site, size):
   page, frame = open_viewer(browser, viewer_site, *size)
   try:
-    visible_width = "img => Math.min(img.clientWidth, img.clientHeight * img.naturalWidth / img.naturalHeight)"
+    visible_width = f"el => {{ {FRAME_SIZE} return Math.min(el.clientWidth, el.clientHeight * nw / nh); }}"
     before = frame.locator("#cam").evaluate(visible_width)
     frame.locator("#telemetry-toggle").click()
     frame.locator("#telemetry-driving").get_by_text("enabled", exact=True).wait_for()
@@ -188,11 +222,12 @@ def test_fullscreen_uses_native_api_when_available_and_rejects_spoofed_messages(
 
 
 def _image_content(page, frame):
-  content = frame.locator("#cam").evaluate("""img => {
-    const r = img.getBoundingClientRect(), s = Math.min(r.width / img.naturalWidth, r.height / img.naturalHeight);
-    const w = img.naturalWidth * s, h = img.naturalHeight * s;
-    return {left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h};
-  }""")
+  content = frame.locator("#cam").evaluate(f"""el => {{
+    {FRAME_SIZE}
+    const r = el.getBoundingClientRect(), s = Math.min(r.width / nw, r.height / nh);
+    const w = nw * s, h = nh * s;
+    return {{left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h}};
+  }}""")
   frame_box = page.locator("iframe").bounding_box()
   content["left"] += frame_box["x"]
   content["top"] += frame_box["y"]
@@ -209,11 +244,12 @@ def _wait_for(page, counts, kind):
     page.wait_for_timeout(20)
 
 
+@pytest.mark.parametrize("player", [True, False], ids=["player", "img"])
 @pytest.mark.parametrize("size", [(390, 844), (1280, 800)])
-def test_control_forwards_live_and_maps_through_the_letterbox(browser, viewer_site, size):
+def test_control_forwards_live_and_maps_through_the_letterbox(browser, viewer_site, size, player):
   counts = viewer_site[1]
   counts["input"].clear()
-  page, frame = open_viewer(browser, viewer_site, *size)
+  page, frame = open_viewer(browser, viewer_site, *size, player=player)
   try:
     cam = frame.locator("#cam")
     # Off by default: a tap on the image sends nothing.
@@ -285,4 +321,50 @@ def test_control_disables_itself_when_the_comma_refuses(browser, viewer_site):
     assert "onroad" in toggle.get_attribute("title")
   finally:
     counts["control_allowed"] = True
+    page.close()
+
+
+def test_player_paces_bunched_frames_evenly(browser, viewer_site):
+  counts = viewer_site[1]
+  counts["burst"] = True
+  page, frame = open_viewer(browser, viewer_site, 844, 390)
+  try:
+    assert frame.locator("#cam").evaluate("el => el.tagName") == "CANVAS"
+    page.wait_for_timeout(3000)
+    stats = frame.locator("body").evaluate("() => window.uiStreamStats()")
+    # Frames land in pairs every 66 ms. Shown as they land, every other one
+    # would be superseded within the same refresh; paced, each gets its turn.
+    intervals = sorted(stats["intervals"][-45:])
+    assert len(intervals) >= 30
+    median = intervals[len(intervals) // 2]
+    assert 1000 / STREAM_FPS * 0.75 <= median <= 1000 / STREAM_FPS * 1.35
+    assert sum(i > 1000 / STREAM_FPS * 1.75 for i in intervals) <= len(intervals) * 0.15
+    assert 0 < stats["delayMs"] <= 100
+  finally:
+    counts["burst"] = False
+    page.close()
+
+
+def test_player_adds_no_delay_on_a_steady_link(browser, viewer_site):
+  page, frame = open_viewer(browser, viewer_site, 844, 390)
+  try:
+    page.wait_for_timeout(2000)
+    stats = frame.locator("body").evaluate("() => window.uiStreamStats()")
+    assert stats["presented"] >= STREAM_FPS
+    assert stats["delayMs"] < 25
+    # Evenly spaced: without phase locking, due times that sit on a refresh
+    # boundary alternate 1- and 3-refresh gaps.
+    intervals = stats["intervals"][-45:]
+    frame_ms = 1000 / STREAM_FPS
+    assert sum(not frame_ms * 0.6 <= i <= frame_ms * 1.4 for i in intervals) <= len(intervals) * 0.15
+  finally:
+    page.close()
+
+
+def test_viewer_falls_back_to_img_without_image_bitmaps(browser, viewer_site):
+  page, frame = open_viewer(browser, viewer_site, 844, 390, player=False)
+  try:
+    assert frame.locator("#cam").evaluate("el => el.tagName") == "IMG"
+    assert frame.locator("body").evaluate("() => typeof window.uiStreamStats") == "undefined"
+  finally:
     page.close()

@@ -29,6 +29,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import math
+import select
 import socket
 import threading
 import time
@@ -46,7 +47,10 @@ from openpilot.common.swaglog import cloudlog
 DEFAULT_BIND = "0.0.0.0"
 DEFAULT_PORT = 8091
 DEFAULT_QUALITY = 60
-DEFAULT_FPS = 20  # matches the tici/tizi UI render rate, so pacing never beats against it
+DEFAULT_FPS = 20  # matches the tizi UI render rate, so pacing never beats against it
+# mici renders a 536x240 UI at 60 fps. Its frame is small enough to read back
+# and encode at half that rate, and 20 fps visibly stutters its animations.
+COMPACT_UI_FPS = 30
 DEFAULT_WIDTH = 1280
 
 TOTAL_HANDLER_PERMITS = 8
@@ -61,6 +65,15 @@ STREAM_WRITE_TIMEOUT = 10.0
 # of queueing seconds of stale video (Linux autotunes it up to megabytes).
 # The kernel doubles this value, so ~2-3 JPEG frames can be in flight.
 STREAM_SNDBUF = 128 * 1024
+# The next frame is chosen only once the socket has (almost) drained, so a slow
+# link skips straight to the newest frame instead of sending ones that went
+# stale in the queue. TCP_NOTSENT_LOWAT makes "writable" mean "fewer than this
+# many bytes not yet sent" rather than "the send buffer has room", which with
+# small mici frames would otherwise be a dozen frames. It does not cap the
+# congestion window the way a smaller SO_SNDBUF would.
+STREAM_NOTSENT_LOWAT = 16 * 1024
+_TCP_NOTSENT_LOWAT = getattr(socket, "TCP_NOTSENT_LOWAT", None)
+_PART_HEADER = b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\nX-Frame-Seq: %d\r\nX-Capture-Ms: %.1f\r\n\r\n"
 # Pacing tolerance as a fraction of the capture interval. Render frames jitter by
 # a few ms; without slack a frame arriving just before the deadline is skipped
 # and the effective rate collapses to every other frame.
@@ -136,13 +149,14 @@ def _env_int(env: Mapping[str, str], key: str, default: int, low: int, high: int
   return value
 
 
-def parse_config(env: Mapping[str, str]) -> StreamConfig | None:
+def parse_config(env: Mapping[str, str], default_fps: int = DEFAULT_FPS) -> StreamConfig | None:
   """Return validated configuration, or ``None`` when killed by ``STREAM=0``.
 
   Raises :class:`StreamConfigError` for an invalid configuration. The streamer
   starts on demand (a browser opening the page posts ``UiStreamRequested``),
   so an unset ``STREAM`` means "available with defaults"; the literal ``0``
   is the kill switch. When killed, the remaining variables are ignored.
+  ``default_fps`` is the device's rate when ``STREAM_FPS`` is unset.
   """
   if env.get("STREAM", "1") == "0":
     return None
@@ -155,7 +169,7 @@ def parse_config(env: Mapping[str, str]) -> StreamConfig | None:
 
   port = _env_int(env, "STREAM_PORT", DEFAULT_PORT, MIN_PORT, MAX_PORT)
   quality = _env_int(env, "STREAM_QUALITY", DEFAULT_QUALITY, MIN_QUALITY, MAX_QUALITY)
-  fps = _env_int(env, "STREAM_FPS", DEFAULT_FPS, MIN_FPS, MAX_FPS)
+  fps = _env_int(env, "STREAM_FPS", default_fps, MIN_FPS, MAX_FPS)
   width = _env_int(env, "STREAM_WIDTH", DEFAULT_WIDTH, 0, MAX_WIDTH)
   if width != 0 and width < MIN_WIDTH:
     raise StreamConfigError(f"STREAM_WIDTH={width} must be 0 or at least {MIN_WIDTH}")
@@ -1106,11 +1120,11 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(200, "text/html; charset=utf-8", viewer_html())
       elif path == "/status":
         self._handle_status()
-      elif path == "/stream":
+      elif path in ("/stream", "/frames"):
         if head_only:
           self._method_not_allowed()  # HEAD must not reserve demand
         else:
-          self._handle_stream()
+          self._handle_stream(path == "/frames")
       elif path == "/snapshot":
         if head_only:
           self._method_not_allowed()
@@ -1158,7 +1172,13 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
 
   # ----------------------------------------------------------------- handlers
 
-  def _handle_stream(self) -> None:
+  def _handle_stream(self, raw: bool = False) -> None:
+    """MJPEG for an <img> at /stream; the same bytes for the viewer's player at /frames.
+
+    WebKit consumes multipart/x-mixed-replace in its loader, so fetch() cannot
+    read that body. /frames sends the identical part framing under a type no
+    browser interprets.
+    """
     stream = self.stream
     if not stream.begin_stream():
       self._send_plain(503, "stream limit reached", headers={"Retry-After": "1"})
@@ -1174,20 +1194,28 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
         return
 
       self.send_response(200)
-      self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+      if raw:
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("X-Content-Type-Options", "nosniff")
+      else:
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
       self.send_header("Cache-Control", "no-store")
       self.send_header("Connection", "close")
       self.end_headers()
       self.close_connection = True
       self._tune_stream_socket()
 
-      last_seq = -1
+      drained = select.poll()
+      drained.register(self.connection, select.POLLOUT)
       while True:
         if stream.is_stopping() or stream.is_paused():
           break
         self._write_frame(frame)
-        last_seq = frame.seq
-        frame = stream.wait_for_frame(last_seq, STREAM_IDLE_DEADLINE)
+        # Wait for the link before choosing the next frame, not after: then a
+        # frame that was superseded while the socket drained is never sent.
+        if not drained.poll(STREAM_WRITE_TIMEOUT * 1000):
+          break
+        frame = stream.wait_for_frame(frame.seq, STREAM_IDLE_DEADLINE)
         if frame is None:
           break
     finally:
@@ -1196,8 +1224,11 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
   def _tune_stream_socket(self) -> None:
     """Low-latency settings for a long-lived MJPEG response. Best effort."""
     connection = self.connection
-    for level, option, value in ((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),
-                                 (socket.SOL_SOCKET, socket.SO_SNDBUF, STREAM_SNDBUF)):
+    options = [(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),
+               (socket.SOL_SOCKET, socket.SO_SNDBUF, STREAM_SNDBUF)]
+    if _TCP_NOTSENT_LOWAT is not None:
+      options.append((socket.IPPROTO_TCP, _TCP_NOTSENT_LOWAT, STREAM_NOTSENT_LOWAT))
+    for level, option, value in options:
       try:
         connection.setsockopt(level, option, value)
       except OSError:
@@ -1210,7 +1241,9 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
   def _write_frame(self, frame: _Frame) -> None:
     # One write per part: the unbuffered socket writer would otherwise issue
     # three sends, and Nagle + delayed ACK can hold the small trailer back.
-    header = b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame.jpeg)).encode() + b"\r\n\r\n"
+    # The sequence and capture time (comma monotonic clock) let the viewer
+    # pace playback by when frames were captured rather than when they landed.
+    header = _PART_HEADER % (len(frame.jpeg), frame.seq, frame.captured_at * 1000)
     self.wfile.write(b"".join((header, frame.jpeg, b"\r\n")))
     self.wfile.flush()
 
