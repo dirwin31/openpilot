@@ -540,6 +540,11 @@ class AetherInteractiveMixin:
     self._pressed_target = self._target_at(mouse_pos)
     self._can_click = True
 
+  def _handle_mouse_cancel(self):
+    self._breadcrumbs.cancel_interaction()
+    self._pressed_target = None
+    self._can_click = True
+
   def _handle_mouse_event(self, mouse_event: MouseEvent):
     if self._scroll_panel and not self._scroll_panel.is_touch_valid():
       self._can_click = False
@@ -933,6 +938,15 @@ class PanelManagerView(AetherInteractiveMixin, Widget):
       self._page_drag_eligible = True
       self._page_drag_offset = 0.0
 
+  def _handle_mouse_cancel(self) -> None:
+    # Ease a half-dragged page back; a cancel never turns the page.
+    if self._has_pagination and self._page_drag_active and abs(self._page_drag_offset) > 8:
+      self._start_drag_snap(self._page_drag_offset)
+    self._page_drag_active = False
+    self._page_drag_eligible = False
+    self._page_drag_offset = 0.0
+    super()._handle_mouse_cancel()
+
   def _handle_mouse_event(self, mouse_event: MouseEvent) -> None:
     super()._handle_mouse_event(mouse_event)
     if self._has_pagination and getattr(self, "_page_drag_eligible", False):
@@ -1113,6 +1127,11 @@ class AdjustorTogglesPanelView(PanelManagerView):
         for el in self._get_active_elements():
             el._handle_mouse_release(mouse_pos)
         super()._handle_mouse_release(mouse_pos)
+
+    def _handle_mouse_cancel(self):
+        for el in self._get_active_elements():
+            el._handle_mouse_cancel()
+        super()._handle_mouse_cancel()
 
     def _handle_mouse_event(self, mouse_event):
         super()._handle_mouse_event(mouse_event)
@@ -2537,6 +2556,10 @@ class AetherInlineRangeControl(Widget):
       self._pending_drag = False
       self._started_on_thumb = False
 
+  def _handle_mouse_cancel(self):
+    # Undo what the unfinished press or drag changed, like dragging off the control.
+    self._cancel_interaction(revert=True)
+
   def _handle_mouse_event(self, mouse_event: MouseEvent):
     mouse_in_rect = rl.check_collision_point_rec(mouse_event.pos, self._rect)
     if mouse_event.left_released and self.is_interacting and not mouse_in_rect:
@@ -2804,6 +2827,9 @@ class AetherAdjustorRow(Widget):
       active = self._active()
       if rl.check_collision_point_rec(mouse_pos, _inflate_rect(self._header_rect, 6, 4)):
         self._set_active_state(not active)
+
+  def _handle_mouse_cancel(self):
+    self._pressed_zone = None
 
   def _handle_mouse_event(self, mouse_event: MouseEvent):
     pass
@@ -3862,6 +3888,10 @@ class AetherTile(Widget):
         self._plate_target = 0.0
       self._is_pressed = False
 
+  def _handle_mouse_cancel(self):
+    self._is_pressed = False
+    self._plate_target = 0.0
+
   def _handle_mouse_event(self, mouse_event):
     if not rl.check_collision_point_rec(mouse_event.pos, self._hit_rect):
       self._plate_target = 0.0
@@ -4339,6 +4369,13 @@ class SliderTile(AetherTile):
         self._is_pressed = False
         self._press_start_time = None
 
+    def _handle_mouse_cancel(self):
+        # Clear the long-press timer too, or the next unrelated event could fire on_test().
+        self._is_dragging = False
+        self._is_pressed = False
+        self._press_start_time = None
+        self._plate_target = 0.0
+
     def _handle_mouse_event(self, mouse_event):
         if not rl.check_collision_point_rec(mouse_event.pos, self._hit_rect):
             if not self._is_dragging and not self._press_start_time:
@@ -4639,6 +4676,9 @@ class AetherSlider(Widget):
   def _handle_mouse_release(self, mouse_pos: MousePos):
     self._finalize_interaction(mouse_pos, inside_release=True)
 
+  def _handle_mouse_cancel(self):
+    self._cancel_interaction(revert=True)
+
   def _handle_mouse_event(self, mouse_event: MouseEvent):
     mouse_in_rect = rl.check_collision_point_rec(mouse_event.pos, self._rect)
     if mouse_event.left_released and self.is_interacting and not mouse_in_rect:
@@ -4810,6 +4850,14 @@ class AetherSliderDialog(Widget):
     if not is_ok and not is_cancel:
       if self._current_val != self._val_on_press and self._on_change:
         self._on_change(self._current_val)
+
+  def _handle_mouse_cancel(self):
+    # A later release over OK/Cancel must not complete this press, and a
+    # withdrawn drag leaves the value where the press found it.
+    self._is_pressed_ok = self._is_pressed_cancel = self._is_dragging = False
+    self._ok_target = self._cancel_target = 0.0
+    self._pressed_zone = None
+    self._current_val = self._val_on_press
 
   def _handle_mouse_event(self, mouse_event):
     if self._is_dragging:
@@ -5098,6 +5146,11 @@ class AetherMultiSelectDialog(Widget):
             break
       self._pressed_zone = None
 
+  def _handle_mouse_cancel(self):
+    self._is_pressed_ok = self._is_pressed_cancel = False
+    self._ok_target = self._cancel_target = 0.0
+    self._pressed_zone = None
+
   def _handle_mouse_event(self, mouse_event):
     pass
 
@@ -5336,6 +5389,11 @@ class AetherSegmentedControl(Widget):
     hit = rl.Rectangle(r.x - GEOMETRY_OFFSET, r.y - GEOMETRY_OFFSET, r.width + 2 * GEOMETRY_OFFSET, r.height + 2 * GEOMETRY_OFFSET)
     if rl.check_collision_point_rec(mouse_pos, hit) and self._current() != pressed_index:
       self._on_change(pressed_index)
+
+  def _handle_mouse_cancel(self):
+    if 0 <= self._pressed_index < len(self._option_targets):
+      self._option_targets[self._pressed_index] = 0.0
+    self._pressed_index = -1
 
   def _handle_mouse_event(self, mouse_event: MouseEvent):
     if self._pressed_index == -1:

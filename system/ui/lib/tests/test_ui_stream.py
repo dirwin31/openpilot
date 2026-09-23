@@ -959,20 +959,25 @@ def _post_input(stream: UiStream, body, headers: dict[str, str] | None = None, p
     conn.close()
 
 
-def _gesture(*points):
-  """points: (type, x, y, t_ms)"""
-  return [{"type": kind, "x": x, "y": y, "t": t} for kind, x, y, t in points]
+def _batch(gesture_id, *events):
+  """events: (type, x, y)"""
+  return {"gesture": gesture_id, "events": [{"type": kind, "x": x, "y": y} for kind, x, y in events]}
 
 
-def _tap(x=0.5, y=0.5):
-  return {"gesture": _gesture(("down", x, y, 1000), ("up", x, y, 1080))}
+def _tap(x=0.5, y=0.5, gesture_id="g1"):
+  return _batch(gesture_id, ("down", x, y), ("up", x, y))
+
+
+def _submit(stream, gesture_id, *events, now=None):
+  body = _batch(gesture_id, *events)
+  return stream.submit_control(body["gesture"], body["events"], now=now)
 
 
 def test_control_refused_until_the_app_allows_it(make_stream):
   stream = make_stream()
   status, body = _post_input(stream, _tap())
   assert status == 403 and "not ready" in body["error"]
-  assert stream.take_gesture() is None
+  assert stream.drain_control() == []
 
   stream.set_control_allowed(False, "the car is onroad")
   status, body = _post_input(stream, _tap())
@@ -987,14 +992,17 @@ def test_control_kill_switch_refuses_input(make_stream):
   assert stream.status()["control"]["available"] is False
 
 
-def test_control_gesture_is_queued_whole_and_rebased(make_stream):
+def test_control_events_are_forwarded_live_in_order(make_stream):
   stream = make_stream()
   stream.set_control_allowed(True)
-  status, body = _post_input(stream, _tap(0.25, 0.75))
-  assert status == 202 and body == {"ok": True, "error": ""}
-  assert stream.take_gesture() == [ui_stream.ControlEvent("down", 0.25, 0.75, 0.0),
-                                   ui_stream.ControlEvent("up", 0.25, 0.75, pytest.approx(0.08))]
-  assert stream.take_gesture() is None
+  assert _post_input(stream, _batch("g1", ("down", 0.25, 0.75)))[0] == 200
+  assert stream.drain_control() == [ui_stream.ControlEvent("down", 0.25, 0.75)]
+  assert _post_input(stream, _batch("g1", ("move", 0.5, 0.75)))[0] == 200
+  assert stream.drain_control() == [ui_stream.ControlEvent("move", 0.5, 0.75)]
+  status, body = _post_input(stream, _batch("g1", ("up", 0.5, 0.75)))
+  assert status == 200 and body == {"ok": True, "error": ""}
+  assert stream.drain_control() == [ui_stream.ControlEvent("up", 0.5, 0.75)]
+  assert stream.status()["control"]["active"] is False
 
 
 @pytest.mark.parametrize("headers, expected", [
@@ -1008,14 +1016,14 @@ def test_control_rejects_requests_a_hostile_page_could_send(make_stream, headers
   stream.set_control_allowed(True)
   status, _ = _post_input(stream, _tap(), headers=headers)
   assert status == expected
-  assert stream.take_gesture() is None
+  assert stream.drain_control() == []
 
 
 def test_control_accepts_same_origin_viewer(make_stream):
   stream = make_stream()
   stream.set_control_allowed(True)
   status, _ = _post_input(stream, _tap(), headers={"Origin": f"http://127.0.0.1:{stream.port}"})
-  assert status == 202
+  assert status == 200
 
 
 def test_control_preflight_and_get_are_refused(make_stream):
@@ -1031,101 +1039,122 @@ def test_control_preflight_and_get_are_refused(make_stream):
       conn.close()
 
 
-@pytest.mark.parametrize("gesture", [
-  # A partial gesture is exactly what must never reach the UI.
-  _gesture(("down", 0.5, 0.5, 0)),
-  _gesture(("down", 0.5, 0.5, 0), ("move", 0.6, 0.5, 10)),
-  _gesture(("move", 0.5, 0.5, 0), ("up", 0.5, 0.5, 10)),
-  _gesture(("down", 0.5, 0.5, 0), ("down", 0.5, 0.5, 5), ("up", 0.5, 0.5, 10)),
-  _gesture(("down", 0.5, 0.5, 0), ("up", 0.5, 0.5, 10), ("up", 0.5, 0.5, 20)),
-  _gesture(("down", 0.5, 0.5, 50), ("up", 0.5, 0.5, 10)),
-  _gesture(("down", 0.5, 0.5, 0), ("up", 0.5, 0.5, ui_stream.CONTROL_MAX_GESTURE * 1000 + 1)),
-  _gesture(("down", "0.5", 0.5, 0), ("up", 0.5, 0.5, 10)),
-  _gesture(("down", True, 0.5, 0), ("up", 0.5, 0.5, 10)),
-  [{"type": "down", "x": 0.5, "y": 0.5}, {"type": "up", "x": 0.5, "y": 0.5}],
-  [{"type": "down", "x": 0.5, "y": 0.5, "t": 0}] + [{"type": "move", "x": 0.5, "y": 0.5, "t": 1}] * ui_stream.CONTROL_MAX_EVENTS
-    + [{"type": "up", "x": 0.5, "y": 0.5, "t": 2}],
-  "tap",
+@pytest.mark.parametrize("body", [
+  b"not json",
+  {"events": [{"type": "down", "x": 0.5, "y": 0.5}]},                        # no gesture id
+  {"gesture": "", "events": [{"type": "down", "x": 0.5, "y": 0.5}]},
+  {"gesture": "g1", "events": []},
+  {"gesture": "g1", "events": [{"type": "tap", "x": 0.5, "y": 0.5}]},
+  {"gesture": "g1", "events": [{"type": "down", "x": "0.5", "y": 0.5}]},
+  {"gesture": "g1", "events": [{"type": "down", "x": True, "y": 0.5}]},
+  {"gesture": "g1", "events": [{"type": "move", "x": 0.5, "y": 0.5}]},       # move before down
+  {"gesture": "g1", "events": [{"type": "down", "x": 0.5, "y": 0.5}] * 2},   # second down
+  {"gesture": "g1", "events": [{"type": "down", "x": 0.5, "y": 0.5}, {"type": "up", "x": 0.5, "y": 0.5},
+                               {"type": "move", "x": 0.5, "y": 0.5}]},        # event after up
+  {"gesture": "g1", "events": [{"type": "down", "x": 0.5, "y": 0.5}] * (ui_stream.CONTROL_MAX_EVENTS + 1)},
 ])
-def test_control_rejects_anything_but_one_whole_gesture(make_stream, gesture):
+def test_control_rejects_malformed_batches_atomically(make_stream, body):
   stream = make_stream()
   stream.set_control_allowed(True)
-  status, _ = _post_input(stream, {"gesture": gesture})
+  status, _ = _post_input(stream, body)
   assert status in (400, 413)
-  assert stream.take_gesture() is None
+  assert stream.drain_control() == []
+  assert stream.status()["control"]["active"] is False
 
 
-def test_control_rejects_malformed_json(make_stream):
+def test_control_clamps_coordinates(make_stream):
   stream = make_stream()
   stream.set_control_allowed(True)
-  assert _post_input(stream, b"not json")[0] == 400
-  assert _post_input(stream, {"events": _tap()["gesture"]})[0] == 400
+  assert _submit(stream, "g1", ("down", -3, 9))[0] == 200
+  assert stream.drain_control() == [ui_stream.ControlEvent("down", 0.0, 1.0)]
 
 
-def test_control_clamps_coordinates():
-  events, error = ui_stream.parse_gesture(_gesture(("down", -3, 9, 0), ("up", 2, 0.5, 5)))
-  assert error == ""
-  assert [(e.x, e.y) for e in events] == [(0.0, 1.0), (1.0, 0.5)]
-
-
-def test_control_gestures_from_several_viewers_stay_whole(make_stream):
-  # Two viewers gesturing at once: each gesture is atomic, so neither can move
-  # or release the other's press. They are replayed one after the other.
+def test_control_one_viewer_owns_the_pointer(make_stream):
+  # Viewer B can neither press nor move/release while A's gesture is held.
   stream = make_stream()
   stream.set_control_allowed(True)
-  drag = {"gesture": _gesture(("down", 0.1, 0.1, 0), ("move", 0.5, 0.1, 100), ("up", 0.9, 0.1, 200))}
-  results = []
-  threads = [threading.Thread(target=lambda body=body: results.append(_post_input(stream, body)[0]))
-             for body in (drag, _tap(0.7, 0.7))]
-  for thread in threads:
-    thread.start()
-  for thread in threads:
-    thread.join(5)
-  assert results == [202, 202]
-  gestures = [stream.take_gesture(), stream.take_gesture()]
-  assert sorted(len(g) for g in gestures) == [2, 3]
-  for gesture in gestures:
-    assert [e.kind for e in gesture] in (["down", "up"], ["down", "move", "up"])
+  assert _submit(stream, "a", ("down", 0.1, 0.1))[0] == 200
+  assert _submit(stream, "b", ("down", 0.9, 0.9)) == (409, "another viewer is using remote control")
+  assert _submit(stream, "b", ("move", 0.9, 0.9))[0] == 409
+  assert _submit(stream, "b", ("up", 0.9, 0.9))[0] == 409
+  assert [e.kind for e in stream.drain_control()] == ["down"]
+  assert _submit(stream, "a", ("up", 0.2, 0.2))[0] == 200
+  assert _submit(stream, "b", ("down", 0.9, 0.9))[0] == 200  # free again
 
 
-def test_control_queue_is_bounded(make_stream):
+def test_control_finished_gesture_cannot_be_resumed(make_stream):
   stream = make_stream()
   stream.set_control_allowed(True)
-  for _ in range(ui_stream.CONTROL_QUEUE_GESTURES):
-    assert stream.submit_gesture(_tap()["gesture"])[0] == 202
-  assert stream.submit_gesture(_tap()["gesture"])[0] == 429
+  _submit(stream, "a", ("down", 0.1, 0.1), ("up", 0.1, 0.1))
+  assert _submit(stream, "a", ("down", 0.1, 0.1))[0] == 409
 
 
-def test_control_stale_gestures_are_dropped(make_stream):
+def test_control_coalesces_moves_between_frames(make_stream):
   stream = make_stream()
   stream.set_control_allowed(True)
-  stream.submit_gesture(_tap(0.1, 0.1)["gesture"], now=100.0)
-  stream.submit_gesture(_tap(0.2, 0.2)["gesture"], now=101.5)
-  gesture = stream.take_gesture(now=100.0 + ui_stream.CONTROL_GESTURE_MAX_WAIT + 0.1)
-  assert gesture[0].x == 0.2
-  assert stream.status()["control"]["dropped"] == 1
+  _submit(stream, "g1", ("down", 0.1, 0.1))
+  for i in range(10):
+    _submit(stream, "g1", ("move", i / 10, 0.5))
+  events = stream.drain_control()
+  assert [e.kind for e in events] == ["down", "move"]
+  assert events[-1].x == pytest.approx(0.9)
 
 
-def test_control_revoked_discards_queued_gestures(make_stream):
+def test_control_silent_gesture_is_cancelled_not_released(make_stream):
+  # A release would click whatever is under the finger; a vanished viewer
+  # must only ever produce a cancel -- and before any 0.5 s hold action.
+  assert ui_stream.CONTROL_SILENCE < 0.5
   stream = make_stream()
   stream.set_control_allowed(True)
-  stream.submit_gesture(_tap()["gesture"])
+  _submit(stream, "g1", ("down", 0.3, 0.4), now=100.0)
+  assert [e.kind for e in stream.drain_control(now=100.0)] == ["down"]
+  assert stream.drain_control(now=100.0 + ui_stream.CONTROL_SILENCE - 0.05) == []
+  assert [e.kind for e in stream.drain_control(now=100.0 + ui_stream.CONTROL_SILENCE)] == ["cancel"]
+  status, error = _submit(stream, "g1", ("up", 0.3, 0.4), now=100.5)
+  assert status == 409 and "stalled" in error
+
+
+def test_control_keepalive_holds_a_long_press(make_stream):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  _submit(stream, "g1", ("down", 0.3, 0.4), now=100.0)
+  stream.drain_control(now=100.0)
+  for t in (100.3, 100.6, 100.9, 101.2):
+    _submit(stream, "g1", ("move", 0.3, 0.4), now=t)
+    assert [e.kind for e in stream.drain_control(now=t)] == ["move"]
+
+
+def test_control_revoked_mid_gesture_cancels(make_stream):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  _submit(stream, "g1", ("down", 0.6, 0.6))
+  stream.drain_control()
   stream.set_control_allowed(False, "the car is onroad")
-  assert stream.take_gesture() is None
+  assert [e.kind for e in stream.drain_control()] == ["cancel"]
+  assert stream.drain_control() == []
   stream.set_control_allowed(True)
-  assert stream.take_gesture() is None  # not resurrected
+  assert _submit(stream, "g1", ("move", 0.6, 0.6))[0] == 409  # not resurrected
+
+
+def test_control_preempted_gesture_tells_its_viewer_why(make_stream):
+  stream = make_stream()
+  stream.set_control_allowed(True)
+  _submit(stream, "g1", ("down", 0.5, 0.5))
+  stream.drain_control()
+  stream.preempt_control("someone touched the comma screen")
+  assert _submit(stream, "g1", ("move", 0.5, 0.5)) == (409, "someone touched the comma screen")
+  assert stream.drain_control() == []
+  assert _submit(stream, "g2", ("down", 0.5, 0.5))[0] == 200
 
 
 def test_status_reports_control(make_stream):
   stream = make_stream()
   control = stream.status()["control"]
   assert control["available"] is True and control["allowed"] is False
-  assert control["maxGestureSeconds"] == ui_stream.CONTROL_MAX_GESTURE
-  assert control["maxEvents"] == ui_stream.CONTROL_MAX_EVENTS
   stream.set_control_allowed(True)
-  stream.submit_gesture(_tap()["gesture"])
+  _submit(stream, "g1", ("down", 0.5, 0.5))
   control = stream.status()["control"]
-  assert control["allowed"] is True and control["queued"] == 1
+  assert control["allowed"] is True and control["active"] is True
 
 
 def test_viewer_control_is_opt_in_and_preflighted():

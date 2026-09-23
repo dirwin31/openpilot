@@ -8,7 +8,7 @@ Opt-in via ``STREAM=1``. This module owns:
 * a single reused raw capture slot with strict ownership handoff
   (``FREE -> CAPTURING -> ENCODING -> FREE``),
 * one demand-driven JPEG encoder worker,
-* a bounded queue of whole remote gestures (``POST /input``) the UI replays.
+* a bounded live remote-touch queue (``POST /input``) drained by the render thread.
 
 Design constraints:
 
@@ -85,23 +85,22 @@ MAX_FPS = 30
 MIN_WIDTH = 160
 MAX_WIDTH = 2160
 
-# Remote control. The viewer sends each gesture whole, when the finger lifts,
-# and the UI replays it with its original timing. The comma therefore never
-# holds a partial press: a gesture lost with the connection never arrives, so
-# there is nothing to cancel, and gestures from different viewers cannot mix.
-# Coordinates are normalized to the image, so the viewer never needs the UI
-# resolution or the downscaled stream size.
+# Remote control. Input is forwarded live as normalized image coordinates, so
+# the viewer never needs the UI resolution or the downscaled stream size. Each
+# gesture carries an id; the first viewer to press owns the pointer until its
+# gesture ends, so viewers can never move or release each other's finger.
 CONTROL_HEADER = "X-UI-Stream-Control"
-CONTROL_MAX_EVENTS = 400  # per gesture; the viewer thins moves to ~60 Hz
-CONTROL_MAX_BODY = 48 * 1024
-# Longest gesture accepted. It also bounds how long a physical touch that
-# starts mid-replay is held back (see GuiApplication._arbitrate_input).
-CONTROL_MAX_GESTURE = 3.0
-CONTROL_QUEUE_GESTURES = 4
-# A queued gesture the UI has not started by now is dropped: the screen was
-# busy with physical touches, and a tap replayed long after it was made would
-# land on whatever the screen shows by then.
-CONTROL_GESTURE_MAX_WAIT = 2.0
+CONTROL_MAX_BODY = 4096
+CONTROL_MAX_EVENTS = 32  # per request
+CONTROL_QUEUE_SIZE = 64
+CONTROL_KINDS = ("down", "move", "up", "cancel")
+# A held gesture with no update for this long is cancelled (never released:
+# a release would click). The viewer sends a keepalive every 100 ms while a
+# finger is down. This must stay under the shortest hold action in the UI --
+# mici's home screen toggles Experimental Mode after 0.5 s held -- so a press
+# whose viewer vanished is withdrawn before any hold action can fire.
+CONTROL_SILENCE = 0.4
+CONTROL_ENDED_MEMORY = 16  # recently ended gesture ids, to tell their viewers why
 
 _SCHEMA_VERSION = 1
 
@@ -193,10 +192,9 @@ class _RawSlot:
 
 class ControlEvent(NamedTuple):
   """One remote pointer transition in normalized image coordinates (0..1)."""
-  kind: str  # "down" | "move" | "up"
+  kind: str  # "down" | "move" | "up" | "cancel"
   x: float
   y: float
-  t: float = 0.0  # seconds since the gesture's down
 
 
 def _number(value: object) -> float | None:
@@ -207,32 +205,20 @@ def _number(value: object) -> float | None:
   return value if math.isfinite(value) else None
 
 
-def parse_gesture(raw: object) -> tuple[list[ControlEvent] | None, str]:
-  """Validate one whole gesture: ``down``, any ``move``s, then ``up``.
+def _parse_control_event(raw: object) -> ControlEvent | None:
+  if not isinstance(raw, dict) or raw.get("type") not in CONTROL_KINDS:
+    return None
+  kind = raw["type"]
+  x, y = _number(raw.get("x")), _number(raw.get("y"))
+  if x is None or y is None:
+    if kind != "cancel":  # a cancel needs no position
+      return None
+    x = y = 0.0
+  return ControlEvent(kind, min(1.0, max(0.0, x)), min(1.0, max(0.0, y)))
 
-  ``t`` is milliseconds from the viewer and must not go backwards. Returns the
-  events rebased to seconds from the down, or ``(None, reason)``.
-  """
-  if not isinstance(raw, list) or not (2 <= len(raw) <= CONTROL_MAX_EVENTS):
-    return None, f"a gesture has 2..{CONTROL_MAX_EVENTS} events"
-  events: list[ControlEvent] = []
-  for index, item in enumerate(raw):
-    if not isinstance(item, dict):
-      return None, "invalid event"
-    expected = "down" if index == 0 else "up" if index == len(raw) - 1 else "move"
-    if item.get("type") != expected:
-      return None, "a gesture is down, moves, then up"
-    x, y, t = _number(item.get("x")), _number(item.get("y")), _number(item.get("t"))
-    if x is None or y is None or t is None:
-      return None, "invalid event"
-    events.append(ControlEvent(expected, min(1.0, max(0.0, x)), min(1.0, max(0.0, y)), t / 1000.0))
-  start = events[0].t
-  events = [event._replace(t=event.t - start) for event in events]
-  if any(later.t < earlier.t for earlier, later in zip(events, events[1:], strict=False)):
-    return None, "event times go backwards"
-  if events[-1].t > CONTROL_MAX_GESTURE:
-    return None, f"gesture longer than {CONTROL_MAX_GESTURE:g} s"
-  return events, ""
+
+def _valid_gesture_id(value: object) -> bool:
+  return isinstance(value, str) and 1 <= len(value) <= 64 and value.isascii() and value.isprintable()
 
 
 def _is_local_host(host: str) -> bool:
@@ -321,13 +307,17 @@ class UiStream:
     self._capture_errors = 0
     self._encode_errors = 0
 
-    # Remote control: whole gestures waiting for the UI, with submit times.
+    # Remote control. `_control_owner` is the gesture holding the pointer;
+    # `_control_ended` remembers why recent gestures ended, for their viewers.
     self._control_allowed = False
     self._control_reason = "not ready"
-    self._control_gestures: deque[tuple[float, list[ControlEvent]]] = deque()
+    self._control_owner: str | None = None
+    self._control_events: deque[ControlEvent] = deque()
+    self._control_last_at = 0.0
+    self._control_ended: dict[str, str] = {}
     self._control_accepted = 0
     self._control_rejected = 0
-    self._control_dropped = 0
+    self._control_cancelled = 0
 
     self._worker: threading.Thread | None = None
     self._serve_thread: threading.Thread | None = None
@@ -865,46 +855,101 @@ class UiStream:
       return f"remote control unavailable: {self._control_reason}"
     return ""
 
-  def submit_gesture(self, raw: object, now: float | None = None) -> tuple[int, str]:
-    """Validate and queue one whole gesture. HTTP handler threads.
+  def _end_gesture_locked(self, gesture_id: str, reason: str) -> None:
+    self._control_ended[gesture_id] = reason
+    while len(self._control_ended) > CONTROL_ENDED_MEMORY:
+      self._control_ended.pop(next(iter(self._control_ended)))
+    if self._control_owner == gesture_id:
+      self._control_owner = None
 
-    Returns ``(http_status, error)``; ``error`` is empty on success.
+  def _cancel_owner_locked(self, reason: str) -> bool:
+    """Withdraw the current gesture. True if the UI may be holding its press."""
+    pending = self._control_owner is not None or bool(self._control_events)
+    self._control_events.clear()
+    if self._control_owner is not None:
+      self._end_gesture_locked(self._control_owner, reason)
+      self._control_cancelled += 1
+    return pending
+
+  def submit_control(self, gesture_id: object, raw_events: object, now: float | None = None) -> tuple[int, str]:
+    """Validate and queue live pointer events from one viewer. HTTP threads.
+
+    A gesture is ``down``, then ``move``s, then ``up`` or ``cancel``, possibly
+    split over several requests. The batch is validated whole before anything
+    is queued. Returns ``(http_status, error)``; ``error`` is empty on success.
     """
     now = time.monotonic() if now is None else now
-    events, error = parse_gesture(raw)
-    if events is None:
-      return 400, error
+    if not _valid_gesture_id(gesture_id):
+      return 400, "missing gesture id"
+    if not isinstance(raw_events, list) or not (1 <= len(raw_events) <= CONTROL_MAX_EVENTS):
+      return 400, f"expected 1..{CONTROL_MAX_EVENTS} events"
+    events = [_parse_control_event(raw) for raw in raw_events]
+    if any(event is None for event in events):
+      return 400, "invalid event"
+
     with self._lock:
       refusal = self._control_refusal_locked()
       if refusal:
         self._control_rejected += 1
         return 403, refusal
-      if len(self._control_gestures) >= CONTROL_QUEUE_GESTURES:
+      if gesture_id in self._control_ended:
+        return 409, self._control_ended[gesture_id]
+      if self._control_owner is not None and self._control_owner != gesture_id:
         self._control_rejected += 1
-        return 429, "the comma is still replaying earlier input"
-      self._control_gestures.append((now, events))
-      self._control_accepted += 1
-    return 202, ""
+        return 409, "another viewer is using remote control"
 
-  def take_gesture(self, now: float | None = None) -> list[ControlEvent] | None:
-    """Next gesture for the UI to replay, or None. Render thread only.
+      active = self._control_owner == gesture_id
+      ended = False
+      for event in events:
+        if ended or (event.kind == "down") == active:
+          return 400, "a gesture is down, moves, then up or cancel"
+        active = True
+        ended = event.kind in ("up", "cancel")
 
-    Refused control (policy gate, kill switch, shutdown) discards everything
-    queued: nothing has reached the UI yet, so there is nothing to undo.
-    Gestures that waited past ``CONTROL_GESTURE_MAX_WAIT`` are dropped.
+      queued = list(self._control_events)
+      for event in events:
+        # Coalesce drags: only the latest position between two frames matters.
+        if event.kind == "move" and queued and queued[-1].kind == "move":
+          queued[-1] = event
+        else:
+          queued.append(event)
+      if len(queued) > CONTROL_QUEUE_SIZE:
+        self._cancel_owner_locked("the comma fell behind; gesture cancelled")
+        self._control_events.append(ControlEvent("cancel", 0.0, 0.0))
+        return 409, "the comma fell behind; gesture cancelled"
+
+      self._control_events = deque(queued)
+      self._control_owner = gesture_id
+      self._control_last_at = now
+      self._control_accepted += len(events)
+      if ended:
+        self._end_gesture_locked(gesture_id, "gesture already finished")
+    return 200, ""
+
+  def drain_control(self, now: float | None = None) -> list[ControlEvent]:
+    """Events for the UI to apply this frame. Render thread only.
+
+    Refused control (policy gate, kill switch, shutdown) and a held gesture
+    gone silent for ``CONTROL_SILENCE`` both end in a ``cancel`` -- never a
+    ``up``, which would click whatever is under the finger. The UI ignores a
+    cancel for a press it never received.
     """
     now = time.monotonic() if now is None else now
     with self._lock:
-      if self._control_refusal_locked():
-        self._control_dropped += len(self._control_gestures)
-        self._control_gestures.clear()
-        return None
-      while self._control_gestures:
-        submitted_at, events = self._control_gestures.popleft()
-        if now - submitted_at <= CONTROL_GESTURE_MAX_WAIT:
-          return events
-        self._control_dropped += 1
-      return None
+      refusal = self._control_refusal_locked()
+      if refusal:
+        return [ControlEvent("cancel", 0.0, 0.0)] if self._cancel_owner_locked(refusal) else []
+      if self._control_owner is not None and now - self._control_last_at >= CONTROL_SILENCE:
+        self._cancel_owner_locked("the connection to the comma stalled; gesture cancelled")
+        return [ControlEvent("cancel", 0.0, 0.0)]
+      events = list(self._control_events)
+      self._control_events.clear()
+      return events
+
+  def preempt_control(self, reason: str) -> None:
+    """The UI withdrew the remote gesture (a physical touch wins). Render thread."""
+    with self._lock:
+      self._cancel_owner_locked(reason)
 
   # ------------------------------------------------------------------- status
 
@@ -948,12 +993,10 @@ class UiStream:
           "available": self.config.control,
           "allowed": not self._control_refusal_locked(),
           "reason": self._control_refusal_locked(),
-          "queued": len(self._control_gestures),
-          "maxGestureSeconds": CONTROL_MAX_GESTURE,
-          "maxEvents": CONTROL_MAX_EVENTS,
+          "active": self._control_owner is not None,
           "accepted": self._control_accepted,
           "rejected": self._control_rejected,
-          "dropped": self._control_dropped,
+          "cancelled": self._control_cancelled,
         },
         "counters": {
           "captured": self._captures,
@@ -1229,7 +1272,7 @@ class _StreamRequestHandler(BaseHTTPRequestHandler):
           if not isinstance(payload, dict):
             status, error = 400, "invalid JSON"
           else:
-            status, error = self.stream.submit_gesture(payload.get("gesture"))
+            status, error = self.stream.submit_control(payload.get("gesture"), payload.get("events"))
     body = json.dumps({"ok": not error, "error": error}).encode()
     self._send_bytes(status, "application/json; charset=utf-8", body)
 

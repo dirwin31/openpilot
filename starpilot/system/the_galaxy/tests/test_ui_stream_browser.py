@@ -46,7 +46,8 @@ def viewer_site():
     def do_POST(self):
       if urlsplit(self.path).path == "/input":
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        counts["input"].append({"header": self.headers.get("X-UI-Stream-Control"), "gesture": body["gesture"]})
+        counts["input"].append({"header": self.headers.get("X-UI-Stream-Control"), "gesture": body["gesture"],
+                                "events": body["events"]})
         self.respond({"ok": True, "error": ""})
         return
       self.respond({"streamState": "running", "streamSequence": 1})
@@ -77,8 +78,7 @@ window.testApp=createApp(UiStream);window.testApp.mount('#root');
       elif path == "/status":
         allowed = counts["control_allowed"]
         self.respond({"state": "ready", "frameSequence": 1, "frameAgeMs": 10, "outputWidth": 2160, "outputHeight": 1080,
-                      "control": {"available": True, "allowed": allowed, "reason": "" if allowed else "the car is onroad",
-                                  "maxGestureSeconds": 3.0, "maxEvents": 400}})
+                      "control": {"available": True, "allowed": allowed, "reason": "" if allowed else "the car is onroad"}})
       elif path == "/telemetry":
         self.respond({"schemaVersion": 1, "isMetric": False, "vEgo": 31.7, "setSpeed": 72,
                       "leadDist": 30, "brake": 0, "engaged": True, "driveState": "enabled",
@@ -198,14 +198,18 @@ def _image_content(page, frame):
   return content
 
 
-def _wait_for_input(page, counts, n=1):
+def _events(counts):
+  return [event for batch in counts["input"] for event in batch["events"]]
+
+
+def _wait_for(page, counts, kind):
   deadline = time.monotonic() + 3.0
-  while time.monotonic() < deadline and len(counts["input"]) < n:
+  while time.monotonic() < deadline and not any(e["type"] == kind for e in _events(counts)):
     page.wait_for_timeout(20)
 
 
 @pytest.mark.parametrize("size", [(390, 844), (1280, 800)])
-def test_control_sends_one_whole_gesture_mapped_through_the_letterbox(browser, viewer_site, size):
+def test_control_forwards_live_and_maps_through_the_letterbox(browser, viewer_site, size):
   counts = viewer_site[1]
   counts["input"].clear()
   page, frame = open_viewer(browser, viewer_site, *size)
@@ -226,25 +230,28 @@ def test_control_sends_one_whole_gesture_mapped_through_the_letterbox(browser, v
     page.mouse.move(x, y)
     page.mouse.down()
     page.mouse.move(x + content["width"] * 0.25, y, steps=4)
-    page.wait_for_timeout(100)
-    assert counts["input"] == []  # nothing leaves the browser mid-gesture
+    _wait_for(page, counts, "move")
+    # Live: the press and the drag reach the comma while the finger is down.
+    kinds = [e["type"] for e in _events(counts)]
+    assert kinds[0] == "down" and "move" in kinds and "up" not in kinds
+    page.wait_for_timeout(350)  # hold still: keepalives keep the press alive
+    held = len(_events(counts))
     page.mouse.up()
-    _wait_for_input(page, counts)
+    _wait_for(page, counts, "up")
 
-    assert len(counts["input"]) == 1 and counts["input"][0]["header"] == "1"
-    gesture = counts["input"][0]["gesture"]
-    kinds = [event["type"] for event in gesture]
-    assert kinds[0] == "down" and kinds[-1] == "up" and set(kinds[1:-1]) <= {"move"}
-    assert gesture[0]["t"] == 0 and all(a["t"] <= b["t"] for a, b in zip(gesture, gesture[1:], strict=False))
-    assert gesture[-1]["t"] >= 100  # original timing is preserved for replay
-    assert gesture[0]["x"] == pytest.approx(0.25, abs=0.01) and gesture[0]["y"] == pytest.approx(0.75, abs=0.01)
-    assert gesture[-1]["x"] == pytest.approx(0.5, abs=0.01)
+    events = _events(counts)
+    assert held > len(kinds)
+    assert all(batch["header"] == "1" for batch in counts["input"])
+    assert len({batch["gesture"] for batch in counts["input"]}) == 1
+    assert events[0]["x"] == pytest.approx(0.25, abs=0.01) and events[0]["y"] == pytest.approx(0.75, abs=0.01)
+    assert events[-1]["type"] == "up" and events[-1]["x"] == pytest.approx(0.5, abs=0.01)
+    assert {e["type"] for e in events[1:-1]} <= {"move"}
     assert frame.locator("body").evaluate("el => el.scrollWidth <= innerWidth")
   finally:
     page.close()
 
 
-def test_control_interrupted_gesture_is_never_sent(browser, viewer_site):
+def test_control_lost_pointer_cancels_instead_of_releasing(browser, viewer_site):
   counts = viewer_site[1]
   counts["input"].clear()
   page, frame = open_viewer(browser, viewer_site, 844, 390)
@@ -253,11 +260,14 @@ def test_control_interrupted_gesture_is_never_sent(browser, viewer_site):
     content = _image_content(page, frame)
     page.mouse.move(content["left"] + content["width"] / 2, content["top"] + content["height"] / 2)
     page.mouse.down()
+    _wait_for(page, counts, "down")
     # The browser takes the pointer away (scroll takeover, lost capture, ...).
     frame.locator("#cam").dispatch_event("pointercancel", {"pointerId": 1, "bubbles": True})
+    _wait_for(page, counts, "cancel")
     page.mouse.up()
-    page.wait_for_timeout(300)
-    assert counts["input"] == []
+    page.wait_for_timeout(200)
+    kinds = [e["type"] for e in _events(counts)]
+    assert kinds[-1] == "cancel" and "up" not in kinds
   finally:
     page.close()
 
