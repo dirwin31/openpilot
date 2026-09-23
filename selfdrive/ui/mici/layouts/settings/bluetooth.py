@@ -3,9 +3,14 @@ import pyray as rl
 from openpilot.selfdrive.ui.mici.layouts.settings.network.wifi_ui import ForgetButton, LoadingAnimation
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton, LABEL_COLOR
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationDialog, BigDialog, BigInputDialog, BigMultiOptionDialog
+from openpilot.starpilot.system.android_auto.sdp import AA_WIRELESS_UUID
+from openpilot.system.ui.lib.android_auto_manager import AndroidAutoManager
 from openpilot.system.ui.lib.application import FontWeight, MousePos, gui_app
 from openpilot.system.ui.lib.bluetooth_manager import BluetoothManager
 from openpilot.system.ui.widgets.scroller import NavScroller
+
+
+PAIR_CAR_HELP = "On the car, open Bluetooth / phone settings and add a new device. Then tap the car in this list and confirm the code on the car."
 
 
 class BluetoothDeviceButton(BigButton):
@@ -149,14 +154,18 @@ class BluetoothLayoutMici(NavScroller):
     self._scan_btn = BigButton("scan for devices", "scan", self._dialog_icon, scroll=True)
     self._scan_btn.set_click_callback(lambda: self._manager.set_scanning(True))
     self._scanning_btn = BluetoothScanningButton()
+    self._android_auto = AndroidAutoManager()
+    self._android_auto_btn = BigButton("android auto", "off", self._dialog_icon, scroll=True)
+    self._android_auto_btn.set_click_callback(self._android_auto_actions)
     self._device_buttons = {}
     self._scan_on_ready = False
-    self._scroller.add_widgets([self._power_btn, self._scan_btn, self._scanning_btn])
+    self._scroller.add_widgets([self._power_btn, self._android_auto_btn, self._scan_btn, self._scanning_btn])
     self._rebuild()
 
   def show_event(self):
     super().show_event()
     self._manager.set_active(True)
+    self._android_auto.set_active(True)
     self._scan_on_ready = True
     gui_app.add_nav_stack_tick(self._tick)
 
@@ -164,6 +173,7 @@ class BluetoothLayoutMici(NavScroller):
     if self._manager.status.discovering and self._manager.status.offroad:
       self._manager.set_scanning(False)
     self._manager.set_active(False)
+    self._android_auto.set_active(False)
     gui_app.remove_nav_stack_tick(self._tick)
     super().hide_event()
 
@@ -178,6 +188,8 @@ class BluetoothLayoutMici(NavScroller):
     self._power_btn.set_enabled(status.available and status.offroad)
     self._scan_btn.set_enabled(status.enabled and status.offroad)
     items = [self._power_btn]
+    if status.enabled:
+      items.append(self._android_auto_btn)
     for device in status.devices:
       button = self._device_buttons.get(device.address)
       if button is None:
@@ -225,6 +237,79 @@ class BluetoothLayoutMici(NavScroller):
         self._manager.test_audio(device.address)
         gui_app.push_widget(BluetoothAudioTestDialog(self._manager, self._dialog_icon))
 
+    dialog = BigMultiOptionDialog(options=options, default=options[0], right_btn_callback=apply)
+    dialog_holder["dialog"] = dialog
+    gui_app.push_widget(dialog)
+
+  # ------------------------------------------------------------ android auto
+
+  def _android_auto_value(self) -> str:
+    status = self._android_auto.status
+    if not status:
+      return "starting service"
+    state = status.get("state", "idle")
+    if state == "streaming":
+      return f"projecting / {status.get('stats', {}).get('fps', 0)} fps"
+    if state == "idle":
+      if status.get("error"):
+        return "stopped / error"
+      return f"off / {status.get('receiver_name')}" if status.get("receiver_name") else "choose your car"
+    if state == "backoff":
+      return f"retrying in {status.get('retry_in', 0):.0f}s"
+    return str(status.get("label", state))
+
+  def _android_auto_actions(self):
+    status = self._android_auto.status
+    bt = self._manager.status
+    options = []
+    if status and status.get("receiver_address"):
+      options.append("stop" if status.get("running") else "start")
+    options.append("choose car")
+    if bt.offroad:
+      options.append("pair a new car")
+    if status and status.get("error"):
+      options.append("show last error")
+    dialog_holder = {}
+
+    def apply():
+      action = dialog_holder["dialog"].get_selected_option()
+      if action == "start":
+        self._android_auto.start()
+      elif action == "stop":
+        self._android_auto.stop_projection()
+      elif action == "choose car":
+        self._android_auto_choose_car()
+      elif action == "pair a new car":
+        self._android_auto.prepare_pairing()
+        self._manager.set_scanning(True)
+        gui_app.push_widget(BigDialog("pair your car", PAIR_CAR_HELP))
+      elif action == "show last error":
+        gui_app.push_widget(BigDialog("android auto", str(status.get("error", ""))))
+
+    dialog = BigMultiOptionDialog(options=options, default=options[0], right_btn_callback=apply)
+    dialog_holder["dialog"] = dialog
+    gui_app.push_widget(dialog)
+
+  def _android_auto_choose_car(self):
+    cars = [device for device in self._manager.status.devices if device.paired]
+    if not cars:
+      gui_app.push_widget(BigDialog("android auto", "Pair your car first: choose \"pair a new car\"."))
+      return
+    cars.sort(key=lambda device: str(AA_WIRELESS_UUID) not in device.uuids)
+    labels = {}
+    for device in cars:
+      label = device.name + (" (android auto)" if str(AA_WIRELESS_UUID) in device.uuids else "")
+      if label in labels:
+        label += f" {device.address[-5:]}"
+      labels[label] = device
+    dialog_holder = {}
+
+    def apply():
+      device = labels.get(dialog_holder["dialog"].get_selected_option())
+      if device is not None:
+        self._android_auto.select_receiver(device.address, device.name)
+
+    options = list(labels)
     dialog = BigMultiOptionDialog(options=options, default=options[0], right_btn_callback=apply)
     dialog_holder["dialog"] = dialog
     gui_app.push_widget(dialog)
@@ -277,4 +362,11 @@ class BluetoothLayoutMici(NavScroller):
     if error:
       self._scan_on_ready = False
       gui_app.push_widget(BigDialog("Bluetooth", error))
+    android_auto_value = self._android_auto_value()
+    if android_auto_value != self._android_auto_btn.get_value():
+      self._android_auto_btn.set_value(android_auto_value)
+    self._android_auto_btn.set_enabled(not self._android_auto.busy)
+    android_auto_error = self._android_auto.consume_error()
+    if android_auto_error:
+      gui_app.push_widget(BigDialog("android auto", android_auto_error))
     self._handle_prompt()

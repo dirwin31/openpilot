@@ -505,6 +505,11 @@ class MouseState:
 
 
 class GuiApplication:
+  # Android Auto capture state; class defaults keep partially constructed apps (tests) safe.
+  _aa_producer = None
+  _aa_texture = None
+  _aa_failed = False
+
   def __init__(self, width: int | None = None, height: int | None = None):
     self._set_log_callback()
 
@@ -542,6 +547,11 @@ class GuiApplication:
     self._ui_stream_error = ""
     self._ui_stream_control_allowed = False
     self._ui_stream_control_reason = "not enabled by this app"
+    # Android Auto projection (android_autod) pulls frames through shared memory.
+    self._aa_producer = None
+    self._aa_texture: rl.RenderTexture | None = None
+    self._aa_buffer: bytearray | None = None
+    self._aa_failed = False
     # Live remote touch and its arbitration against the physical screen.
     self._remote_down = False
     self._remote_pos = MousePos(0, 0)
@@ -1156,7 +1166,93 @@ class GuiApplication:
     deliberately does not count, since it needs no rendering.
     """
     stream = self._ui_stream
-    return stream is not None and stream.image_demand_active()
+    return (stream is not None and stream.image_demand_active()) or self.android_auto_wants_frames()
+
+  def android_auto_wants_frames(self) -> bool:
+    """True while android_autod is projecting and asking for frames."""
+    producer = self._android_auto_producer()
+    try:
+      return producer is not None and producer.demand_active()
+    except Exception:
+      return False
+
+  def _android_auto_producer(self):
+    if self._aa_producer is None and not self._aa_failed:
+      try:
+        from openpilot.starpilot.system.android_auto.frame_source import FrameProducer
+        self._aa_producer = FrameProducer()
+      except Exception as exc:
+        self._aa_failed = True
+        cloudlog.error(f"Android Auto frame source unavailable: {exc}")
+    return self._aa_producer
+
+  def _ensure_android_auto_texture(self) -> None:
+    """Allocate the main render texture before drawing when projection needs frames.
+
+    Render thread only, between frames, exactly like a Live UI start. The texture
+    is kept until the window closes to avoid repeated composition switches.
+    """
+    if self._render_texture is not None or not self.android_auto_wants_frames():
+      return
+    render_texture = rl.load_render_texture(self._render_texture_width, self._render_texture_height)
+    texture = getattr(render_texture, "texture", None)
+    if texture is None or getattr(texture, "id", 0) == 0:
+      self._unload_render_texture(render_texture)
+      self._aa_failed = True
+      cloudlog.error("Android Auto capture disabled: render texture allocation failed")
+      return
+    rl.set_texture_filter(texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
+    self._render_texture = render_texture
+
+  def _capture_android_auto_frame(self) -> None:
+    """Scale the finished frame into the negotiated video geometry and publish it.
+
+    The GPU letterboxes the UI into the requested content rectangle, so the
+    readback is already the encoder's size, top-down and undistorted. Any
+    failure disables projection capture only; the native UI keeps rendering.
+    """
+    producer = self._aa_producer
+    if producer is None or self._render_texture is None:
+      return
+    try:
+      now_ns = time.monotonic_ns()
+      request = producer.pending_request(now_ns / 1e9)
+      if request is None or not producer.due(request, now_ns):
+        return
+      target = self._aa_texture
+      if target is None or target.texture.width != request.width or target.texture.height != request.height:
+        self._release_android_auto_texture()
+        target = rl.load_render_texture(request.width, request.height)
+        if getattr(getattr(target, "texture", None), "id", 0) == 0:
+          raise RuntimeError(f"{request.width}x{request.height} projection texture unavailable")
+        rl.set_texture_filter(target.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
+        self._aa_texture = target
+      rl.begin_texture_mode(target)
+      rl.clear_background(rl.BLACK)
+      x, y, w, h = request.content(self._render_texture_width, self._render_texture_height)
+      rl.draw_texture_pro(self._render_texture.texture,
+                          rl.Rectangle(0, 0, float(self._render_texture_width), float(self._render_texture_height)),
+                          rl.Rectangle(float(x), float(y), float(w), float(h)), rl.Vector2(0, 0), 0.0, rl.WHITE)
+      rl.end_texture_mode()
+      image = rl.load_image_from_texture(target.texture)
+      try:
+        if image.format != rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 or \
+           (image.width, image.height) != (request.width, request.height):
+          raise RuntimeError(f"unexpected projection readback {image.width}x{image.height} format {image.format}")
+        size = request.width * request.height * 4
+        producer.publish(request, rl.ffi.buffer(image.data, size), now_ns)
+      finally:
+        rl.unload_image(image)
+    except Exception as exc:
+      self._aa_failed = True
+      self._aa_producer = None
+      self._release_android_auto_texture()
+      cloudlog.error(f"Android Auto capture disabled: {exc}")
+
+  def _release_android_auto_texture(self) -> None:
+    texture, self._aa_texture = self._aa_texture, None
+    if texture is not None and rl.is_window_ready():
+      self._unload_render_texture(texture)
 
   def _start_pending_ui_stream(self) -> None:
     """Honour a pending start request. Render thread only.
@@ -1447,6 +1543,8 @@ class GuiApplication:
       rl.unload_font(font)
     self._fonts = {}
 
+    self._release_android_auto_texture()
+
     if self._render_texture is not None:
       rl.unload_render_texture(self._render_texture)
       self._render_texture = None
@@ -1527,6 +1625,7 @@ class GuiApplication:
           self._mark_progress("gui_app.before_stream_start")
           self._start_pending_ui_stream()
           self._mark_progress("gui_app.after_stream_start")
+        self._ensure_android_auto_texture()
 
         if self._render_texture:
           self._mark_progress("gui_app.before_begin_texture_mode")
@@ -1625,6 +1724,9 @@ class GuiApplication:
           self._record_frame()
 
         self._capture_stream_frame()
+        self._mark_progress("gui_app.before_android_auto_capture")
+        self._capture_android_auto_frame()
+        self._mark_progress("gui_app.after_android_auto_capture")
 
         self.frame_timing = FrameTiming(
           (time.monotonic() - frame_start) * 1000,

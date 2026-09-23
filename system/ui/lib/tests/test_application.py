@@ -747,3 +747,73 @@ def test_streamer_stopping_under_a_remote_press_cancels_it():
   app.stop_ui_stream()
   assert _flags(app._arbitrate_input([], 10.1)) == [(False, False, False, True)]
   assert app._arbitrate_input([], 10.2) == []
+
+
+# ------------------------------------------------------------ android auto
+
+def _fake_projection_gl(monkeypatch, pixels: bytes):
+  drawn = []
+  raw = application.rl.ffi.new("unsigned char[]", pixels)
+  image = SimpleNamespace(data=raw, width=0, height=0, format=application.rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
+
+  def load_render_texture(w, h):
+    image.width, image.height = w, h
+    return SimpleNamespace(texture=SimpleNamespace(id=7, width=w, height=h))
+
+  monkeypatch.setattr(application.rl, "load_render_texture", load_render_texture)
+  monkeypatch.setattr(application.rl, "set_texture_filter", lambda *a: None)
+  monkeypatch.setattr(application.rl, "begin_texture_mode", lambda t: None)
+  monkeypatch.setattr(application.rl, "end_texture_mode", lambda: None)
+  monkeypatch.setattr(application.rl, "clear_background", lambda c: None)
+  monkeypatch.setattr(application.rl, "draw_texture_pro", lambda tex, src, dst, *a: drawn.append((dst.x, dst.y, dst.width, dst.height)))
+  monkeypatch.setattr(application.rl, "load_image_from_texture", lambda texture: image)
+  monkeypatch.setattr(application.rl, "unload_image", lambda img: None)
+  monkeypatch.setattr(application.rl, "is_window_ready", lambda: False)
+  return drawn
+
+
+def test_android_auto_capture_letterboxes_and_publishes(monkeypatch, tmp_path):
+  from openpilot.starpilot.system.android_auto.frame_source import FrameConsumer, FrameProducer, FrameRequest
+  path = str(tmp_path / "frames")
+  consumer = FrameConsumer(path)
+  consumer.configure(FrameRequest(800, 480, 0, 0, 50_000))
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._render_texture_width, app._render_texture_height = 536, 240
+  app._aa_producer = FrameProducer(path)
+  drawn = _fake_projection_gl(monkeypatch, bytes([9]) * (800 * 480 * 4))
+
+  assert not app.ui_stream_wants_frames()
+  app._capture_android_auto_frame()
+  assert drawn == []  # no demand, no GPU work
+
+  consumer.demand(1.0)
+  app._aa_producer._next_open_check = 0
+  assert app.ui_stream_wants_frames()  # keeps rendering while the display sleeps
+  app._capture_android_auto_frame()
+  assert drawn == [(0.0, 60.0, 800.0, 358.0)]
+  frame = consumer.latest()
+  assert frame is not None and (frame.width, frame.height) == (800, 480) and frame.data[:1] == b"\x09"
+  consumer.close()
+
+
+def test_android_auto_capture_failure_disables_only_projection(monkeypatch, tmp_path):
+  from openpilot.starpilot.system.android_auto.frame_source import FrameConsumer, FrameProducer, FrameRequest
+  path = str(tmp_path / "frames")
+  consumer = FrameConsumer(path)
+  consumer.configure(FrameRequest(800, 480, 0, 0, 50_000))
+  consumer.demand(1.0)
+  app = _bare_app()
+  app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
+  app._render_texture_width, app._render_texture_height = 536, 240
+  app._aa_producer = FrameProducer(path)
+  _fake_projection_gl(monkeypatch, bytes(16))
+
+  def explode(texture):
+    raise RuntimeError("readback failed")
+
+  monkeypatch.setattr(application.rl, "load_image_from_texture", explode)
+  app._capture_android_auto_frame()
+  assert app._aa_failed and app._aa_producer is None and app._aa_texture is None
+  assert not app.android_auto_wants_frames()
+  consumer.close()
