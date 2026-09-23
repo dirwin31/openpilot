@@ -153,10 +153,8 @@ def _bare_app() -> application.GuiApplication:
   app._progress_hook = None
   app._ui_stream_control_allowed = False
   app._ui_stream_control_reason = "not enabled by this app"
-  app._remote_gesture = None
-  app._remote_gesture_start = 0.0
-  app._remote_gesture_index = 0
-  app._held_physical_events = []
+  app._remote_down = False
+  app._remote_pos = application.MousePos(0, 0)
   app._physical_slots_down = set()
   app._last_physical_event_t = -math.inf
   return app
@@ -626,105 +624,126 @@ def test_mici_stream_allocates_texture_on_request_and_reuses_it(monkeypatch):
     app.stop_ui_stream()
 
 
-def _remote_app(gestures, allowed=True):
-  """App wired to a fake streamer that hands out the given gestures."""
+class _FakeControl:
+  """Stand-in for the streamer's control queue: hands out scripted batches."""
+
+  def __init__(self, allowed=True):
+    self.allowed = allowed
+    self.batches: list[list] = []
+    self.policy: list = []
+    self.preempted: list[str] = []
+
+  def set_control_allowed(self, allowed, reason):
+    self.policy.append((allowed, reason))
+
+  def drain_control(self, now):
+    return self.batches.pop(0) if self.batches else []
+
+  def preempt_control(self, reason):
+    self.preempted.append(reason)
+
+
+def _remote_app(allowed=True):
   app = _bare_app()
   app._width, app._height = 2160, 1080
   app._ui_stream_control_allowed = allowed
   app._ui_stream_control_reason = "" if allowed else "the car is onroad"
-  queue_ = list(gestures)
-  policy = []
-
-  def take_gesture(now):
-    return queue_.pop(0) if allowed and queue_ else None
-
-  app._ui_stream = SimpleNamespace(set_control_allowed=lambda a, r: policy.append((a, r)), take_gesture=take_gesture)
-  return app, policy
+  app._ui_stream = _FakeControl(allowed)
+  return app, app._ui_stream
 
 
 def _touch(x, y, pressed=False, released=False, down=False, slot=0, t=0.0):
   return application.MouseEvent(application.MousePos(x, y), slot, pressed, released, down, t)
 
 
-def _tap_gesture(x=0.25, y=0.5, hold=0.0):
+def _remote(kind, x=0.25, y=0.5):
   from openpilot.system.ui.lib.ui_stream import ControlEvent
-  return [ControlEvent("down", x, y, 0.0), ControlEvent("up", x, y, hold)]
+  return ControlEvent(kind, x, y)
 
 
-def test_remote_gesture_maps_normalized_points_onto_the_logical_canvas():
-  from openpilot.system.ui.lib.ui_stream import ControlEvent
-  app, policy = _remote_app([[ControlEvent("down", 0.25, 0.5, 0.0), ControlEvent("move", 0.5, 0.5, 0.0),
-                              ControlEvent("up", 0.5, 0.5, 0.0)]])
+def _flags(events):
+  return [(e.left_pressed, e.left_released, e.left_down, e.cancelled) for e in events]
+
+
+def test_remote_input_maps_normalized_points_onto_the_logical_canvas():
+  app, control = _remote_app()
+  control.batches = [[_remote("down", 0.25, 0.5), _remote("move", 0.5, 0.5), _remote("up", 0.5, 0.5)]]
   events = app._arbitrate_input([], 10.0)
-  assert policy == [(True, "")]
+  assert control.policy == [(True, "")]
   assert [(e.pos.x, e.pos.y) for e in events] == [(540.0, 540.0), (1080.0, 540.0), (1080.0, 540.0)]
-  assert [(e.left_pressed, e.left_released, e.left_down) for e in events] == [
-    (True, False, True), (False, False, True), (False, True, False)]
+  assert _flags(events) == [(True, False, True, False), (False, False, True, False), (False, True, False, False)]
   assert all(e.slot == 0 for e in events)
-  assert app._remote_gesture is None
 
 
-def test_remote_gesture_replays_with_its_original_timing():
-  # A long press must stay held for as long as the user held it, so hold-based
-  # actions (button long-press, mici's Experimental Mode hold) behave the same.
-  app, _ = _remote_app([_tap_gesture(hold=0.9)])
-  assert [e.left_pressed for e in app._arbitrate_input([], 10.0)] == [True]
-  assert app._arbitrate_input([], 10.5) == []
-  up = app._arbitrate_input([], 10.9)
-  assert [e.left_released for e in up] == [True] and up[0].t == pytest.approx(10.9)
+def test_remote_cancel_is_not_a_release():
+  app, control = _remote_app()
+  control.batches = [[_remote("down")], [_remote("cancel")]]
+  app._arbitrate_input([], 10.0)
+  events = app._arbitrate_input([], 10.1)
+  assert _flags(events) == [(False, False, False, True)]
+  assert (events[0].pos.x, events[0].pos.y) == (540.0, 540.0)  # at the finger, not (0, 0)
 
 
-def test_remote_gesture_waits_for_the_physical_screen_to_be_idle():
-  app, _ = _remote_app([_tap_gesture()])
+def test_remote_events_without_a_delivered_press_are_dropped():
+  app, control = _remote_app()
+  control.batches = [[_remote("move"), _remote("up"), _remote("cancel")]]
+  assert app._arbitrate_input([], 10.0) == []
+
+
+def test_remote_press_refused_while_the_panel_is_in_use():
+  app, control = _remote_app()
   press = _touch(10, 10, pressed=True, down=True)
   assert app._arbitrate_input([press], 10.0) == [press]
-  assert app._arbitrate_input([], 11.0) == []  # finger still down
+  control.batches = [[_remote("down"), _remote("up")]]
+  assert app._arbitrate_input([], 10.1) == []  # finger still on the panel
+  assert control.preempted == ["the comma screen is in use"]
   release = _touch(10, 10, released=True)
-  assert app._arbitrate_input([release], 11.1) == [release]
-  assert app._arbitrate_input([], 11.1 + application.REMOTE_PHYSICAL_QUIET / 2) == []  # not quiet yet
-  events = app._arbitrate_input([], 11.1 + application.REMOTE_PHYSICAL_QUIET)
-  assert [e.left_pressed for e in events] == [True, False]
+  app._arbitrate_input([release], 10.2)
+  control.batches = [[_remote("down")]]
+  assert app._arbitrate_input([], 10.2 + application.REMOTE_PHYSICAL_QUIET / 2) == []  # not quiet yet
+  control.batches = [[_remote("down")]]
+  assert _flags(app._arbitrate_input([], 10.2 + application.REMOTE_PHYSICAL_QUIET))[0][0] is True
 
 
-def test_desktop_hover_does_not_block_remote_gestures():
-  app, _ = _remote_app([_tap_gesture()])
+def test_physical_touch_takes_over_a_remote_gesture():
+  # The remote finger is withdrawn with a cancel *before* the physical press,
+  # so the two never merge on slot 0 and the physical tap starts clean.
+  app, control = _remote_app()
+  control.batches = [[_remote("down")]]
+  app._arbitrate_input([], 10.0)
+  press = _touch(10, 10, pressed=True, down=True, t=10.1)
+  control.batches = [[_remote("move")]]
+  events = app._arbitrate_input([press], 10.1)
+  assert _flags(events[:1]) == [(False, False, False, True)]
+  assert events[1:] == [press]
+  assert control.preempted == ["someone touched the comma screen"]
+  assert app._remote_down is False
+
+
+def test_desktop_hover_does_not_block_or_preempt_remote_input():
+  app, control = _remote_app()
+  control.batches = [[_remote("down")]]
   hover = _touch(10, 10)
   events = app._arbitrate_input([hover], 10.0)
-  assert events[0] == hover and [e.left_pressed for e in events[1:]] == [True, False]
-
-
-def test_physical_touch_mid_replay_is_held_intact_and_delivered_after():
-  # A started replay cannot be cancelled (any release is a click), so a finger
-  # landing mid-replay waits for it -- unmodified, in order -- instead of the
-  # two gestures being merged on slot 0.
-  app, _ = _remote_app([_tap_gesture(hold=0.4)])
-  assert [e.left_pressed for e in app._arbitrate_input([], 10.0)] == [True]
-  press = _touch(10, 10, pressed=True, down=True, t=10.1)
-  move = _touch(20, 10, down=True, t=10.2)
-  assert app._arbitrate_input([press], 10.1) == []
-  assert app._arbitrate_input([move], 10.2) == []
-  events = app._arbitrate_input([], 10.4)
-  assert [e.left_released for e in events] == [True, False, False]
-  assert events[1:] == [press, move]
-  # The physical finger is down, so the next queued gesture would wait.
-  assert app._physical_slots_down == {0}
+  assert events[0] == hover and _flags(events[1:])[0][0] is True
+  assert app._arbitrate_input([hover], 10.1) == [hover]
+  assert app._remote_down is True and control.preempted == []
 
 
 def test_remote_input_is_refused_until_the_app_opts_in(monkeypatch):
   # Only an app that decides when remote taps are safe may receive them.
   monkeypatch.setattr(application.GuiApplication, "_set_log_callback", lambda _: None)
   app = application.GuiApplication(536, 240)
-  policy = []
-  app._ui_stream = SimpleNamespace(set_control_allowed=lambda a, r: policy.append((a, r)), take_gesture=lambda now: None)
+  app._ui_stream = _FakeControl()
   assert app._arbitrate_input([], 10.0) == []
-  assert policy == [(False, "not enabled by this app")]
+  assert app._ui_stream.policy == [(False, "not enabled by this app")]
 
 
-def test_replay_finishes_after_the_streamer_stops():
-  # The press was delivered, so it must be released where the gesture ends,
-  # not abandoned with the streamer.
-  app, _ = _remote_app([_tap_gesture(hold=0.3)])
-  app._ui_stream.stop = lambda: None
+def test_streamer_stopping_under_a_remote_press_cancels_it():
+  app, control = _remote_app()
+  control.stop = lambda: None
+  control.batches = [[_remote("down")]]
   app._arbitrate_input([], 10.0)
   app.stop_ui_stream()
-  assert [e.left_released for e in app._arbitrate_input([], 10.3)] == [True]
+  assert _flags(app._arbitrate_input([], 10.1)) == [(False, False, False, True)]
+  assert app._arbitrate_input([], 10.2) == []

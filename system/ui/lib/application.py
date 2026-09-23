@@ -34,7 +34,7 @@ UI_IDLE_FPS = int(os.getenv("UI_IDLE_FPS", "0"))
 UI_INTERACTION_FPS_DURATION = 1.25
 MAX_TOUCH_SLOTS = 2
 TOUCH_HISTORY_TIMEOUT = 3.0  # Seconds before touch points fade out
-REMOTE_PHYSICAL_QUIET = 0.5  # untouched panel time before a remote gesture may start
+REMOTE_PHYSICAL_QUIET = 0.5  # untouched panel time before a remote press is accepted
 
 BIG_UI = os.getenv("BIG", "0") == "1"
 MACOS = platform.system() == "Darwin"
@@ -194,6 +194,19 @@ class MouseEvent(NamedTuple):
   left_released: bool
   left_down: bool
   t: float
+  # The touch was withdrawn (remote control lost its viewer, or a physical
+  # touch took over). It is deliberately neither a press nor a release, so code
+  # that does not know about cancel can never read it as a click or a swipe; it
+  # just sees the finger go up. Aware code resets its gesture state.
+  cancelled: bool = False
+
+
+class _RemoteWithdrawn(NamedTuple):
+  """Stand-in for a streamer ``cancel`` when there is no streamer to ask."""
+  kind: str = "cancel"
+
+
+_REMOTE_WITHDRAWN = _RemoteWithdrawn()
 
 
 class FrameTiming(NamedTuple):
@@ -485,7 +498,7 @@ class MouseState:
 
     # Only add changes
     prev = self._prev_mouse_event[ev.slot]
-    if prev is None or ev[:-1] != prev[:-1]:
+    if prev is None or ev[:5] != prev[:5]:
       with self._lock:
         self._events.append(ev)
       self._prev_mouse_event[ev.slot] = ev
@@ -529,11 +542,9 @@ class GuiApplication:
     self._ui_stream_error = ""
     self._ui_stream_control_allowed = False
     self._ui_stream_control_reason = "not enabled by this app"
-    # Remote gesture replay and its arbitration against the physical screen.
-    self._remote_gesture: list | None = None
-    self._remote_gesture_start = 0.0
-    self._remote_gesture_index = 0
-    self._held_physical_events: list[MouseEvent] = []
+    # Live remote touch and its arbitration against the physical screen.
+    self._remote_down = False
+    self._remote_pos = MousePos(0, 0)
     self._physical_slots_down: set[int] = set()
     self._last_physical_event_t = -math.inf
     self._stream_paused = False
@@ -1055,80 +1066,87 @@ class GuiApplication:
     self._ui_stream_control_reason = reason
 
   def _arbitrate_input(self, physical: list[MouseEvent], now: float) -> list[MouseEvent]:
-    """This frame's events: physical touches plus any remote gesture replay.
+    """This frame's events: physical touches plus live remote control.
 
-    Render thread only. Remote gestures arrive whole and are replayed on slot
-    0 with their original timing, so widgets see exactly what a finger would
-    produce, long presses and drags included. The physical screen wins:
+    Render thread only. Remote input shares slot 0 with the touchscreen, so
+    exactly one source owns it at a time, and the physical screen wins:
 
-    * a replay only starts once no finger is down and the panel has been
-      untouched for ``REMOTE_PHYSICAL_QUIET`` (queued gestures otherwise age
-      out in the streamer);
-    * a started replay cannot be aborted -- the UI has no cancel, and any
-      release is a click -- so physical events arriving mid-replay are held,
-      unmodified and in order, and delivered right after it. The streamer caps
-      gestures at ``CONTROL_MAX_GESTURE`` seconds, which bounds that wait.
+    * a remote press is refused while a finger is down or the panel was
+      touched within ``REMOTE_PHYSICAL_QUIET``;
+    * a finger landing during a remote gesture withdraws it with a ``cancelled``
+      event first, so the physical gesture starts clean.
+
+    A remote gesture only ever ends in a real release when its viewer lifted.
+    Every other ending -- preemption, a stalled or vanished viewer, control
+    refused (onroad), the streamer stopping -- is a cancel, which widgets
+    treat as the finger going away without a click.
     """
+    touching = False
     for event in physical:
       if event.left_down:
         self._physical_slots_down.add(event.slot)
       else:
         self._physical_slots_down.discard(event.slot)
-    # Desktop hover (no button) is not a touch and must not block replays.
-    if any(event.left_down or event.left_released for event in physical):
+      # Desktop hover (no button) is not a touch.
+      touching |= event.left_down or event.left_released
+    if touching:
       self._last_physical_event_t = now
+    physical_busy = bool(self._physical_slots_down) or now - self._last_physical_event_t < REMOTE_PHYSICAL_QUIET
 
-    if self._remote_gesture is not None:
-      self._held_physical_events.extend(physical)
-      events = self._replay_due(now)
-      if self._remote_gesture is None:
-        events += self._held_physical_events
-        self._held_physical_events = []
-      return events
+    events: list[MouseEvent] = []
+    if self._remote_down and (touching or self._physical_slots_down):
+      events.append(self._remote_event(now, cancelled=True))
+      self._preempt_remote("someone touched the comma screen")
+      return events + physical
 
-    if self._physical_slots_down or now - self._last_physical_event_t < REMOTE_PHYSICAL_QUIET:
-      return physical
-    gesture = self._take_remote_gesture(now)
-    if gesture is None:
-      return physical
-    self._remote_gesture = gesture
-    self._remote_gesture_start = now
-    self._remote_gesture_index = 0
-    return physical + self._replay_due(now)
+    for remote in self._drain_remote(now):
+      if remote.kind == "down":
+        if physical_busy:
+          self._preempt_remote("the comma screen is in use")
+          break
+        self._remote_down = True
+        self._remote_pos = MousePos(remote.x * self._width, remote.y * self._height)
+        events.append(self._remote_event(now, pressed=True))
+      elif not self._remote_down:
+        continue  # the press never reached the UI; nothing to move, release or cancel
+      elif remote.kind == "move":
+        self._remote_pos = MousePos(remote.x * self._width, remote.y * self._height)
+        events.append(self._remote_event(now))
+      elif remote.kind == "up":
+        self._remote_pos = MousePos(remote.x * self._width, remote.y * self._height)
+        events.append(self._remote_event(now, released=True))
+      else:
+        events.append(self._remote_event(now, cancelled=True))
+    return physical + events
 
-  def _take_remote_gesture(self, now: float):
+  def _remote_event(self, now: float, pressed: bool = False, released: bool = False, cancelled: bool = False) -> MouseEvent:
+    """A slot-0 event at the remote pointer. Coordinates arrive normalized to
+    the captured image, which is the whole logical canvas."""
+    down = not (released or cancelled)
+    if not down:
+      self._remote_down = False
+    return MouseEvent(self._remote_pos, 0, pressed, released, down, now, cancelled)
+
+  def _drain_remote(self, now: float) -> list:
     stream = self._ui_stream
     if stream is None:
-      return None
+      # The streamer stopped under a held remote press: withdraw it.
+      return [_REMOTE_WITHDRAWN] if self._remote_down else []
     try:
       stream.set_control_allowed(self._ui_stream_control_allowed, self._ui_stream_control_reason)
-      return stream.take_gesture(now)
+      return stream.drain_control(now)
     except Exception as exc:
       cloudlog.error(f"UI streamer input failed: {exc}")
-      return None
+      return [_REMOTE_WITHDRAWN] if self._remote_down else []
 
-  def _replay_due(self, now: float) -> list[MouseEvent]:
-    """Remote events whose time has come. Coordinates are normalized to the
-    captured image, which is the whole logical canvas."""
-    gesture = self._remote_gesture
-    events: list[MouseEvent] = []
-    while self._remote_gesture_index < len(gesture):
-      event = gesture[self._remote_gesture_index]
-      t = self._remote_gesture_start + event.t
-      if t > now:
-        break
-      events.append(MouseEvent(
-        MousePos(event.x * self._width, event.y * self._height),
-        0,
-        event.kind == "down",
-        event.kind == "up",
-        event.kind != "up",
-        t,
-      ))
-      self._remote_gesture_index += 1
-    if self._remote_gesture_index >= len(gesture):
-      self._remote_gesture = None
-    return events
+  def _preempt_remote(self, reason: str) -> None:
+    self._remote_down = False
+    stream = self._ui_stream
+    if stream is not None:
+      try:
+        stream.preempt_control(reason)
+      except Exception as exc:
+        cloudlog.error(f"UI streamer input failed: {exc}")
 
   def ui_stream_wants_frames(self) -> bool:
     """True while a browser is actually pulling images.
@@ -1376,8 +1394,7 @@ class GuiApplication:
     self._ui_stream_pending = False
     self._stream_paused = False
     if stream is not None:
-      # A replay already under way lives in the app and still finishes, so a
-      # press it delivered is always released where the gesture ended.
+      # A held remote press is withdrawn by the next frame's arbitration.
       stream.stop()
     # Unlike the main texture this one is only read, never composited, so
     # freeing it costs nothing visible; it is small and cheap to re-create.
