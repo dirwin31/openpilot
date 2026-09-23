@@ -26,13 +26,16 @@ from pathlib import Path
 
 from openpilot.starpilot.system.android_auto import identity as identity_store
 from openpilot.starpilot.system.android_auto.bootstrap import NAMES, BootstrapError, WirelessBootstrap
-from openpilot.starpilot.system.android_auto.frame_source import FrameConsumer, FrameRequest, SyntheticFrames
+from openpilot.starpilot.system.android_auto.frame_source import DEFAULT_PATH as DEFAULT_FRAME_PATH, FrameRequest
+from openpilot.starpilot.system.android_auto.touch import DEFAULT_TOUCH_SOCKET
+from openpilot.starpilot.system.android_auto.view import CAR_FRAME_PATH, ViewSource, renderer_available
 from openpilot.starpilot.system.android_auto.session import AuthenticationRejected, PeerRequestedStop, ProjectionSession
 
 BACKOFF_SECONDS = (2.0, 4.0, 8.0, 15.0, 30.0)
 STABLE_SESSION_SECONDS = 30.0
 PEER_STOP_RETRY_SECONDS = 10.0
 FRAME_MAX_AGE = 0.5          # never send a UI frame older than this
+SOFTWARE_FPS = 15            # libx264 cadence; the hardware encoder runs at 30
 UNAVAILABLE_AFTER = 3.0      # focused but no fresh UI frame for this long -> "unavailable" card
 SDP_SETTLE = (1.5, 2.2, 3.0)
 TCP_ATTEMPTS = 6
@@ -92,8 +95,10 @@ class EventLog:
 
 class Supervisor:
   def __init__(self, bluez_factory=None, lease_factory=None, bluetooth_client=None, frame_path: str | None = None,
-               synthetic: bool = False):
+               synthetic: bool = False, car_frame_path: str = CAR_FRAME_PATH, touch_path: str = DEFAULT_TOUCH_SOCKET,
+               renderer_command: list[str] | None = None):
     self._synthetic = synthetic
+    self._car_frame_path, self._touch_path, self._renderer_command = car_frame_path, touch_path, renderer_command
     self._bluez_factory = bluez_factory
     self._lease_factory = lease_factory
     self._bt_client = bluetooth_client
@@ -108,7 +113,8 @@ class Supervisor:
     self.log = EventLog()
     self.config = identity_store.load_config()
     self._status: dict = {"state": "idle", "detail": "", "error": "", "last_stage": "", "attempt": 0,
-                          "retry_in": 0.0, "mode": None, "stats": {}, "head_unit": {}, "identity": "", "running": False}
+                          "retry_in": 0.0, "mode": None, "stats": {}, "head_unit": {}, "identity": "", "running": False,
+                          "view": "", "encoder": "", "target_fps": 0}
 
   # ------------------------------------------------------------------ status
 
@@ -131,6 +137,7 @@ class Supervisor:
     status["label"] = STATE_LABELS.get(status["state"], status["state"])
     status["receiver_address"] = self.config["receiver_address"]
     status["receiver_name"] = self.config["receiver_name"]
+    status["configured_view"] = self.config["view"]
     status["pairing_ready"] = time.monotonic() < self._pairing_until
     status["recent"] = list(self.log.recent)[-8:]
     return status
@@ -179,6 +186,15 @@ class Supervisor:
       self.config.update(receiver_address=address, receiver_name=name or address)
       identity_store.save_config(self.config)
     self._unselect_car_audio(address)
+
+  def set_view(self, view: str) -> None:
+    """Choose what the car shows; applies from the next projection session."""
+    if view not in ("car", "mirror"):
+      raise RuntimeError(f"Unknown view {view!r}")
+    with self._lock:
+      self.config["view"] = view
+      identity_store.save_config(self.config)
+    self.log("view_selected", view=view)
 
   def prepare_pairing(self, seconds: float = 180.0) -> None:
     """Present as a phone (HFP gateway, smartphone class) while the car pairs."""
@@ -418,18 +434,24 @@ class Supervisor:
     self._set(mode=mode.as_dict(), error="")
     self.log("projection_ready", mode=mode.as_dict(), head_unit_subject=session.head_unit_subject)
 
-    from openpilot.starpilot.system.android_auto.encoder import H264Encoder
-    encoder = H264Encoder(mode.width, mode.height, fps=mode.fps, bitrate_kbps=config["bitrate_kbps"])
-    if self._synthetic:
-      consumer = SyntheticFrames()
-    else:
-      consumer = FrameConsumer(self._frame_path) if self._frame_path else FrameConsumer()
-    interval = 1.0 / config["fps"]
-    consumer.configure(FrameRequest(mode.width, mode.height, mode.margin_width, mode.margin_height, int(interval * 1e6)))
+    from openpilot.starpilot.system.android_auto.hw_encoder import create_encoder
+    encoder, fps = create_encoder(mode.width, mode.height, preference=config["encoder"], bitrate_kbps=config["bitrate_kbps"],
+                                  margin_height=mode.margin_height, software_fps=SOFTWARE_FPS, log=self.log)
+    fps = min(fps, config["fps"]) if config["fps"] else fps
+    interval = 1.0 / fps
+    request = FrameRequest(mode.width, mode.height, mode.margin_width, mode.margin_height, int(interval * 1e6))
+    view = config["view"]
+    if view == "car" and not self._synthetic and self._renderer_command is None and not renderer_available():
+      view = "mirror"
+    source = ViewSource(view, request, self.log, synthetic=self._synthetic,
+                        mirror_path=self._frame_path or DEFAULT_FRAME_PATH, car_path=self._car_frame_path,
+                        touch_path=self._touch_path, renderer_command=self._renderer_command,
+                        renderer_log=identity_store.LOG_DIR / "car_ui.log")
+    self._set(view=source.label, encoder=getattr(encoder, "backend", "libx264"), target_fps=fps)
     try:
-      self._stream(session, encoder, consumer, lease, interval)
+      self._stream(session, encoder, source, lease, interval)
     finally:
-      consumer.close()
+      source.close()
       encoder.close()
       if self._stop.is_set():
         try:
@@ -437,25 +459,28 @@ class Supervisor:
         except Exception:
           pass
 
-  def _stream(self, session: ProjectionSession, encoder, consumer, lease, interval: float) -> None:
+  def _stream(self, session: ProjectionSession, encoder, source: ViewSource, lease, interval: float) -> None:
     started = time.monotonic()
     last_fresh = time.monotonic()
     last_unavailable = 0.0
     next_check = 0.0
     ages: deque[float] = deque(maxlen=120)
-    sent_times: deque[float] = deque(maxlen=60)
-    unavailable = None
+    sent_times: deque[float] = deque(maxlen=200)
+    unavailable: dict[str, bytes] = {}
     self._stage("streaming")
     while not self._stop.is_set():
       now = time.monotonic()
-      consumer.demand(1.0)
-      session.pump(0.01 if session.can_send() else 0.05)
+      source.demand(1.0)
+      session.pump(0.005 if session.can_send() else 0.05)
       session.check_progress()
+      if session.touch_events:
+        source.send_touches(list(session.touch_events))
+        session.touch_events.clear()
       state = "streaming" if session.focused else "suspended"
       if self._status["state"] != state:
         self._set(state=state)
       if session.can_send():
-        frame = consumer.latest()
+        frame = source.latest()
         if frame is not None:
           age = now - frame.captured_ns / 1e9
           if age <= FRAME_MAX_AGE:
@@ -467,20 +492,25 @@ class Supervisor:
         elif now - last_fresh > UNAVAILABLE_AFTER and now - last_unavailable > 1.0:
           # The UI stopped producing frames (e.g. the offroad render budget ran
           # out). Say so on the car instead of freezing on an old image.
-          if unavailable is None:
-            unavailable = self._unavailable_frame(consumer.request)
-          data, keyframe = encoder.encode_rgba(unavailable, keyframe=True)
+          text = "Starting StarPilot display" if source.waiting_for_first_frame else "StarPilot display unavailable"
+          if text not in unavailable:
+            unavailable[text] = self._unavailable_frame(source.request, text)
+          data, keyframe = encoder.encode_rgba(unavailable[text], keyframe=True)
           session.send_frame(data, time.monotonic_ns() // 1000, keyframe=keyframe)
           last_unavailable = now
       if now >= next_check:
         next_check = now + 1.0
         if not lease.still_connected():
           raise RuntimeError("Lost the car's Wi-Fi network")
+        label = source.label
+        source.check(now)
+        if source.label != label:
+          self._set(view=source.label)
         window = [t for t in sent_times if now - t <= 5.0]
         ordered = sorted(ages)
         stats = {**session.stats(), "fps": round(len(window) / 5.0, 1), "encode_ms": round(encoder.last_encode_ms, 1),
                  "frame_age_p95_ms": round(ordered[int(len(ordered) * 0.95) - 1] * 1000) if ordered else None,
-                 "uptime_s": round(now - started)}
+                 "uptime_s": round(now - started), "frames_from_view": source.frames}
         self._set(stats=stats)
         if int(now - started) % 30 == 0:
           self.log("stats", **stats)
@@ -490,7 +520,7 @@ class Supervisor:
         time.sleep(max(0.0, min(interval / 4, 0.01)))
 
   @staticmethod
-  def _unavailable_frame(request: FrameRequest | None) -> bytes:
+  def _unavailable_frame(request: FrameRequest | None, text: str) -> bytes:
     assert request is not None
     try:
       import cv2
@@ -498,7 +528,6 @@ class Supervisor:
       image = np.zeros((request.height, request.width, 4), np.uint8)
       image[..., 3] = 255
       scale = request.height / 480
-      text = "StarPilot display unavailable"
       size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, max(1, int(2 * scale)))[0]
       cv2.putText(image, text, ((request.width - size[0]) // 2, (request.height + size[1]) // 2), cv2.FONT_HERSHEY_SIMPLEX,
                   scale, (255, 255, 255, 255), max(1, int(2 * scale)), cv2.LINE_AA)

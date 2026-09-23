@@ -81,8 +81,10 @@ DEFAULT_CONFIG = {
   "receiver_name": "",
   "rfcomm_channel": 0,         # 0 = discover through SDP (normal); set only to work around a broken SDP record
   "verify_head_unit": True,    # verify the car's certificate against root-cert.pem when present
-  "fps": 12,                   # source frame rate sent to the car
-  "bitrate_kbps": 4000,
+  "view": "car",               # "car": full StarPilot UI sized for the car; "mirror": copy of the comma screen
+  "encoder": "auto",           # "auto": hardware H.264 at 30 fps, else libx264; "hardware" / "software" to force
+  "fps": 0,                    # 0 = automatic (30 with hardware, 15 with software); otherwise a cap, 5-30
+  "bitrate_kbps": 6000,
   "wifi_interface": "wlan0",
   "device_name": "StarPilot",
   "version_status": 0,         # WifiVersionResponse status (0 = success) for receivers that negotiate a version
@@ -99,7 +101,9 @@ def load_config(path: Path | None = None) -> dict:
       config.update({key: value for key, value in stored.items() if key in DEFAULT_CONFIG and isinstance(value, type(DEFAULT_CONFIG[key]))})
   except (OSError, ValueError):
     pass
-  config["fps"] = max(5, min(30, int(config["fps"])))
+  config["fps"] = 0 if int(config["fps"]) <= 0 else max(5, min(30, int(config["fps"])))
+  if config["view"] not in ("car", "mirror"):
+    config["view"] = "car"
   config["bitrate_kbps"] = max(1000, min(12000, int(config["bitrate_kbps"])))
   return config
 

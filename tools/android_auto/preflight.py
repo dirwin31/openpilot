@@ -42,18 +42,44 @@ def check_identity() -> None:
 
 
 def check_encoder() -> None:
-  try:
-    from openpilot.starpilot.system.android_auto.encoder import H264Encoder
-    encoder = H264Encoder(1280, 720, fps=30)
-    import time
-    started = time.monotonic()
-    for index in range(10):
-      encoder.encode_rgba(bytes([index * 20]) * (1280 * 720 * 4), keyframe=index == 0)
-    per_frame = (time.monotonic() - started) * 100
-    encoder.close()
-    record("PASS" if per_frame < 40 else "WARN", "H.264 encoder", f"libx264 via PyAV {encoder.av.__version__}, {per_frame:.1f} ms/frame at 720p")
-  except Exception as error:
-    record("FAIL", "H.264 encoder", str(error))
+  import time
+  from openpilot.starpilot.system.android_auto import hw_encoder
+  from openpilot.starpilot.system.android_auto.encoder import H264Encoder
+  hardware_ok = False
+  for name, factory in (("hardware H.264", lambda: hw_encoder.HardwareH264Encoder(1280, 720, margin_height=240)),
+                        ("software H.264", lambda: H264Encoder(1280, 720, fps=30))):
+    encoder = None
+    try:
+      if name.startswith("hardware") and not hw_encoder.LIBRARY.is_file():
+        raise RuntimeError(f"{hw_encoder.LIBRARY} missing (prebuilt library not deployed)")
+      encoder = factory()
+      frames = 30
+      started = time.monotonic()
+      for index in range(frames):
+        encoder.encode_rgba(bytes([index * 8 % 256]) * (1280 * 720 * 4), keyframe=index == 0)
+      per_frame = (time.monotonic() - started) * 1000 / frames
+      ok = per_frame < (30 if name.startswith("hardware") else 60)
+      record("PASS" if ok else "WARN", name, f"{encoder.backend}, {per_frame:.1f} ms/frame at 720p")
+      hardware_ok = hardware_ok or name.startswith("hardware")
+    except Exception as error:
+      fatal = name.startswith("software") and not hardware_ok  # software only matters as the fallback
+      record("FAIL" if fatal else "WARN", name, f"{type(error).__name__}: {error}")
+    finally:
+      if encoder is not None:
+        encoder.close()
+
+
+def check_car_view() -> None:
+  node = "/dev/dri/renderD128"
+  record("PASS" if os.access(node, os.R_OK | os.W_OK) else "WARN", "GPU render node (car layout)",
+         node if os.access(node, os.R_OK | os.W_OK) else f"{node} not accessible; the car will get the comma-screen mirror")
+  import ctypes
+  for library in ("libEGL.so", "libgbm.so"):
+    try:
+      ctypes.CDLL(library)
+      record("PASS", library)
+    except OSError as error:
+      record("WARN", library, f"{error}; the car will get the comma-screen mirror")
 
 
 def check_bluetooth(car: str) -> None:
@@ -122,7 +148,7 @@ def main() -> int:
       args.car = load_config()["receiver_address"]
     except Exception:
       pass
-  for check in (check_identity, check_encoder, lambda: check_bluetooth(args.car), check_wifi, check_ui):
+  for check in (check_identity, check_encoder, check_car_view, lambda: check_bluetooth(args.car), check_wifi, check_ui):
     try:
       check()
     except Exception as error:
