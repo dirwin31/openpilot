@@ -294,12 +294,15 @@ def test_control_lost_pointer_cancels_instead_of_releasing(browser, viewer_site)
   page, frame = open_viewer(browser, viewer_site, 844, 390)
   try:
     frame.locator("#control-toggle").click()
+    # Mouse pointer ids differ by browser (1 in Chrome, 0 in Firefox).
+    frame.locator("#cam").evaluate("el => el.addEventListener('pointerdown', e => { window.downPointerId = e.pointerId; })")
     content = _image_content(page, frame)
     page.mouse.move(content["left"] + content["width"] / 2, content["top"] + content["height"] / 2)
     page.mouse.down()
     _wait_for(page, counts, "down")
+    pointer_id = frame.locator("body").evaluate("() => window.downPointerId")
     # The browser takes the pointer away (scroll takeover, lost capture, ...).
-    frame.locator("#cam").dispatch_event("pointercancel", {"pointerId": 1, "bubbles": True})
+    frame.locator("#cam").dispatch_event("pointercancel", {"pointerId": pointer_id, "bubbles": True})
     _wait_for(page, counts, "cancel")
     page.mouse.up()
     page.wait_for_timeout(200)
