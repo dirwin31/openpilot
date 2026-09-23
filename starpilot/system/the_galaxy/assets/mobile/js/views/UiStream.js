@@ -76,6 +76,7 @@ export const UiStream = {
       streamPort: null,
       lanIp: "",
       galaxyLocalUrl: "",
+      viewerHost: "",
       viewerUrl: "",
       viewerOrigin: "",
       state: "idle",
@@ -150,6 +151,7 @@ export const UiStream = {
       this.streamPort = Number.isFinite(port) && port > 0 ? port : null
 
       const localHost = this.remote ? this.lanIp : window.location.hostname
+      this.viewerHost = localHost && localHost !== "unknown" ? localHost : ""
       this.galaxyLocalUrl = this.remote ? buildGalaxyLocalUrl(this.lanIp) : ""
       // parentOrigin lets the viewer target this exact Galaxy origin instead of "*".
       const parentOrigin = encodeURIComponent(window.location.origin)
@@ -369,7 +371,7 @@ export const UiStream = {
           <div style="padding:var(--sp-4); display:grid; gap:12px;">
             <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
               <span class="gx-chip" :style="stateStyle">{{ stateLabel }}</span>
-              <span v-if="viewerUrl" style="color:var(--text-muted); word-break:break-all;">{{ viewerUrl }}</span>
+              <span v-if="viewerHost" style="color:var(--text-muted); word-break:break-all;">{{ viewerHost }}</span>
             </div>
 
             <div v-if="state === 'remote'" class="gx-alert gx-alert--warn" style="border:none;margin:0;">
@@ -447,13 +449,6 @@ export const UiStream = {
           </div>
         </section>
 
-        <section class="gx-card">
-          <div style="padding:var(--sp-4); color:var(--text-muted); font-size:13px; line-height:1.5;">
-            <p style="margin:0 0 8px;">A live mirror of the on-device UI. The image already contains the driving HUD and alerts, so nothing is overlaid on it. While parked, press Control in the viewer to tap the comma screen remotely.</p>
-            <p style="margin:0 0 8px;">It is served over your local network with no authentication. Only enable it on a network you trust.</p>
-            <p style="margin:0;">Remote access through Galaxy does not carry the stream. Open Galaxy locally at the comma's IP to use Live UI.</p>
-          </div>
-        </section>
       </template>
     </div>
   `,

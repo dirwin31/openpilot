@@ -41,7 +41,7 @@
   #stage{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center}
   #cam{width:100%;height:100%;object-fit:contain;display:block;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   .controlling #cam{touch-action:none;cursor:crosshair;outline:2px solid var(--warn);outline-offset:-2px}
-  #trail{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  #touch{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
   button[aria-pressed="true"]{border-color:var(--warn);color:var(--warn)}
   button:disabled{opacity:.45;cursor:not-allowed}
   #cover{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:24px;background:rgba(0,0,0,.82);color:var(--dim)}
@@ -54,14 +54,33 @@
   .cell{display:flex;flex-direction:column;justify-content:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 9px;min-width:0}
   .cell .k{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim)}
   .cell .v{font-size:clamp(13px,1.8vw,20px);font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px;overflow-wrap:anywhere}
+  .cell .v .u{font-size:.62em;font-weight:500;color:var(--dim);margin-left:2px}
+  .cell .v.good{color:var(--good)}
+  .cell .v.good::before{content:"";display:inline-block;width:.45em;height:.45em;border-radius:50%;background:currentColor;box-shadow:0 0 6px currentColor;margin-right:.35em;vertical-align:.12em}
+  .cell .v.warn{color:var(--warn)}
   .cell .v.bad{color:var(--bad)}
   .cell .v.dim{color:var(--dim);font-weight:500}
+  .meter{height:3px;border-radius:2px;background:var(--line);margin-top:5px;overflow:hidden}
+  .meter i{display:block;height:100%;border-radius:inherit;background:var(--accent);transition:width .4s ease}
+  .meter.warn i{background:var(--warn)}
+  .meter.bad i{background:var(--bad)}
   .expanded footer{display:none}
   @media (orientation:portrait){
-    main.with-telemetry{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
-    .with-telemetry #stage{grid-column:1/-1;grid-row:1;height:auto;aspect-ratio:var(--stream-aspect,2)}
-    .with-telemetry .telemetry{grid-row:2}
-    .cell .v{font-size:17px}
+    /* Portrait: a slim device bar above the image, driving tiles below it. The
+       auto margins centre the group without clipping it when it overflows. */
+    main.with-telemetry{display:flex;flex-direction:column;gap:10px;padding:10px;overflow-y:auto}
+    .with-telemetry #stage{flex:0 0 auto;height:auto;aspect-ratio:var(--stream-aspect,2);border-radius:12px;overflow:hidden}
+    .with-telemetry #telemetry-device{display:flex;flex:0 0 auto;margin-top:auto;padding:8px 2px;overflow:visible;border-radius:14px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02))}
+    #telemetry-device .cell{flex:1 1 0;align-items:center;text-align:center;background:none;border:0;border-radius:0;padding:1px 6px}
+    #telemetry-device .cell+.cell{border-left:1px solid var(--line)}
+    #telemetry-device .cell .k{font-size:9px}
+    #telemetry-device .cell .v{font-size:15px}
+    #telemetry-device .meter{width:100%;max-width:44px}
+    .with-telemetry #telemetry-driving{flex:0 0 auto;margin-bottom:auto;overflow:visible;grid-template-columns:repeat(3,minmax(0,1fr));grid-auto-rows:auto;gap:8px}
+    #telemetry-driving .cell{padding:10px;border-radius:12px;background:linear-gradient(180deg,#1a1e24,#13161a)}
+    #telemetry-driving .cell .v{font-size:21px}
+    .with-telemetry .telemetry .cell .v{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
+    #telemetry-driving .cell .v.good,#telemetry-driving .cell .v.dim{font-size:14px}
     header{gap:6px;padding:6px 8px}
     #meta{display:none!important}
   }
@@ -85,7 +104,7 @@
     <aside id="telemetry-device" class="telemetry" aria-label="Device telemetry"></aside>
     <div id="stage" role="img" aria-label="Live comma UI">
       <img id="cam" alt="" role="presentation">
-      <canvas id="trail" aria-hidden="true"></canvas>
+      <canvas id="touch" aria-hidden="true"></canvas>
       <div id="cover"><div class="box">
         <strong id="cover-title">Connecting…</strong>
         <div id="cover-body">Waiting for the first frame from your comma.</div>
@@ -136,7 +155,7 @@
     telemetryToggle: document.getElementById("telemetry-toggle"),
     controlToggle: document.getElementById("control-toggle"),
     stage: document.getElementById("stage"),
-    trail: document.getElementById("trail"),
+    touch: document.getElementById("touch"),
     footer: document.getElementById("footer"),
     retry: document.getElementById("retry"),
     fs: document.getElementById("fs")
@@ -336,11 +355,21 @@
   function fmt(value, digits, unit) {
     if (value === null || value === undefined || (typeof value === "number" && !isFinite(value))) return "--";
     var v = (typeof value === "number") ? value.toFixed(digits) : String(value);
-    return unit ? v + " " + unit : v;
+    return unit ? v + '<span class="u">' + unit + '</span>' : v;
   }
 
-  function cell(key, value, cls) {
-    return '<div class="cell"><div class="k">' + key + '</div><div class="v ' + (cls || "") + '">' + value + '</div></div>';
+  function level(value, warn, bad) {
+    if (typeof value !== "number" || !isFinite(value)) return "";
+    return value >= bad ? "bad" : value >= warn ? "warn" : "";
+  }
+
+  // meter, when given, is a 0-100 fill drawn as a thin bar under the value.
+  function cell(key, value, cls, meter) {
+    var bar = "";
+    if (typeof meter === "number" && isFinite(meter)) {
+      bar = '<div class="meter ' + (cls || "") + '"><i style="width:' + Math.max(0, Math.min(100, meter)).toFixed(0) + '%"></i></div>';
+    }
+    return '<div class="cell"><div class="k">' + key + '</div><div class="v ' + (cls || "") + '">' + value + '</div>' + bar + '</div>';
   }
 
   function renderTelemetry() {
@@ -361,12 +390,12 @@
     var temp = d.cpuTempC === null || d.cpuTempC === undefined ? null : (metric ? d.cpuTempC : d.cpuTempC * 9 / 5 + 32);
 
     var engage = d.driveState ? d.driveState : (d.engaged ? "enabled" : "disabled");
-    var engageCls = (d.engaged === true) ? "" : "dim";
+    var engageCls = (d.engaged === true) ? "good" : "dim";
     var cells = "";
-    cells += cell("Engaged", engage, engageCls);
     cells += cell("Speed", fmt(speed, 0, speedUnit));
     cells += cell("Set", setSpeed === null ? "--" : fmt(setSpeed, 0, speedUnit), setSpeed === null ? "dim" : "");
     cells += cell("Lead", lead === null ? "--" : fmt(lead, 0, distUnit), lead === null ? "dim" : "");
+    cells += cell("Engaged", engage, engageCls);
     cells += cell("Brake", fmt(d.brake, 0, "%"), "");
     var pedals = [];
     if (d.gasPressed) pedals.push("gas");
@@ -374,11 +403,13 @@
     cells += cell("Pedals", pedals.length ? pedals.join("+") : "--", pedals.length ? "" : "dim");
     el.drivingTelemetry.innerHTML = cells;
     cells = "";
-    cells += cell("CPU", fmt(d.cpuUsagePercent, 0, "%"));
-    cells += cell("Mem", fmt(d.memoryUsagePercent, 0, "%"));
-    cells += cell("CPU temp", fmt(temp, 0, tempUnit));
+    cells += cell("CPU", fmt(d.cpuUsagePercent, 0, "%"), level(d.cpuUsagePercent, 80, 95), d.cpuUsagePercent);
+    cells += cell("Mem", fmt(d.memoryUsagePercent, 0, "%"), level(d.memoryUsagePercent, 80, 92), d.memoryUsagePercent);
+    // Temperature bar spans 30-100 °C regardless of the display unit.
+    var tempFill = typeof d.cpuTempC === "number" ? (d.cpuTempC - 30) / 70 * 100 : null;
+    cells += cell("Temp", fmt(temp, 0, tempUnit), level(d.cpuTempC, 75, 85), tempFill);
     cells += cell("Model", fmt(d.modelExecMs, 1, "ms"));
-    cells += cell("Drops", fmt(d.frameDropPerc, 1, "%"));
+    cells += cell("Drops", fmt(d.frameDropPerc, 1, "%"), level(d.frameDropPerc, 1, 5));
     el.deviceTelemetry.innerHTML = cells;
   }
 
@@ -426,17 +457,15 @@
 
   var CONTROL_KEEPALIVE_MS = 100;
   var CONTROL_MAX_BATCH = 32;
-  var TRAIL_FADE_MS = 500;
   var DEFAULT_FOOTER = el.footer.textContent;
   var CONTROL_FOOTER = "Remote control on: taps and drags on the image go to the comma as you make them.";
   var controlOn = false;
   var controlAllowed = false;
   var controlReason = "";
-  var gesture = null;  // { id, pointerId, point, trail, keepalive }
+  var gesture = null;  // { id, pointerId, point, keepalive }
   var outbox = [];     // { id, event }
   var controlInflight = false;
-  var trailClear = null;
-  var trailCtx = el.trail.getContext("2d");
+  var touchCtx = el.touch.getContext("2d");
 
   function updateControlAvailability(control) {
     var available = !!(control && control.available);
@@ -474,32 +503,22 @@
     return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)), inside: x >= 0 && x <= 1 && y >= 0 && y <= 1 };
   }
 
-  // The trail is drawn locally, so it tracks the finger with no stream latency.
-  function drawTrail(points, fade) {
-    if (trailClear) { clearTimeout(trailClear); trailClear = null; }
+  // A dot under the finger, drawn locally so it tracks with no stream latency.
+  // Null clears it.
+  function drawTouch(event) {
     var box = el.stage.getBoundingClientRect();
     var dpr = window.devicePixelRatio || 1;
-    if (el.trail.width !== Math.round(box.width * dpr) || el.trail.height !== Math.round(box.height * dpr)) {
-      el.trail.width = Math.round(box.width * dpr);
-      el.trail.height = Math.round(box.height * dpr);
+    if (el.touch.width !== Math.round(box.width * dpr) || el.touch.height !== Math.round(box.height * dpr)) {
+      el.touch.width = Math.round(box.width * dpr);
+      el.touch.height = Math.round(box.height * dpr);
     }
-    trailCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    trailCtx.clearRect(0, 0, box.width, box.height);
-    if (!points.length) return;
-    trailCtx.strokeStyle = trailCtx.fillStyle = "rgba(245,166,35,.9)";
-    trailCtx.lineWidth = 4;
-    trailCtx.lineCap = trailCtx.lineJoin = "round";
-    trailCtx.beginPath();
-    points.forEach(function (p, i) {
-      if (i === 0) trailCtx.moveTo(p.clientX - box.left, p.clientY - box.top);
-      else trailCtx.lineTo(p.clientX - box.left, p.clientY - box.top);
-    });
-    trailCtx.stroke();
-    var last = points[points.length - 1];
-    trailCtx.beginPath();
-    trailCtx.arc(last.clientX - box.left, last.clientY - box.top, 10, 0, 2 * Math.PI);
-    trailCtx.fill();
-    if (fade) trailClear = setTimeout(function () { trailClear = null; drawTrail([]); }, TRAIL_FADE_MS);
+    touchCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    touchCtx.clearRect(0, 0, box.width, box.height);
+    if (!event) return;
+    touchCtx.fillStyle = "rgba(245,166,35,.9)";
+    touchCtx.beginPath();
+    touchCtx.arc(event.clientX - box.left, event.clientY - box.top, 10, 0, 2 * Math.PI);
+    touchCtx.fill();
   }
 
   function queueControl(id, type, point) {
@@ -546,10 +565,9 @@
     if (!gesture) return;
     var pointer = gesture.pointerId;
     clearInterval(gesture.keepalive);
-    var trail = gesture.trail;
     gesture = null;  // first: releasing capture fires lostpointercapture
     try { el.cam.releasePointerCapture(pointer); } catch (e) { /* ignore */ }
-    drawTrail(trail, true);
+    drawTouch(null);
   }
 
   // Anything but a clean lift cancels: the comma forgets the press, no click.
@@ -570,13 +588,13 @@
     if (!point || !point.inside) return;
     event.preventDefault();
     var id = gestureId();
-    gesture = { id: id, pointerId: event.pointerId, point: point, trail: [{ clientX: event.clientX, clientY: event.clientY }], keepalive: null };
+    gesture = { id: id, pointerId: event.pointerId, point: point, keepalive: null };
     try { el.cam.setPointerCapture(event.pointerId); } catch (e) { /* ignore */ }
     queueControl(id, "down", point);
     gesture.keepalive = setInterval(function () {
       if (gesture && gesture.id === id && !controlInflight && !outbox.length) queueControl(id, "move", gesture.point);
     }, CONTROL_KEEPALIVE_MS);
-    drawTrail(gesture.trail, false);
+    drawTouch(event);
   });
 
   el.cam.addEventListener("pointermove", function (event) {
@@ -585,9 +603,8 @@
     if (!point) return;
     event.preventDefault();
     gesture.point = point;
-    gesture.trail.push({ clientX: event.clientX, clientY: event.clientY });
     queueControl(gesture.id, "move", point);
-    drawTrail(gesture.trail, false);
+    drawTouch(event);
   });
 
   el.cam.addEventListener("pointerup", function (event) {
