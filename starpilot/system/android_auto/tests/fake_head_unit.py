@@ -66,7 +66,7 @@ def discovery_response(video_channel: int = 3, input_channel: int = 1) -> bytes:
   av = field(1, 3) + field(4, video_config(1)) + field(4, video_config(2, 0, 240))
   video = field(1, video_channel) + field(3, av)
   audio = field(1, 4) + field(3, field(1, 1))
-  touch = field(1, input_channel) + field(4, field(1, 84))
+  touch = field(1, input_channel) + field(4, field(1, 84) + field(1, 4) + field(2, field(1, 1280) + field(2, 720)))
   return field(1, video) + field(1, audio) + field(1, touch) + field(2, "Honda") + field(3, "Civic")
 
 
@@ -215,6 +215,10 @@ class FakeHeadUnit:
         unacked -= 1
       elif channel == 1 and kind == 0x8002:
         self._send(1, 0x8003, field(1, 0))
+
+  def send_touch(self, action: int, x: int, y: int, pointer: int = 0) -> None:
+    location = field(1, x) + field(2, y) + field(3, pointer)
+    self._send(1, 0x8001, field(1, 123) + field(3, field(1, location) + field(2, 0) + field(3, action)))
 
   def set_focus(self, projected: bool) -> None:
     self._send(3, 0x8008, field(1, 1 if projected else 2) + field(2, 1))

@@ -23,6 +23,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from openpilot.starpilot.system.android_auto.touch import InputConfig, TouchEvent, TouchMapper, parse_input_config
 from openpilot.starpilot.system.android_auto.wire import field, json_fields, one, parse_fields, signed
 
 MAX_MESSAGE = 2 * 1024 * 1024
@@ -351,12 +352,17 @@ class Session:
         media = parse_fields(av)
         item["media_type"] = one(media, 1)
         item["video_configs"] = [parse_fields(c) for c in media.get(4, []) if isinstance(c, bytes)]
-      if 4 in fields:
+      if isinstance(one(fields, 4), bytes):
         item["input"] = True
+        try:
+          item["input_config"] = parse_input_config(one(fields, 4))
+        except ValueError:
+          item["input_config"] = InputConfig()
       channels.append(item)
     head_unit = {number: [value.decode("utf-8", "replace") for value in values if isinstance(value, bytes)]
                  for number, values in response.items() if number in (2, 3, 4, 5, 6, 7, 8, 9)}
-    self.event("discovered", channels=[{k: (json_fields_list(v) if k == "video_configs" else v) for k, v in ch.items()} for ch in channels],
+    self.event("discovered", channels=[{k: (json_fields_list(v) if k == "video_configs" else str(v) if k == "input_config" else v)
+                                        for k, v in ch.items()} for ch in channels],
                head_unit={k: v for k, v in head_unit.items() if v})
     return channels
 
@@ -406,6 +412,8 @@ class ProjectionSession(Session):
     self.max_ack_seconds = 0.0
     self.input_channel: int | None = None
     self.input_events = 0
+    self.touch: TouchMapper | None = None
+    self.touch_events: deque[TouchEvent] = deque(maxlen=128)
     self.last_ping_sent = 0.0
     self.last_rx = time.monotonic()
     self.ping_responses = 0
@@ -449,8 +457,13 @@ class ProjectionSession(Session):
       if signed(one(opened, 1)) != 0:
         raise ValueError("channel open rejected")
       self.input_channel = channel["id"]
-      self.send(channel["id"], INPUT_BINDING_REQUEST, b"")
-      self.event("input_opened", channel=channel["id"])
+      config = channel.get("input_config") or InputConfig()
+      # Echo the advertised keycodes, as a phone does; touch needs no binding.
+      self.send(channel["id"], INPUT_BINDING_REQUEST, b"".join(field(1, code) for code in config.keycodes))
+      if self.mode is not None:
+        self.touch = TouchMapper(config, self.mode.width, self.mode.height, self.mode.margin_width, self.mode.margin_height)
+      self.event("input_opened", channel=channel["id"], keycodes=len(config.keycodes),
+                 touch=f"{config.touch_width}x{config.touch_height}")
     except (TimeoutError, ValueError) as error:
       self.event("input_unavailable", error=str(error))
 
@@ -508,7 +521,12 @@ class ProjectionSession(Session):
         self.event("video_ignored", kind=kind, fields=json_fields(fields))
     elif channel == self.input_channel:
       if kind == INPUT_EVENT:
-        self.input_events += 1  # view-only MVP: acknowledged by reading, never injected
+        self.input_events += 1
+        if self.touch is not None and self.focused:
+          try:
+            self.touch_events.extend(self.touch.decode(data))
+          except ValueError as error:
+            self.event("input_invalid", error=str(error))
       elif kind == INPUT_BINDING_RESPONSE:
         self.event("input_bound", status=signed(one(fields, 1, 0)))
       else:
@@ -521,6 +539,8 @@ class ProjectionSession(Session):
     granted = focus in (FOCUS_PROJECTED, FOCUS_PROJECTED_NO_INPUT)
     self.focused = granted and self.allow_projection
     self.event("video_focus", focus=focus, unsolicited=unsolicited, focused=self.focused)
+    if was_focused and not self.focused and self.touch is not None:
+      self.touch_events.extend(self.touch.reset())
     if self.focused and not was_focused:
       assert self.mode is not None
       if self.media_started:
@@ -592,4 +612,4 @@ class ProjectionSession(Session):
   def stats(self) -> dict:
     return {"frames_sent": self.frames_sent, "frames_acked": self.acked, "pending": self.unacked,
             "focus_epoch": self.focus_epoch, "focused": self.focused, "max_ack_ms": round(self.max_ack_seconds * 1000),
-            "input_events": self.input_events}
+            "input_events": self.input_events, "touch": self.touch is not None}

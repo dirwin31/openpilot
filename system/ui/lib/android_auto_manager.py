@@ -79,6 +79,9 @@ class AndroidAutoManager:
   def prepare_pairing(self) -> None:
     self._run(self._client.prepare_pairing)
 
+  def set_view(self, view: str) -> None:
+    self._run(self._client.set_view, view)
+
   def select_receiver(self, address: str, name: str) -> None:
     self._run(self._client.select_receiver, address, name)
 

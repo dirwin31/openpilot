@@ -249,7 +249,8 @@ class BluetoothLayoutMici(NavScroller):
       return "starting service"
     state = status.get("state", "idle")
     if state == "streaming":
-      return f"projecting / {status.get('stats', {}).get('fps', 0)} fps"
+      view = "car layout" if status.get("view") == "car" else "mirror"
+      return f"projecting / {view} / {status.get('stats', {}).get('fps', 0)} fps"
     if state == "idle":
       if status.get("error"):
         return "stopped / error"
@@ -265,6 +266,7 @@ class BluetoothLayoutMici(NavScroller):
     if status and status.get("receiver_address"):
       options.append("stop" if status.get("running") else "start")
     options.append("choose car")
+    options.append("mirror comma screen" if status.get("configured_view", "car") == "car" else "use car layout")
     if bt.offroad:
       options.append("pair a new car")
     if status and status.get("error"):
@@ -279,6 +281,10 @@ class BluetoothLayoutMici(NavScroller):
         self._android_auto.stop_projection()
       elif action == "choose car":
         self._android_auto_choose_car()
+      elif action == "mirror comma screen":
+        self._android_auto.set_view("mirror")
+      elif action == "use car layout":
+        self._android_auto.set_view("car")
       elif action == "pair a new car":
         self._android_auto.prepare_pairing()
         self._manager.set_scanning(True)

@@ -47,6 +47,8 @@ def handle(supervisor: Supervisor, request: dict[str, Any]) -> dict[str, Any]:
     supervisor.stop()
   elif command == "select_receiver":
     supervisor.select_receiver(str(request.get("address", "")), str(request.get("name", "")))
+  elif command == "set_view":
+    supervisor.set_view(str(request.get("view", "")))
   elif command == "prepare_pairing":
     supervisor.prepare_pairing()
   elif command == "devices":
