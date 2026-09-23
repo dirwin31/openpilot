@@ -53,6 +53,9 @@ class AndroidAutoClient:
   def select_receiver(self, address: str, name: str = "") -> None:
     self.call("select_receiver", address=address, name=name)
 
+  def set_view(self, view: str) -> None:
+    self.call("set_view", view=view)
+
   def prepare_pairing(self) -> None:
     self.call("prepare_pairing")
 
