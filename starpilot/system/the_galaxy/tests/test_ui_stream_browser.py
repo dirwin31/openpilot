@@ -135,8 +135,9 @@ def test_telemetry_preserves_portrait_image_and_uses_landscape_sides(browser, vi
     right = frame.locator("#telemetry-driving").bounding_box()
     if frame.locator("body").evaluate("() => innerWidth <= innerHeight"):
       assert frame.locator("#cam").evaluate(visible_width) >= before * 0.90
-      assert left["y"] >= stage["y"] + stage["height"] - 1
-      assert right["y"] == left["y"]
+      # Device bar sits above the image and driving tiles below; neither overlaps it.
+      assert left["y"] + left["height"] <= stage["y"] + 1
+      assert right["y"] >= stage["y"] + stage["height"] - 1
     else:
       assert left["x"] + left["width"] <= stage["x"]
       assert stage["x"] + stage["width"] <= right["x"]
