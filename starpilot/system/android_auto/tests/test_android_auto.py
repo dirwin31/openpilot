@@ -331,6 +331,18 @@ def test_session_end_to_end_with_focus_epochs(identity):
   assert [sid for sid, _ in hu.frames] == [1, 1, 1, 1, 1, 2] and hu.shutdown_received.is_set()
 
 
+def test_session_accepts_newer_head_unit_protocol(identity):
+  hu = FakeHeadUnit(identity, version=(4, 1))  # 2025 Honda Civic head unit
+  session = connect(hu, identity)
+  session.authenticate()
+  mode = session.start("StarPilot", "comma.ai")
+  assert hu.version_reply == (6, 1, 0) and mode.width == 1280
+  session.shutdown()
+  session.peer.close()
+  hu.thread.join(5)
+  assert hu.error is None, hu.error
+
+
 def test_session_keeps_unsolicited_focus_grant(identity):
   hu = FakeHeadUnit(identity, unsolicited_focus=True)
   session = connect(hu, identity)

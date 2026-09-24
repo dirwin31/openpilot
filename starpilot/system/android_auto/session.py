@@ -27,6 +27,7 @@ from openpilot.starpilot.system.android_auto.touch import InputConfig, TouchEven
 from openpilot.starpilot.system.android_auto.wire import field, json_fields, one, parse_fields, signed
 
 MAX_MESSAGE = 2 * 1024 * 1024
+PHONE_MAX_VERSION = (6, 1)  # protocol version Android Auto 17.6 reports to newer head units
 MAX_FRAGMENT_BYTES = 2 * MAX_MESSAGE
 FRAGMENT_SIZE = 16000
 
@@ -297,10 +298,13 @@ class Session:
     if channel != 0 or kind != MSG_VERSION_REQUEST or len(data) != 4:
       raise ValueError(f"Expected version request; got {channel}/{kind:#x}")
     major, minor = struct.unpack(">HH", data)
-    if major != 1:
+    if major < 1:
       raise ValueError(f"Unsupported Android Auto protocol version {major}.{minor}")
-    self.event("version", major=major, minor=minor)
-    self.send(0, MSG_VERSION_RESPONSE, struct.pack(">HHH", 1, min(minor, 5), 0), encrypted=False)
+    # Android Auto 17.6 answers any request above 1.7 with its own maximum and success;
+    # newer head units (e.g. 2025 Honda, 4.1) hang up on anything else.
+    reply = (1, min(minor, 5)) if (major, minor) <= (1, 7) else PHONE_MAX_VERSION
+    self.event("version", major=major, minor=minor, reply=f"{reply[0]}.{reply[1]}")
+    self.send(0, MSG_VERSION_RESPONSE, struct.pack(">HHH", *reply, 0), encrypted=False)
     while True:
       channel, kind, data = self.receive()
       if channel != 0 or kind != MSG_SSL_HANDSHAKE:
