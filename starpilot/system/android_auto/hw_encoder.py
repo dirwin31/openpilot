@@ -121,6 +121,6 @@ def create_encoder(width: int, height: int, *, preference: str, bitrate_kbps: in
       if preference == "hardware":
         raise
       log("encoder_fallback", reason=f"{type(error).__name__}: {str(error)[:160]}")
-  encoder = H264Encoder(width, height, fps=30, bitrate_kbps=bitrate_kbps)
+  encoder = H264Encoder(width, height, fps=software_fps, bitrate_kbps=bitrate_kbps)
   log("encoder", backend=encoder.backend, fps=software_fps)
   return encoder, software_fps
