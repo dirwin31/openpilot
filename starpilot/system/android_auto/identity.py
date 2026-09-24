@@ -42,7 +42,10 @@ class IdentityError(RuntimeError):
 def _not_after(cert_path: Path) -> datetime | None:
   try:
     from cryptography import x509
-    return x509.load_pem_x509_certificate(cert_path.read_bytes()).not_valid_after_utc
+    certificate = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    if hasattr(certificate, "not_valid_after_utc"):
+      return certificate.not_valid_after_utc
+    return certificate.not_valid_after.replace(tzinfo=UTC)  # cryptography < 42, as on device
   except ImportError:
     pass
   try:
