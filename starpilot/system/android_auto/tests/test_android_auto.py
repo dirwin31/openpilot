@@ -102,7 +102,7 @@ def test_sdp_channel_encodings():
 
 # ----------------------------------------------------------------- bootstrap
 
-def run_bootstrap(**hu_options):
+def run_bootstrap(start_request_delay=5.0, **hu_options):
   phone, car = socket.socketpair()
   joined = []
   result_holder = {}
@@ -116,7 +116,8 @@ def run_bootstrap(**hu_options):
   thread = threading.Thread(target=car_side, daemon=True)
   thread.start()
   events = []
-  boot = bs.WirelessBootstrap(phone, lambda name, **values: events.append((name, values)), stage_timeout=5.0)
+  boot = bs.WirelessBootstrap(phone, lambda name, **values: events.append((name, values)), stage_timeout=5.0,
+                              start_request_delay=start_request_delay)
 
   def join(credentials):
     time.sleep(0.3)  # the car pings while we join
@@ -145,6 +146,12 @@ def test_bootstrap_version_first_and_fragmented():
   assert result.version == (1, 3) and result.head_unit.get("car_make") == "Honda"
   assert one(seen["version_response"], 1) == 1 and signed(one(seen["version_response"], 4)) == 0
   assert joined[0].ssid == "HondaAA"
+
+
+def test_bootstrap_asks_car_to_start_projection():
+  result, joined, seen, events = run_bootstrap(start_request_delay=0.2, version_first=True, wait_for_phone_start=True)
+  assert seen["phone_start_request"] == b"" and joined[0].ssid == "HondaAA"
+  assert ("bootstrap_tx", {"message": "WifiStartRequest", "bytes": 0}) in events
 
 
 def test_bootstrap_detects_alternate_info_layout():

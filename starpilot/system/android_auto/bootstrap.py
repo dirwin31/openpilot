@@ -202,8 +202,9 @@ class WirelessBootstrap:
   """Runs the phone side of the handshake on a connected RFCOMM socket."""
 
   def __init__(self, sock, log: Callable[..., None], *, device_serial: str = "starpilot",
-               version_status: int = STATUS_SUCCESS, stage_timeout: float = 20.0):
+               version_status: int = STATUS_SUCCESS, stage_timeout: float = 20.0, start_request_delay: float = 5.0):
     self.sock = sock
+    self.start_request_delay = start_request_delay
     self.log = log
     self.device_serial = device_serial
     self.version_status = version_status
@@ -270,10 +271,20 @@ class WirelessBootstrap:
     # Stage 1: wait for the endpoint (optionally after a version exchange).
     self.stage = "wifi_start"
     hinted: Endpoint | None = None  # endpoint carried by WifiVersionRequest, if any
+    # Android Auto 17.6 asks the car to start projection 5 s after the version
+    # exchange if the car has not started it; newer head units (2025 Honda) wait for it.
+    start_request_at: float | None = None
     while endpoint is None:
+      wait = 3.0 if hinted is not None else self.stage_timeout
+      if start_request_at is not None:
+        wait = min(wait, max(0.01, start_request_at - time.monotonic()))
       try:
-        message_id, payload = self.next_frame(3.0 if hinted is not None else self.stage_timeout)
+        message_id, payload = self.next_frame(wait)
       except BootstrapError:
+        if start_request_at is not None and time.monotonic() >= start_request_at:
+          start_request_at = None
+          self.send(WIFI_START_REQUEST)
+          continue
         if hinted is None:
           raise
         endpoint = hinted  # the receiver sent its endpoint only with the version exchange
@@ -290,6 +301,7 @@ class WirelessBootstrap:
         self.send(WIFI_VERSION_RESPONSE, field(1, major) + field(2, minor) + field(3, self.device_serial) +
                   field(4, self.version_status))
         hinted = version_endpoint or hinted
+        start_request_at = time.monotonic() + self.start_request_delay
       elif message_id == WIFI_START_REQUEST:
         parsed = parse_endpoint(payload)
         if parsed is None:

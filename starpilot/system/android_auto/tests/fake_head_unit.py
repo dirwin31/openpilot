@@ -238,7 +238,8 @@ class FakeHeadUnit:
 
 
 def rfcomm_head_unit(sock: socket.socket, endpoint: tuple[str, int], *, version_first: bool = False, oaa_layout: bool = False,
-                     setup_info_only: bool = False, pings: bool = True, byte_by_byte: bool = False) -> dict:
+                     setup_info_only: bool = False, pings: bool = True, byte_by_byte: bool = False,
+                     wait_for_phone_start: bool = False) -> dict:
   """Car side of the RFCOMM bootstrap; returns what the phone sent."""
   seen: dict = {"messages": []}
   reader = bs.FrameReader()
@@ -276,6 +277,10 @@ def rfcomm_head_unit(sock: socket.socket, endpoint: tuple[str, int], *, version_
       message_id, payload = receive()
       assert message_id == bs.WIFI_VERSION_RESPONSE
       seen["version_response"] = parse_fields(payload)
+      if wait_for_phone_start:  # 2025 Honda: projection starts only when the phone asks
+        message_id, payload = receive()
+        assert message_id == bs.WIFI_START_REQUEST, message_id
+        seen["phone_start_request"] = payload
     if pings:
       send(bs.WIFI_PING_REQUEST, field(1, 123))
     send(bs.WIFI_START_REQUEST, field(1, ip) + field(2, port))
