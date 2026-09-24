@@ -30,13 +30,13 @@ class ExperimentalModeButton(Widget):
   def _render(self, rect):
     rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
     draw_mode_banner_gradient(rect, self.mode_variant, 0xCC if self.is_pressed else 0xFF)
-    rl.draw_rectangle_rounded_lines_ex(self._rect, 0.19, 10, 5, rl.BLACK)
+    rl.draw_rectangle_rounded_lines_ex(self._rect, 0.19, 10, 2, rl.Color(30, 30, 62, 255))
     rl.end_scissor_mode()
 
     # Draw vertical separator line
     line_x = rect.x + rect.width - self.img_width - (2 * self.horizontal_padding)
-    separator_color = rl.Color(0, 0, 0, 77)  # 0x4d = 77
-    rl.draw_line_ex(rl.Vector2(line_x, rect.y), rl.Vector2(line_x, rect.y + rect.height), 3, separator_color)
+    separator_color = rl.Color(0, 0, 0, 55)
+    rl.draw_line_ex(rl.Vector2(line_x, rect.y), rl.Vector2(line_x, rect.y + rect.height), 2, separator_color)
 
     # Draw text label (left aligned)
     if self.mode_variant == ModeBannerVariant.CONDITIONAL_EXPERIMENTAL:

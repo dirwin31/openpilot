@@ -16,15 +16,18 @@ from openpilot.selfdrive.selfdrived.alertmanager import OFFROAD_ALERTS
 
 
 class AlertColors:
-  HIGH_SEVERITY = rl.Color(226, 44, 44, 255)
-  LOW_SEVERITY = rl.Color(41, 41, 41, 255)
-  BACKGROUND = rl.Color(57, 57, 57, 255)
-  BUTTON = rl.WHITE
-  BUTTON_PRESSED = rl.Color(200, 200, 200, 255)
-  BUTTON_TEXT = rl.BLACK
-  SNOOZE_BG = rl.Color(79, 79, 79, 255)
-  SNOOZE_BG_PRESSED = rl.Color(100, 100, 100, 255)
-  TEXT = rl.WHITE
+  HIGH_SEVERITY = rl.Color(224, 85, 119, 255)   # Nebula Rose
+  LOW_SEVERITY = rl.Color(22, 22, 42, 255)       # Cosmic dark card
+  BACKGROUND = rl.Color(14, 14, 26, 255)         # Cosmic container
+  BORDER = rl.Color(35, 35, 68, 255)             # Galaxy border
+  BUTTON = rl.Color(139, 108, 197, 255)          # Cosmic Purple
+  BUTTON_PRESSED = rl.Color(117, 88, 176, 255)
+  BUTTON_BORDER = rl.Color(180, 155, 245, 180)
+  BUTTON_TEXT = rl.WHITE
+  SNOOZE_BG = rl.Color(26, 26, 48, 255)
+  SNOOZE_BG_PRESSED = rl.Color(42, 42, 75, 255)
+  SNOOZE_BORDER = rl.Color(48, 48, 85, 255)
+  TEXT = rl.Color(250, 248, 255, 255)
 
 
 class AlertConstants:
@@ -71,14 +74,17 @@ class ActionButton(Widget):
     self._rect.height = AlertConstants.BUTTON_HEIGHT
 
     roundness = AlertConstants.BORDER_RADIUS / self._rect.height
-    bg_color = AlertColors.BUTTON if self._style == ButtonStyle.LIGHT else AlertColors.SNOOZE_BG
+    is_light = self._style == ButtonStyle.LIGHT
+    bg_color = AlertColors.BUTTON if is_light else AlertColors.SNOOZE_BG
+    border_color = AlertColors.BUTTON_BORDER if is_light else AlertColors.SNOOZE_BORDER
     if self.is_pressed:
-      bg_color = AlertColors.BUTTON_PRESSED if self._style == ButtonStyle.LIGHT else AlertColors.SNOOZE_BG_PRESSED
+      bg_color = AlertColors.BUTTON_PRESSED if is_light else AlertColors.SNOOZE_BG_PRESSED
 
-    rl.draw_rectangle_rounded(self._rect, roundness, 10, bg_color)
+    rl.draw_rectangle_rounded(self._rect, roundness, 12, bg_color)
+    rl.draw_rectangle_rounded_lines_ex(self._rect, roundness, 12, 1.5, border_color)
 
     # center text
-    color = rl.WHITE if self._style == ButtonStyle.DARK else rl.BLACK
+    color = rl.WHITE
     text_x = int(self._rect.x + (self._rect.width - text_size.x) // 2)
     text_y = int(self._rect.y + (self._rect.height - text_size.y) // 2)
     rl.draw_text_ex(self._font, self.text, rl.Vector2(text_x, text_y), AlertConstants.FONT_SIZE, 0, color)
@@ -133,7 +139,8 @@ class AbstractAlert(Widget, ABC):
     pass
 
   def _render(self, rect: rl.Rectangle):
-    rl.draw_rectangle_rounded(rect, AlertConstants.BORDER_RADIUS / rect.height, 10, AlertColors.BACKGROUND)
+    rl.draw_rectangle_rounded(rect, AlertConstants.BORDER_RADIUS / rect.height, 12, AlertColors.BACKGROUND)
+    rl.draw_rectangle_rounded_lines_ex(rect, AlertConstants.BORDER_RADIUS / rect.height, 12, 1.5, AlertColors.BORDER)
 
     footer_height = AlertConstants.BUTTON_HEIGHT + AlertConstants.SPACING
     content_height = rect.height - 2 * AlertConstants.MARGIN - footer_height
@@ -275,6 +282,7 @@ class OffroadAlert(AbstractAlert):
         continue
 
       bg_color = AlertColors.HIGH_SEVERITY if alert_data.severity > 0 else AlertColors.LOW_SEVERITY
+      border_color = rl.Color(245, 140, 170, 200) if alert_data.severity > 0 else rl.Color(48, 48, 85, 255)
       text_width = int(content_rect.width - (AlertConstants.ALERT_INSET * 2))
       wrapped_lines = wrap_text(font, alert_data.text, AlertConstants.FONT_SIZE, text_width)
       line_count = len(wrapped_lines)
@@ -290,6 +298,7 @@ class OffroadAlert(AbstractAlert):
 
       roundness = AlertConstants.BORDER_RADIUS / min(alert_rect.height, alert_rect.width)
       rl.draw_rectangle_rounded(alert_rect, roundness, 10, bg_color)
+      rl.draw_rectangle_rounded_lines_ex(alert_rect, roundness, 10, 1.5, border_color)
 
       text_x = alert_rect.x + AlertConstants.ALERT_INSET
       text_y = alert_rect.y + AlertConstants.ALERT_INSET
