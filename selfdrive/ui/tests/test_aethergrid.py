@@ -272,12 +272,13 @@ class TestAethergridContracts(unittest.TestCase):
   def test_custom_icon_draws_directly_while_cache_fill_is_pending(self):
     mod = _import_aethergrid()
     scribble = sys.modules["openpilot.selfdrive.ui.layouts.settings.starpilot.scribble"]
+    vector_icon = sys.modules["openpilot.system.ui.lib.vector_icon"]
     geometry = MagicMock()
     cache = MagicMock(return_value=None)
 
     color = mod.rl.Color(255, 255, 255, 255)
     with patch.object(scribble, "_draw_custom_icon_geometry", geometry), \
-         patch.object(scribble.gui_app, "cached_render_texture", cache, create=True):
+         patch.object(vector_icon.gui_app, "cached_render_texture", cache, create=True):
       scribble.draw_custom_icon("sound", 10, 20, 1.0, color)
 
     cache.assert_called_once()
@@ -286,12 +287,13 @@ class TestAethergridContracts(unittest.TestCase):
   def test_custom_icon_uses_completed_cache_without_redrawing_geometry(self):
     mod = _import_aethergrid()
     scribble = sys.modules["openpilot.selfdrive.ui.layouts.settings.starpilot.scribble"]
+    vector_icon = sys.modules["openpilot.system.ui.lib.vector_icon"]
     geometry = MagicMock()
     cache = MagicMock(return_value=object())
     draw_texture = MagicMock()
 
     with patch.object(scribble, "_draw_custom_icon_geometry", geometry), \
-         patch.object(scribble.gui_app, "cached_render_texture", cache, create=True), \
+         patch.object(vector_icon.gui_app, "cached_render_texture", cache, create=True), \
          patch.object(scribble.rl, "draw_texture_pro", draw_texture):
       scribble.draw_custom_icon("sound", 10, 20, 1.0, mod.rl.Color(255, 255, 255, 255))
 
@@ -304,6 +306,7 @@ class TestAethergridContracts(unittest.TestCase):
   def test_translucent_custom_icon_uses_premultiplied_blending(self):
     mod = _import_aethergrid()
     scribble = sys.modules["openpilot.selfdrive.ui.layouts.settings.starpilot.scribble"]
+    vector_icon = sys.modules["openpilot.system.ui.lib.vector_icon"]
     geometry = MagicMock()
     cache = MagicMock(return_value=object())
     begin_blend = MagicMock()
@@ -311,7 +314,7 @@ class TestAethergridContracts(unittest.TestCase):
 
     color = mod.rl.Color(160, 170, 185, 80)
     with patch.object(scribble, "_draw_custom_icon_geometry", geometry), \
-         patch.object(scribble.gui_app, "cached_render_texture", cache, create=True), \
+         patch.object(vector_icon.gui_app, "cached_render_texture", cache, create=True), \
          patch.object(scribble.rl, "begin_blend_mode", begin_blend), \
          patch.object(scribble.rl, "end_blend_mode", end_blend):
       scribble.draw_custom_icon("first_aid", 10, 20, 0.8, color)

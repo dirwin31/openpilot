@@ -11,6 +11,7 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from openpilot.system.ui.lib.bluetooth_manager import BluetoothManager
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
+from openpilot.system.ui.lib.vector_icon import draw_strokes
 from openpilot.system.ui.lib.wifi_manager import WifiManager
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.bluetooth import BluetoothManagerUI
@@ -149,12 +150,10 @@ class SettingsLayout(Widget):
       p1 = rl.Vector2(cx + half, cy - size)
       p2 = rl.Vector2(cx - half, cy)
       p3 = rl.Vector2(cx + half, cy + size)
+    points = [(p1.x, p1.y), (p2.x, p2.y), (p3.x, p3.y)]
     if bloom:
-      bloom_col = rl.Color(color.r, color.g, color.b, 35)
-      rl.draw_line_ex(p1, p2, 7.0, bloom_col)
-      rl.draw_line_ex(p2, p3, 7.0, bloom_col)
-    rl.draw_line_ex(p1, p2, 2.8, color)
-    rl.draw_line_ex(p2, p3, 2.8, color)
+      draw_strokes([(points, 7.0)], rl.Color(color.r, color.g, color.b, 35), "settings-chevron-bloom")
+    draw_strokes([(points, 2.8)], color, "settings-chevron")
 
   def _draw_sidebar(self, rect: rl.Rectangle):
     rl.draw_rectangle_rec(rect, SIDEBAR_COLOR)

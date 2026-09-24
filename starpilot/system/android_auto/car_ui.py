@@ -154,6 +154,10 @@ def run(frames_path: str, touch_path: str) -> int:
   MainLayout()
 
   content = rl.load_render_texture(visible_w, visible_h)
+  from openpilot.system.ui.lib.msaa import MsaaTarget, install_watertight_shapes
+  msaa = MsaaTarget.create(visible_w, visible_h)
+  if msaa is not None:
+    install_watertight_shapes()
   output = rl.load_render_texture(request.width, request.height)
   touch = TouchInput(MouseEvent, MousePos, logical_w, logical_h)
   # A few widgets (list buttons, StarPilot sliders) poll raylib's pointer directly;
@@ -187,7 +191,7 @@ def run(frames_path: str, touch_path: str) -> int:
         gui_app._last_mouse_event = events[-1]
       ui_state.update()
 
-      rl.begin_texture_mode(content)
+      rl.begin_texture_mode(msaa.render_texture if msaa is not None else content)
       rl.clear_background(rl.Color(6, 6, 15, 255))
       rl.rl_push_matrix()
       rl.rl_scalef(scale_x, scale_y, 1.0)
@@ -201,6 +205,8 @@ def run(frames_path: str, touch_path: str) -> int:
         widget.render(viewport)
       rl.rl_pop_matrix()
       rl.end_texture_mode()
+      if msaa is not None:
+        msaa.resolve(content)
 
       # Centre inside the car's margins; drawing with a positive source height
       # flips on the GPU so the readback is top-down for the encoder.
@@ -220,6 +226,8 @@ def run(frames_path: str, touch_path: str) -> int:
     return 0
   finally:
     receiver.close()
+    if msaa is not None:
+      msaa.unload()
     rl.unload_render_texture(content)
     rl.unload_render_texture(output)
     context.close()
