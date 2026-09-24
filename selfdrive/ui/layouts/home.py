@@ -93,6 +93,9 @@ class HomeLayout(Widget):
     self.current_state = state
 
   def _render(self, rect: rl.Rectangle):
+    # Cosmic dark void background
+    rl.draw_rectangle_rec(rect, rl.Color(6, 6, 15, 255))
+
     current_time = time.monotonic()
     if current_time - self.last_refresh >= REFRESH_INTERVAL:
       self._refresh()
@@ -109,23 +112,30 @@ class HomeLayout(Widget):
       self._render_alerts_view()
 
   def _update_state(self):
+    content_margin_x = max(24, min(CONTENT_MARGIN, int(self._rect.width * 0.02)))
+    content_margin_y = CONTENT_MARGIN
+
     self.header_rect = rl.Rectangle(
-      self._rect.x + CONTENT_MARGIN, self._rect.y + CONTENT_MARGIN, self._rect.width - 2 * CONTENT_MARGIN, HEADER_HEIGHT
+      self._rect.x + content_margin_x, self._rect.y + content_margin_y,
+      self._rect.width - 2 * content_margin_x, HEADER_HEIGHT
     )
 
-    content_y = self._rect.y + CONTENT_MARGIN + HEADER_HEIGHT + SPACING
-    content_height = self._rect.height - CONTENT_MARGIN - HEADER_HEIGHT - SPACING - CONTENT_MARGIN
+    content_y = self._rect.y + content_margin_y + HEADER_HEIGHT + SPACING
+    content_height = self._rect.height - content_margin_y - HEADER_HEIGHT - SPACING - content_margin_y
 
     self.content_rect = rl.Rectangle(
-      self._rect.x + CONTENT_MARGIN, content_y, self._rect.width - 2 * CONTENT_MARGIN, content_height
+      self._rect.x + content_margin_x, content_y, self._rect.width - 2 * content_margin_x, content_height
     )
 
-    left_width = self.content_rect.width - RIGHT_COLUMN_WIDTH - SPACING
+    # Adaptive column split: proportional ~44% for right column, clamped to reasonable bounds
+    target_right = int(self.content_rect.width * 0.44)
+    right_width = max(520, min(800, target_right))
+    left_width = self.content_rect.width - right_width - SPACING
 
     self.left_column_rect = rl.Rectangle(self.content_rect.x, self.content_rect.y, left_width, self.content_rect.height)
 
     self.right_column_rect = rl.Rectangle(
-      self.content_rect.x + left_width + SPACING, self.content_rect.y, RIGHT_COLUMN_WIDTH, self.content_rect.height
+      self.content_rect.x + left_width + SPACING, self.content_rect.y, right_width, self.content_rect.height
     )
 
     self.update_notif_rect.x = self.header_rect.x
@@ -148,13 +158,15 @@ class HomeLayout(Widget):
 
     version_text_width = self.header_rect.width
 
-    # Update notification button
+    # Update notification button (Galaxy cosmic purple pill)
     if self.update_available:
       version_text_width -= self.update_notif_rect.width
 
-      # Highlight if currently viewing updates
-      highlight_color = rl.Color(75, 95, 255, 255) if self.current_state == HomeLayoutState.UPDATE else rl.Color(54, 77, 239, 255)
-      rl.draw_rectangle_rounded(self.update_notif_rect, 0.3, 10, highlight_color)
+      is_active = self.current_state == HomeLayoutState.UPDATE
+      highlight_color = rl.Color(139, 108, 197, 255) if is_active else rl.Color(117, 88, 176, 255)
+      border_color = rl.Color(180, 155, 245, 255) if is_active else rl.Color(150, 120, 220, 180)
+      rl.draw_rectangle_rounded(self.update_notif_rect, 0.4, 12, highlight_color)
+      rl.draw_rectangle_rounded_lines_ex(self.update_notif_rect, 0.4, 12, 1.5, border_color)
 
       text = tr("UPDATE")
       text_size = measure_text_cached(font, text, HEAD_BUTTON_FONT_SIZE)
@@ -162,13 +174,15 @@ class HomeLayout(Widget):
       text_y = self.update_notif_rect.y + (self.update_notif_rect.height - text_size.y) // 2
       rl.draw_text_ex(font, text, rl.Vector2(int(text_x), int(text_y)), HEAD_BUTTON_FONT_SIZE, 0, rl.WHITE)
 
-    # Alert notification button
+    # Alert notification button (Galaxy nebula rose pill)
     if self.alert_count > 0:
       version_text_width -= self.alert_notif_rect.width
 
-      # Highlight if currently viewing alerts
-      highlight_color = rl.Color(255, 70, 70, 255) if self.current_state == HomeLayoutState.ALERTS else rl.Color(226, 44, 44, 255)
-      rl.draw_rectangle_rounded(self.alert_notif_rect, 0.3, 10, highlight_color)
+      is_active = self.current_state == HomeLayoutState.ALERTS
+      highlight_color = rl.Color(224, 85, 119, 255) if is_active else rl.Color(192, 68, 102, 255)
+      border_color = rl.Color(245, 140, 170, 255) if is_active else rl.Color(220, 110, 140, 180)
+      rl.draw_rectangle_rounded(self.alert_notif_rect, 0.4, 12, highlight_color)
+      rl.draw_rectangle_rounded_lines_ex(self.alert_notif_rect, 0.4, 12, 1.5, border_color)
 
       alert_text = trn("{} ALERT", "{} ALERTS", self.alert_count).format(self.alert_count)
       text_size = measure_text_cached(font, alert_text, HEAD_BUTTON_FONT_SIZE)
@@ -185,7 +199,7 @@ class HomeLayout(Widget):
     brand_text = "StarPilot"
     detail_text = self._version_text.removeprefix(brand_text)
     brand_font = gui_app.font(FontWeight.BRAND)
-    version_font_size = 48
+    version_font_size = 46
 
     def _measure_header(font_size: int) -> tuple[rl.Vector2, rl.Vector2]:
       return (measure_text_cached(brand_font, brand_text, font_size + 2),
@@ -194,19 +208,19 @@ class HomeLayout(Widget):
     brand_size, detail_size = _measure_header(version_font_size)
     total_width = brand_size.x + detail_size.x
     if total_width > version_rect.width:
-      version_font_size = max(32, int(version_font_size * version_rect.width / total_width))
+      version_font_size = max(28, int(version_font_size * version_rect.width / total_width))
       brand_size, detail_size = _measure_header(version_font_size)
       total_width = brand_size.x + detail_size.x
 
     rendered_width = min(total_width, version_rect.width)
     text_x = version_rect.x + version_rect.width - rendered_width
     brand_rect = rl.Rectangle(text_x, version_rect.y, min(brand_size.x, rendered_width), version_rect.height)
-    gui_label(brand_rect, brand_text, version_font_size + 2, rl.WHITE, font_weight=FontWeight.BRAND, elide_right=False)
+    gui_label(brand_rect, brand_text, version_font_size + 2, rl.Color(250, 248, 255, 255), font_weight=FontWeight.BRAND, elide_right=False)
 
     detail_width = max(0.0, rendered_width - brand_rect.width)
     if detail_text and detail_width > 0:
       detail_rect = rl.Rectangle(brand_rect.x + brand_rect.width, version_rect.y, detail_width, version_rect.height)
-      gui_label(detail_rect, detail_text, version_font_size, rl.WHITE, font_weight=FontWeight.MEDIUM)
+      gui_label(detail_rect, detail_text, version_font_size, rl.Color(160, 160, 195, 255), font_weight=FontWeight.MEDIUM)
 
   def _render_home_content(self):
     self._render_left_column()
