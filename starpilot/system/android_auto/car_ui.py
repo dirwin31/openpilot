@@ -27,7 +27,7 @@ from openpilot.starpilot.system.android_auto.frame_source import FrameProducer, 
 from openpilot.starpilot.system.android_auto.touch import DEFAULT_TOUCH_SOCKET, TouchEvent, TouchReceiver
 
 LOGICAL_HEIGHT = 1080  # the landscape UI's design height
-MIN_LOGICAL_WIDTH = 1440  # supports 4:3 (1440x1080) through ultrawide (2880x1080)
+MIN_LOGICAL_WIDTH = 1600
 DEMAND_GRACE = 5.0
 STARTUP_DEMAND_WAIT = 15.0
 

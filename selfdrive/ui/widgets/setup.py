@@ -53,31 +53,24 @@ class SetupWidget(Widget):
     accent_rect = rl.Rectangle(rect.x + 24, rect.y + 12, rect.width - 48, 5)
     rl.draw_rectangle_rounded(accent_rect, 1.0, 8, rl.Color(139, 108, 197, 255))
 
-    padding_x = max(28, min(64, int(rect.width * 0.08)))
-    padding_y = max(24, min(48, int(rect.height * 0.06)))
-    x = rect.x + padding_x
-    y = rect.y + padding_y
-    w = rect.width - padding_x * 2
+    x = rect.x + 64
+    y = rect.y + 48
+    w = rect.width - 128
 
-    # Title with adaptive sizing
-    title_size = max(48, min(72, int(rect.height * 0.11)))
+    # Title
     font = gui_app.font(FontWeight.BOLD)
-    rl.draw_text_ex(font, tr("Finish Setup"), rl.Vector2(x, y), title_size, 0, rl.Color(250, 248, 255, 255))
-    y += title_size + max(16, int(rect.height * 0.03))
+    rl.draw_text_ex(font, tr("Finish Setup"), rl.Vector2(x, y), 75, 0, rl.WHITE)
+    y += 113  # 75 + 38 spacing
 
-    # Description with adaptive sizing
+    # Description
     desc = tr("Pair your device with comma connect (connect.comma.ai) and claim your comma prime offer.")
-    desc_size = max(34, min(46, int(rect.height * 0.065)))
     light_font = gui_app.font(FontWeight.NORMAL)
-    wrapped = wrap_text(light_font, desc, desc_size, int(w))
+    wrapped = wrap_text(light_font, desc, 50, int(w))
     for line in wrapped:
-      rl.draw_text_ex(light_font, line, rl.Vector2(x, y), desc_size, 0, rl.Color(160, 160, 190, 255))
-      y += int(desc_size * FONT_SCALE)
+      rl.draw_text_ex(light_font, line, rl.Vector2(x, y), 50, 0, rl.WHITE)
+      y += 50 * FONT_SCALE
 
-    remaining_h = rect.y + rect.height - y - padding_y
-    btn_h = max(90, min(160, int(remaining_h - 16)))
-    btn_y = rect.y + rect.height - padding_y - btn_h
-    button_rect = rl.Rectangle(x, btn_y, w, btn_h)
+    button_rect = rl.Rectangle(x, y + 30, w, 200)
     self._pair_device_btn.render(button_rect)
 
   def _render_logo(self, rect: rl.Rectangle):
