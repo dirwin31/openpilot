@@ -922,59 +922,89 @@ class GuiApplication:
     return texture_obj
 
   def cached_render_texture(self, cache_key: str, width: int, height: int,
-                            render: Callable[[], None]) -> object | None:
+                            render: Callable[[], None], supersample: int = 1) -> object | None:
     """Return a cached texture, scheduling cache misses between frames.
 
     Raylib render-texture modes are not nestable. Widgets call this while the
     main framebuffer (often another render texture) is active, so cache misses
     must be populated after the frame has been presented.
+
+    Render textures have no MSAA, so vector content drawn into them is aliased.
+    A power-of-two ``supersample`` renders at that multiple (``render`` still
+    draws in ``width`` x ``height`` coordinates) and box-filters back down.
     """
     cached = self._cached_render_textures.get(cache_key)
     if cached is not None:
       return cached.texture
 
     self._pending_render_textures.setdefault(
-      cache_key, (max(1, int(width)), max(1, int(height)), render)
+      cache_key, (max(1, int(width)), max(1, int(height)), render, max(1, int(supersample)))
     )
     return None
+
+  @staticmethod
+  def _render_into_texture(target: rl.RenderTexture, draw: Callable[[], None],
+                           src_factor: int, zoom: float = 1.0) -> None:
+    began_texture_mode = False
+    began_blend_mode = False
+    began_mode_2d = False
+    try:
+      rl.begin_texture_mode(target)
+      began_texture_mode = True
+      rl.clear_background(rl.Color(0, 0, 0, 0))
+      # Alpha is kept straight while RGB is premultiplied (src_factor
+      # RL_SRC_ALPHA) or copied as-is (RL_ONE, for already-premultiplied input).
+      # The result is composited with BLEND_ALPHA_PREMULTIPLY without squaring
+      # translucent vector alpha.
+      rl.rl_set_blend_factors_separate(
+        src_factor, rl.RL_ONE_MINUS_SRC_ALPHA,
+        rl.RL_ONE, rl.RL_ONE_MINUS_SRC_ALPHA,
+        rl.RL_FUNC_ADD, rl.RL_FUNC_ADD,
+      )
+      rl.begin_blend_mode(rl.BlendMode.BLEND_CUSTOM_SEPARATE)
+      began_blend_mode = True
+      if zoom != 1.0:
+        rl.begin_mode_2d(rl.Camera2D(rl.Vector2(0, 0), rl.Vector2(0, 0), 0.0, zoom))
+        began_mode_2d = True
+      draw()
+    finally:
+      if began_mode_2d:
+        rl.end_mode_2d()
+      if began_blend_mode:
+        rl.end_blend_mode()
+      if began_texture_mode:
+        rl.end_texture_mode()
+    rl.set_texture_filter(target.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
+    rl.set_texture_wrap(target.texture, rl.TextureWrap.TEXTURE_WRAP_CLAMP)
 
   def _populate_render_texture_cache(self) -> None:
     pending = self._pending_render_textures
     self._pending_render_textures = {}
-    for cache_key, (width, height, render) in pending.items():
+    for cache_key, (width, height, render, supersample) in pending.items():
       if cache_key in self._cached_render_textures:
         continue
 
-      cached = rl.load_render_texture(max(1, int(width)), max(1, int(height)))
-      began_texture_mode = False
-      began_blend_mode = False
+      scale = 1
+      while scale * 2 <= supersample:
+        scale *= 2
+      cached = rl.load_render_texture(width * scale, height * scale)
       try:
-        rl.begin_texture_mode(cached)
-        began_texture_mode = True
-        rl.clear_background(rl.Color(0, 0, 0, 0))
-        # Preserve straight alpha while RGB is accumulated premultiplied. The
-        # resulting texture can then be composited with BLEND_ALPHA_PREMULTIPLY
-        # without squaring translucent vector alpha.
-        rl.rl_set_blend_factors_separate(
-          rl.RL_SRC_ALPHA, rl.RL_ONE_MINUS_SRC_ALPHA,
-          rl.RL_ONE, rl.RL_ONE_MINUS_SRC_ALPHA,
-          rl.RL_FUNC_ADD, rl.RL_FUNC_ADD,
-        )
-        rl.begin_blend_mode(rl.BlendMode.BLEND_CUSTOM_SEPARATE)
-        began_blend_mode = True
-        render()
+        self._render_into_texture(cached, render, rl.RL_SRC_ALPHA, float(scale))
+        # Halve repeatedly: a bilinear tap centred between four texels at an
+        # exact 2:1 ratio is a 2x2 box filter, so the chain is a scale x scale box.
+        while scale > 1:
+          scale //= 2
+          source = cached
+          cached = rl.load_render_texture(width * scale, height * scale)
+          try:
+            self._render_into_texture(cached, lambda src=source, w=width * scale, h=height * scale: rl.draw_texture_pro(
+              src.texture, rl.Rectangle(0, 0, src.texture.width, -src.texture.height),
+              rl.Rectangle(0, 0, w, h), rl.Vector2(0, 0), 0.0, rl.WHITE), rl.RL_ONE)
+          finally:
+            rl.unload_render_texture(source)
       except Exception:
-        if began_blend_mode:
-          rl.end_blend_mode()
-        if began_texture_mode:
-          rl.end_texture_mode()
         rl.unload_render_texture(cached)
         raise
-      else:
-        rl.end_blend_mode()
-        rl.end_texture_mode()
-      rl.set_texture_filter(cached.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
-      rl.set_texture_wrap(cached.texture, rl.TextureWrap.TEXTURE_WRAP_CLAMP)
       self._cached_render_textures[cache_key] = cached
 
   def _load_image_from_path(self, image_path: str, width: int | None = None, height: int | None = None,

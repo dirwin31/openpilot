@@ -3,466 +3,232 @@ import math
 import pyray as rl
 from openpilot.system.ui.lib.application import gui_app
 
+# Icons are authored on a 60x60 canvas and rasterised into a cached texture at
+# this multiple, then box-filtered down, which gives clean anti-aliased edges.
+ICON_SUPERSAMPLE = 4
+
+_Point = tuple[float, float]
+
 
 def _draw_custom_icon_geometry(key: str, x: float, y: float, s: float, color: rl.Color):
+  """Draw icon `key` with its 60x60 canvas at (x, y), scaled by s.
 
-  # Helper for drawing quadratic Bezier curves
-  def draw_bezier(p0: rl.Vector2, p1: rl.Vector2, p2: rl.Vector2, thick: float):
-    segments = 128
-    for i in range(segments):
-      t1 = i / segments
-      t2 = (i + 1) / segments
-      x1_val = (1 - t1)**2 * p0.x + 2 * (1 - t1) * t1 * p1.x + t1**2 * p2.x
-      y1_val = (1 - t1)**2 * p0.y + 2 * (1 - t1) * t1 * p1.y + t1**2 * p2.y
-      x2_val = (1 - t2)**2 * p0.x + 2 * (1 - t2) * t2 * p1.x + t2**2 * p2.x
-      y2_val = (1 - t2)**2 * p0.y + 2 * (1 - t2) * t2 * p1.y + t2**2 * p2.y
-      rl.draw_line_ex(rl.Vector2(x1_val, y1_val), rl.Vector2(x2_val, y2_val), thick, color)
+  Every shape is drawn so that overlapping parts share one colour, which lets
+  the cache render it opaque and apply translucency once when compositing.
+  """
 
-  # Helper for drawing tilted ellipse arcs
-  def draw_ellipse_arc(cx: float, cy: float, a: float, b: float, tilt_deg: float, start_deg: float, end_deg: float, thick: float):
-    tilt = math.radians(tilt_deg)
-    segments = 128
-    step = (end_deg - start_deg) / segments
-    for i in range(segments):
-      p1 = math.radians(start_deg + i * step)
-      p2 = math.radians(start_deg + (i + 1) * step)
+  def v(px: float, py: float) -> rl.Vector2:
+    return rl.Vector2(x + px * s, y + py * s)
 
-      x1_val = a * math.cos(p1)
-      y1_val = b * math.sin(p1)
-      rx1 = x1_val * math.cos(tilt) - y1_val * math.sin(tilt)
-      ry1 = x1_val * math.sin(tilt) + y1_val * math.cos(tilt)
+  def dot(px: float, py: float, r: float, col: rl.Color = color):
+    rl.draw_circle_v(v(px, py), r * s, col)
 
-      x2_val = a * math.cos(p2)
-      y2_val = b * math.sin(p2)
-      rx2 = x2_val * math.cos(tilt) - y2_val * math.sin(tilt)
-      ry2 = x2_val * math.sin(tilt) + y2_val * math.cos(tilt)
+  def stroke(points: list[_Point], thick: float, closed: bool = False, col: rl.Color = color):
+    """Polyline with round caps and joins."""
+    pts = points + [points[0]] if closed else points
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:], strict=False):
+      rl.draw_line_ex(v(x0, y0), v(x1, y1), thick * s, col)
+    for px, py in points:
+      dot(px, py, thick / 2.0, col)
 
-      rl.draw_line_ex(rl.Vector2(cx + rx1, cy + ry1), rl.Vector2(cx + rx2, cy + ry2), thick, color)
+  def arc(cx: float, cy: float, r: float, start: float, end: float, thick: float, caps: bool = True):
+    """Circular arc; angles in degrees, clockwise from +x (screen space)."""
+    segments = max(24, int(abs(end - start) / 3))
+    rl.draw_ring(v(cx, cy), (r - thick / 2.0) * s, (r + thick / 2.0) * s, start, end, segments, color)
+    if caps:
+      for a in (start, end):
+        dot(cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a)), thick / 2.0)
 
-  # Helper for drawing 4-pointed stars
-  def draw_star(cx: float, cy: float, R: float, r: float):
-    v1a = rl.Vector2(cx - r, cy - r)
-    v1b = rl.Vector2(cx + r, cy - r)
-    v1c = rl.Vector2(cx, cy - R)
+  def ellipse(cx: float, cy: float, a: float, b: float, start: float, end: float, n: int = 96) -> list[_Point]:
+    return [(cx + a * math.cos(math.radians(start + (end - start) * i / n)),
+             cy + b * math.sin(math.radians(start + (end - start) * i / n))) for i in range(n + 1)]
 
-    v2a = rl.Vector2(cx + r, cy - r)
-    v2b = rl.Vector2(cx + r, cy + r)
-    v2c = rl.Vector2(cx + R, cy)
+  def quad(p0: _Point, p1: _Point, p2: _Point, n: int = 32) -> list[_Point]:
+    out = []
+    for i in range(n + 1):
+      t = i / n
+      out.append(((1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t ** 2 * p2[0],
+                  (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t ** 2 * p2[1]))
+    return out
 
-    v3a = rl.Vector2(cx + r, cy + r)
-    v3b = rl.Vector2(cx - r, cy + r)
-    v3c = rl.Vector2(cx, cy + R)
+  def cubic(p0: _Point, p1: _Point, p2: _Point, p3: _Point, t0: float = 0.0, t1: float = 1.0, n: int = 48) -> list[_Point]:
+    out = []
+    for i in range(n + 1):
+      t = t0 + (t1 - t0) * i / n
+      a, b, c, d = (1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t ** 2, t ** 3
+      out.append((a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0], a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1]))
+    return out
 
-    v4a = rl.Vector2(cx - r, cy + r)
-    v4b = rl.Vector2(cx - r, cy - r)
-    v4c = rl.Vector2(cx - R, cy)
+  def fill(points: list[_Point]):
+    """Convex polygon fill. Raylib culls clockwise triangles, so fix winding."""
+    area = sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(points, points[1:] + points[:1], strict=True))
+    pts = points if area < 0 else points[::-1]
+    for i in range(1, len(pts) - 1):
+      rl.draw_triangle(v(*pts[0]), v(*pts[i]), v(*pts[i + 1]), color)
 
-    rl.draw_triangle(v1a, v1b, v1c, color)
-    rl.draw_triangle(v2a, v2b, v2c, color)
-    rl.draw_triangle(v3a, v3b, v3c, color)
-    rl.draw_triangle(v4a, v4b, v4c, color)
-    rl.draw_circle_v(rl.Vector2(cx, cy), r, color)
+  def round_rect(rx: float, ry: float, rw: float, rh: float, r: float, col: rl.Color = color):
+    rl.draw_rectangle_rounded(rl.Rectangle(x + rx * s, y + ry * s, rw * s, rh * s), min(1.0, 2.0 * r / min(rw, rh)), 16, col)
+
+  def round_rect_outline(rx: float, ry: float, rw: float, rh: float, r: float, thick: float):
+    """Stroke centred on the rectangle edge, built from non-overlapping pieces."""
+    h = thick / 2.0
+    for cx, cy, a in ((rx + r, ry + r, 180), (rx + rw - r, ry + r, 270), (rx + rw - r, ry + rh - r, 0), (rx + r, ry + rh - r, 90)):
+      arc(cx, cy, r, a, a + 90, thick, caps=False)
+    for sx, sy, sw, sh in ((rx + r, ry - h, rw - 2 * r, thick), (rx + r, ry + rh - h, rw - 2 * r, thick),
+                           (rx - h, ry + r, thick, rh - 2 * r), (rx + rw - h, ry + r, thick, rh - 2 * r)):
+      rl.draw_rectangle_rec(rl.Rectangle(x + sx * s, y + sy * s, sw * s, sh * s), color)
 
   if key == "sound":
-    # Sounds & Alerts: Speaker icon on the left, sound waves on the right (proportionate weight & scale)
-    x_c = x + 30.0 * s
-    y_c = y + 30.0 * s
-
-    thick = 3.0 * s
-    r_cap = thick / 2.0
-
-    # Draw speaker body outline (Driver on the left, mouth opening to the right)
-    rl.draw_line_ex(rl.Vector2(x_c - 3.0 * s, y_c - 18.0 * s), rl.Vector2(x_c - 3.0 * s, y_c + 18.0 * s), thick, color)
-    rl.draw_line_ex(rl.Vector2(x_c - 3.0 * s, y_c - 18.0 * s), rl.Vector2(x_c - 12.0 * s, y_c - 7.0 * s), thick, color)
-    rl.draw_line_ex(rl.Vector2(x_c - 3.0 * s, y_c + 18.0 * s), rl.Vector2(x_c - 12.0 * s, y_c + 7.0 * s), thick, color)
-    rl.draw_line_ex(rl.Vector2(x_c - 12.0 * s, y_c - 7.0 * s), rl.Vector2(x_c - 22.0 * s, y_c - 7.0 * s), thick, color)
-    rl.draw_line_ex(rl.Vector2(x_c - 12.0 * s, y_c + 7.0 * s), rl.Vector2(x_c - 22.0 * s, y_c + 7.0 * s), thick, color)
-    rl.draw_line_ex(rl.Vector2(x_c - 22.0 * s, y_c - 7.0 * s), rl.Vector2(x_c - 22.0 * s, y_c + 7.0 * s), thick, color)
-
-    # Draw circles at speaker body vertices to round the corners beautifully
-    rl.draw_circle_v(rl.Vector2(x_c - 3.0 * s, y_c - 18.0 * s), r_cap, color)
-    rl.draw_circle_v(rl.Vector2(x_c - 3.0 * s, y_c + 18.0 * s), r_cap, color)
-    rl.draw_circle_v(rl.Vector2(x_c - 12.0 * s, y_c - 7.0 * s), r_cap, color)
-    rl.draw_circle_v(rl.Vector2(x_c - 12.0 * s, y_c + 7.0 * s), r_cap, color)
-    rl.draw_circle_v(rl.Vector2(x_c - 22.0 * s, y_c - 7.0 * s), r_cap, color)
-    rl.draw_circle_v(rl.Vector2(x_c - 22.0 * s, y_c + 7.0 * s), r_cap, color)
-
-    # Helper to draw rounded concentric sound wave arcs
-    def draw_rounded_arc(cx: float, cy: float, r: float, start_deg: float, end_deg: float):
-      draw_ellipse_arc(cx, cy, r, r, 0.0, start_deg, end_deg, thick)
-      rad_start = math.radians(start_deg)
-      rad_end = math.radians(end_deg)
-      rl.draw_circle_v(rl.Vector2(cx + r * math.cos(rad_start), cy + r * math.sin(rad_start)), r_cap, color)
-      rl.draw_circle_v(rl.Vector2(cx + r * math.cos(rad_end), cy + r * math.sin(rad_end)), r_cap, color)
-
-    # Draw three concentric sound wave arcs (curving on the right side)
-    draw_rounded_arc(x_c - 3.0 * s, y_c, 8.0 * s, -25.0, 25.0)
-    draw_rounded_arc(x_c - 3.0 * s, y_c, 15.0 * s, -37.5, 37.5)
-    draw_rounded_arc(x_c - 3.0 * s, y_c, 22.0 * s, -50.0, 50.0)
+    # Sounds & Alerts: solid speaker with three sound waves
+    t = 3.8
+    round_rect(10.0, 23.0, 9.0, 14.0, 2.0)
+    fill([(18.0, 23.0), (29.0, 14.0), (29.0, 46.0), (18.0, 37.0)])
+    stroke([(29.0, 14.0), (29.0, 46.0)], t)
+    for r, span in ((8.5, 34.0), (16.0, 44.0), (23.5, 52.0)):
+      arc(29.0, 30.0, r, -span, span, t)
 
   elif key == "steering":
-    # Driving Controls: Minimalist 3-spoke steering wheel
-    x_c = x + 30.0 * s
-    y_c = y + 30.0 * s
-
-    # Outer rim
-    rl.draw_ring(rl.Vector2(x_c, y_c), 19.5 * s, 22.5 * s, 0.0, 360.0, 96, color)
-
-    # Center hub
-    rl.draw_circle_v(rl.Vector2(x_c, y_c), 4.5 * s, color)
-
-    # Three clean, single-line spokes
-    rl.draw_line_ex(rl.Vector2(x_c - 4.5 * s, y_c), rl.Vector2(x_c - 19.5 * s, y_c), 2.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 4.5 * s, y_c), rl.Vector2(x_c + 19.5 * s, y_c), 2.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c, y_c + 4.5 * s), rl.Vector2(x_c, y_c + 19.5 * s), 2.5 * s, color)
+    # Driving Controls: sports steering wheel
+    arc(30.0, 30.0, 20.0, 0.0, 360.0, 5.0, caps=False)
+    round_rect(23.0, 26.0, 14.0, 11.0, 4.0)
+    stroke([(23.5, 30.5), (12.0, 32.5)], 4.6)
+    stroke([(36.5, 30.5), (48.0, 32.5)], 4.6)
+    stroke([(27.5, 36.0), (28.5, 47.0)], 3.6)
+    stroke([(32.5, 36.0), (31.5, 47.0)], 3.6)
 
   elif key == "navigate":
-    # Map Data: Clean location pin with single base shadow ellipse
-    x_c = x + 30.0 * s
-    y_c = y + 21.0 * s
-
-    # Teardrop head outline
-    draw_ellipse_arc(x_c, y_c, 10.0 * s, 10.0 * s, 0.0, 150.0, 390.0, 3.0 * s)
-
-    # Tapered sides to tip
-    rl.draw_line_ex(rl.Vector2(x_c - 8.66 * s, y_c + 5.0 * s), rl.Vector2(x_c, y_c + 19.5 * s), 3.0 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 8.66 * s, y_c + 5.0 * s), rl.Vector2(x_c, y_c + 19.5 * s), 3.0 * s, color)
-
-    # Inner core dot
-    rl.draw_circle_v(rl.Vector2(x_c, y_c), 3.0 * s, color)
-
-    # Perspective base shadow
-    draw_ellipse_arc(x_c, y_c + 24.0 * s, 14.0 * s, 4.5 * s, 0.0, 0.0, 360.0, 2.0 * s)
+    # Map Data: location pin over a ground ellipse
+    t = 3.8
+    cx, cy, r, tip = 30.0, 21.0, 10.5, 41.0
+    swing = math.degrees(math.acos(r / (tip - cy)))
+    a0, a1 = 90.0 + swing, 450.0 - swing
+    arc(cx, cy, r, a0, a1, t, caps=False)
+    for a in (a0, a1):
+      stroke([(cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a))), (cx, tip)], t)
+    dot(cx, cy, 3.6)
+    stroke(ellipse(cx, 46.0, 14.0, 4.5, 0.0, 360.0)[:-1], 2.6, closed=True)
 
   elif key == "system":
-    # System Settings: Interlocking minimalist gears (Large & Small)
-    cx1, cy1 = x + 24.0 * s, y + 24.0 * s
-    cx2, cy2 = x + 38.5 * s, y + 38.5 * s
+    # System Settings: two meshing gears
+    def gear(cx: float, cy: float, r_hole: float, r_body: float, r_tip: float, teeth: int, base_w: float, tip_w: float, offset: float):
+      arc(cx, cy, (r_hole + r_body) / 2.0, 0.0, 360.0, r_body - r_hole, caps=False)
+      for i in range(teeth):
+        a = math.radians(offset + i * 360.0 / teeth)
+        ca, sa = math.cos(a), math.sin(a)
+        rb = r_body - 0.8
+        fill([(cx + ca * rb - sa * base_w / 2, cy + sa * rb + ca * base_w / 2),
+              (cx + ca * r_tip - sa * tip_w / 2, cy + sa * r_tip + ca * tip_w / 2),
+              (cx + ca * r_tip + sa * tip_w / 2, cy + sa * r_tip - ca * tip_w / 2),
+              (cx + ca * rb + sa * base_w / 2, cy + sa * rb - ca * base_w / 2)])
 
-    # Gear 1 (Large - 6 cogs)
-    rl.draw_ring(rl.Vector2(cx1, cy1), 5.0 * s, 9.0 * s, 0.0, 360.0, 48, color)
-    for i in range(6):
-      angle_rad = math.radians(i * 60.0)
-      cos_a = math.cos(angle_rad)
-      sin_a = math.sin(angle_rad)
-      rl.draw_line_ex(
-        rl.Vector2(cx1 + cos_a * 9.0 * s, cy1 + sin_a * 9.0 * s),
-        rl.Vector2(cx1 + cos_a * 13.0 * s, cy1 + sin_a * 13.0 * s),
-        4.5 * s,
-        color
-      )
-
-    # Gear 2 (Small - 5 cogs)
-    rl.draw_ring(rl.Vector2(cx2, cy2), 3.0 * s, 6.0 * s, 0.0, 360.0, 48, color)
-    for j in range(5):
-      angle_rad = math.radians(36.0 + j * 72.0)
-      cos_a = math.cos(angle_rad)
-      sin_a = math.sin(angle_rad)
-      rl.draw_line_ex(
-        rl.Vector2(cx2 + cos_a * 6.0 * s, cy2 + sin_a * 6.0 * s),
-        rl.Vector2(cx2 + cos_a * 9.5 * s, cy2 + sin_a * 9.5 * s),
-        3.5 * s,
-        color
-      )
+    # The big gear leaves a gap facing the small one (45 deg) and the small
+    # gear points a tooth back into it (225 deg).
+    gear(23.0, 23.0, 4.8, 11.0, 15.5, 8, 6.2, 4.2, 22.5)
+    gear(39.5, 39.5, 3.2, 7.4, 10.8, 6, 4.6, 3.2, 45.0)
 
   elif key == "display":
-    # Appearance Settings: A horizontal control panel rectangle with 4 vertical slider tracks and thumbs at various levels
-    x_c = x + 30.0 * s
-    y_c = y + 30.0 * s
-
-    thick = 2.5 * s
-    inner_thick = 1.5 * s
-    thumb_r = 2.5 * s
-
-    # 1. Draw outer rounded rectangle outline manually for perfect geometry and scaling
-    # Top and bottom horizontal lines
-    rl.draw_line_ex(rl.Vector2(x_c - 17.0 * s, y_c - 16.0 * s), rl.Vector2(x_c + 17.0 * s, y_c - 16.0 * s), thick, color)
-    rl.draw_line_ex(rl.Vector2(x_c - 17.0 * s, y_c + 16.0 * s), rl.Vector2(x_c + 17.0 * s, y_c + 16.0 * s), thick, color)
-    # Left and right vertical lines
-    rl.draw_line_ex(rl.Vector2(x_c - 22.0 * s, y_c - 11.0 * s), rl.Vector2(x_c - 22.0 * s, y_c + 11.0 * s), thick, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 22.0 * s, y_c - 11.0 * s), rl.Vector2(x_c + 22.0 * s, y_c + 11.0 * s), thick, color)
-    # Four corner arcs
-    draw_ellipse_arc(x_c - 17.0 * s, y_c - 11.0 * s, 5.0 * s, 5.0 * s, 0.0, 180.0, 270.0, thick)
-    draw_ellipse_arc(x_c + 17.0 * s, y_c - 11.0 * s, 5.0 * s, 5.0 * s, 0.0, 270.0, 360.0, thick)
-    draw_ellipse_arc(x_c + 17.0 * s, y_c + 11.0 * s, 5.0 * s, 5.0 * s, 0.0, 0.0, 90.0, thick)
-    draw_ellipse_arc(x_c - 17.0 * s, y_c + 11.0 * s, 5.0 * s, 5.0 * s, 0.0, 90.0, 180.0, thick)
-
-    # 2. Draw 4 vertical slider tracks
-    x_positions = [x_c - 12.0 * s, x_c - 4.0 * s, x_c + 4.0 * s, x_c + 12.0 * s]
-    for px in x_positions:
-      rl.draw_line_ex(rl.Vector2(px, y_c - 9.0 * s), rl.Vector2(px, y_c + 9.0 * s), inner_thick, color)
-
-    # 3. Draw slider thumbs (solid circles at different vertical levels)
-    # Track 1 (left): low level
-    rl.draw_circle_v(rl.Vector2(x_positions[0], y_c + 3.0 * s), thumb_r, color)
-    # Track 2 (mid-left): center level
-    rl.draw_circle_v(rl.Vector2(x_positions[1], y_c - 2.0 * s), thumb_r, color)
-    # Track 3 (mid-right): low level
-    rl.draw_circle_v(rl.Vector2(x_positions[2], y_c + 3.0 * s), thumb_r, color)
-    # Track 4 (right): high level
-    rl.draw_circle_v(rl.Vector2(x_positions[3], y_c - 6.0 * s), thumb_r, color)
+    # Appearance: three tuning sliders
+    dim = rl.Color(color[0], color[1], color[2], 75) if isinstance(color, tuple) else rl.Color(color.r, color.g, color.b, 75)
+    for tx, knob_y in ((15.0, 36.0), (30.0, 22.0), (45.0, 31.0)):
+      round_rect(tx - 2.0, 12.0, 4.0, 36.0, 2.0, dim)
+      round_rect(tx - 2.0, knob_y, 4.0, 48.0 - knob_y, 2.0)
+      round_rect(tx - 7.0, knob_y - 3.5, 14.0, 7.0, 3.5)
 
   elif key == "vehicle":
-    # Vehicle Settings: Little Car
-    v_front = rl.Vector2(x + 5.0 * s, y + 34.0 * s)
-    v_hood_end = rl.Vector2(x + 15.0 * s, y + 27.0 * s)
-    v_cabin_end = rl.Vector2(x + 37.0 * s, y + 17.0 * s)
-    v_rear = rl.Vector2(x + 55.0 * s, y + 33.0 * s)
-
-    # Car body panels (continuous Bezier curve profile)
-    rl.draw_line_ex(rl.Vector2(x + 5.0 * s, y + 38.0 * s), v_front, 2.0 * s, color)
-    draw_bezier(v_front, rl.Vector2(x + 9.0 * s, y + 32.0 * s), v_hood_end, 2.0 * s)
-    draw_bezier(v_hood_end, rl.Vector2(x + 25.0 * s, y + 17.0 * s), v_cabin_end, 2.0 * s)
-    draw_bezier(v_cabin_end, rl.Vector2(x + 48.0 * s, y + 20.0 * s), v_rear, 2.0 * s)
-    rl.draw_line_ex(v_rear, rl.Vector2(x + 55.0 * s, y + 38.0 * s), 2.0 * s, color)
-
-    # Underbody frame
-    rl.draw_line_ex(rl.Vector2(x + 5.0 * s, y + 38.0 * s), rl.Vector2(x + 11.5 * s, y + 38.0 * s), 2.0 * s, color)
-    rl.draw_line_ex(rl.Vector2(x + 21.5 * s, y + 38.0 * s), rl.Vector2(x + 38.5 * s, y + 38.0 * s), 2.0 * s, color)
-    rl.draw_line_ex(rl.Vector2(x + 48.5 * s, y + 38.0 * s), rl.Vector2(x + 55.0 * s, y + 38.0 * s), 2.0 * s, color)
-
-    # Wheels (clean hollow rings with high segment counts)
-    rl.draw_ring(rl.Vector2(x + 16.5 * s, y + 38.0 * s), 2.5 * s, 5.0 * s, 0.0, 360.0, 48, color)
-    rl.draw_ring(rl.Vector2(x + 43.5 * s, y + 38.0 * s), 2.5 * s, 5.0 * s, 0.0, 360.0, 48, color)
-
-    # Window cutout details
-    rl.draw_line_ex(rl.Vector2(x + 18.0 * s, y + 25.0 * s), rl.Vector2(x + 36.0 * s, y + 25.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x + 36.0 * s, y + 25.0 * s), rl.Vector2(x + 34.0 * s, y + 20.0 * s), 1.5 * s, color)
+    # Vehicle Settings: fastback sports car in profile
+    t = 3.6
+    w1, w2, wy, tire_r = 15.5, 44.5, 40.0, 6.2
+    body = (quad((5.5, 34.5), (10.0, 30.0), (17.0, 28.5))
+            + quad((17.0, 28.5), (21.0, 19.5), (25.5, 18.5))[1:]
+            + [(37.5, 18.5)]
+            + quad((37.5, 18.5), (48.5, 23.5), (54.5, 35.0))[1:])
+    stroke(body, t)
+    stroke([(5.5, 34.5), (5.5, wy), (w1 - tire_r - 1.5, wy)], t)
+    stroke([(w1 + tire_r + 1.5, wy), (w2 - tire_r - 1.5, wy)], t)
+    stroke([(w2 + tire_r + 1.5, wy), (54.5, wy), (54.5, 35.0)], t)
+    stroke([(20.0, 27.5), (42.0, 27.5)], 2.4)
+    for wx in (w1, w2):
+      arc(wx, wy, (tire_r + 3.0) / 2.0, 0.0, 360.0, tire_r - 3.0, caps=False)
+      dot(wx, wy, 1.3)
 
   elif key == "road":
-    # Curvy Road: Vertical perspective road with dashed center line
-    x_c = x + 30.0 * s
-    y_c = y + 30.0 * s
-
-    def draw_cubic_bezier(p0: rl.Vector2, p1: rl.Vector2, p2: rl.Vector2, p3: rl.Vector2, thick: float):
-      segments = 64
-      for i in range(segments):
-        t1 = i / segments
-        t2 = (i + 1) / segments
-
-        t1_3 = (1 - t1)**3
-        t1_2_t = 3 * (1 - t1)**2 * t1
-        t_t1_2 = 3 * (1 - t1) * t1**2
-        t1_cube = t1**3
-
-        x1_val = t1_3 * p0.x + t1_2_t * p1.x + t_t1_2 * p2.x + t1_cube * p3.x
-        y1_val = t1_3 * p0.y + t1_2_t * p1.y + t_t1_2 * p2.y + t1_cube * p3.y
-
-        t2_3 = (1 - t2)**3
-        t2_2_t = 3 * (1 - t2)**2 * t2
-        t_t2_2 = 3 * (1 - t2) * t2**2
-        t2_cube = t2**3
-
-        x2_val = t2_3 * p0.x + t2_2_t * p1.x + t_t2_2 * p2.x + t2_cube * p3.x
-        y2_val = t2_3 * p0.y + t2_2_t * p1.y + t_t2_2 * p2.y + t2_cube * p3.y
-
-        rl.draw_line_ex(rl.Vector2(x1_val, y1_val), rl.Vector2(x2_val, y2_val), thick, color)
-
-    # Center reference points for S-curve
-    p0_c = rl.Vector2(x_c, y_c + 24.0 * s)
-    p1_c = rl.Vector2(x_c - 16.0 * s, y_c + 9.0 * s)
-    p2_c = rl.Vector2(x_c + 16.0 * s, y_c - 5.0 * s)
-    p3_c = rl.Vector2(x_c, y_c - 19.0 * s)
-
-    # Left edge points (widest at bottom, tapering at top)
-    p0_l = rl.Vector2(p0_c.x - 17.0 * s, p0_c.y)
-    p1_l = rl.Vector2(p1_c.x - 12.0 * s, p1_c.y)
-    p2_l = rl.Vector2(p2_c.x - 8.0 * s, p2_c.y)
-    p3_l = rl.Vector2(p3_c.x - 5.0 * s, p3_c.y)
-    draw_cubic_bezier(p0_l, p1_l, p2_l, p3_l, 3.0 * s)
-
-    # Right edge points (widest at bottom, tapering at top)
-    p0_r = rl.Vector2(p0_c.x + 17.0 * s, p0_c.y)
-    p1_r = rl.Vector2(p1_c.x + 12.0 * s, p1_c.y)
-    p2_r = rl.Vector2(p2_c.x + 8.0 * s, p2_c.y)
-    p3_r = rl.Vector2(p3_c.x + 5.0 * s, p3_c.y)
-    draw_cubic_bezier(p0_r, p1_r, p2_r, p3_r, 3.0 * s)
-
-    # Center dashed line
-    dash_count = 4
-    for i in range(dash_count):
-      t1 = (i + 0.15) / dash_count
-      t2 = (i + 0.65) / dash_count
-
-      t1_3 = (1 - t1)**3
-      t1_2_t = 3 * (1 - t1)**2 * t1
-      t_t1_2 = 3 * (1 - t1) * t1**2
-      t1_cube = t1**3
-
-      x1_val = t1_3 * p0_c.x + t1_2_t * p1_c.x + t_t1_2 * p2_c.x + t1_cube * p3_c.x
-      y1_val = t1_3 * p0_c.y + t1_2_t * p1_c.y + t_t1_2 * p2_c.y + t1_cube * p3_c.y
-
-      t2_3 = (1 - t2)**3
-      t2_2_t = 3 * (1 - t2)**2 * t2
-      t_t2_2 = 3 * (1 - t2) * t2**2
-      t2_cube = t2**3
-
-      x2_val = t2_3 * p0_c.x + t2_2_t * p1_c.x + t_t2_2 * p2_c.x + t2_cube * p3_c.x
-      y2_val = t2_3 * p0_c.y + t2_2_t * p1_c.y + t_t2_2 * p2_c.y + t2_cube * p3_c.y
-
-      rl.draw_line_ex(rl.Vector2(x1_val, y1_val), rl.Vector2(x2_val, y2_val), 2.5 * s, color)
+    # Curvy Road: winding road with a dashed centre line
+    c = ((30.0, 54.0), (14.0, 39.0), (46.0, 25.0), (30.0, 11.0))
+    half = (17.0, 12.0, 8.0, 5.0)
+    for side in (-1.0, 1.0):
+      edge = [(px + side * w, py) for (px, py), w in zip(c, half, strict=True)]
+      stroke(cubic(*edge), 3.8)
+    for i in range(4):
+      stroke(cubic(*c, t0=(i + 0.2) / 4, t1=(i + 0.6) / 4, n=12), 3.0)
 
   elif key == "aicar":
-    # AI Car: Half car silhouette on the left (Sedan), circuit traces with contact pads on the right
-    x_c = x + 30.0 * s
-    y_c = y + 30.0 * s
-
-    def draw_pad(cx: float, cy: float, size: float):
-      half = size / 2.0
-      rl.draw_line_ex(rl.Vector2(cx - half, cy - half), rl.Vector2(cx + half, cy - half), 1.5 * s, color)
-      rl.draw_line_ex(rl.Vector2(cx + half, cy - half), rl.Vector2(cx + half, cy + half), 1.5 * s, color)
-      rl.draw_line_ex(rl.Vector2(cx + half, cy + half), rl.Vector2(cx - half, cy + half), 1.5 * s, color)
-      rl.draw_line_ex(rl.Vector2(cx - half, cy + half), rl.Vector2(cx - half, cy - half), 1.5 * s, color)
-      dot_half = size / 4.0
-      rl.draw_rectangle_rec(rl.Rectangle(cx - dot_half, cy - dot_half, size / 2.0, size / 2.0), color)
-
-    # 1. Soft Dashed Vertical Splitter (Blending/Transition Effect)
-    r = color.r if hasattr(color, "r") else color[0]
-    g = color.g if hasattr(color, "g") else color[1]
-    b = color.b if hasattr(color, "b") else color[2]
-    divider_color = rl.Color(r, g, b, 60)  # ~24% opacity
-    dash_len = 1.0 * s
-    gap_len = 2.0 * s
-    curr_y = y_c - 16.0 * s
-    end_y = y_c + 12.0 * s
-    while curr_y < end_y:
-      rl.draw_line_ex(rl.Vector2(x_c, curr_y), rl.Vector2(x_c, min(curr_y + dash_len, end_y)), 1.5 * s, divider_color)
-      curr_y += dash_len + gap_len
-
-    # 2. Right Side (AI Circuit Traces & Pads)
-    # Trace 1 (Top - Aligned with roofline)
-    rl.draw_line_ex(rl.Vector2(x_c, y_c - 16.0 * s), rl.Vector2(x_c + 8.0 * s, y_c - 16.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 8.0 * s, y_c - 16.0 * s), rl.Vector2(x_c + 14.0 * s, y_c - 20.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 14.0 * s, y_c - 20.0 * s), rl.Vector2(x_c + 22.0 * s, y_c - 20.0 * s), 1.5 * s, color)
-    draw_pad(x_c + 24.0 * s, y_c - 20.0 * s, 3.5 * s)
-
-    # Trace 2 (Aligned with window bottom / beltline)
-    rl.draw_line_ex(rl.Vector2(x_c, y_c - 5.0 * s), rl.Vector2(x_c + 8.0 * s, y_c - 5.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 8.0 * s, y_c - 5.0 * s), rl.Vector2(x_c + 13.0 * s, y_c - 9.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 13.0 * s, y_c - 9.0 * s), rl.Vector2(x_c + 18.0 * s, y_c - 9.0 * s), 1.5 * s, color)
-    draw_pad(x_c + 20.0 * s, y_c - 9.0 * s, 3.5 * s)
-
-    # Trace 3 (Forked - Centered on door)
-    rl.draw_line_ex(rl.Vector2(x_c, y_c + 1.0 * s), rl.Vector2(x_c + 6.0 * s, y_c + 1.0 * s), 1.5 * s, color)
-    # Fork 3A (Up)
-    rl.draw_line_ex(rl.Vector2(x_c + 6.0 * s, y_c + 1.0 * s), rl.Vector2(x_c + 10.0 * s, y_c - 2.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 10.0 * s, y_c - 2.0 * s), rl.Vector2(x_c + 16.0 * s, y_c - 2.0 * s), 1.5 * s, color)
-    draw_pad(x_c + 18.0 * s, y_c - 2.0 * s, 3.5 * s)
-    # Fork 3B (Down)
-    rl.draw_line_ex(rl.Vector2(x_c + 6.0 * s, y_c + 1.0 * s), rl.Vector2(x_c + 10.0 * s, y_c + 4.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 10.0 * s, y_c + 4.0 * s), rl.Vector2(x_c + 16.0 * s, y_c + 4.0 * s), 1.5 * s, color)
-    draw_pad(x_c + 18.0 * s, y_c + 4.0 * s, 3.5 * s)
-
-    # Trace 4 (Lower door)
-    rl.draw_line_ex(rl.Vector2(x_c, y_c + 7.0 * s), rl.Vector2(x_c + 7.0 * s, y_c + 7.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 7.0 * s, y_c + 7.0 * s), rl.Vector2(x_c + 11.0 * s, y_c + 10.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 11.0 * s, y_c + 10.0 * s), rl.Vector2(x_c + 15.0 * s, y_c + 10.0 * s), 1.5 * s, color)
-    draw_pad(x_c + 17.0 * s, y_c + 10.0 * s, 3.5 * s)
-
-    # Trace 5 (Bottom - Aligned with rocker panel)
-    rl.draw_line_ex(rl.Vector2(x_c, y_c + 12.0 * s), rl.Vector2(x_c + 8.0 * s, y_c + 12.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 8.0 * s, y_c + 12.0 * s), rl.Vector2(x_c + 14.0 * s, y_c + 18.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 14.0 * s, y_c + 18.0 * s), rl.Vector2(x_c + 22.0 * s, y_c + 18.0 * s), 1.5 * s, color)
-    draw_pad(x_c + 24.0 * s, y_c + 18.0 * s, 3.5 * s)
-
-    # 3. Left Side (Car Front silhouette - Sleek modern profile with long sweeping windshield)
-    # Roof & Windshield (continuous Bezier curve profile)
-    p0_roof = rl.Vector2(x_c, y_c - 16.0 * s)
-    p1_roof = rl.Vector2(x_c - 12.0 * s, y_c - 16.0 * s)
-    p2_roof = rl.Vector2(x_c - 22.0 * s, y_c - 5.0 * s)
-    draw_bezier(p0_roof, p1_roof, p2_roof, 2.0 * s)
-
-    # Hood (short, streamlined)
-    p0_hood = rl.Vector2(x_c - 22.0 * s, y_c - 5.0 * s)
-    p1_hood = rl.Vector2(x_c - 25.0 * s, y_c - 4.5 * s)
-    p2_hood = rl.Vector2(x_c - 28.0 * s, y_c - 2.5 * s)
-    draw_bezier(p0_hood, p1_hood, p2_hood, 2.0 * s)
-
-    # Nose & Bumper Curve
-    p0_nose = rl.Vector2(x_c - 28.0 * s, y_c - 2.5 * s)
-    p1_nose = rl.Vector2(x_c - 31.0 * s, y_c + 1.0 * s)
-    p2_nose = rl.Vector2(x_c - 28.0 * s, y_c + 12.0 * s)
-    draw_bezier(p0_nose, p1_nose, p2_nose, 2.0 * s)
-
-    # Wheel Arch
-    draw_ellipse_arc(x_c - 21.0 * s, y_c + 12.0 * s, 7.0 * s, 7.0 * s, 0.0, 180.0, 360.0, 2.0 * s)
-
-    # Underbody / Rocker panel (aligned with Trace 5)
-    rl.draw_line_ex(rl.Vector2(x_c - 14.0 * s, y_c + 12.0 * s), rl.Vector2(x_c, y_c + 12.0 * s), 2.0 * s, color)
-
-    # Wheel (hollow ring matching the arch)
-    rl.draw_ring(rl.Vector2(x_c - 21.0 * s, y_c + 12.0 * s), 3.5 * s, 5.0 * s, 0.0, 360.0, 24, color)
-
-    # Side Window Details (Parallel sloped wedge, open to the dashed divider at the rear to blend perfectly)
-    p0_win = rl.Vector2(x_c, y_c - 13.0 * s)
-    p1_win = rl.Vector2(x_c - 10.0 * s, y_c - 13.0 * s)
-    p2_win = rl.Vector2(x_c - 18.0 * s, y_c - 5.0 * s)
-    draw_bezier(p0_win, p1_win, p2_win, 1.5 * s)
-    rl.draw_line_ex(rl.Vector2(x_c - 18.0 * s, y_c - 5.0 * s), rl.Vector2(x_c, y_c - 5.0 * s), 1.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c - 9.0 * s, y_c - 11.4 * s), rl.Vector2(x_c - 9.0 * s, y_c - 5.0 * s), 1.5 * s, color)
+    # Driving Model: front view of a car with forward perception arcs
+    t = 3.6
+    sensor_y = 22.0
+    for r, span in ((9.0, 85.0), (17.0, 80.0), (25.0, 75.0)):
+      arc(30.0, sensor_y, r, -90.0 - span / 2, -90.0 + span / 2, t)
+    dot(30.0, sensor_y, 3.0)
+    stroke([(12.0, 47.0), (12.0, 33.0), (20.0, 23.0), (40.0, 23.0), (48.0, 33.0), (48.0, 47.0)], t, closed=True)
+    stroke([(12.0, 34.0), (7.5, 33.0)], 2.5)
+    stroke([(48.0, 34.0), (52.5, 33.0)], 2.5)
+    stroke([(14.5, 38.5), (22.0, 38.5)], 3.5)
+    stroke([(38.0, 38.5), (45.5, 38.5)], 3.5)
+    stroke([(20.0, 43.5), (40.0, 43.5)], 2.2)
+    round_rect(9.5, 43.5, 5.0, 7.5, 2.0)
+    round_rect(45.5, 43.5, 5.0, 7.5, 2.0)
 
   elif key == "first_aid":
-    # First Aid Kit Symbol
-    x_c = x + 30.0 * s
-    y_c = y + 30.0 * s
-
-    # Handle on top of the kit
-    draw_ellipse_arc(x_c, y_c - 10.0 * s, 6.0 * s, 4.0 * s, 0.0, 180.0, 360.0, 2.5 * s)
-
-    # Box outline with rounded corners
-    draw_ellipse_arc(x_c - 15.0 * s, y_c - 7.0 * s, 3.0 * s, 3.0 * s, 0.0, 180.0, 270.0, 2.5 * s)
-    draw_ellipse_arc(x_c + 15.0 * s, y_c - 7.0 * s, 3.0 * s, 3.0 * s, 0.0, 270.0, 360.0, 2.5 * s)
-    draw_ellipse_arc(x_c + 15.0 * s, y_c + 12.0 * s, 3.0 * s, 3.0 * s, 0.0, 0.0, 90.0, 2.5 * s)
-    draw_ellipse_arc(x_c - 15.0 * s, y_c + 12.0 * s, 3.0 * s, 3.0 * s, 0.0, 90.0, 180.0, 2.5 * s)
-
-    # Connecting lines for the box outline
-    rl.draw_line_ex(rl.Vector2(x_c - 15.0 * s, y_c - 10.0 * s), rl.Vector2(x_c + 15.0 * s, y_c - 10.0 * s), 2.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c - 15.0 * s, y_c + 15.0 * s), rl.Vector2(x_c + 15.0 * s, y_c + 15.0 * s), 2.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c - 18.0 * s, y_c - 7.0 * s), rl.Vector2(x_c - 18.0 * s, y_c + 12.0 * s), 2.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c + 18.0 * s, y_c - 7.0 * s), rl.Vector2(x_c + 18.0 * s, y_c + 12.0 * s), 2.5 * s, color)
-
-    # Cross in the center (centered at y_c + 2.5)
-    rl.draw_line_ex(rl.Vector2(x_c, y_c - 4.0 * s), rl.Vector2(x_c, y_c + 9.0 * s), 3.5 * s, color)
-    rl.draw_line_ex(rl.Vector2(x_c - 6.5 * s, y_c + 2.5 * s), rl.Vector2(x_c + 6.5 * s, y_c + 2.5 * s), 3.5 * s, color)
+    # First Aid Kit
+    t = 2.6
+    stroke(ellipse(30.0, 20.0, 6.0, 4.5, 180.0, 360.0, 32), t)
+    round_rect_outline(12.0, 20.0, 36.0, 25.0, 3.5, t)
+    stroke([(30.0, 26.0), (30.0, 39.0)], 3.6)
+    stroke([(23.5, 32.5), (36.5, 32.5)], 3.6)
 
 
 def draw_custom_icon(key: str, x: float, y: float, s: float, color: rl.Color):
   """Draw a custom icon, caching its static vector geometry on the GPU."""
   cache = getattr(gui_app, "cached_render_texture", None)
-  if hasattr(color, "r"):
-    color_key = (color.r, color.g, color.b, color.a)
-  else:
-    components = tuple(color)
-    color_key = (*components[:3], components[3] if len(components) > 3 else 255)
   if cache is None:
     _draw_custom_icon_geometry(key, x, y, s, color)
     return
 
+  if hasattr(color, "r"):
+    r, g, b, a = color.r, color.g, color.b, color.a
+  else:
+    components = tuple(color)
+    r, g, b = components[:3]
+    a = components[3] if len(components) > 3 else 255
+
   # A few strokes extend beyond the authored 60x60 canvas. Padding prevents
   # those edges from being clipped by the render texture.
-  padding = max(1, int(math.ceil(3.0 * s)))
+  padding = max(2, int(math.ceil(6.0 * s)))
   icon_size = max(1, int(round(60.0 * s)))
   width = icon_size + 2 * padding
   height = width
-  cache_key = f"aethergrid-icon:{key}:{round(s, 4)}:{width}:{height}:{color_key}"
+  # The cached geometry is opaque; alpha is applied once as a tint below, so
+  # overlapping strokes never show darker seams and fades reuse one texture.
+  opaque = rl.Color(r, g, b, 255)
+  cache_key = f"aethergrid-icon:{key}:{round(s, 4)}:{width}:{height}:{(r, g, b)}"
   texture = cache(cache_key, width, height,
-                  lambda: _draw_custom_icon_geometry(key, padding, padding, s, color))
+                  lambda: _draw_custom_icon_geometry(key, padding, padding, s, opaque),
+                  supersample=ICON_SUPERSAMPLE)
   if texture is None:
     _draw_custom_icon_geometry(key, x, y, s, color)
     return
 
   # Render targets contain premultiplied alpha after drawing onto transparent
-  # black. Use the matching blend mode to avoid applying translucent icon
-  # alpha twice when compositing the cached texture.
+  # black. Use the matching blend mode (and a premultiplied tint). Snapping to
+  # whole pixels keeps the texture 1:1 with the screen so edges stay sharp.
   rl.begin_blend_mode(rl.BlendMode.BLEND_ALPHA_PREMULTIPLY)
   try:
     rl.draw_texture_pro(
       texture,
       rl.Rectangle(0, 0, width, -height),
-      rl.Rectangle(x - padding, y - padding, width, height),
+      rl.Rectangle(round(x) - padding, round(y) - padding, width, height),
       rl.Vector2(0, 0),
       0.0,
-      rl.WHITE,
+      rl.Color(a, a, a, a),
     )
   finally:
     rl.end_blend_mode()
