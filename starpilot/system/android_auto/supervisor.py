@@ -559,7 +559,7 @@ class Supervisor:
         elif now - last_fresh > UNAVAILABLE_AFTER and now - last_unavailable > 1.0:
           # The UI stopped producing frames (e.g. the offroad render budget ran
           # out). Say so on the car instead of freezing on an old image.
-          text = "Starting StarPilot display" if source.waiting_for_first_frame else "StarPilot display unavailable"
+          text = "Starting StarPilot" if source.waiting_for_first_frame else "StarPilot display unavailable"
           if text not in unavailable:
             unavailable[text] = self._unavailable_frame(source.request, text)
           data, keyframe = encoder.encode_rgba(unavailable[text], keyframe=True)
@@ -590,14 +590,56 @@ class Supervisor:
   def _unavailable_frame(request: FrameRequest | None, text: str) -> bytes:
     assert request is not None
     try:
-      import cv2
-      import numpy as np
-      image = np.zeros((request.height, request.width, 4), np.uint8)
-      image[..., 3] = 255
-      scale = request.height / 480
-      size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, max(1, int(2 * scale)))[0]
-      cv2.putText(image, text, ((request.width - size[0]) // 2, (request.height + size[1]) // 2), cv2.FONT_HERSHEY_SIMPLEX,
-                  scale, (255, 255, 255, 255), max(1, int(2 * scale)), cv2.LINE_AA)
-      return image.tobytes()
-    except ImportError:
-      return bytes(request.width * request.height * 4)
+      from PIL import Image, ImageDraw, ImageFont
+      from openpilot.common.basedir import BASEDIR
+
+      base = Path(BASEDIR)
+      logo_path = base / "starpilot" / "system" / "the_galaxy" / "assets" / "images" / "main_logo.png"
+      font_path = base / "selfdrive" / "assets" / "fonts" / "como-heavy.otf"
+
+      bg_color = (10, 10, 22, 255)  # Cosmic void #0a0a16
+      canvas = Image.new("RGBA", (request.width, request.height), bg_color)
+
+      font_size = max(18, min(64, int(request.height * 0.06)))
+      try:
+        font = ImageFont.truetype(str(font_path), font_size) if font_path.exists() else ImageFont.load_default()
+      except Exception:
+        font = ImageFont.load_default()
+
+      draw = ImageDraw.Draw(canvas)
+      bbox = draw.textbbox((0, 0), text, font=font)
+      text_w = bbox[2] - bbox[0]
+      text_h = bbox[3] - bbox[1]
+
+      gap = max(12, int(request.height * 0.04))
+      target_logo_h = int(min(request.height * 0.42, request.width * 0.35))
+
+      if logo_path.exists() and target_logo_h > 20:
+        logo = Image.open(logo_path).convert("RGBA")
+        logo_w = int(logo.width * (target_logo_h / logo.height))
+        logo_resized = logo.resize((logo_w, target_logo_h), Image.Resampling.LANCZOS)
+        total_h = target_logo_h + gap + text_h
+        start_y = max(8, (request.height - total_h) // 2)
+        logo_x = (request.width - logo_w) // 2
+        canvas.paste(logo_resized, (logo_x, start_y), logo_resized)
+        text_y = start_y + target_logo_h + gap
+      else:
+        text_y = (request.height - text_h) // 2
+
+      text_x = (request.width - text_w) // 2
+      draw.text((text_x + 1, text_y + 1), text, font=font, fill=(30, 20, 50, 180))
+      draw.text((text_x, text_y), text, font=font, fill=(250, 248, 255, 255))
+      return canvas.tobytes()
+    except Exception:
+      try:
+        import cv2
+        import numpy as np
+        image = np.zeros((request.height, request.width, 4), np.uint8)
+        image[..., 3] = 255
+        scale = request.height / 480
+        size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, max(1, int(2 * scale)))[0]
+        cv2.putText(image, text, ((request.width - size[0]) // 2, (request.height + size[1]) // 2), cv2.FONT_HERSHEY_SIMPLEX,
+                    scale, (255, 255, 255, 255), max(1, int(2 * scale)), cv2.LINE_AA)
+        return image.tobytes()
+      except Exception:
+        return bytes(request.width * request.height * 4)

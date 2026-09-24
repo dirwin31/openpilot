@@ -27,7 +27,7 @@ from openpilot.starpilot.system.android_auto.frame_source import FrameProducer, 
 from openpilot.starpilot.system.android_auto.touch import DEFAULT_TOUCH_SOCKET, TouchEvent, TouchReceiver
 
 LOGICAL_HEIGHT = 1080  # the landscape UI's design height
-MIN_LOGICAL_WIDTH = 1600
+MIN_LOGICAL_WIDTH = 1440  # supports 4:3 (1440x1080) through ultrawide (2880x1080)
 DEMAND_GRACE = 5.0
 STARTUP_DEMAND_WAIT = 15.0
 
@@ -188,7 +188,7 @@ def run(frames_path: str, touch_path: str) -> int:
       ui_state.update()
 
       rl.begin_texture_mode(content)
-      rl.clear_background(rl.BLACK)
+      rl.clear_background(rl.Color(6, 6, 15, 255))
       rl.rl_push_matrix()
       rl.rl_scalef(scale_x, scale_y, 1.0)
       for tick in list(gui_app._nav_stack_ticks):
@@ -205,7 +205,7 @@ def run(frames_path: str, touch_path: str) -> int:
       # Centre inside the car's margins; drawing with a positive source height
       # flips on the GPU so the readback is top-down for the encoder.
       rl.begin_texture_mode(output)
-      rl.clear_background(rl.BLACK)
+      rl.clear_background(rl.Color(6, 6, 15, 255))
       rl.draw_texture_pro(content.texture, rl.Rectangle(0, 0, visible_w, visible_h),
                           rl.Rectangle(request.margin_w // 2, request.margin_h // 2, visible_w, visible_h),
                           rl.Vector2(0, 0), 0.0, rl.WHITE)
