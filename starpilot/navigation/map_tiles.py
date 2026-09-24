@@ -145,13 +145,24 @@ def _existing_ancestor(path: Path) -> Path:
   return path
 
 
-class TileCache:
-  """Tiles on disk as ``<root>/<style>/<z>/<x>/<y>.png``, trimmed oldest-first past a size cap."""
+def offline_root(base: Path | None = None) -> Path:
+  """Where downloaded offline areas keep their tiles; never trimmed automatically."""
+  return Path(base or default_cache_dir()) / "offline"
 
-  def __init__(self, root: Path, style: str, max_bytes: int = MAX_DISK_BYTES, min_free_bytes: int = MIN_FREE_DISK_BYTES):
+
+class TileCache:
+  """Tiles on disk as ``<root>/<style>/<z>/<x>/<y>.png``, trimmed oldest-first past a size cap.
+
+  ``max_bytes=None`` never trims (offline areas). A ``pinned`` cache is consulted
+  on reads, so tiles saved in an offline area are never downloaded twice.
+  """
+
+  def __init__(self, root: Path, style: str, max_bytes: int | None = MAX_DISK_BYTES, min_free_bytes: int = MIN_FREE_DISK_BYTES,
+               pinned: TileCache | None = None):
     self.root = Path(root) / style.replace("/", "_")
     self.max_bytes = max_bytes
     self.min_free_bytes = min_free_bytes
+    self.pinned = pinned
     self._lock = threading.Lock()
     self._size: int | None = None
     self._touched: set[TileKey] = set()
@@ -166,8 +177,8 @@ class TileCache:
       stat = path.stat()
       data = path.read_bytes()
     except OSError:
-      return None
-    if key not in self._touched:
+      return self.pinned.read(key) if self.pinned is not None else None
+    if self.max_bytes is not None and key not in self._touched:
       # Recently viewed tiles survive trimming; one touch per tile per session is enough.
       self._touched.add(key)
       try:
@@ -177,7 +188,20 @@ class TileCache:
     return data, max(0.0, time.time() - stat.st_mtime)  # noqa: TID251 - file mtimes are wall-clock
 
   def contains(self, key: TileKey) -> bool:
-    return self.path(key).is_file()
+    return self.path(key).is_file() or (self.pinned is not None and self.pinned.contains(key))
+
+  def remove(self, key: TileKey) -> int:
+    """Delete a tile from this cache (not the pinned one); returns the bytes freed."""
+    path = self.path(key)
+    try:
+      size = path.stat().st_size
+      path.unlink()
+    except OSError:
+      return 0
+    with self._lock:
+      if self._size is not None:
+        self._size -= size
+    return size
 
   def write(self, key: TileKey, data: bytes) -> bool:
     path = self.path(key)
@@ -195,7 +219,7 @@ class TileCache:
     with self._lock:
       if self._size is not None:
         self._size += len(data) - old_size
-      over = self._size is not None and self._size > self.max_bytes
+      over = self.max_bytes is not None and self._size is not None and self._size > self.max_bytes
     if over:
       self.trim()
     return True
@@ -224,6 +248,10 @@ class TileCache:
           continue
         entries.append((stat.st_mtime, stat.st_size, full))
     total = sum(size for _, size, _ in entries)
+    if self.max_bytes is None:
+      with self._lock:
+        self._size = total
+      return
     target = int(self.max_bytes * 0.9)
     entries.sort()
     for _, size, full in entries:
@@ -243,8 +271,10 @@ class TileService:
 
   def __init__(self, token: Callable[[], str], decode: Callable[[bytes, str], Any] | None = None,
                cache: TileCache | None = None, style: str = DEFAULT_STYLE, session: Any = None,
-               workers: int = WORKERS, clock: Callable[[], float] = time.monotonic):
+               workers: int = WORKERS, clock: Callable[[], float] = time.monotonic,
+               prefetch_interval: float = PREFETCH_INTERVAL_SECONDS):
     self.style = style
+    self.prefetch_interval = prefetch_interval
     self.cache = cache or TileCache(default_cache_dir(), style)
     self._token = token
     self._decode = decode or (lambda data, ext: data)
@@ -255,6 +285,8 @@ class TileService:
     self._visible: list[TileKey] = []
     self._prefetch: list[TileKey] = []
     self._prefetch_index = 0
+    self._prefetch_refresh = False
+    self.not_found: set[TileKey] = set()
     self._refresh: deque[TileKey] = deque(maxlen=256)
     self._inflight: set[TileKey] = set()
     self._delivered: set[TileKey] = set()
@@ -263,7 +295,7 @@ class TileService:
     self._offline_until = 0.0
     self._last_prefetch = 0.0
     self._stopped = False
-    self.stats = {"network": 0, "disk": 0, "prefetched": 0, "failed": 0}
+    self.stats = {"network": 0, "disk": 0, "prefetched": 0, "failed": 0, "write_failed": 0}
 
     self._threads = [threading.Thread(target=self._scan_cache, name="nav-tiles-scan", daemon=True)]
     self._threads += [threading.Thread(target=self._worker, name=f"nav-tiles-{i}", daemon=True) for i in range(workers)]
@@ -291,11 +323,26 @@ class TileService:
     with self._cond:
       self._delivered.discard(key)
 
-  def prefetch(self, keys: Sequence[TileKey]) -> None:
-    """Background download plan, e.g. the route corridor. Replaces the previous plan."""
+  @property
+  def idle(self) -> bool:
+    """The background plan has been worked through and nothing is downloading."""
+    with self._cond:
+      return self._prefetch_index >= len(self._prefetch) and not self._inflight and not self._refresh
+
+  @property
+  def prefetch_position(self) -> int:
+    with self._cond:
+      return self._prefetch_index
+
+  def prefetch(self, keys: Sequence[TileKey], refresh: bool = False) -> None:
+    """Background download plan, e.g. the route corridor. Replaces the previous plan.
+
+    ``refresh`` downloads every tile again, even ones already cached.
+    """
     with self._cond:
       self._prefetch = list(keys)
       self._prefetch_index = 0
+      self._prefetch_refresh = refresh
       self._cond.notify_all()
 
   def poll(self, limit: int = 2) -> list[tuple[TileKey, Any]]:
@@ -311,6 +358,8 @@ class TileService:
       self._cond.notify_all()
 
   def _scan_cache(self) -> None:
+    if self.cache.max_bytes is None:
+      return
     try:
       if self.cache.scan() > self.cache.max_bytes:
         self.cache.trim()
@@ -328,7 +377,7 @@ class TileService:
         continue
       return key, True
 
-    if self.offline or now - self._last_prefetch < PREFETCH_INTERVAL_SECONDS:
+    if self.offline or now - self._last_prefetch < self.prefetch_interval:
       return None
     while self._refresh:
       key = self._refresh.popleft()
@@ -338,9 +387,9 @@ class TileService:
     while self._prefetch_index < len(self._prefetch):
       key = self._prefetch[self._prefetch_index]
       self._prefetch_index += 1
-      if key in self._inflight or now < self._missing.get(key, 0.0):
+      if key in self._inflight or now < self._missing.get(key, 0.0) or key in self.not_found:
         continue
-      if self.cache.contains(key):
+      if not self._prefetch_refresh and self.cache.contains(key):
         continue
       self._last_prefetch = now
       return key, False
@@ -354,7 +403,7 @@ class TileService:
           job = self._next_job()
           if job is not None:
             break
-          self._cond.wait(timeout=PREFETCH_INTERVAL_SECONDS)
+          self._cond.wait(timeout=max(0.02, self.prefetch_interval))
         if self._stopped:
           return
         key, deliver = job
@@ -386,7 +435,8 @@ class TileService:
         with self._cond:
           self._missing[key] = max(self._missing.get(key, 0.0), self._offline_until, self._clock() + 2.0)
       return
-    self.cache.write(key, data)
+    if not self.cache.write(key, data):
+      self.stats["write_failed"] += 1
     if deliver:
       self._deliver(key, data)
     else:
@@ -434,6 +484,8 @@ class TileService:
         self._offline_until = self._clock() + OFFLINE_BACKOFF_SECONDS
       else:
         self._missing[key] = self._clock() + MISSING_RETRY_SECONDS
+        if status == 404:
+          self.not_found.add(key)
     return None
 
   def network_restored(self) -> None:

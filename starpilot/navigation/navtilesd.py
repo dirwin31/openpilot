@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+"""Downloads map tiles ahead of time so the navigation map works offline.
+
+Runs onroad and offroad, independent of the car screen:
+  * Route tiles for whatever route is relevant: the live route from navigationd,
+    the destination set from the device or The Galaxy (routed here when
+    navigationd isn't running yet), and the route being previewed. Any network,
+    kept small, paced gently onroad.
+  * Offline areas the user saved, on Wi-Fi only, with progress for the UI.
+    Deleted areas have their tiles removed; areas re-download every few months.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import threading
+import time
+
+import cereal.messaging as messaging
+from cereal import log
+from openpilot.common.params import Params
+from openpilot.common.swaglog import cloudlog
+from openpilot.starpilot.navigation.destination_store import parse_destination_json
+from openpilot.starpilot.navigation.map_tiles import DEFAULT_STYLE, TileCache, TileService, offline_root
+from openpilot.starpilot.navigation.offline_maps import (
+  AREA_REFRESH_SECONDS,
+  OFFLINE_MAX_BYTES,
+  OfflineArea,
+  OfflineMaps,
+  route_tiles,
+)
+from openpilot.starpilot.navigation.route_engine import Coordinate, MapboxRouteEngine
+
+LOOP_SECONDS = 1.0
+AREA_CHECK_SECONDS = 5.0
+PREVIEW_CHECK_SECONDS = 3.0
+STATUS_SECONDS = 2.0
+ROUTE_RETRY_SECONDS = 60.0
+LIVE_ROUTE_STALE_SECONDS = 30.0
+AREA_VERIFY_ATTEMPTS = 3
+AREA_RETRY_SECONDS = 3600.0    # after an incomplete download or a full disk
+
+ROUTE_INTERVAL_ONROAD = 0.35   # ~3 tiles/s while driving; the car screen shares the link
+ROUTE_INTERVAL_OFFROAD = 0.12
+AREA_INTERVAL = 0.08           # Wi-Fi only
+
+UNMETERED = (log.DeviceState.NetworkType.wifi, log.DeviceState.NetworkType.ethernet)
+
+
+def _wall() -> float:
+  return time.time()  # noqa: TID251 - persisted timestamps must survive reboots
+
+
+def _signature(points: list[tuple[float, float]]) -> tuple | None:
+  return (len(points), points[0], points[-1]) if points else None
+
+
+class Navtilesd:
+  def __init__(self, maps: OfflineMaps | None = None, sm=None, params: Params | None = None,
+               route_engine: MapboxRouteEngine | None = None, session=None, workers: int = 2):
+    self.maps = maps or OfflineMaps()
+    self.params = params or Params()
+    self.params_memory = Params(memory=True) if params is None else params
+    self.sm = sm if sm is not None else messaging.SubMaster(["deviceState", "navRoute"])
+    self.route_engine = route_engine or MapboxRouteEngine()
+
+    self.area_cache = TileCache(offline_root(self.maps.base), DEFAULT_STYLE, max_bytes=None)
+    self.route_cache = TileCache(self.maps.base, DEFAULT_STYLE, pinned=self.area_cache)
+    self.route_service = TileService(self._token, cache=self.route_cache, session=session, workers=workers,
+                                     prefetch_interval=ROUTE_INTERVAL_OFFROAD)
+    self.area_service = TileService(self._token, cache=self.area_cache, session=session, workers=workers + 1,
+                                    prefetch_interval=AREA_INTERVAL)
+
+    self.started = False
+    self.unmetered = False
+    self.network_up = False
+    self.metered_wifi = False
+
+    self._live_points: list[tuple[float, float]] = []
+    self._live_at = -math.inf
+    self._destination_key: tuple | None = None
+    self._destination_points: list[tuple[float, float]] = []
+    self._destination_attempt = -math.inf
+    self._destination_fetching = False
+    self._preview_points: list[tuple[float, float]] = []
+    self._preview_checked = -math.inf
+    self._route_plan: tuple | None = None
+    self._route_total = 0
+
+    self._areas_checked = -math.inf
+    self._active_area: OfflineArea | None = None
+    self._active_keys: list = []
+    self._active_refresh = False
+    self._active_queued = False
+    self._verify_attempts = 0
+    self._area_status: dict[str, dict] = dict(self.maps.status().get("areas", {}))
+    self._offline_bytes: int | None = None
+    self._status_written = -math.inf
+    self._last_status: dict | None = None
+
+  def _token(self) -> str:
+    return str(self.params.get("MapboxPublicKey", encoding="utf-8") or "").strip()
+
+  # ── network ─────────────────────────────────────────────────────────────
+
+  def _update_device(self) -> None:
+    if not self.sm.seen["deviceState"]:
+      return
+    state = self.sm["deviceState"]
+    network_up = state.networkType != log.DeviceState.NetworkType.none
+    if network_up and not self.network_up:
+      # A connection just came back: retry at once instead of waiting out the offline backoff.
+      self.route_service.network_restored()
+      self.area_service.network_restored()
+    self.network_up = network_up
+    metered = bool(getattr(state, "networkMetered", False))
+    self.unmetered = state.networkType in UNMETERED and not metered
+    self.metered_wifi = state.networkType in UNMETERED and metered
+    self.started = bool(state.started)
+
+  # ── route tiles ─────────────────────────────────────────────────────────
+
+  def _last_position(self) -> Coordinate | None:
+    for params in (self.params_memory, self.params):
+      raw = params.get("LastGPSPosition", encoding="utf-8")
+      try:
+        state = json.loads(raw) if isinstance(raw, str) else raw
+        latitude, longitude = float(state["latitude"]), float(state["longitude"])
+      except (TypeError, ValueError, KeyError):
+        continue
+      if math.isfinite(latitude) and math.isfinite(longitude) and (abs(latitude) > 1e-6 or abs(longitude) > 1e-6):
+        return Coordinate(latitude, longitude)
+    return None
+
+  def _update_destination_route(self, now: float) -> None:
+    destination = parse_destination_json(self.params.get("NavDestination", encoding="utf-8"))
+    if destination is None:
+      self._destination_key, self._destination_points = None, []
+      return
+    key = (round(float(destination["latitude"]), 6), round(float(destination["longitude"]), 6), destination.get("routeId"))
+    if key != self._destination_key:
+      self._destination_key, self._destination_points, self._destination_attempt = key, [], -math.inf
+    if self._destination_points or self._destination_fetching or now - self._destination_attempt < ROUTE_RETRY_SECONDS:
+      return
+    start = self._last_position()
+    token = str(self.params.get("MapboxSecretKey", encoding="utf-8") or "").strip()
+    if start is None or not token or not self.network_up:
+      return
+    self._destination_attempt = now
+    self._destination_fetching = True
+
+    def worker():
+      try:
+        route = self.route_engine.fetch_route(token, start, destination)
+        if route is not None and self._destination_key == key:
+          self._destination_points = [(point.latitude, point.longitude) for point in route.geometry]
+      except Exception:
+        cloudlog.exception("navtilesd: destination route failed")
+      finally:
+        self._destination_fetching = False
+
+    threading.Thread(target=worker, name="navtilesd-route", daemon=True).start()
+
+  def _update_route(self, now: float) -> None:
+    if self.sm.updated["navRoute"]:
+      message = self.sm["navRoute"]
+      self._live_points = [(c.latitude, c.longitude) for c in message.coordinates] if self.sm.valid["navRoute"] else []
+      self._live_at = now
+    live = self._live_points if now - self._live_at < LIVE_ROUTE_STALE_SECONDS else []
+
+    if not live:
+      self._update_destination_route(now)
+    if now - self._preview_checked >= PREVIEW_CHECK_SECONDS:
+      self._preview_checked = now
+      self._preview_points = self.maps.preview_route()
+
+    primary = live or self._destination_points
+    plan = (_signature(primary), _signature(self._preview_points))
+    self.route_service.prefetch_interval = ROUTE_INTERVAL_ONROAD if self.started else ROUTE_INTERVAL_OFFROAD
+    if plan == self._route_plan:
+      return
+    self._route_plan = plan
+    keys = route_tiles(primary)
+    seen = set(keys)
+    keys += [key for key in route_tiles(self._preview_points) if key not in seen]
+    self._route_total = len(keys)
+    self.route_service.prefetch(keys)
+    cloudlog.info(f"navtilesd: route plan {len(keys)} tiles")
+
+  # ── offline areas ───────────────────────────────────────────────────────
+
+  def _area_state(self, area_id: str) -> dict:
+    return self._area_status.setdefault(area_id, {"state": "queued", "done": 0, "total": 0, "bytes": 0, "completed_at": 0.0})
+
+  def _needs_download(self, area: OfflineArea, wall: float) -> tuple[bool, bool]:
+    """(needs work, refresh every tile)."""
+    state = self._area_state(area.id)
+    completed_at = float(state.get("completed_at") or 0.0)
+    if state.get("state") in ("incomplete", "storage_full", "no_space"):
+      retry = area.update_requested > completed_at or wall - completed_at > AREA_RETRY_SECONDS
+      return retry, area.update_requested > completed_at > 0
+    if state.get("state") != "complete":
+      return True, area.update_requested > completed_at > 0
+    if area.update_requested > completed_at:
+      return True, True
+    if wall - completed_at > AREA_REFRESH_SECONDS and not self.started:
+      return True, True
+    return False, False
+
+  def _delete_area(self, area: OfflineArea, remaining: list[OfflineArea]) -> None:
+    keep = set()
+    for other in remaining:
+      keep.update(other.tiles())
+    freed = sum(self.area_cache.remove(key) for key in area.tiles() if key not in keep)
+    if self._offline_bytes is not None:
+      self._offline_bytes = max(0, self._offline_bytes - freed)
+    self.maps.forget_area(area.id)
+    self._area_status.pop(area.id, None)
+    cloudlog.info(f"navtilesd: deleted area {area.id}, freed {freed} bytes")
+
+  def _stop_active(self, state: str | None = None) -> None:
+    if self._active_area is not None and state is not None:
+      self._area_state(self._active_area.id).update(state=state, completed_at=_wall())
+    self._active_area = None
+    self._active_keys = []
+    self.area_service.prefetch([])
+
+  def _update_areas(self, now: float, wall: float) -> None:
+    if self._offline_bytes is None:
+      self._offline_bytes = self.area_cache.scan()
+
+    if now - self._areas_checked >= AREA_CHECK_SECONDS:
+      self._areas_checked = now
+      areas = self.maps.areas(include_deleted=True)
+      live = [area for area in areas if not area.deleted]
+      for area in areas:
+        if area.deleted:
+          if self._active_area is not None and self._active_area.id == area.id:
+            self._stop_active()
+          self._delete_area(area, live)
+      if self._active_area is not None:
+        current = next((area for area in live if area.id == self._active_area.id), None)
+        if current is None or current.update_requested != self._active_area.update_requested:
+          self._stop_active()
+        elif current.allow_metered != self._active_area.allow_metered:
+          self._active_area = current
+      if self._active_area is None:
+        for area in live:
+          needed, refresh = self._needs_download(area, wall)
+          if needed:
+            self._start_area(area, refresh)
+            break
+
+    area = self._active_area
+    if area is None:
+      return
+    state = self._area_state(area.id)
+    if not (self.unmetered or (area.allow_metered and self.network_up)):
+      if self.area_service.prefetch_position or not self.area_service.idle:
+        self.area_service.prefetch([])
+      state["state"] = "waiting_wifi"
+      state["metered_wifi"] = self.metered_wifi
+      self._active_queued = False
+      return
+    if self._offline_bytes is not None and self._offline_bytes >= OFFLINE_MAX_BYTES and not self._active_refresh:
+      self._stop_active("storage_full")
+      return
+    if self.area_service.stats["write_failed"]:
+      self.area_service.stats["write_failed"] = 0
+      self._stop_active("no_space")
+      return
+    if not self._active_queued:
+      self.area_service.prefetch(self._active_keys, refresh=self._active_refresh)
+      self._active_queued = True
+    state["state"] = "downloading"
+    state["done"] = min(state["total"], self.area_service.prefetch_position)
+    if self.area_service.idle:
+      self._verify_area(area, wall)
+
+  def _start_area(self, area: OfflineArea, refresh: bool) -> None:
+    self._active_area = area
+    self._active_keys = area.tiles()
+    self._active_refresh = refresh
+    self._verify_attempts = 0
+    self._active_queued = False
+    state = self._area_state(area.id)
+    state.update(total=len(self._active_keys), done=0, state="queued")
+    cloudlog.info(f"navtilesd: area {area.id} {len(self._active_keys)} tiles refresh={refresh}")
+
+  def _verify_area(self, area: OfflineArea, wall: float) -> None:
+    missing = [key for key in self._active_keys if key not in self.area_service.not_found and not self.area_cache.contains(key)]
+    state = self._area_state(area.id)
+    if missing and self._verify_attempts < AREA_VERIFY_ATTEMPTS:
+      # Some downloads failed (dropped connection); fetch just those again.
+      self._verify_attempts += 1
+      self._active_refresh = False
+      self._active_keys = missing
+      self.area_service.prefetch(missing)
+      return
+    total_bytes = 0
+    for key in area.tiles():
+      try:
+        total_bytes += self.area_cache.path(key).stat().st_size
+      except OSError:
+        pass
+    state.update(bytes=total_bytes, done=state["total"] - len(missing),
+                 state="complete" if not missing else "incomplete", completed_at=wall)
+    self._offline_bytes = self.area_cache.scan()
+    self._active_area = None
+    self._active_keys = []
+
+  # ── status ──────────────────────────────────────────────────────────────
+
+  def _write_status(self, now: float, wall: float) -> None:
+    if now - self._status_written < STATUS_SECONDS:
+      return
+    status = {
+      "route": {"total": self._route_total, "remaining": self.route_service.prefetch_remaining if self._route_total else 0},
+      "areas": self._area_status,
+      "offline_bytes": self._offline_bytes or 0,
+      "unmetered": self.unmetered,
+      "offline": self.route_service.offline or not self.network_up,
+    }
+    if status != self._last_status:
+      self._last_status = json.loads(json.dumps(status))
+      self.maps.write_status(dict(status, updated=wall))
+    self._status_written = now
+
+  def step(self, now: float | None = None, wall: float | None = None) -> None:
+    now = time.monotonic() if now is None else now
+    wall = _wall() if wall is None else wall
+    self.sm.update(0)
+    self._update_device()
+    self._update_route(now)
+    self._update_areas(now, wall)
+    self._write_status(now, wall)
+
+  def run(self) -> None:
+    cloudlog.warning("navtilesd init")
+    while True:
+      try:
+        self.step()
+      except Exception:
+        cloudlog.exception("navtilesd step failed")
+      time.sleep(LOOP_SECONDS)
+
+
+def main() -> None:
+  Navtilesd().run()
+
+
+if __name__ == "__main__":
+  main()
