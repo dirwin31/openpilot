@@ -47,11 +47,32 @@ STATE_LABELS = {
   "joining_wifi": "joining car wi-fi", "connecting_tcp": "connecting", "authenticating": "authenticating",
   "negotiating": "negotiating video", "streaming": "projecting", "suspended": "car showing its own screen",
   "backoff": "retrying", "stopping": "stopping", "error": "error",
+  "waiting_for_usb": "plug into the car's usb", "usb_accessory": "starting usb",
 }
 
 
 class Cancelled(Exception):
   pass
+
+
+class NoLease:
+  """Wired sessions use no car Wi-Fi network."""
+  local_ip = None
+
+  def release(self, restore: bool = False) -> None:
+    pass
+
+
+class UsbLease:
+  """The link of a wired session: the USB cable, via the accessory bridge."""
+  local_ip = None
+  lost = "The car's USB connection ended"
+
+  def __init__(self, bridge):
+    self.bridge = bridge
+
+  def still_connected(self) -> bool:
+    return not self.bridge.closed.is_set()
 
 
 class EventLog:
@@ -138,6 +159,7 @@ class Supervisor:
     status["receiver_address"] = self.config["receiver_address"]
     status["receiver_name"] = self.config["receiver_name"]
     status["configured_view"] = self.config["view"]
+    status["connection"] = self.config["connection"]
     status["pairing_ready"] = time.monotonic() < self._pairing_until
     status["recent"] = list(self.log.recent)[-8:]
     return status
@@ -150,7 +172,7 @@ class Supervisor:
         if self._stop.is_set():
           raise RuntimeError("Android Auto is still stopping; try again in a moment")
         return
-      if not self.config["receiver_address"]:
+      if self.config["connection"] != "wired" and not self.config["receiver_address"]:
         raise RuntimeError("Choose your car first")
       identity = identity_store.load_identity()  # fail fast with a clear message
       self._stop.clear()
@@ -195,6 +217,17 @@ class Supervisor:
       self.config["view"] = view
       identity_store.save_config(self.config)
     self.log("view_selected", view=view)
+
+  def set_connection(self, connection: str) -> None:
+    """Choose wireless (Bluetooth + car Wi-Fi) or wired (USB) projection."""
+    if connection not in ("wireless", "wired"):
+      raise RuntimeError(f"Unknown connection {connection!r}")
+    with self._lock:
+      if self._thread is not None and self._thread.is_alive():
+        raise RuntimeError("Stop Android Auto before changing the connection")
+      self.config["connection"] = connection
+      identity_store.save_config(self.config)
+    self.log("connection_selected", connection=connection)
 
   def prepare_pairing(self, seconds: float = 180.0) -> None:
     """Present as a phone (HFP gateway, smartphone class) while the car pairs."""
@@ -286,8 +319,9 @@ class Supervisor:
 
   def _run(self, generation: int) -> None:
     self.log.open()
-    self.log("session_start", receiver=self.config["receiver_name"], generation=generation)
-    lease = self._lease()
+    wired = self.config["connection"] == "wired"
+    self.log("session_start", receiver="usb" if wired else self.config["receiver_name"], generation=generation)
+    lease = NoLease() if wired else self._lease()
     attempt = 0
     try:
       while not self._stop.is_set():
@@ -351,6 +385,9 @@ class Supervisor:
     return f"{STATE_LABELS.get(stage, stage)}: {text}"[:300]
 
   def _attempt(self, lease) -> None:
+    if self.config["connection"] == "wired":
+      self._attempt_usb()
+      return
     config = self.config
     address = config["receiver_address"]
     ident = identity_store.load_identity()
@@ -399,6 +436,35 @@ class Supervisor:
     finally:
       keepalive_stop.set()
 
+  def _attempt_usb(self) -> None:
+    """Wired: wait for the car's accessory handshake on USB, then project over the cable."""
+    from openpilot.starpilot.system.android_auto import usb_accessory as usb
+    ident = identity_store.load_identity()
+    gadget = usb.AccessoryGadget(self.log)
+    listener = usb.UeventListener()
+    bridge = None
+    try:
+      gadget.prepare()
+      self._stage("waiting_for_usb")
+      while True:
+        self._check_cancel()
+        event = listener.next(0.5)
+        if event is None:
+          continue
+        if "USB_STATE" in event:
+          self.log("usb_state", state=event["USB_STATE"])
+        if event.get("ACCESSORY") == "START":
+          break
+      self._stage("usb_accessory")
+      gadget.switch_to_accessory()
+      bridge = usb.AccessoryBridge(log=self.log)
+      self._project(None, UsbLease(bridge), ident, connect=lambda: self._track(bridge.socket))
+    finally:
+      if bridge is not None:
+        bridge.close()
+      listener.close()
+      gadget.restore()
+
   def _bootstrap_log(self, name: str, **values) -> None:
     self.log(name, **values)
     if name == "bootstrap_tx" and values.get("message") == NAMES[2]:
@@ -422,9 +488,9 @@ class Supervisor:
         self._wait(1.0 + attempt * 0.5)
     raise RuntimeError(f"Car did not accept the projection connection: {last_error}")
 
-  def _project(self, result, lease, ident) -> None:
+  def _project(self, result, lease, ident, connect=None) -> None:
     config = self.config
-    sock = self._connect_tcp(result, lease)
+    sock = connect() if connect is not None else self._connect_tcp(result, lease)
     ca = ident.root if config.get("verify_head_unit", True) else None
     session = ProjectionSession(sock, ident.cert, ident.key, self.log, ca)
     self._stage("authenticating")
@@ -502,7 +568,7 @@ class Supervisor:
       if now >= next_check:
         next_check = now + 1.0
         if not lease.still_connected():
-          raise RuntimeError("Lost the car's Wi-Fi network")
+          raise RuntimeError(getattr(lease, "lost", "Lost the car's Wi-Fi network"))
         label = source.label
         source.check(now, focused=session.focused)
         if source.label != label:

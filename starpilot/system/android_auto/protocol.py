@@ -56,6 +56,9 @@ class AndroidAutoClient:
   def set_view(self, view: str) -> None:
     self.call("set_view", view=view)
 
+  def set_connection(self, connection: str) -> None:
+    self.call("set_connection", connection=connection)
+
   def prepare_pairing(self) -> None:
     self.call("prepare_pairing")
 
