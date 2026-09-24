@@ -1199,6 +1199,7 @@ class GuiApplication:
     if texture is None or getattr(texture, "id", 0) == 0:
       self._unload_render_texture(render_texture)
       self._aa_failed = True
+      self._aa_producer = None
       cloudlog.error("Android Auto capture disabled: render texture allocation failed")
       return
     rl.set_texture_filter(texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)

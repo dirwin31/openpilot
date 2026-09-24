@@ -435,9 +435,10 @@ class Supervisor:
     self.log("projection_ready", mode=mode.as_dict(), head_unit_subject=session.head_unit_subject)
 
     from openpilot.starpilot.system.android_auto.hw_encoder import create_encoder
+    software_fps = min(SOFTWARE_FPS, config["fps"]) if config["fps"] else SOFTWARE_FPS
     encoder, fps = create_encoder(mode.width, mode.height, preference=config["encoder"], bitrate_kbps=config["bitrate_kbps"],
-                                  margin_height=mode.margin_height, software_fps=SOFTWARE_FPS, log=self.log)
-    fps = min(fps, config["fps"]) if config["fps"] else fps
+                                  margin_height=mode.margin_height, software_fps=software_fps, log=self.log)
+    fps = min(fps, mode.fps, config["fps"] or fps)
     interval = 1.0 / fps
     request = FrameRequest(mode.width, mode.height, mode.margin_width, mode.margin_height, int(interval * 1e6))
     view = config["view"]
@@ -503,7 +504,7 @@ class Supervisor:
         if not lease.still_connected():
           raise RuntimeError("Lost the car's Wi-Fi network")
         label = source.label
-        source.check(now)
+        source.check(now, focused=session.focused)
         if source.label != label:
           self._set(view=source.label)
         window = [t for t in sent_times if now - t <= 5.0]

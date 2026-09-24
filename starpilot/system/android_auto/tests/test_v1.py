@@ -166,6 +166,28 @@ def test_view_source_falls_back_to_mirror_when_renderer_dies(tmp_path, sock_dir)
     view.close()
 
 
+def test_view_source_car_timers_pause_while_car_shows_its_own_screen(tmp_path, sock_dir):
+  from openpilot.starpilot.system.android_auto.view import CAR_STALL_TIMEOUT, CAR_STARTUP_TIMEOUT
+  request = FrameRequest(64, 32, 0, 0, 20_000)
+  view = ViewSource("car", request, lambda *a, **k: None, mirror_path=str(tmp_path / "mirror"), car_path=str(tmp_path / "car"),
+                    touch_path=str(sock_dir / "touch.sock"), renderer_command=[sys.executable, "-c", "import time; time.sleep(60)"])
+  try:
+    start = view.started_at
+    view.check(start + 1, focused=False)
+    view.check(start + CAR_STARTUP_TIMEOUT + 60, focused=False)  # car never granted focus yet: not a startup failure
+    view.check(start + CAR_STARTUP_TIMEOUT + 62, focused=True)
+    assert view.view == "car"
+    view.frames, view.last_frame_at = 10, start + CAR_STARTUP_TIMEOUT + 62
+    view.check(view.last_frame_at + 1, focused=False)  # driver switched to the car's own radio screen
+    view.check(view.last_frame_at + CAR_STALL_TIMEOUT + 120, focused=False)
+    view.check(view.last_frame_at + CAR_STALL_TIMEOUT + 121, focused=True)
+    assert view.view == "car"
+    view.check(view.last_frame_at + CAR_STALL_TIMEOUT + 1, focused=True)  # a real stall while projecting still falls back
+    assert "frames stopped" in view.label
+  finally:
+    view.close()
+
+
 # ------------------------------------------------------------ session touches
 
 def test_session_delivers_car_touches(identity):
@@ -205,7 +227,7 @@ def test_create_encoder_falls_back_to_software(monkeypatch, tmp_path):
   encoder, fps = hw_encoder.create_encoder(320, 240, preference="auto", bitrate_kbps=2000, margin_height=0, software_fps=15,
                                            log=lambda name, **values: events.append((name, values)))
   try:
-    assert encoder.backend == "libx264" and fps == 15
+    assert encoder.backend == "libx264" and fps == 15 and encoder.fps == 15
     assert events[0][0] == "encoder_fallback" and "not built" in events[0][1]["reason"]
   finally:
     encoder.close()
@@ -272,3 +294,20 @@ def test_supervisor_car_view_end_to_end_with_touch(identity, tmp_path, sock_dir,
   hu.thread.join(5)
   assert hu.error is None, hu.error
   assert sup.status()["state"] == "idle"
+
+
+# -------------------------------------------------------------------- config
+
+def test_config_migrates_legacy_defaults(tmp_path):
+  from openpilot.starpilot.system.android_auto import identity as identity_store
+  path = tmp_path / "config.json"
+  path.write_text(json.dumps({"receiver_address": "AA:BB", "fps": 12, "bitrate_kbps": 4000, "view": "mirror"}))
+  config = identity_store.load_config(path)
+  assert config["fps"] == 0 and config["bitrate_kbps"] == 6000
+  assert config["receiver_address"] == "AA:BB" and config["view"] == "mirror"
+  identity_store.save_config(config, path)
+  assert json.loads(path.read_text())["config_version"] == identity_store.CONFIG_VERSION
+  path.write_text(json.dumps({"config_version": 2, "fps": 12, "bitrate_kbps": 4000}))
+  assert identity_store.load_config(path)["fps"] == 12  # a cap chosen after versioning is kept
+  path.write_text(json.dumps({"fps": 20, "bitrate_kbps": 8000}))
+  assert identity_store.load_config(path)["fps"] == 20 and identity_store.load_config(path)["bitrate_kbps"] == 8000
