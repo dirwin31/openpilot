@@ -3970,7 +3970,7 @@ class AetherTile(Widget):
     nodes, _ = self._constellation_data
     draw_constellation_nodes(nodes, [], face, accent, glow, scale=1.0)
 
-  def _render_hud_background(self, rect: rl.Rectangle, accent: rl.Color, glow: float = 1.0, *, bg_color: rl.Color | None = None, const_connected: bool = True) -> tuple[rl.Rectangle, rl.Color]:
+  def _render_hud_background(self, rect: rl.Rectangle, accent: rl.Color, glow: float = 1.0, *, bg_color: rl.Color | None = None, draw_constellation: bool = False, const_connected: bool = True) -> tuple[rl.Rectangle, rl.Color]:
     sq = self._squish
     snapped = snap_rect(rect)
     sw = snapped.width * sq
@@ -3978,10 +3978,11 @@ class AetherTile(Widget):
     ox = snapped.x + (snapped.width - sw) / 2
     oy = snapped.y + (snapped.height - sh) / 2
     face, accent = draw_hud_background(rl.Rectangle(ox, oy, sw, sh), accent, glow, bg_color=bg_color)
-    if const_connected:
-      self._draw_constellation(face, accent, glow)
-    else:
-      self._draw_constellation_disconnected(face, accent, glow)
+    if draw_constellation:
+      if const_connected:
+        self._draw_constellation(face, accent, glow)
+      else:
+        self._draw_constellation_disconnected(face, accent, glow)
     return face, accent
 
   def _render(self, rect: rl.Rectangle):

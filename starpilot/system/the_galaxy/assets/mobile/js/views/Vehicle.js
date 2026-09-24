@@ -1,6 +1,7 @@
 import { api, showSnackbar } from "../api.js"
 import { navigate, toolHref } from "../store.js"
 import { GalaxySection } from "../components/GalaxySection.js"
+import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
 
 const FEATURES = [
   { key: "doors", name: "Lock/Unlock Doors", icon: "bi-door-closed", desc: "Send lock or unlock commands remotely to your vehicle.", embed: "/manage_doors" },
@@ -9,7 +10,7 @@ const FEATURES = [
 
 export const Vehicle = {
   name: "Vehicle",
-  components: { GalaxySection },
+  components: { GalaxySection, AndroidAutoIdentityPanel },
   data() {
     return {
       features: FEATURES,
@@ -66,6 +67,10 @@ export const Vehicle = {
           </button>
           <p style="color:var(--text-muted); margin:0;">These features verify vehicle compatibility when launched.</p>
         </div>
+      </GalaxySection>
+
+      <GalaxySection title="Android Auto Identity" icon="bi-key" :collapsible="false">
+        <AndroidAutoIdentityPanel />
       </GalaxySection>
     </div>
   `,

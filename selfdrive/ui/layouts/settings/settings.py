@@ -18,11 +18,10 @@ from openpilot.system.ui.widgets.network import NetworkUI
 
 # Constants
 COLLAPSED_WIDTH = 0
-EXPANDED_WIDTH = 500
+EXPANDED_WIDTH = 480
 SWIPE_THRESHOLD = 80
-CLOSE_BTN_SIZE = 200
-CLOSE_ICON_SIZE = 100
-NAV_BTN_HEIGHT = 80
+CLOSE_BTN_SIZE = 100
+CLOSE_ICON_SIZE = 52
 PANEL_MARGIN = 10
 
 # Colors (Galaxy palette)
@@ -30,11 +29,15 @@ SIDEBAR_COLOR = rl.Color(10, 10, 22, 255)
 ACCENT_LINE_COLOR = rl.Color(139, 92, 246, 75)
 PANEL_COLOR = rl.Color(14, 14, 26, 255)
 PANEL_BORDER = rl.Color(30, 30, 62, 255)
-CLOSE_BTN_COLOR = rl.Color(0, 0, 0, 0)
+CLOSE_BTN_COLOR = rl.Color(20, 20, 38, 255)
 CLOSE_BTN_PRESSED = rl.Color(139, 108, 197, 90)
 CLOSE_BTN_BORDER = rl.Color(48, 48, 82, 255)
-TEXT_NORMAL = rl.Color(189, 189, 189, 255)
+TEXT_NORMAL = rl.Color(150, 150, 180, 255)
 TEXT_SELECTED = rl.WHITE
+ACTIVE_PILL_BG = rl.Color(139, 92, 246, 45)
+ACTIVE_PILL_BORDER = rl.Color(139, 92, 246, 130)
+ACTIVE_PILL_BAR = rl.Color(139, 92, 246, 255)
+HOVER_PILL_BG = rl.Color(255, 255, 255, 12)
 DARK_CORE_COLOR = rl.Color(12, 10, 18, 190)
 
 
@@ -200,18 +203,22 @@ class SettingsLayout(Widget):
     if self._sidebar_expanded:
       # ── EXPANDED ──
 
-      # Back/Close button - prominent touch target
-      back_btn_rect = rl.Rectangle(rect.x + (rect.width - CLOSE_BTN_SIZE) / 2, rect.y + 60, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE)
+      # Back/Close button - prominent touch target with sleek border
+      back_btn_rect = rl.Rectangle(rect.x + (rect.width - CLOSE_BTN_SIZE) / 2, rect.y + 40, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE)
       pressed = gui_app.last_mouse_event.left_down and rl.check_collision_point_rec(gui_app.last_mouse_event.pos, back_btn_rect)
       close_color = CLOSE_BTN_PRESSED if pressed else CLOSE_BTN_COLOR
-      rl.draw_rectangle_rounded(back_btn_rect, 1.0, 20, close_color)
+      close_border = ACCENT_LINE_COLOR if pressed else CLOSE_BTN_BORDER
+      rl.draw_rectangle_rounded(back_btn_rect, 0.4, 16, close_color)
+      rl.draw_rectangle_rounded_lines_ex(back_btn_rect, 0.4, 16, 1.5, close_border)
 
-      icon_color = rl.Color(255, 255, 255, 255) if not pressed else rl.Color(220, 220, 220, 255)
+      icon_color = rl.Color(255, 255, 255, 255) if not pressed else rl.Color(220, 220, 240, 255)
+      icon_w = min(float(self._close_icon.width), CLOSE_ICON_SIZE)
+      icon_h = min(float(self._close_icon.height), CLOSE_ICON_SIZE)
       icon_dest = rl.Rectangle(
-        back_btn_rect.x + (back_btn_rect.width - self._close_icon.width) / 2,
-        back_btn_rect.y + (back_btn_rect.height - self._close_icon.height) / 2,
-        self._close_icon.width,
-        self._close_icon.height,
+        back_btn_rect.x + (back_btn_rect.width - icon_w) / 2,
+        back_btn_rect.y + (back_btn_rect.height - icon_h) / 2,
+        icon_w,
+        icon_h,
       )
       rl.draw_texture_pro(
         self._close_icon,
@@ -225,23 +232,47 @@ class SettingsLayout(Widget):
       # Store back button rect for click detection
       self._back_btn_rect = back_btn_rect
 
-      # Navigation buttons - bold, crisp 65pt typography
-      y = rect.y + 300
-      for panel_type, panel_info in self._panels.items():
-        button_rect = rl.Rectangle(rect.x + 50, y, rect.width - 150, NAV_BTN_HEIGHT)
+      # Navigation buttons - dynamically distributed with capsule pills
+      nav_start_y = back_btn_rect.y + back_btn_rect.height + 35
+      bottom_margin = 30
+      available_h = rect.height - (nav_start_y - rect.y) - bottom_margin
+      num_panels = len(self._panels)
+      item_gap = 12
+      nav_btn_height = max(64, min(86, int((available_h - (num_panels - 1) * item_gap) / num_panels)))
+      button_x = rect.x + 25
+      button_w = rect.width - 50
+      font_size = min(46, max(36, int(nav_btn_height * 0.54)))
 
-        # Button styling
+      y = nav_start_y
+      for panel_type, panel_info in self._panels.items():
+        button_rect = rl.Rectangle(button_x, y, button_w, nav_btn_height)
         is_selected = panel_type == self._current_panel
+        is_btn_pressed = gui_app.last_mouse_event.left_down and rl.check_collision_point_rec(gui_app.last_mouse_event.pos, button_rect)
+
+        # Galaxy Capsule / Pill Card
+        if is_selected:
+          rl.draw_rectangle_rounded(button_rect, 0.35, 12, ACTIVE_PILL_BG)
+          rl.draw_rectangle_rounded_lines_ex(button_rect, 0.35, 12, 1.5, ACTIVE_PILL_BORDER)
+
+          # Glowing left indicator bar
+          bar_h = button_rect.height - 24
+          bar_rect = rl.Rectangle(button_rect.x + 8, button_rect.y + 12, 5, bar_h)
+          rl.draw_rectangle_rounded(bar_rect, 1.0, 4, ACTIVE_PILL_BAR)
+        elif is_btn_pressed:
+          rl.draw_rectangle_rounded(button_rect, 0.35, 12, HOVER_PILL_BG)
+
+        # Text styling
         text_color = TEXT_SELECTED if is_selected else TEXT_NORMAL
         panel_name = tr(panel_info.name)
-        text_size = measure_text_cached(self._font_medium, panel_name, 65)
-        text_pos = rl.Vector2(button_rect.x + button_rect.width - text_size.x, button_rect.y + (button_rect.height - text_size.y) / 2)
-        rl.draw_text_ex(self._font_medium, panel_name, rl.Vector2(round(text_pos.x), round(text_pos.y)), 65, 0, text_color)
+        text_size = measure_text_cached(self._font_medium, panel_name, font_size)
+        text_x = button_rect.x + (34 if is_selected else 22)
+        text_y = button_rect.y + (button_rect.height - text_size.y) / 2
+        rl.draw_text_ex(self._font_medium, panel_name, rl.Vector2(round(text_x), round(text_y)), font_size, 0, text_color)
 
         # Store button rect for click detection
         panel_info.button_rect = button_rect
 
-        y += NAV_BTN_HEIGHT
+        y += nav_btn_height + item_gap
 
   def _draw_current_panel(self, rect: rl.Rectangle):
     container_rect = rl.Rectangle(rect.x + 10, rect.y + 10, rect.width - 20, rect.height - 20)

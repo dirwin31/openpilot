@@ -25,7 +25,7 @@ The car only accepts a phone that presents Google's Android Auto phone
 certificate and its key. They are embedded in the Android Auto app, so each user
 extracts them from their own copy. The comma does this itself:
 
-1. Open The Galaxy and go to **Bluetooth → Android Auto**.
+1. Open The Galaxy and go to **Vehicle Controls → Android Auto Identity**.
 2. Tap **Install from File** and pick the Android Auto file you downloaded.
 
 The comma finds the certificate and the encrypted key in the app's code,
@@ -176,7 +176,7 @@ ssh comma@<comma-ip> 'pkill -TERM -f "^starpilot.system.android_auto.daemon$"'
 |---|---|
 | **pair a new car** missing, **scan for devices** does nothing | The comma is onroad. Use the **Offroad** switch (step 2). |
 | Car-screen touches do nothing | The comma is onroad (maybe forced **Onroad**). Set Settings → System to **Auto**. |
-| `Android Auto identity missing` / `expired` / `is unusable` | Install or renew it in The Galaxy → Bluetooth → Android Auto (step 1). |
+| `Android Auto identity missing` / `expired` / `is unusable` | Install or renew it in The Galaxy → Vehicle Controls → Android Auto Identity (step 1). |
 | The Galaxy says *does not contain the Android Auto identity* | The file is not the Android Auto app (often a mirror's store installer). Download the app itself. |
 | The Galaxy says *stores its key differently* | That app version is not supported yet; use 17.6.663454 or another version that works. |
 | `waiting for car: wifi_start: head unit did not answer` | The car did not start Wi-Fi. The comma asks it to after 5 s; occasional misses retry on their own. If it never succeeds, delete the comma on the car and pair again: the car can remember an earlier failure. |
@@ -190,7 +190,8 @@ ssh comma@<comma-ip> 'pkill -TERM -f "^starpilot.system.android_auto.daemon$"'
 
 Google's **Desktop Head Unit** (Android SDK → `extras/google/auto/desktop-head-unit`)
 accepts the same identity. It negotiates 800×480 and protocol 1.7, so it does
-not exercise everything a real car does.
+not exercise everything a real car does. Step-by-step runbook, with the traps:
+[android-auto-dhu-testing.md](android-auto-dhu-testing.md).
 
 - **Protocol only, on the computer:**
   `python tools/android_auto/dhu_test.py --dhu <path>/desktop-head-unit --identity .cache/android_auto/identity`
