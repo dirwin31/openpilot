@@ -15,6 +15,7 @@ desktop head unit over TCP; here the transport is the head unit's Wi-Fi TCP port
 from __future__ import annotations
 
 import math
+import re
 import select
 import ssl
 import struct
@@ -52,6 +53,7 @@ MSG_SHUTDOWN_RESPONSE = 0x10
 
 # Media channel message ids.
 AV_MEDIA_WITH_TIMESTAMP = 0x0000
+AV_MEDIA_CODEC_CONFIG = 0x0001  # SPS/PPS without a timestamp, sent before the first frame like a phone's MediaCodec
 AV_SETUP_REQUEST = 0x8000
 AV_START_INDICATION = 0x8001
 AV_STOP_INDICATION = 0x8002
@@ -90,6 +92,20 @@ class AuthenticationRejected(ValueError):
 
 class PeerRequestedStop(EOFError):
   pass
+
+
+START_CODE = re.compile(b"\x00\x00(?:\x00)?\x01")
+
+
+def codec_config(access_unit: bytes) -> bytes:
+  """The SPS and PPS NAL units of a keyframe, as Android's codec-config buffer carries them."""
+  starts = list(START_CODE.finditer(access_unit))
+  units = []
+  for index, match in enumerate(starts):
+    end = starts[index + 1].start() if index + 1 < len(starts) else len(access_unit)
+    if match.end() < end and access_unit[match.end()] & 31 in (7, 8):
+      units.append(b"\x00\x00\x00\x01" + access_unit[match.end():end])
+  return b"".join(units)
 
 
 @dataclass(frozen=True)
@@ -414,6 +430,7 @@ class ProjectionSession(Session):
     self.frames_sent = 0
     self.focus_epoch = 0
     self.max_ack_seconds = 0.0
+    self.config_ack_slack = 0  # codec-config messages a head unit may acknowledge like frames
     self.input_channel: int | None = None
     self.input_events = 0
     self.touch: TouchMapper | None = None
@@ -554,6 +571,7 @@ class ProjectionSession(Session):
         self.session_id += 1
         self.unacked = 0
         self.pending.clear()
+        self.config_ack_slack = 0
       self.media_started = True
       self.needs_keyframe = True
       self.focus_epoch += 1
@@ -562,6 +580,17 @@ class ProjectionSession(Session):
   def _handle_ack(self, sid, count: int) -> None:
     if sid in self.retired_sessions:
       return
+    # Head units may acknowledge codec config like a frame: under the current
+    # session (as an extra count) or, like the DHU, under session 0.
+    if sid != self.session_id and 0 < count <= self.config_ack_slack:
+      self.config_ack_slack -= count
+      return
+    excess = count - self.unacked
+    if sid == self.session_id and 0 < excess <= self.config_ack_slack:
+      self.config_ack_slack -= excess
+      count -= excess
+      if count == 0:
+        return
     if sid != self.session_id or not 0 < count <= self.unacked or count > len(self.pending):
       raise ValueError(f"Invalid video acknowledgement session={sid} count={count} pending={self.unacked}")
     now = time.monotonic()
@@ -588,6 +617,11 @@ class ProjectionSession(Session):
     if self.needs_keyframe and not keyframe:
       raise ValueError("A fresh media epoch must start with SPS/PPS and an IDR frame")
     assert self.mode is not None
+    if self.needs_keyframe:
+      config = codec_config(data)
+      if config:
+        self.send(self.mode.channel, AV_MEDIA_CODEC_CONFIG, config)
+        self.config_ack_slack += 1
     self.send(self.mode.channel, AV_MEDIA_WITH_TIMESTAMP, struct.pack(">Q", timestamp_us) + data)
     self.needs_keyframe = False
     self.pending.append(time.monotonic())

@@ -350,6 +350,32 @@ def test_session_accepts_newer_head_unit_protocol(identity):
   assert hu.error is None, hu.error
 
 
+@pytest.mark.parametrize("ack_codec_config", [True, False, 0])
+def test_session_sends_codec_config_before_each_epoch(identity, ack_codec_config):
+  hu = FakeHeadUnit(identity, ack_codec_config=ack_codec_config)
+  session = connect(hu, identity)
+  session.authenticate()
+  session.start("StarPilot", "comma.ai")
+  pump_until(session, lambda: session.focused)
+  session.send_frame(keyframe_au(1), 1, keyframe=True)
+  for i in range(2, 5):
+    pump_until(session, session.can_send)
+    session.send_frame(delta_au(i), i, keyframe=False)
+  pump_until(session, lambda: session.acked == 4)
+  hu.set_focus(False)
+  pump_until(session, lambda: not session.focused)
+  hu.set_focus(True)
+  pump_until(session, lambda: session.focused)
+  session.send_frame(keyframe_au(9), 9, keyframe=True)
+  pump_until(session, lambda: session.acked == 5)
+  session.shutdown()
+  session.peer.close()
+  hu.thread.join(5)
+  assert hu.error is None, hu.error
+  sps_pps = b"\x00\x00\x00\x01\x67\x42\x00\x00\x00\x01\x68\xce"
+  assert hu.codec_configs == [(1, sps_pps, 0), (2, sps_pps, 4)]  # one per epoch, before its keyframe
+
+
 def test_session_keeps_unsolicited_focus_grant(identity):
   hu = FakeHeadUnit(identity, unsolicited_focus=True)
   session = connect(hu, identity)
