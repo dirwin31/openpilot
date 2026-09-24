@@ -73,6 +73,7 @@ class MainLayout(Widget):
                                 on_flag=self._on_bookmark_clicked,
                                 open_settings=lambda: self.open_settings(PanelType.TOGGLES))
     self._layouts[MainState.HOME].set_settings_callback(lambda: self.open_settings(PanelType.TOGGLES))
+    self._layouts[MainState.HOME].set_navigate_callback(self.open_navigation)
     self._layouts[MainState.SETTINGS].set_callbacks(on_close=self._set_mode_for_state)
     self._layouts[MainState.ONROAD].set_click_callback(self._on_onroad_clicked)
     device.add_interactive_timeout_callback(self._set_mode_for_state)
@@ -112,6 +113,12 @@ class MainLayout(Widget):
       self._current_mode = layout
       self._layouts[self._current_mode].show_event()
       gui_app.request_high_fps()
+
+  def open_navigation(self):
+    self.open_settings(PanelType.STARPILOT)
+    starpilot = self._layouts[MainState.SETTINGS]._panels[PanelType.STARPILOT].instance
+    if hasattr(starpilot, "open_navigation"):
+      starpilot.open_navigation()
 
   def open_settings(self, panel_type: PanelType):
     self._layouts[MainState.SETTINGS].set_current_panel(panel_type)

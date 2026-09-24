@@ -5,6 +5,7 @@ from enum import IntEnum
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.widgets.offroad_alerts import UpdateAlert, OffroadAlert
 from openpilot.selfdrive.ui.widgets.exp_mode_button import ExperimentalModeButton
+from openpilot.selfdrive.ui.widgets.navigate_button import NavigateButton
 from openpilot.selfdrive.ui.widgets.drive_stats import DriveStatsDashboard
 from openpilot.selfdrive.ui.widgets.home_info_card import HomeInfoCard
 from openpilot.selfdrive.ui.widgets.setup import SetupWidget
@@ -63,10 +64,13 @@ class HomeLayout(Widget):
     self._home_info_card = self._child(HomeInfoCard(params=self.params, drive_stats=self._drive_stats))
 
     self._exp_mode_button = ExperimentalModeButton()
+    self._navigate_button = NavigateButton()
+    self.navigate_callback: Callable | None = None
     self._setup_callbacks()
 
   def show_event(self):
     self._exp_mode_button.show_event()
+    self._navigate_button.show_event()
     super().show_event()
     self.last_refresh = time.monotonic()
     self._refresh()
@@ -75,9 +79,13 @@ class HomeLayout(Widget):
     self.update_alert.set_dismiss_callback(lambda: self._set_state(HomeLayoutState.HOME))
     self.offroad_alert.set_dismiss_callback(lambda: self._set_state(HomeLayoutState.HOME))
     self._exp_mode_button.set_click_callback(lambda: self.settings_callback() if self.settings_callback else None)
+    self._navigate_button.set_click_callback(lambda: self.navigate_callback() if self.navigate_callback else None)
 
   def set_settings_callback(self, callback: Callable):
     self.settings_callback = callback
+
+  def set_navigate_callback(self, callback: Callable):
+    self.navigate_callback = callback
 
   def _set_state(self, state: HomeLayoutState):
     # propagate show/hide events
@@ -235,11 +243,18 @@ class HomeLayout(Widget):
     )
     self._exp_mode_button.render(exp_rect)
 
+    nav_height = 125
+    nav_rect = rl.Rectangle(
+      self.right_column_rect.x, exp_rect.y + exp_height + SPACING, self.right_column_rect.width, nav_height
+    )
+    self._navigate_button.render(nav_rect)
+
+    top = nav_rect.y + nav_height + SPACING
     setup_rect = rl.Rectangle(
       self.right_column_rect.x,
-      self.right_column_rect.y + exp_height + SPACING,
+      top,
       self.right_column_rect.width,
-      self.right_column_rect.height - exp_height - SPACING,
+      self.right_column_rect.y + self.right_column_rect.height - top,
     )
     if ui_state.prime_state.is_paired():
       self._home_info_card.render(setup_rect)

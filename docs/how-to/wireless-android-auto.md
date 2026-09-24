@@ -12,7 +12,8 @@ untested.
 
 ## Requirements
 
-- A car whose head unit supports **wireless** Android Auto. Wired-only head units will not work.
+- A car whose head unit supports **wireless** Android Auto. (A wired USB mode exists but is
+  experimental and untested in a car; see step 3.)
 - A comma 3X/four with Bluetooth enabled (`android_autod` runs whenever Bluetooth is on).
 - The **Android Auto** app as an XAPK, APK or APKM file, downloaded in a phone or
   computer browser from an APK mirror. `17.6.663454-release` is known to work.
@@ -99,6 +100,8 @@ In the same menu:
 
 - **mirror comma screen / use car layout** switches what the car shows, from the next session.
 - **show last error** shows why the last attempt failed.
+- **use wired (usb) / use wireless** (while stopped) switches to projecting over a USB cable from the
+  car to the comma's USB-C port, with no pairing or Wi-Fi. Experimental: not yet tested in a car.
 
 **Touch.** In the car layout, car-screen touches control the StarPilot UI, but
 only while offroad; onroad they are ignored by design. That includes a comma
@@ -113,6 +116,7 @@ service idle; changes apply from the next session.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `connection` | `"wireless"` | `"wireless"`: Bluetooth + the car's Wi-Fi; `"wired"`: USB (experimental) |
 | `view` | `"car"` | `"car"`: car-sized StarPilot UI; `"mirror"`: copy of the comma screen |
 | `encoder` | `"auto"` | `"auto"`: hardware H.264, falling back to libx264; `"hardware"` / `"software"` to force |
 | `fps` | `0` | `0` = automatic (30 hardware, 15 software); otherwise a cap, 5–30 |
@@ -188,31 +192,14 @@ ssh comma@<comma-ip> 'pkill -TERM -f "^starpilot.system.android_auto.daemon$"'
 
 ## Testing without the car
 
-Google's **Desktop Head Unit** (Android SDK → `extras/google/auto/desktop-head-unit`)
-accepts the same identity. It negotiates 800×480 and protocol 1.7, so it does
-not exercise everything a real car does. Step-by-step runbook, with the traps:
-[android-auto-dhu-testing.md](android-auto-dhu-testing.md).
-
-- **Protocol only, on the computer:**
-  `python tools/android_auto/dhu_test.py --dhu <path>/desktop-head-unit --identity .cache/android_auto/identity`
-- **The comma's real pipeline** (car layout, hardware encoder, touch), with the DHU on the computer:
-
-  ```bash
-  # comma: stop Android Auto in settings first
-  cd /data/openpilot && PYTHONPATH=/data/openpilot /usr/local/venv/bin/python tools/android_auto/dhu_device.py --view car
-  # computer
-  ssh -N -L 5288:127.0.0.1:5288 comma@<comma-ip>
-  cd <sdk>/extras/google/auto && ./desktop-head-unit --adb=127.0.0.1:5288
-  ```
-
-  Use the venv Python on the comma; with the system `python3` the car layout
-  cannot find `pyray` and falls back to mirror. The DHU console accepts
-  `focus video toggle` (take the screen away and back), `tap x y` and
-  `screenshot <file>`.
+Google's **Desktop Head Unit** shows the comma's projection on a computer, no car
+needed: see [android-auto-desktop-head-unit.md](android-auto-desktop-head-unit.md).
+It does not test Bluetooth pairing, the Wi-Fi handoff or car-specific behavior.
 
 ## Known limitations
 
 - Video and touch only: no audio, microphone, calls or navigation data are projected.
-- Test sessions so far have lasted about a minute before a reconnect.
+- In the car, sessions so far have lasted about a minute before a reconnect (the service reconnects
+  on its own); with the Desktop Head Unit they run for 15+ minutes.
 - Tested on one car (2026 Honda Civic).
 - The identity comes from the Android Auto app and expires with it; renew it from a newer app version in The Galaxy.
