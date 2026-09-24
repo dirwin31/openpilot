@@ -112,30 +112,23 @@ class HomeLayout(Widget):
       self._render_alerts_view()
 
   def _update_state(self):
-    content_margin_x = max(24, min(CONTENT_MARGIN, int(self._rect.width * 0.02)))
-    content_margin_y = CONTENT_MARGIN
-
     self.header_rect = rl.Rectangle(
-      self._rect.x + content_margin_x, self._rect.y + content_margin_y,
-      self._rect.width - 2 * content_margin_x, HEADER_HEIGHT
+      self._rect.x + CONTENT_MARGIN, self._rect.y + CONTENT_MARGIN, self._rect.width - 2 * CONTENT_MARGIN, HEADER_HEIGHT
     )
 
-    content_y = self._rect.y + content_margin_y + HEADER_HEIGHT + SPACING
-    content_height = self._rect.height - content_margin_y - HEADER_HEIGHT - SPACING - content_margin_y
+    content_y = self._rect.y + CONTENT_MARGIN + HEADER_HEIGHT + SPACING
+    content_height = self._rect.height - CONTENT_MARGIN - HEADER_HEIGHT - SPACING - CONTENT_MARGIN
 
     self.content_rect = rl.Rectangle(
-      self._rect.x + content_margin_x, content_y, self._rect.width - 2 * content_margin_x, content_height
+      self._rect.x + CONTENT_MARGIN, content_y, self._rect.width - 2 * CONTENT_MARGIN, content_height
     )
 
-    # Adaptive column split: proportional ~44% for right column, clamped to reasonable bounds
-    target_right = int(self.content_rect.width * 0.44)
-    right_width = max(520, min(800, target_right))
-    left_width = self.content_rect.width - right_width - SPACING
+    left_width = self.content_rect.width - RIGHT_COLUMN_WIDTH - SPACING
 
     self.left_column_rect = rl.Rectangle(self.content_rect.x, self.content_rect.y, left_width, self.content_rect.height)
 
     self.right_column_rect = rl.Rectangle(
-      self.content_rect.x + left_width + SPACING, self.content_rect.y, right_width, self.content_rect.height
+      self.content_rect.x + left_width + SPACING, self.content_rect.y, RIGHT_COLUMN_WIDTH, self.content_rect.height
     )
 
     self.update_notif_rect.x = self.header_rect.x
