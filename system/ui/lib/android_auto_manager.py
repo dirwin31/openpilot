@@ -82,6 +82,9 @@ class AndroidAutoManager:
   def set_view(self, view: str) -> None:
     self._run(self._client.set_view, view)
 
+  def set_connection(self, connection: str) -> None:
+    self._run(self._client.set_connection, connection)
+
   def select_receiver(self, address: str, name: str) -> None:
     self._run(self._client.select_receiver, address, name)
 

@@ -90,6 +90,7 @@ DEFAULT_CONFIG = {
   "receiver_name": "",
   "rfcomm_channel": 0,         # 0 = discover through SDP (normal); set only to work around a broken SDP record
   "verify_head_unit": True,    # verify the car's certificate against root-cert.pem when present
+  "connection": "wireless",    # "wireless": Bluetooth + the car's Wi-Fi; "wired": USB cable from the car to the comma's USB-C port
   "view": "car",               # "car": full StarPilot UI sized for the car; "mirror": copy of the comma screen
   "encoder": "auto",           # "auto": hardware H.264 at 30 fps, else libx264; "hardware" / "software" to force
   "fps": 0,                    # 0 = automatic (30 with hardware, 15 with software); otherwise a cap, 5-30
@@ -117,6 +118,8 @@ def load_config(path: Path | None = None) -> dict:
   config["fps"] = 0 if int(config["fps"]) <= 0 else max(5, min(30, int(config["fps"])))
   if config["view"] not in ("car", "mirror"):
     config["view"] = "car"
+  if config["connection"] not in ("wireless", "wired"):
+    config["connection"] = "wireless"
   config["bitrate_kbps"] = max(1000, min(12000, int(config["bitrate_kbps"])))
   return config
 

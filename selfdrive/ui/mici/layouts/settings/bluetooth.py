@@ -254,6 +254,8 @@ class BluetoothLayoutMici(NavScroller):
     if state == "idle":
       if status.get("error"):
         return "stopped / error"
+      if status.get("connection") == "wired":
+        return "off / wired (usb)"
       return f"off / {status.get('receiver_name')}" if status.get("receiver_name") else "choose your car"
     if state == "backoff":
       return f"retrying in {status.get('retry_in', 0):.0f}s"
@@ -263,11 +265,15 @@ class BluetoothLayoutMici(NavScroller):
     status = self._android_auto.status
     bt = self._manager.status
     options = []
-    if status and status.get("receiver_address"):
+    wired = status.get("connection") == "wired"
+    if status and (wired or status.get("receiver_address")):
       options.append("stop" if status.get("running") else "start")
-    options.append("choose car")
+    if not wired:
+      options.append("choose car")
     options.append("mirror comma screen" if status.get("configured_view", "car") == "car" else "use car layout")
-    if bt.offroad:
+    if not status.get("running"):
+      options.append("use wireless" if wired else "use wired (usb)")
+    if bt.offroad and not wired:
       options.append("pair a new car")
     if status and status.get("error"):
       options.append("show last error")
@@ -285,6 +291,10 @@ class BluetoothLayoutMici(NavScroller):
         self._android_auto.set_view("mirror")
       elif action == "use car layout":
         self._android_auto.set_view("car")
+      elif action == "use wired (usb)":
+        self._android_auto.set_connection("wired")
+      elif action == "use wireless":
+        self._android_auto.set_connection("wireless")
       elif action == "pair a new car":
         self._android_auto.prepare_pairing()
         self._manager.set_scanning(True)
