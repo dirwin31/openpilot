@@ -76,7 +76,13 @@ def load_identity(directory: Path | None = None, now: datetime | None = None) ->
                   expires.isoformat() if expires is not None else "unknown", days_left)
 
 
+CONFIG_VERSION = 2
+# Before config versions, every save wrote these defaults, which pinned projection
+# at 12 fps / 4000 kbps. Unversioned files holding exactly them get today's defaults.
+LEGACY_DEFAULTS = {"fps": 12, "bitrate_kbps": 4000}
+
 DEFAULT_CONFIG = {
+  "config_version": CONFIG_VERSION,
   "receiver_address": "",      # Bluetooth address of the paired head unit
   "receiver_name": "",
   "rfcomm_channel": 0,         # 0 = discover through SDP (normal); set only to work around a broken SDP record
@@ -98,9 +104,13 @@ def load_config(path: Path | None = None) -> dict:
   try:
     stored = json.loads(path.read_text())
     if isinstance(stored, dict):
+      version = stored.get("config_version")
+      if not isinstance(version, int) or version < 2:
+        stored = {key: value for key, value in stored.items() if LEGACY_DEFAULTS.get(key, object()) != value}
       config.update({key: value for key, value in stored.items() if key in DEFAULT_CONFIG and isinstance(value, type(DEFAULT_CONFIG[key]))})
   except (OSError, ValueError):
     pass
+  config["config_version"] = CONFIG_VERSION
   config["fps"] = 0 if int(config["fps"]) <= 0 else max(5, min(30, int(config["fps"])))
   if config["view"] not in ("car", "mirror"):
     config["view"] = "car"

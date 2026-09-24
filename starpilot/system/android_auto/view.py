@@ -37,6 +37,7 @@ class ViewSource:
     self.fallback_reason = ""
     self.started_at = time.monotonic()
     self.last_frame_at = 0.0
+    self.unfocused_since: float | None = None
     self.frames = 0
     if synthetic:
       self.view = "synthetic"
@@ -96,15 +97,29 @@ class ViewSource:
     if self.touch is not None and self.view == "car" and events:
       self.touch.send(events)
 
-  def check(self, now: float | None = None) -> None:
-    """Fall back to mirroring when the car view is not healthy."""
+  def check(self, now: float | None = None, *, focused: bool = True) -> None:
+    """Fall back to mirroring when the car view is not healthy.
+
+    Frames are only pulled while the car shows projection, so the startup and
+    stall timers are paused while it shows its own screen.
+    """
     if self.view != "car":
       return
     now = time.monotonic() if now is None else now
+    if not focused:
+      if self.unfocused_since is None:
+        self.unfocused_since = now
+    elif self.unfocused_since is not None:
+      paused = now - self.unfocused_since
+      self.started_at += paused
+      self.last_frame_at += paused
+      self.unfocused_since = None
     reason = ""
     code = self.process.poll() if self.process is not None else None
     if code is not None:
       reason = f"renderer exited with {code}"
+    elif not focused:
+      pass
     elif self.frames == 0 and now - self.started_at > CAR_STARTUP_TIMEOUT:
       reason = f"no frames after {CAR_STARTUP_TIMEOUT:.0f} s"
     elif self.frames and now - self.last_frame_at > CAR_STALL_TIMEOUT:
