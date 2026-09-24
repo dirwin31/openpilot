@@ -154,6 +154,26 @@ class StarPilotLayout(Widget):
     self._sync_legacy_category_idx()
     self._set_current_panel(StarPilotPanelType.MAIN)
 
+  def open_navigation(self):
+    """Jump straight to the Navigation panel, e.g. from the home screen."""
+    def find(folders, path):
+      for item in folders:
+        if item.get("panel") == "NAVIGATION":
+          return path, item
+        found = find(item.get("children", []), path + [item])
+        if found is not None:
+          return found
+      return None
+
+    found = find(self.CATEGORIES, [])
+    if found is None:
+      return
+    self.reset_to_root()
+    folders, leaf = found
+    for folder in folders:
+      self._open_folder(folder)
+    self._open_leaf(leaf)
+
   def navigate_to_hub_depth(self, depth: int):
     """Jump to a folder in the current hub path from a breadcrumb."""
     depth = max(0, min(depth, len(self._hub_path)))

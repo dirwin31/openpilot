@@ -17,6 +17,7 @@ NAVIGATIOND_HZ = 1
 REROUTE_TRIGGER_SECONDS = 2.0
 ARRIVAL_CLEAR_SECONDS = 5.0
 LOCATION_STATE_STALE_SECONDS = 2.5
+NAV_ROUTE_REPUBLISH_SECONDS = 5.0  # map views that start after the route was sent still get it
 
 
 class Navigationd:
@@ -35,6 +36,7 @@ class Navigationd:
     self._route_fetch_inflight = False
     self._route_generation = 0
     self._published_route_generation = -1
+    self._published_route_at = 0.0
 
     self._last_position: Coordinate | None = None
     self._last_bearing: float | None = None
@@ -322,7 +324,9 @@ class Navigationd:
 
   def _publish_nav_route_if_needed(self) -> None:
     route, _, route_generation = self._snapshot_route()
-    if route_generation == self._published_route_generation:
+    now = monotonic()
+    republish_due = route is not None and now - self._published_route_at >= NAV_ROUTE_REPUBLISH_SECONDS
+    if route_generation == self._published_route_generation and not republish_due:
       return
 
     msg = messaging.new_message("navRoute")
@@ -335,6 +339,7 @@ class Navigationd:
 
     self.pm.send("navRoute", msg)
     self._published_route_generation = route_generation
+    self._published_route_at = now
 
   def run(self) -> None:
     cloudlog.warning("navigationd init")

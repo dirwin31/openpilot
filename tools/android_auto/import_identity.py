@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Extract the Android Auto phone identity from your own copy of the Android Auto app, on a computer.
 
-Most users do this on the comma instead: The Galaxy → Bluetooth → Android Auto.
+Most users do this on the comma instead: The Galaxy → Vehicle Controls → Android Auto Identity.
 This is the same extraction (starpilot/system/android_auto/apk_identity.py) for
 testing with the Desktop Head Unit or installing by hand. Needs only Python with
 ``cryptography``; accepts an APK, XAPK or APKM.
