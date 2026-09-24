@@ -30,6 +30,9 @@ LOGICAL_HEIGHT = 1080  # the landscape UI's design height
 MIN_LOGICAL_WIDTH = 1600
 DEMAND_GRACE = 5.0
 STARTUP_DEMAND_WAIT = 15.0
+NAV_SPLIT_MIN_WIDTH = 1700  # logical width; narrower car screens keep the full driving view
+NAV_SPLIT_FRACTION = 0.42
+NAV_PARAM_REFRESH = 2.0
 
 
 class NullPubMaster:
@@ -98,6 +101,100 @@ class TouchInput:
     return self.MouseEvent(self.pos, 0, pressed, released, down, now, cancelled)
 
 
+class NavSplit:
+  """Onroad, put the navigation map beside the driving view on a wide car screen.
+
+  Gated by the "Navigation Widgets" toggle. The map is display-only here: car
+  touches are already refused onroad.
+  """
+
+  def __init__(self, logical_w: int, logical_h: int):
+    self.logical_w, self.logical_h = logical_w, logical_h
+    self._enabled = False
+    self._checked = -NAV_PARAM_REFRESH
+    self._map = None
+    self._shown = False
+    self._texture = None
+    self._msaa = None
+    self._texture_valid = False
+    self.redraws = 0
+
+  def rects(self, started: bool, now: float):
+    """(driving rect, map rect) when the split applies, else None."""
+    import pyray as rl
+    if now - self._checked >= NAV_PARAM_REFRESH:
+      self._checked = now
+      from openpilot.selfdrive.ui.ui_state import ui_state
+      self._enabled = self.logical_w >= NAV_SPLIT_MIN_WIDTH and ui_state.params.get_bool("NavigationUI")
+    active = started and self._enabled
+    if active != self._shown and self._map is not None:
+      (self._map.show_event if active else self._map.hide_event)()
+    self._shown = active
+    if not active:
+      return None
+    map_w = round(min(1100, max(700, self.logical_w * NAV_SPLIT_FRACTION)))
+    return (rl.Rectangle(0, 0, self.logical_w - map_w, self.logical_h),
+            rl.Rectangle(self.logical_w - map_w, 0, map_w, self.logical_h))
+
+  def _ensure_map(self):
+    if self._map is None:
+      from openpilot.selfdrive.ui.onroad.starpilot.nav_map import NavMapView
+      self._map = NavMapView(show_guidance=True, clip=False)
+      self._map.show_event()
+    return self._map
+
+  def prepare(self, rect, scale_x: float, scale_y: float, now: float) -> None:
+    """Before the frame: redraw the map into its own texture only when it changed.
+
+    Most car frames then cost one textured quad for the map instead of its
+    tiles, route, markers and text.
+    """
+    import pyray as rl
+    nav_map = self._ensure_map()
+    width, height = max(1, round(rect.width * scale_x)), max(1, round(rect.height * scale_y))
+    if self._texture is None or (self._texture.texture.width, self._texture.texture.height) != (width, height):
+      self._unload_texture()
+      from openpilot.system.ui.lib.msaa import MsaaTarget
+      self._texture = rl.load_render_texture(width, height)
+      rl.set_texture_filter(self._texture.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
+      self._msaa = MsaaTarget.create(width, height)
+      self._texture_valid = False
+    nav_map.update()
+    if self._texture_valid and not nav_map.needs_redraw(now):
+      return
+    rl.begin_texture_mode(self._msaa.render_texture if self._msaa is not None else self._texture)
+    rl.clear_background(rl.Color(0, 0, 0, 255))
+    rl.rl_push_matrix()
+    rl.rl_scalef(scale_x, scale_y, 1.0)
+    nav_map.render(rl.Rectangle(0, 0, rect.width, rect.height))
+    rl.rl_pop_matrix()
+    rl.end_texture_mode()
+    if self._msaa is not None:
+      self._msaa.resolve(self._texture)
+    self._texture_valid = True
+    self.redraws += 1
+
+  def draw(self, rect) -> None:
+    import pyray as rl
+    if self._texture is None or not self._texture_valid:
+      return
+    texture = self._texture.texture
+    # Render textures are stored bottom-up; a negative source height flips them back.
+    rl.draw_texture_pro(texture, rl.Rectangle(0, 0, texture.width, -texture.height), rect, rl.Vector2(0, 0), 0.0, rl.WHITE)
+
+  def _unload_texture(self) -> None:
+    import pyray as rl
+    if self._texture is not None:
+      rl.unload_render_texture(self._texture)
+      self._texture = None
+    if self._msaa is not None:
+      self._msaa.unload()
+      self._msaa = None
+
+  def close(self) -> None:
+    self._unload_texture()
+
+
 def neutralize_side_effects() -> None:
   """Must run before any UI module is imported."""
   os.environ["BIG"] = "1"  # landscape layout; read by application.py at import
@@ -151,7 +248,8 @@ def run(frames_path: str, touch_path: str) -> int:
   ui_state.prime_state.start = lambda: None  # no second comma API poller
   ui_state.ui_params.start()
   from openpilot.selfdrive.ui.layouts.main import MainLayout
-  MainLayout()
+  main_layout = MainLayout()
+  nav_split = NavSplit(logical_w, logical_h)
 
   content = rl.load_render_texture(visible_w, visible_h)
   from openpilot.system.ui.lib.msaa import MsaaTarget, install_watertight_shapes
@@ -190,6 +288,9 @@ def run(frames_path: str, touch_path: str) -> int:
       if events:
         gui_app._last_mouse_event = events[-1]
       ui_state.update()
+      split = nav_split.rects(ui_state.started, now)
+      if split is not None:
+        nav_split.prepare(split[1], scale_x, scale_y, now)
 
       rl.begin_texture_mode(msaa.render_texture if msaa is not None else content)
       rl.clear_background(rl.Color(6, 6, 15, 255))
@@ -202,7 +303,11 @@ def run(frames_path: str, touch_path: str) -> int:
       if len(widgets) > 1 and widgets[-1].covers_background(viewport):
         widgets = widgets[-1:]
       for widget in widgets:
-        widget.render(viewport)
+        if widget is main_layout and split is not None:
+          widget.render(split[0])
+          nav_split.draw(split[1])
+        else:
+          widget.render(viewport)
       rl.rl_pop_matrix()
       rl.end_texture_mode()
       if msaa is not None:
@@ -226,6 +331,7 @@ def run(frames_path: str, touch_path: str) -> int:
     return 0
   finally:
     receiver.close()
+    nav_split.close()
     if msaa is not None:
       msaa.unload()
     rl.unload_render_texture(content)

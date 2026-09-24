@@ -41,6 +41,10 @@ from openpilot.starpilot.navigation.destination_store import (
   same_destination,
   update_favorite_destination,
 )
+from openpilot.selfdrive.ui.onroad.starpilot.nav_map import NavMapView
+from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import _format_distance
+from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.starpilot.navigation.route_engine import Coordinate, MapboxRouteEngine, NavigationRoute
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import DialogResult
@@ -232,6 +236,9 @@ NAV_ROW_HEIGHT = 124.0
 NAV_EMPTY_HEIGHT = 132.0
 NAV_ACTION_COLUMNS = 3
 NAV_ACTION_GAP = 12.0
+NAV_ROUTE_ROW_HEIGHT = 104.0
+NAV_MAP_MIN_WIDTH = 1100.0  # below this the panel is list-only
+NAV_MAP_FRACTION = 0.5
 
 
 class NavigationManagerView(PanelManagerView):
@@ -282,6 +289,13 @@ class StarPilotNavigationLayout(_SettingsPage):
     self._selected_favorite: dict[str, Any] | None = None
 
     self._manager_view = NavigationManagerView(self)
+    self._route_engine = MapboxRouteEngine()
+    self._map = NavMapView(show_guidance=True)
+    self._route_generation = 0
+    self._preview_routes: list[NavigationRoute] = []
+    self._preview_route_index = 0
+    self._routes_loading = False
+    self._routes_error = ""
 
   def show_event(self):
     self._session_token = str(uuid.uuid4())
@@ -292,13 +306,17 @@ class StarPilotNavigationLayout(_SettingsPage):
     self._search_error = ""
     self._draft_destination = None
     self._selected_favorite = None
+    self._clear_route_preview()
     self._refresh_navigation_state(force=True)
     super().show_event()
+    self._map.show_event()
 
   def hide_event(self):
     self._search_generation += 1
     self._search_loading = False
+    self._route_generation += 1
     super().hide_event()
+    self._map.hide_event()
 
   def _update_state(self):
     self._consume_pending_results()
@@ -325,6 +343,18 @@ class StarPilotNavigationLayout(_SettingsPage):
         kind, generation, payload = self._pending.get_nowait()
       except queue.Empty:
         return
+
+      if kind == "routes":
+        if generation == self._route_generation:
+          self._routes_loading = False
+          if isinstance(payload, Exception) or not payload:
+            self._routes_error = tr("No route found. Check your connection and try again.")
+          else:
+            self._preview_routes = payload
+            self._preview_route_index = 0
+            self._routes_error = ""
+          self._update_map_preview()
+        continue
 
       if generation != self._search_generation:
         continue
@@ -464,6 +494,44 @@ class StarPilotNavigationLayout(_SettingsPage):
     self._draft_destination = destination
     self._selected_favorite = favorite or self._favorite_for_destination(destination)
     self._search_error = ""
+    self._fetch_route_preview(destination)
+
+  def _clear_route_preview(self):
+    self._route_generation += 1
+    self._preview_routes = []
+    self._preview_route_index = 0
+    self._routes_loading = False
+    self._routes_error = ""
+    self._map.clear_preview()
+
+  def _update_map_preview(self):
+    if self._draft_destination is None:
+      self._map.clear_preview()
+      return
+    destination = (float(self._draft_destination["latitude"]), float(self._draft_destination["longitude"]))
+    routes = [[(point.latitude, point.longitude) for point in route.geometry] for route in self._preview_routes]
+    self._map.set_preview(routes, self._preview_route_index, destination)
+
+  def _fetch_route_preview(self, destination: dict[str, Any]):
+    self._clear_route_preview()
+    self._update_map_preview()
+    position = self._last_position()
+    token = str(self._params.get("MapboxSecretKey", encoding="utf-8") or "").strip()
+    if position is None or not token:
+      return
+    generation = self._route_generation
+    self._routes_loading = True
+    start = Coordinate(position[1], position[0])
+    target = dict(destination)
+
+    def worker():
+      try:
+        routes = self._route_engine.fetch_routes(token, start, target, alternatives=True)
+        self._pending.put(("routes", generation, routes[:3]))
+      except Exception as error:
+        self._pending.put(("routes", generation, error))
+
+    threading.Thread(target=worker, daemon=True, name="navigation-route-preview").start()
 
   def _ensure_favorite(self) -> dict[str, Any] | None:
     if self._draft_destination is None:
@@ -535,17 +603,21 @@ class StarPilotNavigationLayout(_SettingsPage):
   def _start_navigation(self):
     if self._draft_destination is None or not self._routing_available():
       return
+    if self._preview_routes:
+      self._draft_destination["routeId"] = "main" if self._preview_route_index == 0 else f"alt-{self._preview_route_index}"
     if self._store.set_destination(self._draft_destination) is None:
       self._search_error = tr("That destination is not valid.")
       return
     self._draft_destination = None
     self._selected_favorite = None
+    self._clear_route_preview()
     self._refresh_navigation_state(force=True)
 
   def _cancel_navigation(self):
     self._store.clear_navigation()
     self._draft_destination = None
     self._selected_favorite = None
+    self._clear_route_preview()
     self._refresh_navigation_state(force=True)
 
   def _activate_navigation_target(self, target_id: str | None):
@@ -567,6 +639,14 @@ class StarPilotNavigationLayout(_SettingsPage):
       self._open_rename_keyboard()
     elif target_id == "action:remove":
       self._remove_favorite()
+    elif target_id.startswith("route:"):
+      try:
+        index = int(target_id.split(":", 1)[1])
+      except ValueError:
+        return
+      if 0 <= index < len(self._preview_routes):
+        self._preview_route_index = index
+        self._update_map_preview()
     elif target_id.startswith("result:"):
       try:
         result = self._search_results[int(target_id.split(":", 1)[1])]
@@ -640,6 +720,9 @@ class StarPilotNavigationLayout(_SettingsPage):
     if self._draft_destination is not None:
       title = tr("Ready to navigate")
       subtitle = str(self._draft_destination.get("place_name") or self._draft_destination.get("name") or "")
+      if self._preview_routes:
+        route = self._preview_routes[self._preview_route_index]
+        title = f"{self._duration_text(route.total_duration)}  •  {_format_distance(route.total_distance, ui_state.is_metric)}"
       action_text = tr("Start") if self._routing_available() else tr("Unavailable")
       target_id = "action:start"
       current = False
@@ -676,6 +759,94 @@ class StarPilotNavigationLayout(_SettingsPage):
       current_border=AetherListColors.CURRENT_BORDER,
       row_separator=PANEL_STYLE.divider_color,
     )
+
+  def _render(self, rect):
+    if rect.width < NAV_MAP_MIN_WIDTH or self._manager_view is None:
+      return super()._render(rect)
+    map_width = rect.width * NAV_MAP_FRACTION
+    list_rect = rl.Rectangle(rect.x, rect.y, rect.width - map_width, rect.height)
+    map_rect = rl.Rectangle(rect.x + rect.width - map_width, rect.y + NAV_INSET, map_width - NAV_INSET, rect.height - NAV_INSET * 2)
+    self._manager_view.render(list_rect)
+    self._map.render(map_rect)
+
+  @staticmethod
+  def _duration_text(seconds: float) -> str:
+    minutes = max(1, int(round(seconds / 60.0)))
+    return f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{minutes} min"
+
+  def _route_rows(self) -> list[tuple[str, str, str]]:
+    """(target id, title, subtitle) per previewed route."""
+    rows = []
+    fastest = min((route.total_duration for route in self._preview_routes), default=0.0)
+    for index, route in enumerate(self._preview_routes):
+      title = tr("Recommended route") if index == 0 else tr("Alternative {}").format(index)
+      subtitle = f"{self._duration_text(route.total_duration)}  •  {_format_distance(route.total_distance, ui_state.is_metric)}"
+      if index > 0 and route.total_duration > fastest + 30:
+        subtitle += "  •  " + tr("+{} slower").format(self._duration_text(route.total_duration - fastest))
+      rows.append((f"route:{index}", title, subtitle))
+    return rows
+
+  def _route_section_height(self) -> float:
+    if self._draft_destination is None:
+      return 0.0
+    if self._routes_loading or self._routes_error:
+      return NAV_EMPTY_HEIGHT + NAV_GAP
+    if len(self._preview_routes) > 1:
+      return NAV_SECTION_HEIGHT + len(self._preview_routes) * NAV_ROUTE_ROW_HEIGHT + NAV_GAP
+    return 0.0
+
+  def _draw_route_section(self, x: float, y: float, width: float, manager: NavigationManagerView) -> float:
+    if self._draft_destination is None:
+      return 0.0
+    if self._routes_loading or self._routes_error:
+      draw_empty_state_card(
+        rl.Rectangle(x, y, width, NAV_EMPTY_HEIGHT),
+        tr("Finding routes...") if self._routes_loading else tr("Route unavailable"),
+        tr("Checking traffic with Mapbox") if self._routes_loading else self._routes_error,
+        title_size=30,
+        body_size=22,
+        border=with_alpha(AetherListColors.WARNING if self._routes_error else PANEL_STYLE.surface_border, 45 if self._routes_error else 14),
+        style=PANEL_STYLE,
+      )
+      return NAV_EMPTY_HEIGHT + NAV_GAP
+    if len(self._preview_routes) <= 1:
+      return 0.0
+    draw_section_header(
+      rl.Rectangle(x, y, width, NAV_SECTION_HEIGHT),
+      tr("Routes"),
+      trailing_text=str(len(self._preview_routes)),
+      title_size=30,
+      trailing_size=24,
+      style=PANEL_STYLE,
+    )
+    row_y = y + NAV_SECTION_HEIGHT
+    rows = self._route_rows()
+    for index, (target_id, title, subtitle) in enumerate(rows):
+      row_rect = rl.Rectangle(x, row_y, width, NAV_ROUTE_ROW_HEIGHT)
+      hovered, pressed = manager._interactive_state(target_id, row_rect)
+      selected = index == self._preview_route_index
+      draw_selection_list_row(
+        row_rect,
+        title=title,
+        subtitle=subtitle,
+        action_text=tr("Selected") if selected else tr("Use"),
+        current=selected,
+        hovered=hovered,
+        pressed=pressed,
+        is_last=index == len(rows) - 1,
+        action_width=190,
+        action_pill=True,
+        action_pill_height=58,
+        action_pill_width=150,
+        title_size=30,
+        subtitle_size=22,
+        action_text_size=23,
+        current_bg=AetherListColors.CURRENT_BG,
+        current_border=AetherListColors.CURRENT_BORDER,
+        row_separator=PANEL_STYLE.divider_color,
+      )
+      row_y += NAV_ROUTE_ROW_HEIGHT
+    return NAV_SECTION_HEIGHT + len(rows) * NAV_ROUTE_ROW_HEIGHT + NAV_GAP
 
   def _draw_navigation_content(self, scroll_rect: rl.Rectangle, content_width: float, scroll_offset: float, manager: NavigationManagerView):
     x = scroll_rect.x + NAV_INSET
@@ -730,6 +901,7 @@ class StarPilotNavigationLayout(_SettingsPage):
       summary_rect = rl.Rectangle(x, y, width, NAV_SUMMARY_HEIGHT)
       self._draw_summary_row(summary_rect, manager)
       y += NAV_SUMMARY_HEIGHT + NAV_GAP
+      y += self._draw_route_section(x, y, width, manager)
       action_height = self._draw_action_buttons(x, y, width, manager)
       if action_height > 0:
         y += action_height + NAV_GAP
@@ -864,6 +1036,7 @@ class StarPilotNavigationLayout(_SettingsPage):
       height += NAV_EMPTY_HEIGHT + NAV_GAP
     if self._draft_destination is not None or self._active_destination is not None:
       height += NAV_SUMMARY_HEIGHT + NAV_GAP
+      height += self._route_section_height()
       action_height = len(self._action_definitions())
       if action_height:
         action_rows = (action_height + NAV_ACTION_COLUMNS - 1) // NAV_ACTION_COLUMNS
