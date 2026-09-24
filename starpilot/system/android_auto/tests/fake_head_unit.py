@@ -74,8 +74,10 @@ class FakeHeadUnit:
   """Car side of one AA TCP session. Runs in a thread; records what the phone sent."""
 
   def __init__(self, identity: dict[str, Path], *, window: int = 4, reject_auth: bool = False, require_client_cert: bool = True,
-               unsolicited_focus: bool = False):
+               unsolicited_focus: bool = False, version: tuple[int, int] = (1, 7)):
     self.unsolicited_focus = unsolicited_focus
+    self.version = version
+    self.version_reply: tuple[int, int, int] | None = None
     self.listener = socket.socket()
     self.listener.bind(("127.0.0.1", 0))
     self.listener.listen(1)
@@ -150,9 +152,11 @@ class FakeHeadUnit:
       self.listener.close()
 
   def _session(self) -> None:
-    self._send(0, 1, struct.pack(">HH", 1, 7), encrypted=False)
+    self._send(0, 1, struct.pack(">HH", *self.version), encrypted=False)
     channel, kind, data = self._receive()
-    assert (channel, kind) == (0, 2) and struct.unpack(">HHH", data)[2] == 0
+    assert (channel, kind) == (0, 2)
+    self.version_reply = struct.unpack(">HHH", data)
+    assert self.version_reply[2] == 0
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.load_cert_chain(str(self.identity["hu_cert"]), str(self.identity["hu_key"]))
