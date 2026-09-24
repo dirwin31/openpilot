@@ -4,6 +4,7 @@ import json
 import math
 import queue
 import threading
+import time
 import uuid
 from dataclasses import dataclass, replace
 from typing import Any
@@ -44,6 +45,13 @@ from openpilot.starpilot.navigation.destination_store import (
 from openpilot.selfdrive.ui.onroad.starpilot.nav_map import NavMapView
 from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import _format_distance
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.starpilot.navigation.offline_maps import (
+  AREA_PRESETS,
+  OFFLINE_MAX_BYTES,
+  OfflineMaps,
+  estimate_area,
+  format_bytes,
+)
 from openpilot.starpilot.navigation.route_engine import Coordinate, MapboxRouteEngine, NavigationRoute
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
@@ -100,6 +108,8 @@ class SearchResult:
 class MapboxSearchClient:
   SUGGEST_URL = "https://api.mapbox.com/search/searchbox/v1/suggest"
   RETRIEVE_URL = "https://api.mapbox.com/search/searchbox/v1/retrieve"
+  # Geocoding v6 honours the type filter; the Search Box reverse endpoint answers with street addresses.
+  REVERSE_URL = "https://api.mapbox.com/search/geocode/v6/reverse"
 
   def __init__(self, session: Any = requests, timeout: float = 5.0):
     self._session = session
@@ -195,6 +205,29 @@ class MapboxSearchClient:
       if isinstance(item, dict) and (result := self._normalize_result(item)) is not None
     ]
 
+  def reverse(self, latitude: float, longitude: float, public_token: str, language: str = "") -> str:
+    """The city at a point, e.g. "Las Vegas", or "" when unknown. Never a street address."""
+    if not public_token:
+      return ""
+    params: dict[str, Any] = {
+      "access_token": public_token,
+      "latitude": latitude,
+      "longitude": longitude,
+      "types": "place",
+      "limit": 1,
+    }
+    if language.strip():
+      params["language"] = language.strip()
+    try:
+      payload = self._get_json(self.REVERSE_URL, params)
+    except MapboxSearchError:
+      return ""
+    features = payload.get("features") or []
+    if not isinstance(features, list) or not features or not isinstance(features[0], dict):
+      return ""
+    result = self._normalize_result(features[0])
+    return result.name if result is not None else ""
+
   def resolve(self, result: SearchResult, public_token: str, session_token: str) -> SearchResult:
     if result.has_coordinates:
       return result
@@ -239,6 +272,8 @@ NAV_ACTION_GAP = 12.0
 NAV_ROUTE_ROW_HEIGHT = 104.0
 NAV_MAP_MIN_WIDTH = 1100.0  # below this the panel is list-only
 NAV_MAP_FRACTION = 0.5
+OFFLINE_REFRESH_SECONDS = 2.0
+AREA_DETAIL = {16: "street detail", 15: "city detail", 14: "road detail", 13: "regional"}
 
 
 class NavigationManagerView(PanelManagerView):
@@ -296,6 +331,13 @@ class StarPilotNavigationLayout(_SettingsPage):
     self._preview_route_index = 0
     self._routes_loading = False
     self._routes_error = ""
+    self._offline = OfflineMaps()
+    self._offline_areas = []
+    self._offline_status: dict[str, Any] = {}
+    self._offline_refreshed = -1.0
+    self._area_chooser: dict[str, Any] | None = None
+    self._area_generation = 0
+    self._selected_area_id: str | None = None
 
   def show_event(self):
     self._session_token = str(uuid.uuid4())
@@ -323,6 +365,15 @@ class StarPilotNavigationLayout(_SettingsPage):
     now = rl.get_time()
     if self._last_state_refresh < 0 or now - self._last_state_refresh >= 0.5:
       self._refresh_navigation_state()
+    if self._offline_refreshed < 0 or now - self._offline_refreshed >= OFFLINE_REFRESH_SECONDS:
+      self._refresh_offline_state()
+
+  def _refresh_offline_state(self):
+    self._offline_refreshed = rl.get_time()
+    self._offline_areas = self._offline.areas(include_deleted=True)
+    self._offline_status = self._offline.status()
+    if self._selected_area_id is not None and not any(area.id == self._selected_area_id and not area.deleted for area in self._offline_areas):
+      self._selected_area_id = None
 
   def _refresh_navigation_state(self, force: bool = False):
     now = rl.get_time()
@@ -343,6 +394,11 @@ class StarPilotNavigationLayout(_SettingsPage):
         kind, generation, payload = self._pending.get_nowait()
       except queue.Empty:
         return
+
+      if kind == "area_chooser":
+        if self._area_chooser is not None and generation == self._area_generation:
+          self._area_chooser.update(payload)
+        continue
 
       if kind == "routes":
         if generation == self._route_generation:
@@ -639,6 +695,23 @@ class StarPilotNavigationLayout(_SettingsPage):
       self._open_rename_keyboard()
     elif target_id == "action:remove":
       self._remove_favorite()
+    elif target_id in ("offline:here", "offline:destination"):
+      self._open_area_chooser(target_id == "offline:destination")
+    elif target_id == "offline:cancel":
+      self._area_chooser = None
+    elif target_id.startswith("offline:preset:"):
+      self._save_area(int(target_id.rsplit(":", 1)[1]))
+    elif target_id.startswith("area:"):
+      area_id = target_id.split(":", 1)[1]
+      self._selected_area_id = None if self._selected_area_id == area_id else area_id
+    elif target_id == "area_action:update" and self._selected_area_id:
+      self._offline.request_update(self._selected_area_id)
+      self._refresh_offline_state()
+    elif target_id == "area_action:now" and self._selected_area_id:
+      self._offline.allow_metered(self._selected_area_id)
+      self._refresh_offline_state()
+    elif target_id == "area_action:delete" and self._selected_area_id:
+      self._confirm_delete_area(self._selected_area_id)
     elif target_id.startswith("route:"):
       try:
         index = int(target_id.split(":", 1)[1])
@@ -759,6 +832,205 @@ class StarPilotNavigationLayout(_SettingsPage):
       current_border=AetherListColors.CURRENT_BORDER,
       row_separator=PANEL_STYLE.divider_color,
     )
+
+  # ── offline maps ────────────────────────────────────────────────────────
+
+  def _context_destination(self) -> dict[str, Any] | None:
+    return self._draft_destination or self._active_destination
+
+  def _open_area_chooser(self, at_destination: bool):
+    if at_destination:
+      destination = self._context_destination()
+      if destination is None:
+        return
+      latitude, longitude = float(destination["latitude"]), float(destination["longitude"])
+      fallback = str(destination.get("place_name") or destination.get("name") or tr("Destination"))
+    else:
+      position = self._last_position()
+      if position is None:
+        self._search_error = tr("No location yet. Try again once the device has GPS.")
+        return
+      longitude, latitude = position
+      fallback = f"{latitude:.3f}, {longitude:.3f}"
+    self._area_generation += 1
+    generation = self._area_generation
+    self._area_chooser = {"latitude": latitude, "longitude": longitude, "name": fallback, "estimates": None}
+    public_key = self._public_mapbox_key()
+    language = self._language_code()
+    search_client = self._search_client
+
+    def worker():
+      estimates = [(radius, zoom) + estimate_area(latitude, longitude, radius, zoom) for radius, zoom in AREA_PRESETS]
+      name = fallback if at_destination else (search_client.reverse(latitude, longitude, public_key, language) or fallback)
+      self._pending.put(("area_chooser", generation, {"estimates": estimates, "name": name}))
+
+    threading.Thread(target=worker, daemon=True, name="navigation-area-estimate").start()
+
+  def _offline_bytes(self) -> int:
+    return int(self._offline_status.get("offline_bytes") or 0)
+
+  def _save_area(self, index: int):
+    chooser = self._area_chooser
+    if chooser is None or not chooser.get("estimates") or not 0 <= index < len(chooser["estimates"]):
+      return
+    radius, zoom, _, size = chooser["estimates"][index]
+    if self._offline_bytes() + size > OFFLINE_MAX_BYTES:
+      return
+    self._offline.add_area(chooser["name"], chooser["latitude"], chooser["longitude"], radius, zoom)
+    self._area_chooser = None
+    self._refresh_offline_state()
+
+  def _confirm_delete_area(self, area_id: str):
+    area = next((item for item in self._offline_areas if item.id == area_id), None)
+    if area is None:
+      return
+
+    def on_result(result: DialogResult):
+      if result == DialogResult.CONFIRM:
+        self._offline.delete_area(area_id)
+        self._selected_area_id = None
+        self._refresh_offline_state()
+
+    gui_app.push_widget(ConfirmDialog(tr("Delete the offline map for {}?").format(area.name), tr("Delete"), callback=on_result))
+
+  @staticmethod
+  def _age_text(timestamp: float) -> str:
+    days = int(max(0.0, time.time() - timestamp) // 86400)  # noqa: TID251 - compared with a saved wall-clock time
+    if days == 0:
+      return tr("today")
+    return tr("yesterday") if days == 1 else tr("{} days ago").format(days)
+
+  def _area_status_text(self, area) -> str:
+    if area.deleted:
+      return tr("Removing...")
+    state = (self._offline_status.get("areas") or {}).get(area.id) or {}
+    total, done = int(state.get("total") or 0), int(state.get("done") or 0)
+    percent = f"{100 * done // total}%" if total else "0%"
+    kind = state.get("state") or "queued"
+    if kind == "complete":
+      return tr("Saved • {} • updated {}").format(format_bytes(state.get("bytes") or 0), self._age_text(float(state.get("completed_at") or 0.0)))
+    if kind == "downloading":
+      return tr("Downloading {} • {} of {} tiles").format(percent, f"{done:,}", f"{total:,}")
+    if kind == "waiting_wifi":
+      if state.get("metered_wifi"):
+        return tr("This Wi-Fi is marked metered • tap Manage, then Download now")
+      return tr("Waiting for Wi-Fi • {} done").format(percent)
+    if kind == "incomplete":
+      return tr("Partly saved • retrying later")
+    if kind == "storage_full":
+      return tr("Offline storage is full ({})").format(format_bytes(OFFLINE_MAX_BYTES))
+    if kind == "no_space":
+      return tr("Not enough free space on the device")
+    return tr("Queued • downloads on Wi-Fi")
+
+  def _route_offline_text(self) -> str:
+    route = self._offline_status.get("route") or {}
+    total, remaining = int(route.get("total") or 0), int(route.get("remaining") or 0)
+    if not total:
+      return tr("Saved automatically once the route is ready")
+    if remaining <= 0:
+      return tr("Saved • the map works without a connection")
+    percent = 100 * (total - remaining) // total
+    if self._offline_status.get("offline"):
+      return tr("Waiting for a connection • {}% saved").format(percent)
+    return tr("Saving for offline • {}%").format(percent)
+
+  def _offline_layout(self) -> list[tuple[str, float, Any]]:
+    """(kind, height, data) rows of the Offline maps section, shared by drawing and measuring."""
+    rows: list[tuple[str, float, Any]] = [("header", NAV_SECTION_HEIGHT, None)]
+    if self._context_destination() is not None:
+      rows.append(("route", NAV_ROW_HEIGHT, None))
+    if self._area_chooser is None:
+      rows.append(("buttons", NAV_ACTION_HEIGHT + NAV_GAP, None))
+    else:
+      estimates = self._area_chooser.get("estimates")
+      if estimates is None:
+        rows.append(("estimating", NAV_ROW_HEIGHT, None))
+      else:
+        rows += [("preset", NAV_ROW_HEIGHT, index) for index in range(len(estimates))]
+      rows.append(("cancel", NAV_ACTION_HEIGHT + NAV_GAP, None))
+    rows += [("area", NAV_ROW_HEIGHT, area) for area in self._offline_areas]
+    if self._selected_area_id is not None:
+      rows.append(("area_actions", NAV_ACTION_HEIGHT + NAV_GAP, None))
+    if not self._offline_areas and self._area_chooser is None:
+      rows.append(("empty", NAV_EMPTY_HEIGHT, None))
+    return rows
+
+  def _pill(self, rect: rl.Rectangle, target_id: str, label: str, manager: NavigationManagerView, color=None):
+    hovered, pressed = manager._interactive_state(target_id, rect, pad_y=4)
+    color = color or AetherListColors.PRIMARY
+    fill = with_alpha(color, 54 if hovered or pressed else 24)
+    draw_action_pill(rect, label, fill, with_alpha(color, 110), AetherListColors.HEADER, font_size=24)
+
+  def _draw_offline_section(self, x: float, y: float, width: float, manager: NavigationManagerView) -> float:
+    start_y = y
+    for kind, height, data in self._offline_layout():
+      rect = rl.Rectangle(x, y, width, height)
+      if kind == "header":
+        saved = self._offline_bytes()
+        draw_section_header(rect, tr("Offline maps"), trailing_text=tr("{} saved").format(format_bytes(saved)) if saved else "",
+                            title_size=30, trailing_size=24, style=PANEL_STYLE)
+      elif kind == "route":
+        draw_selection_list_row(rect, title=tr("This route"), subtitle=self._route_offline_text(), action_width=0,
+                                title_size=31, subtitle_size=22, row_separator=PANEL_STYLE.divider_color)
+      elif kind == "buttons":
+        has_destination = self._context_destination() is not None
+        count = 2 if has_destination else 1
+        button_width = (width - NAV_ACTION_GAP * (count - 1)) / count
+        self._pill(rl.Rectangle(x, y, button_width, NAV_ACTION_HEIGHT), "offline:here", tr("Save area here"), manager)
+        if has_destination:
+          self._pill(rl.Rectangle(x + button_width + NAV_ACTION_GAP, y, button_width, NAV_ACTION_HEIGHT),
+                     "offline:destination", tr("Save area at destination"), manager)
+      elif kind == "estimating":
+        draw_selection_list_row(rect, title=tr("Sizing up the area..."), subtitle=self._area_chooser["name"], action_width=0,
+                                title_size=31, subtitle_size=22, row_separator=PANEL_STYLE.divider_color)
+      elif kind == "preset":
+        radius, zoom, tiles, size = self._area_chooser["estimates"][data]
+        fits = self._offline_bytes() + size <= OFFLINE_MAX_BYTES
+        target_id = f"offline:preset:{data}"
+        hovered, pressed = manager._interactive_state(target_id, rect)
+        radius_text = f"{radius:.0f} km" if ui_state.is_metric else f"{radius * 0.621371:.0f} mi"
+        draw_selection_list_row(
+          rect,
+          title=tr("{} around {}").format(radius_text, self._area_chooser["name"]),
+          subtitle=(tr("{} • about {} • {} tiles").format(tr(AREA_DETAIL.get(zoom, "")), format_bytes(size), f"{tiles:,}")
+                    if fits else tr("Too large for the space left")),
+          action_text=tr("Save") if fits else "",
+          hovered=hovered, pressed=pressed,
+          action_width=190, action_pill=True, action_pill_height=58, action_pill_width=150,
+          title_size=29, subtitle_size=22, action_text_size=23, row_separator=PANEL_STYLE.divider_color,
+        )
+      elif kind == "cancel":
+        self._pill(rl.Rectangle(x, y, width, NAV_ACTION_HEIGHT), "offline:cancel", tr("Cancel"), manager)
+      elif kind == "area":
+        target_id = f"area:{data.id}"
+        hovered, pressed = manager._interactive_state(target_id, rect)
+        selected = self._selected_area_id == data.id
+        draw_selection_list_row(
+          rect, title=data.name, subtitle=self._area_status_text(data),
+          action_text="" if data.deleted else (tr("Close") if selected else tr("Manage")),
+          current=selected, hovered=hovered, pressed=pressed,
+          action_width=190, action_pill=True, action_pill_height=58, action_pill_width=150,
+          title_size=31, subtitle_size=22, action_text_size=23,
+          current_bg=AetherListColors.CURRENT_BG, current_border=AetherListColors.CURRENT_BORDER,
+          row_separator=PANEL_STYLE.divider_color,
+        )
+      elif kind == "area_actions":
+        area = next((item for item in self._offline_areas if item.id == self._selected_area_id), None)
+        state = ((self._offline_status.get("areas") or {}).get(self._selected_area_id) or {}).get("state")
+        waiting = area is not None and state == "waiting_wifi" and not area.allow_metered
+        half = (width - NAV_ACTION_GAP) / 2
+        if waiting:
+          self._pill(rl.Rectangle(x, y, half, NAV_ACTION_HEIGHT), "area_action:now", tr("Download now"), manager, color=AetherListColors.SUCCESS)
+        else:
+          self._pill(rl.Rectangle(x, y, half, NAV_ACTION_HEIGHT), "area_action:update", tr("Update now"), manager)
+        self._pill(rl.Rectangle(x + half + NAV_ACTION_GAP, y, half, NAV_ACTION_HEIGHT), "area_action:delete", tr("Delete"), manager,
+                   color=AetherListColors.DANGER)
+      elif kind == "empty":
+        draw_empty_state_card(rect, tr("No offline areas"), tr("Save an area on Wi-Fi to keep the map when there's no signal."),
+                              title_size=30, body_size=22, border=with_alpha(PANEL_STYLE.surface_border, 14), style=PANEL_STYLE)
+      y += height
+    return y - start_y
 
   def _render(self, rect):
     if rect.width < NAV_MAP_MIN_WIDTH or self._manager_view is None:
@@ -1015,6 +1287,7 @@ class StarPilotNavigationLayout(_SettingsPage):
           row_separator=PANEL_STYLE.divider_color,
         )
         y += NAV_ROW_HEIGHT
+      y += NAV_GAP
 
     if not self._search_results and not self._favorites and not self._recent_destinations and not self._search_loading and not self._search_error:
       empty_title = tr("No matching destinations") if self._query else tr("No destinations yet")
@@ -1028,6 +1301,9 @@ class StarPilotNavigationLayout(_SettingsPage):
         border=with_alpha(PANEL_STYLE.surface_border, 14),
         style=PANEL_STYLE,
       )
+      y += NAV_EMPTY_HEIGHT + NAV_GAP
+
+    self._draw_offline_section(x, y, width, manager)
 
   def _measure_navigation_content_height(self, content_width: float) -> float:
     del content_width
@@ -1048,5 +1324,6 @@ class StarPilotNavigationLayout(_SettingsPage):
     if self._recent_destinations:
       height += NAV_SECTION_HEIGHT + len(self._recent_destinations) * NAV_ROW_HEIGHT + NAV_GAP
     if not self._search_results and not self._favorites and not self._recent_destinations and not self._search_loading and not self._search_error:
-      height += NAV_EMPTY_HEIGHT
+      height += NAV_EMPTY_HEIGHT + NAV_GAP
+    height += sum(row_height for _, row_height, _ in self._offline_layout())
     return height + NAV_INSET

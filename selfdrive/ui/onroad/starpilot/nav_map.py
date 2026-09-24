@@ -34,12 +34,16 @@ from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import (
   _normalize_maneuver_type,
 )
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.starpilot.navigation.offline_maps import OfflineMaps
 from openpilot.starpilot.navigation.map_tiles import (
   TILE_SIZE,
   TileKey,
+  DEFAULT_STYLE,
+  TileCache,
   TileService,
-  corridor_tiles,
+  default_cache_dir,
   meters_per_world_unit,
+  offline_root,
   tiles_covering,
   world_xy,
 )
@@ -56,6 +60,7 @@ DEAD_RECKON_LIMIT = 1.0
 NAV_STALE_SECONDS = 3.5
 ROUTE_STALE_SECONDS = 30.0  # navigationd republishes the route every few seconds while it has one
 TOKEN_REFRESH_SECONDS = 30.0
+OFFLINE_STATUS_SECONDS = 2.0
 MAP_MAX_FPS = 15.0       # redraw cap when drawing into a cached texture
 MAP_IDLE_REDRAW = 1.0    # still redraw this often so the clock and badges stay current
 
@@ -132,7 +137,19 @@ class TileTextures:
     self._token_checked = -math.inf
     self._token_lock = threading.Lock()
     self._textures: OrderedDict[TileKey, rl.Texture] = OrderedDict()
-    self.service = TileService(self._read_token, decode=_decode_tile)
+    # Offline areas are read too; navtilesd does all ahead-of-time downloading.
+    pinned = TileCache(offline_root(), DEFAULT_STYLE, max_bytes=None)
+    self.service = TileService(self._read_token, decode=_decode_tile, cache=TileCache(default_cache_dir(), DEFAULT_STYLE, pinned=pinned))
+    self.offline_maps = OfflineMaps()
+    self._offline_status: dict = {}
+    self._offline_status_read = -math.inf
+
+  def offline_status(self) -> dict:
+    now = time.monotonic()
+    if now - self._offline_status_read >= OFFLINE_STATUS_SECONDS:
+      self._offline_status_read = now
+      self._offline_status = self.offline_maps.status()
+    return self._offline_status
 
   @property
   def has_token(self) -> bool:
@@ -322,7 +339,6 @@ class NavMapView(Widget):
     self._preview_selected = 0
     self._preview_destination: tuple[float, float] | None = None
     self._preview_active = False
-    self._prefetch_generation = 0
 
   # ── public API ────────────────────────────────────────────────────────────
 
@@ -334,8 +350,13 @@ class NavMapView(Widget):
     self._preview_destination = destination
     self._preview_active = bool(self._preview_routes) or destination is not None
     self._dirty = True
-    if self._preview_routes:
-      self._start_prefetch(self._preview_routes[self._preview_selected])
+    if routes:
+      # navtilesd saves this route for offline use in the background, even if the car screen closes.
+      self._ensure_started()
+      try:
+        self._tiles.offline_maps.set_preview_route(routes[self._preview_selected])
+      except OSError:
+        pass
 
   def clear_preview(self) -> None:
     self._preview_routes = []
@@ -387,8 +408,6 @@ class NavMapView(Widget):
         self._route_key = key
         self._route_world = _route_world(points)
         self._route_progress = 0
-        if len(self._route_world):
-          self._start_prefetch(self._route_world)
 
     if self._sm.updated["navInstruction"]:
       message = self._sm["navInstruction"]
@@ -483,21 +502,6 @@ class NavMapView(Widget):
     if nearest < self._route_progress - 20 or nearest > self._route_progress + 380:
       nearest = int(np.argmin(np.sum((self._route_world - car) ** 2, axis=1)))
     self._route_progress = nearest
-
-  def _start_prefetch(self, route_world: np.ndarray) -> None:
-    """Queue the route corridor for background caching. Never blocks the UI."""
-    if self._tiles is None:
-      self._ensure_started()
-    self._prefetch_generation += 1
-    generation = self._prefetch_generation
-    points = [(float(x), float(y)) for x, y in route_world]
-
-    def worker():
-      keys = corridor_tiles(points)
-      if generation == self._prefetch_generation:
-        self._tiles.service.prefetch(keys)
-
-    threading.Thread(target=worker, name="nav-map-prefetch", daemon=True).start()
 
   # ── camera ────────────────────────────────────────────────────────────────
 
@@ -750,8 +754,11 @@ class NavMapView(Widget):
       badges.append(("Add a Mapbox key in The Galaxy", BADGE_WARN))
     elif self._tiles is not None and self._tiles.service.offline:
       badges.append(("Offline • cached map", BADGE_WARN))
-    elif self._tiles is not None and self._tiles.service.prefetch_remaining > 0 and not ui_state.started:
-      badges.append((f"Saving route map • {self._tiles.service.prefetch_remaining}", SUBTEXT))
+    elif self._tiles is not None and not ui_state.started:
+      route = self._tiles.offline_status().get("route") or {}
+      remaining, total = int(route.get("remaining") or 0), int(route.get("total") or 0)
+      if remaining > 0 and total > 0:
+        badges.append((f"Saving route for offline • {100 * (total - remaining) // total}%", SUBTEXT))
     if self._gps is not None and not self._gps.fresh and not self._preview_active:
       badges.append(("No GPS fix", BADGE_WARN))
     x = rect.x + rect.width - 24
