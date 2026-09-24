@@ -174,6 +174,7 @@ from openpilot.starpilot.navigation.destination_store import normalize_destinati
 from openpilot.starpilot.system.the_galaxy.factory_reset import remove_path as _run_factory_reset_delete
 from openpilot.starpilot.system.the_galaxy import flm_workspace, utilities
 from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interrupted_update, public_recovery_status, recover_interrupted_update
+from openpilot.starpilot.system.android_auto import apk_identity
 from openpilot.starpilot.system.bluetooth import BluetoothClient
 from openpilot.starpilot.system.wheel_controls import (
   CONTROLLER_ACTION_OPTIONS,
@@ -5400,7 +5401,7 @@ def setup(app):
       response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
-    if request.path == "/api/bluetooth/status" or request.path.startswith("/api/bluetooth/"):
+    if request.path.startswith(("/api/bluetooth/", "/api/android_auto/")):
       response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
@@ -5519,6 +5520,58 @@ def setup(app):
       return jsonify({"message": "Bluetooth operation started.", **result}), 200
     except Exception as error:
       return jsonify({"error": str(error)}), 503
+
+  # The Android Auto phone identity, extracted on device from the user's own copy of the app.
+  android_auto_import = apk_identity.ImportJob()
+
+  def _android_auto_identity_payload():
+    return {
+      **apk_identity.identity_status(),
+      "job": android_auto_import.status(),
+      "knownGoodVersion": apk_identity.KNOWN_GOOD_VERSION,
+      "maxUploadMb": apk_identity.MAX_FILE_BYTES // (1024 * 1024),
+    }
+
+  @app.route("/api/android_auto/identity", methods=["GET"])
+  def android_auto_identity():
+    return jsonify(_android_auto_identity_payload()), 200
+
+  @app.route("/api/android_auto/identity/upload", methods=["POST"])
+  def android_auto_identity_upload():
+    if android_auto_import.busy():
+      return jsonify({"error": "An import is already running."}), 409
+    if (request.content_length or 0) > apk_identity.MAX_FILE_BYTES + 1024 * 1024:
+      return jsonify({"error": "That file is too large to be the Android Auto app."}), 413
+    upload = request.files.get("apk")
+    if upload is None or not upload.filename:
+      return jsonify({"error": "Choose the Android Auto APK or XAPK file."}), 400
+    try:
+      path = android_auto_import.upload_path()
+      upload.save(str(path))
+      android_auto_import.start(path=path)
+    except apk_identity.IdentityImportError as error:
+      return jsonify({"error": str(error)}), 409
+    except OSError as error:
+      return jsonify({"error": f"Could not save the upload: {error}"}), 500
+    return jsonify(_android_auto_identity_payload()), 202
+
+  @app.route("/api/android_auto/identity/download", methods=["POST"])
+  def android_auto_identity_download():
+    url = str((request.get_json(silent=True) or {}).get("url", "")).strip()
+    if not url.lower().startswith(("https://", "http://")):
+      return jsonify({"error": "Enter an http(s) link to the Android Auto APK or XAPK."}), 400
+    try:
+      android_auto_import.start(url=url)
+    except apk_identity.IdentityImportError as error:
+      return jsonify({"error": str(error)}), 409
+    return jsonify(_android_auto_identity_payload()), 202
+
+  @app.route("/api/android_auto/identity", methods=["DELETE"])
+  def android_auto_identity_remove():
+    if android_auto_import.busy():
+      return jsonify({"error": "An import is running."}), 409
+    apk_identity.remove_identity()
+    return jsonify(_android_auto_identity_payload()), 200
 
   @app.route("/api/wheel-controls/status", methods=["GET"])
   def wheel_controls_status():

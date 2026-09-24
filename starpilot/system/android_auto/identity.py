@@ -1,9 +1,10 @@
 """Private phone identity and configuration locations, and identity validation.
 
 The identity (phone certificate, its key, and the Google Automotive Link root used
-to verify the head unit) is provisioned separately with
-``tools/android_auto/import_identity.py`` and copied to ``IDENTITY_DIR``. It is
-never committed, never logged, and the key must be readable only by its owner.
+to verify the head unit) is extracted from the user's own Android Auto app by
+``apk_identity`` (The Galaxy → Bluetooth → Android Auto, or
+``tools/android_auto/import_identity.py``) into ``IDENTITY_DIR``. It is never
+committed, never logged, and the key must be readable only by its owner.
 """
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ def load_identity(directory: Path | None = None, now: datetime | None = None) ->
   cert, key, root = directory / CERT_NAME, directory / KEY_NAME, directory / ROOT_NAME
   missing = [path.name for path in (cert, key) if not path.is_file()]
   if missing:
-    raise IdentityError(f"Android Auto identity missing ({', '.join(missing)} in {directory}); see the setup guide")
+    raise IdentityError(f"Android Auto identity missing ({', '.join(missing)} in {directory}); add it in The Galaxy: Bluetooth → Android Auto")
   if stat.S_IMODE(key.stat().st_mode) & 0o077:
     raise IdentityError(f"{key} must not be readable by other users (chmod 600)")
   try:
@@ -73,7 +74,7 @@ def load_identity(directory: Path | None = None, now: datetime | None = None) ->
   expires = _not_after(cert)
   now = now or datetime.now(UTC)
   if expires is not None and expires <= now:
-    raise IdentityError(f"Android Auto phone certificate expired on {expires.date()}; import a newer identity")
+    raise IdentityError(f"Android Auto phone certificate expired on {expires.date()}; renew it in The Galaxy: Bluetooth → Android Auto")
   days_left = (expires - now).days if expires is not None else -1
   return Identity(str(cert), str(key), str(root) if root.is_file() else None,
                   expires.isoformat() if expires is not None else "unknown", days_left)
@@ -144,7 +145,7 @@ def save_config(config: dict, path: Path | None = None) -> None:
 
 def expiry_warning(identity: Identity) -> str:
   if 0 <= identity.days_left <= EXPIRY_WARNING_DAYS:
-    return f"Android Auto identity expires in {identity.days_left} days ({identity.expires[:10]})"
+    return f"Android Auto identity expires in {identity.days_left} days ({identity.expires[:10]}); renew it in The Galaxy"
   return ""
 
 

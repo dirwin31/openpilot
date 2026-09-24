@@ -14,82 +14,56 @@ untested.
 
 - A car whose head unit supports **wireless** Android Auto. Wired-only head units will not work.
 - A comma 3X/four with Bluetooth enabled (`android_autod` runs whenever Bluetooth is on).
-- A Mac or Linux computer, once, to extract the phone identity:
-  - `jadx` (`brew install jadx`, which also installs OpenJDK)
-  - Android SDK `apksigner` (from `build-tools/<version>/`)
-  - Python with `cryptography`
-- The Android Auto app **17.6.663454-release** as an XAPK or APK from an APK mirror.
-  Make sure you get the app itself; some mirrors' big download buttons hand you their store installer instead.
+- The **Android Auto** app as an XAPK, APK or APKM file, downloaded in a phone or
+  computer browser from an APK mirror. `17.6.663454-release` is known to work.
+  Make sure you get the app itself; some mirrors' big download buttons hand you
+  their own store installer instead.
 
-## 1. Extract the phone identity
+## 1. Install the phone identity
 
 The car only accepts a phone that presents Google's Android Auto phone
-certificate. It is embedded in the Android Auto app, so each user extracts it
-from their own copy. **Never commit or share the output.**
+certificate and its key. They are embedded in the Android Auto app, so each user
+extracts them from their own copy. The comma does this itself:
+
+1. Open The Galaxy and go to **Bluetooth → Android Auto**.
+2. Tap **Install from File** and pick the Android Auto file you downloaded.
+
+The comma finds the certificate and the encrypted key in the app's code,
+decrypts the key, and accepts the result only if the key matches the
+certificate, the certificate is issued by Google's Automotive Link root (pinned
+by fingerprint), and both are currently valid. It then installs the identity to
+`/data/android_auto/identity/` (readable only by the `comma` user) and deletes
+the uploaded file. A modified or wrong file is rejected and changes nothing.
+This takes a few seconds after the upload.
+
+**Or have the comma download it from a link** does the same from a direct link
+to the file, e.g. in your own cloud storage. Mirror pages that need a browser
+(Cloudflare checks, download buttons built by JavaScript) will not work there.
+
+The card shows the certificate's expiry date. Nothing needs restarting: the
+Android Auto service reads the identity each time a session starts.
+
+**Never commit or share the identity.** It is Google's key.
+
+### Renewing
+
+The 17.6.663454 certificate **expires 2026-12-23**. From 14 days before, The
+Galaxy card and the device's Android Auto status warn; after that Android Auto
+stops connecting. Download a newer Android Auto version and use **Renew from
+File** on the same card. The previous identity is kept in
+`/data/android_auto/identity.previous/`.
+
+If a future app version stores its key differently, the import says so and
+leaves the current identity in place; use a version that works.
+
+### On a computer instead
+
+For testing with the Desktop Head Unit, or to install by hand, the same
+extraction runs on a computer with Python and `cryptography`:
 
 ```bash
-mkdir -p .cache/android_auto && cd .cache/android_auto   # .cache/ is git-ignored
-unzip -o ~/Downloads/android-auto-17-6-663454-release.xapk com.google.android.projection.gearhead.apk -d xapk
-export JAVA_HOME=/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home   # macOS/Homebrew
-$ANDROID_SDK/build-tools/<version>/apksigner verify --print-certs xapk/com.google.android.projection.gearhead.apk | grep "SHA-256"
-```
-
-The signer digest must be Google's:
-`1ca8dcc0bed3cbd872d2cb791200c0292ca9975768a82d676b8b424fb65b5295`.
-If it isn't, delete the file; it is not the real app.
-
-Then run the importer from the repository root:
-
-```bash
-python tools/android_auto/import_identity.py \
-  --apk .cache/android_auto/xapk/com.google.android.projection.gearhead.apk \
-  --apksigner $ANDROID_SDK/build-tools/<version>/apksigner
-```
-
-It writes `phone-cert.pem`, `phone-key.pem`, `root-cert.pem` and
-`provenance.json` to `.cache/android_auto/identity/` and checks that the key
-matches the certificate and that the certificate chains to the root.
-
-### If the importer refuses a genuine APK
-
-The importer pins one exact APK hash and expects apksigner's `Signer #1` output
-format. Mirrors often serve a different build of the same version, signed only
-with a v3 signature (`V3.0 Signer: …`), and the importer rejects it. If you
-verified the Google signer digest above, extract the identity directly:
-
-```bash
-APK=.cache/android_auto/xapk/com.google.android.projection.gearhead.apk
-OUT=$(mktemp -d)
-for c in jcf jch; do
-  jadx --no-res --no-replace-consts --log-level error --single-class defpackage.$c \
-       --single-class-output $OUT/$c.java $APK
-done
-python - "$OUT" <<'EOF'
-import json, os, sys
-from pathlib import Path
-sys.path.insert(0, "tools/android_auto")
-import import_identity as imp
-src = Path(sys.argv[1])
-files, meta = imp.recover((src / "jcf.java").read_text(), (src / "jch.java").read_text())
-out = Path(".cache/android_auto/identity")
-out.mkdir(mode=0o700)
-for name, content in files.items():
-  with os.fdopen(os.open(out / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
-    f.write(content)
-print(json.dumps({k: meta[k] for k in ("subject", "expires", "key_matches")}, indent=2))
-EOF
-rm -rf "$OUT"
-```
-
-The class names `jcf`/`jch` are specific to 17.6.663454; other versions need the importer updated.
-
-The 17.6.663454 certificate **expires 2026-12-23**. From 14 days before that,
-Android Auto status shows a warning; re-import from a newer app version before
-it expires.
-
-## 2. Install the identity on the comma
-
-```bash
+python tools/android_auto/import_identity.py --apk ~/Downloads/android-auto.xapk
+# writes .cache/android_auto/identity/ (git-ignored)
 cd .cache/android_auto/identity
 COPYFILE_DISABLE=1 tar -cf - phone-cert.pem phone-key.pem root-cert.pem provenance.json | \
   ssh comma@<comma-ip> 'umask 077 && mkdir -p /data/android_auto/identity && \
@@ -97,18 +71,9 @@ COPYFILE_DISABLE=1 tar -cf - phone-cert.pem phone-key.pem root-cert.pem provenan
     chmod 600 /data/android_auto/identity/*'
 ```
 
-`COPYFILE_DISABLE=1` stops macOS adding `._*` metadata files. The key must be
-owned by `comma` and not readable by anyone else, or the identity is rejected.
+`COPYFILE_DISABLE=1` stops macOS adding `._*` metadata files.
 
-Check that it loads:
-
-```bash
-ssh comma@<comma-ip> 'cd /data/openpilot && PYTHONPATH=/data/openpilot /usr/local/venv/bin/python -c "
-from openpilot.starpilot.system.android_auto.identity import load_identity
-i = load_identity(); print(i.expires, i.days_left, \"days\")"'
-```
-
-## 3. Pair the car
+## 2. Pair the car
 
 Bluetooth pairing and scanning only work while the comma is **offroad**, but
 the car's screen only works with the car on, which normally puts the comma
@@ -119,7 +84,7 @@ onroad. Force it offroad while parked:
 3. On the car: Bluetooth / phone settings → add a new device. Pick the comma in the comma's list and confirm the code on both screens.
 4. **android auto → choose car**, and pick the car. It is marked "(android auto)" if it advertises wireless Android Auto.
 
-## 4. Start projection
+## 3. Start projection
 
 **Settings → Bluetooth → android auto → start.**
 
@@ -209,9 +174,11 @@ ssh comma@<comma-ip> 'pkill -TERM -f "^starpilot.system.android_auto.daemon$"'
 
 | Symptom | Cause / fix |
 |---|---|
-| **pair a new car** missing, **scan for devices** does nothing | The comma is onroad. Use the **Offroad** switch (step 3). |
+| **pair a new car** missing, **scan for devices** does nothing | The comma is onroad. Use the **Offroad** switch (step 2). |
 | Car-screen touches do nothing | The comma is onroad (maybe forced **Onroad**). Set Settings → System to **Auto**. |
-| `Android Auto identity missing` / `is unusable` | Step 2; check owner `comma` and mode `600` on `phone-key.pem`. |
+| `Android Auto identity missing` / `expired` / `is unusable` | Install or renew it in The Galaxy → Bluetooth → Android Auto (step 1). |
+| The Galaxy says *does not contain the Android Auto identity* | The file is not the Android Auto app (often a mirror's store installer). Download the app itself. |
+| The Galaxy says *stores its key differently* | That app version is not supported yet; use 17.6.663454 or another version that works. |
 | `waiting for car: wifi_start: head unit did not answer` | The car did not start Wi-Fi. The comma asks it to after 5 s; occasional misses retry on their own. If it never succeeds, delete the comma on the car and pair again: the car can remember an earlier failure. |
 | Car says the device is not compatible / connect a phone with the latest OS | The comma dropped the connection during setup. Check `attempt_failed` in the log. |
 | Car shows Android Auto briefly, then its own screen | Look at `video_focus`: repeated `focus 1` then `focus 2` about 3 s later means the car is not getting decodable video. |
@@ -247,4 +214,4 @@ not exercise everything a real car does.
 - Video and touch only: no audio, microphone, calls or navigation data are projected.
 - Test sessions so far have lasted about a minute before a reconnect.
 - Tested on one car (2026 Honda Civic).
-- The identity comes from one app version and expires with it.
+- The identity comes from the Android Auto app and expires with it; renew it from a newer app version in The Galaxy.

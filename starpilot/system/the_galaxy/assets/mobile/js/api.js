@@ -175,6 +175,9 @@ export const api = {
 
   getBluetoothStatus() { return request("/api/bluetooth/status") },
   bluetoothOp(operation, body = {}) { return request(`/api/bluetooth/${operation}`, { method: "POST", data: body }) },
+  getAndroidAutoIdentity() { return request("/api/android_auto/identity", { cache: "no-store" }) },
+  downloadAndroidAutoApk(url) { return request("/api/android_auto/identity/download", { method: "POST", data: { url } }) },
+  removeAndroidAutoIdentity() { return request("/api/android_auto/identity", { method: "DELETE" }) },
 
   carFeaturesCheck(tool = "") {
     const query = tool ? `?tool=${encodeURIComponent(tool)}` : ""
