@@ -13,6 +13,7 @@ from openpilot.common.params import Params
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
+from openpilot.system.ui.lib.vector_icon import Pen, draw_vector_icon
 
 
 METER_TO_MILE = 1.0 / 1609.344
@@ -516,6 +517,33 @@ def _format_decimal(value: float) -> str:
   return f"{value:.1f}"
 
 
+
+def _draw_record_glyph(index: int, p: Pen) -> None:
+  """Personal-record glyphs on a 64x64 canvas."""
+  t = 3.0
+  if index == 0:  # longest drive: arrow
+    p.stroke([(19.0, 32.0), (44.0, 32.0)], t)
+    p.stroke([(37.0, 24.5), (44.5, 32.0), (37.0, 39.5)], t)
+  elif index == 1:  # completed: check in a circle
+    p.circle(32.0, 32.0, 14.0, 2.6)
+    p.stroke([(25.5, 32.5), (30.0, 37.0), (39.0, 26.5)], t)
+  elif index == 2:  # trend: chart
+    p.stroke([(19.0, 19.0), (19.0, 45.0), (45.0, 45.0)], t)
+    p.stroke([(24.0, 38.0), (30.5, 30.5), (36.0, 35.0), (45.0, 24.0)], t)
+  elif index == 3:  # lightning bolt
+    p.stroke([(34.5, 17.0), (22.0, 34.5), (30.0, 34.5), (27.5, 47.0), (42.5, 27.5), (34.5, 27.5)], 2.8, closed=True)
+  elif index == 4:  # shield with check
+    p.stroke([(32.0, 18.0), (44.0, 23.0), (42.0, 35.0), (32.0, 46.0), (22.0, 35.0), (20.0, 23.0)], 2.8, closed=True)
+    p.stroke([(27.0, 32.0), (31.0, 36.0), (38.0, 28.0)], 2.8)
+  else:  # sparkles
+    for cx, cy, r in ((35.0, 34.0, 11.0), (23.0, 22.0, 5.5), (44.0, 21.0, 4.5)):
+      i = r * 0.24
+      for tip, left, right in (((cx, cy - r), (cx - i, cy - i), (cx + i, cy - i)),
+                               ((cx + r, cy), (cx + i, cy - i), (cx + i, cy + i)),
+                               ((cx, cy + r), (cx + i, cy + i), (cx - i, cy + i)),
+                               ((cx - r, cy), (cx - i, cy + i), (cx - i, cy - i))):
+        p.fill([tip, right, (cx, cy), left])
+
 class DriveStatsDashboard:
   def __init__(self, params: Params):
     self._params = params
@@ -561,64 +589,9 @@ class DriveStatsDashboard:
   @staticmethod
   def _draw_record_icon(index: int, rect: rl.Rectangle) -> None:
     rl.draw_rectangle_rounded(rect, 0.18, 8, rl.Color(40, 33, 68, 255))
-    cx = rect.x + rect.width / 2
-    cy = rect.y + rect.height / 2
-    color = PURPLE
-    scale = min(rect.width, rect.height) / 64.0
-    thickness = 2.5 * scale
-
-    def line(x1: float, y1: float, x2: float, y2: float) -> None:
-      rl.draw_line_ex(rl.Vector2(x1, y1), rl.Vector2(x2, y2), thickness, color)
-
-    if index == 0:
-      line(cx - 13 * scale, cy, cx + 12 * scale, cy)
-      line(cx + 12 * scale, cy, cx + 5 * scale, cy - 7 * scale)
-      line(cx + 12 * scale, cy, cx + 5 * scale, cy + 7 * scale)
-    elif index == 1:
-      rl.draw_circle_lines(int(cx), int(cy), 13 * scale, color)
-      rl.draw_circle_lines(int(cx), int(cy), 12 * scale, color)
-      line(cx - 7 * scale, cy, cx - 2 * scale, cy + 5 * scale)
-      line(cx - 2 * scale, cy + 5 * scale, cx + 8 * scale, cy - 7 * scale)
-    elif index == 2:
-      line(cx - 13 * scale, cy - 12 * scale, cx - 13 * scale, cy + 12 * scale)
-      line(cx - 13 * scale, cy + 12 * scale, cx + 13 * scale, cy + 12 * scale)
-      line(cx - 9 * scale, cy + 6 * scale, cx - 2 * scale, cy - 2 * scale)
-      line(cx - 2 * scale, cy - 2 * scale, cx + 4 * scale, cy + 3 * scale)
-      line(cx + 4 * scale, cy + 3 * scale, cx + 13 * scale, cy - 8 * scale)
-    elif index == 3:
-      points = (
-        (cx + 2 * scale, cy - 15 * scale), (cx - 10 * scale, cy + 2 * scale), (cx - 2 * scale, cy + 2 * scale),
-        (cx - 5 * scale, cy + 15 * scale), (cx + 11 * scale, cy - 5 * scale), (cx + 3 * scale, cy - 5 * scale),
-      )
-      for point_index, point in enumerate(points):
-        next_point = points[(point_index + 1) % len(points)]
-        line(point[0], point[1], next_point[0], next_point[1])
-    elif index == 4:
-      points = (
-        (cx, cy - 14 * scale), (cx + 12 * scale, cy - 9 * scale), (cx + 10 * scale, cy + 3 * scale),
-        (cx, cy + 14 * scale), (cx - 10 * scale, cy + 3 * scale), (cx - 12 * scale, cy - 9 * scale),
-      )
-      for point_index, point in enumerate(points):
-        next_point = points[(point_index + 1) % len(points)]
-        line(point[0], point[1], next_point[0], next_point[1])
-      line(cx - 5 * scale, cy, cx - scale, cy + 4 * scale)
-      line(cx - scale, cy + 4 * scale, cx + 6 * scale, cy - 4 * scale)
-    else:
-      def sparkle(x: float, y: float, radius: float) -> None:
-        inner = radius * 0.22
-        points = (
-          (x, y - radius), (x + inner, y - inner),
-          (x + radius, y), (x + inner, y + inner),
-          (x, y + radius), (x - inner, y + inner),
-          (x - radius, y), (x - inner, y - inner),
-        )
-        for point_index, point in enumerate(points):
-          next_point = points[(point_index + 1) % len(points)]
-          line(point[0], point[1], next_point[0], next_point[1])
-
-      sparkle(cx + 3 * scale, cy + 2 * scale, 10 * scale)
-      sparkle(cx - 9 * scale, cy - 9 * scale, 5 * scale)
-      sparkle(cx + 12 * scale, cy - 10 * scale, 4 * scale)
+    s = min(rect.width, rect.height) / 64.0
+    draw_vector_icon(f"drive-record:{index}", rect.x, rect.y, s, PURPLE,
+                     lambda x, y, scale, color: _draw_record_glyph(index, Pen(x, y, scale, color)), canvas=64.0)
 
   def _draw_fitted_centered(self, text: str, rect: rl.Rectangle, font_size: int, minimum_size: int, color: rl.Color) -> None:
     size = font_size
