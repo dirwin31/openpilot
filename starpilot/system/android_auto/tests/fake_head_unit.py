@@ -74,8 +74,10 @@ class FakeHeadUnit:
   """Car side of one AA TCP session. Runs in a thread; records what the phone sent."""
 
   def __init__(self, identity: dict[str, Path], *, window: int = 4, reject_auth: bool = False, require_client_cert: bool = True,
-               unsolicited_focus: bool = False, version: tuple[int, int] = (1, 7)):
+               unsolicited_focus: bool = False, version: tuple[int, int] = (1, 7), ack_codec_config: bool | int = True):
     self.unsolicited_focus = unsolicited_focus
+    self.ack_codec_config = ack_codec_config
+    self.codec_configs: list[tuple[int | None, bytes, int]] = []  # (session, SPS/PPS, frames received before it)
     self.version = version
     self.version_reply: tuple[int, int, int] | None = None
     self.listener = socket.socket()
@@ -187,7 +189,7 @@ class FakeHeadUnit:
     focused = False
     while not self.stop.is_set():
       channel, kind, data = self._receive()
-      fields = parse_fields(data) if kind != 0 else {}
+      fields = parse_fields(data) if kind not in (0, 1) else {}
       if channel == 0 and kind == 5:
         self.device_name = one(fields, 4, b"").decode()
         self._send(0, 6, discovery_response())
@@ -211,6 +213,11 @@ class FakeHeadUnit:
       elif channel == 3 and kind == 0x8001:
         session_id = one(fields, 1)
         self.start_indications.append(session_id)
+      elif channel == 3 and kind == 1:
+        self.codec_configs.append((session_id, data, len(self.frames)))
+        if self.ack_codec_config is not False:  # True: current session; an int: that session id (the DHU uses 0)
+          ack_session = session_id if self.ack_codec_config is True else self.ack_codec_config
+          self._send(3, 0x8004, field(1, ack_session) + field(2, 1))
       elif channel == 3 and kind == 0:
         self.frames.append((session_id, data[8:]))
         unacked += 1
