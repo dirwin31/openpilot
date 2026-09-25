@@ -96,6 +96,10 @@ def controls():
     def _set_current_layout(self, mode):
       self._current_mode = mode
 
+    def open_starpilot_panel(self, key):
+      self.opened_panel = key
+      self._current_mode = MainState.SETTINGS
+
     def _set_mode_for_state(self):
       self._current_mode = MainState.ONROAD
       self._sidebar.visible = False
@@ -117,9 +121,8 @@ def controls():
 
 
 class FakeNavigateScreen:
-  def __init__(self, on_started, on_close):
-    self.on_started, self.on_close = on_started, on_close
-    self.back_label = ""
+  def __init__(self, on_started, on_close, on_offline_maps):
+    self.on_started, self.on_close, self.on_offline_maps = on_started, on_close, on_offline_maps
     self.events = []
 
   def show_event(self):
@@ -192,7 +195,7 @@ def test_navigate_opens_the_navigate_screen_and_takes_touches(controls):
   controls.menu.open = True
   controls.menu.activate("navigate")
   assert controls.nav_open and not controls.menu.open
-  assert controls.navigate_screen.events == ["show"] and controls.navigate_screen.back_label == "Back to driving"
+  assert controls.navigate_screen.events == ["show"]
   assert controls.full_screen(True)
   button = controls.menu.button_rect(screen())
   layout_events, menu_events = controls.route(tap(button.x + 10, button.y + 10), touches, True, screen())
@@ -207,7 +210,6 @@ def test_starting_a_route_returns_to_the_drive_even_from_the_home_screen(control
   controls.update(True, 0.0)
   controls.go_home()
   controls.open_navigate()
-  assert controls.navigate_screen.back_label == "Back"
   controls.navigate_screen.on_close()
   assert controls.on_home(True), "Back returns to where the driver came from"
   controls.open_navigate()
@@ -220,8 +222,7 @@ def test_home_screen_navigate_button_opens_the_same_screen():
 
   class Home:
     def __init__(self):
-      self._home_info_card = SimpleNamespace(quick_start_enabled=True)
-      self._navigate_button = SimpleNamespace(locked_text="")
+      self.nav_card = None
       self.callback = None
 
     def set_navigate_callback(self, callback):
@@ -232,7 +233,7 @@ def test_home_screen_navigate_button_opens_the_same_screen():
   controls = car_ui.OnroadControls(main_layout, params=FakeParams({"MapboxSecretKey": "sk"}), params_memory=FakeParams(),
                                    navigate_screen_factory=FakeNavigateScreen)
   assert home.callback == controls.open_navigate
-  assert home._home_info_card.quick_start_enabled is False, "Personal Records no longer hides a second navigation page"
+  assert home.nav_card is controls.nav_card, "the Navigate card replaces Personal Records on the car"
   controls.update(False)
   home.callback()
   assert controls.nav_open and controls.full_screen(False)
@@ -368,3 +369,198 @@ def test_button_moves_off_the_sidebar_flag_on_the_home_screen(controls):
   assert panel.x + panel.width <= 1920 and panel.x > 1000, "the panel opens toward the screen from the right corner"
   controls.go_driving()
   assert controls.menu.button_rect(screen()).x < 200
+
+
+# ── home screen Navigate card ─────────────────────────────────────────────────
+
+def test_card_offers_home_and_work(controls):
+  controls.update(True, 0.0)
+  card = controls.nav_card
+  assert card.home["name"] == "House" and card.work["name"] == "Office"
+  assert not card.allowed("start"), "Start waits for Home or Work"
+  card.activate("work")
+  assert card.selected == "work" and card.allowed("start")
+  card.activate("work")
+  assert card.selected is None, "tapping again deselects"
+
+
+def test_card_start_goes_to_the_drive_layout(controls):
+  controls.update(True, 0.0)
+  controls.go_home()
+  card = controls.nav_card
+  card.activate("home")
+  card.activate("start")
+  assert "House" in controls.params.values["NavDestination"]
+  assert not controls.on_home(True), "Start opens the drive in the chosen car screen layout"
+  assert card.selected is None and card.destination_name == "House" and card.allowed("end")
+  card.activate("end")
+  assert "NavDestination" not in controls.params.values and not card.destination_name
+
+
+def test_card_start_offroad_sets_the_route_for_the_next_drive(controls):
+  controls.update(False)
+  controls.nav_card.activate("work")
+  controls.nav_card.activate("start")
+  assert "Office" in controls.params.values["NavDestination"]
+
+
+def test_card_other_opens_the_navigate_page(controls):
+  controls.update(True, 0.0)
+  controls.go_home()
+  controls.nav_card.activate("other")
+  assert controls.nav_open
+
+
+def test_card_locks_above_10_mph_but_can_end_a_route(controls):
+  controls.params.values["NavDestination"] = '{"name": "House", "place_name": "House", "latitude": 36.3, "longitude": -115.3}'
+  controls.update(True, 0.0)
+  card = controls.nav_card
+  card.activate("work")
+  controls.update(True, 20 * MPH)
+  assert "10 mph" in card.status_text()
+  assert not any(card.allowed(key) for key in ("home", "work", "start", "other"))
+  card.activate("start")
+  assert "House" in controls.params.values["NavDestination"], "Start does nothing while moving"
+  card.activate("end")
+  assert "NavDestination" not in controls.params.values
+
+
+def test_card_without_a_work_favorite(controls):
+  import json
+  controls.params.values["FavoriteDestinations"] = json.dumps([{"id": "h", "name": "House", "latitude": 36.3, "longitude": -115.3,
+                                                                "is_home": True}])
+  controls.update(True, 0.0)
+  card = controls.nav_card
+  assert card.work is None and not card.allowed("work") and card.allowed("home")
+
+
+def test_dhu_session_is_pinned_below_the_limit():
+  from openpilot.starpilot.system.android_auto.car_screen import DHU_ENV
+  sm = SimpleNamespace(recv_frame={"carState": 0}, alive={"carState": False})
+  ui_state = SimpleNamespace(sm=sm)
+  assert car_ui.navigation_speed(ui_state, environ={}) is None, "a real car without carState stays locked"
+  assert car_ui.navigation_speed(ui_state, environ={DHU_ENV: "1"}) == 0.0
+
+
+# ── Navigate screen ───────────────────────────────────────────────────────────
+
+class FakePage:
+  def __init__(self, on_started=None, **kwargs):
+    from openpilot.starpilot.navigation.destination_store import same_destination
+    self._same = same_destination
+    self._draft_destination = None
+    self._active_destination = None
+    self._search_results = []
+    self._favorites = []
+    self._recent_destinations = []
+    self._query = ""
+    self._search_loading = False
+    self._search_error = ""
+    self._preview_routes = []
+    self._preview_route_index = 0
+    self._selected_favorite = None
+    self.targets = []
+
+  def _same_destination(self, left, right):
+    return self._same(left, right)
+
+  def _favorite_for_destination(self, destination):
+    return next((f for f in self._favorites if self._same(f, destination)), None)
+
+  @staticmethod
+  def _duration_text(seconds):
+    return f"{round(seconds / 60)} min"
+
+  def _activate_navigation_target(self, target):
+    self.targets.append(target)
+
+
+@pytest.fixture
+def nav_screen(monkeypatch):
+  from openpilot.selfdrive.ui.layouts.settings.starpilot import navigation
+  from openpilot.starpilot.system.android_auto.car_navigate import CarNavigateScreen
+  monkeypatch.setattr(navigation, "StarPilotNavigationLayout", FakePage)
+  closed = []
+  screen = CarNavigateScreen(on_started=lambda: None, on_close=lambda: closed.append(True), on_offline_maps=lambda: closed.append("offline"))
+  screen.closed = closed
+  return screen
+
+
+def test_screen_lists_results_favorites_and_recents_with_full_addresses(nav_screen):
+  from openpilot.selfdrive.ui.layouts.settings.starpilot.navigation import SearchResult
+  page = nav_screen.page
+  page._search_results = [SearchResult("Blue Bottle Coffee", "1 Ferry Building, San Francisco, CA 94111, United States", 37.8, -122.4)]
+  page._favorites = [
+    {"id": "o", "name": "Office", "place_name": "500 Howard St, San Francisco", "latitude": 37.7, "longitude": -122.3, "is_work": True},
+    {"id": "g", "name": "Gym", "latitude": 37.6, "longitude": -122.2},
+  ]
+  page._recent_destinations = [{"name": "Airport", "place_name": "Airport", "latitude": 37.6, "longitude": -122.4}]
+  page._draft_destination = {"name": "Gym", "latitude": 37.6, "longitude": -122.2}
+
+  sections = dict(nav_screen.list_rows())
+  assert list(sections) == ["Results", "Favorites", "Recent"]
+  result = sections["Results"][0]
+  assert result.target == "result:0" and result.subtitle.startswith("1 Ferry Building")
+  office, gym = sorted(sections["Favorites"], key=lambda row: row.title != "Office")
+  assert office.badge == "Work" and office.subtitle == "500 Howard St, San Francisco"
+  assert gym.selected and gym.subtitle == "" and gym.target == "favorite:g"
+  assert sections["Recent"][0].subtitle == "", "no subtitle that just repeats the title"
+  assert nav_screen.notice() is None
+
+
+def test_screen_notices(nav_screen):
+  page = nav_screen.page
+  assert nav_screen.notice()[0] == "No places yet"
+  page._query = "zzzz"
+  assert nav_screen.notice()[0] == "No matches"
+  page._search_loading = True
+  assert nav_screen.notice()[0] == "Searching…"
+
+
+def test_screen_route_and_favorite_chips(nav_screen):
+  page = nav_screen.page
+  page._draft_destination = {"name": "Gym", "latitude": 37.6, "longitude": -122.2}
+  page._preview_routes = [SimpleNamespace(total_duration=600), SimpleNamespace(total_duration=900)]
+  page._preview_route_index = 1
+  assert nav_screen.route_chips() == [("route:0", "Fastest · 10 min", False), ("route:1", "Route 2 · 15 min", True)]
+  assert [chip[1:] for chip in nav_screen.favorite_chips()] == [("Save", False), ("Home", False), ("Work", False)]
+  page._favorites = [{"id": "g", "name": "Gym", "latitude": 37.6, "longitude": -122.2, "is_home": True}]
+  assert [chip[1:] for chip in nav_screen.favorite_chips()] == [("Saved", True), ("Home", True), ("Work", False)]
+  page._preview_routes = page._preview_routes[:1]
+  assert nav_screen.route_chips() == [], "no chips without a choice"
+
+
+def test_screen_taps_activate_and_drags_scroll(nav_screen):
+  import pyray as rl
+  from openpilot.system.ui.lib.application import MouseEvent, MousePos
+  nav_screen._list_rect = rl.Rectangle(0, 200, 800, 600)
+  nav_screen._content_height = 1400
+  nav_screen._targets = [("back", rl.Rectangle(0, 0, 80, 80), False), ("favorite:g", rl.Rectangle(0, 300, 800, 108), True)]
+
+  nav_screen._handle_mouse_press(MousePos(100, 350))
+  nav_screen._handle_mouse_release(MousePos(100, 352))
+  assert nav_screen.page.targets == ["favorite:g"]
+
+  nav_screen._handle_mouse_press(MousePos(100, 350))
+  nav_screen._handle_mouse_event(MouseEvent(MousePos(100, 250), 0, False, False, True, 0.0))
+  nav_screen._handle_mouse_release(MousePos(100, 250))
+  assert nav_screen.page.targets == ["favorite:g"], "a drag scrolls instead of tapping"
+  assert nav_screen.scroll == 100
+
+  nav_screen._handle_mouse_press(MousePos(40, 40))
+  nav_screen._handle_mouse_release(MousePos(40, 40))
+  assert nav_screen.closed == [True]
+
+
+def test_navigate_screen_links_to_offline_maps_settings(controls, nav_screen):
+  nav_screen.activate("offline_maps")
+  assert nav_screen.closed == ["offline"]
+
+  controls.update(True, 0.0)
+  controls.open_navigate()
+  controls.navigate_screen.on_offline_maps()
+  assert not controls.nav_open and controls.main_layout.opened_panel == "OFFLINE_MAPS"
+  assert controls.on_home(True), "Settings takes touches onroad like the home screen"
+  touches = touch_input()
+  layout_events, _ = controls.route(tap(900, 500), touches, True, screen())
+  assert len(layout_events) == 2

@@ -115,10 +115,13 @@ class MainLayout(Widget):
       gui_app.request_high_fps()
 
   def open_navigation(self):
+    self.open_starpilot_panel("NAVIGATION")
+
+  def open_starpilot_panel(self, panel_key: str):
     self.open_settings(PanelType.STARPILOT)
     starpilot = self._layouts[MainState.SETTINGS]._panels[PanelType.STARPILOT].instance
-    if hasattr(starpilot, "open_navigation"):
-      starpilot.open_navigation()
+    if hasattr(starpilot, "open_panel"):
+      starpilot.open_panel(panel_key)
 
   def open_settings(self, panel_type: PanelType):
     self._layouts[MainState.SETTINGS].set_current_panel(panel_type)

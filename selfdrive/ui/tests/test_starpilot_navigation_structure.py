@@ -82,6 +82,7 @@ def test_driving_controls_contains_nested_navigation_folder_and_leaf_routes():
   assert navigation_maps["children"] == [
     {"title": "Map Data", "panel": "MAPS", "icon": "navigate"},
     {"title": "Navigation", "panel": "NAVIGATION", "icon": "road"},
+    {"title": "Offline Maps", "panel": "OFFLINE_MAPS", "icon": "navigate"},
   ]
 
   assert controls["children"][1]["panel"] == "LONGITUDINAL"
@@ -98,6 +99,7 @@ def test_driving_model_is_a_root_leaf_and_existing_panel_routes_are_preserved():
   assert StarPilotLayout.PANEL_TYPE_MAP["MAPS"] == StarPilotPanelType.MAPS
   assert StarPilotLayout.PANEL_TYPE_MAP["NAVIGATION"] == StarPilotPanelType.NAVIGATION
   assert StarPilotPanelType.NAVIGATION.value == 13
+  assert StarPilotLayout.PANEL_TYPE_MAP["OFFLINE_MAPS"] == StarPilotPanelType.OFFLINE_MAPS
 
 
 class _FakeHubTile:
@@ -361,3 +363,13 @@ def test_breadcrumb_panel_stack_unwinds_nav_stack(monkeypatch):
   assert len(layout._panel_stack) == 1
   assert layout._panel_stack[0] == (StarPilotPanelType.MAPS, "sub1")
 
+
+
+def test_open_panel_jumps_to_offline_maps_with_the_folders_behind_it(monkeypatch):
+  layout, depths = _make_layout(monkeypatch)
+  layout.open_panel("OFFLINE_MAPS")
+  assert layout._current_panel == StarPilotPanelType.OFFLINE_MAPS
+  assert [folder["title"] for folder in layout._hub_path] == ["Driving Controls", "Navigation & Maps"]
+  assert depths[-1] == 3
+  layout.navigate_back()
+  assert layout._current_panel == StarPilotPanelType.MAIN and depths[-1] == 2, "Back walks up to Navigation & Maps"

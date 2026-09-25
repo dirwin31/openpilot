@@ -20,6 +20,9 @@ ONROAD_VIEWS = ("split", "driving", "map")  # map + driving view, driving view o
 MAP_SIDES = ("right", "left")
 DEFAULTS = {"onroad_view": "split", "map_side": "right", "camera": True}
 RELOAD_SECONDS = 1.0
+# Set by tools/android_auto/dhu_device.py for a Desktop Head Unit session; the car view
+# then treats the car as below the 10 mph destination lock.
+DHU_ENV = "STARPILOT_ANDROID_AUTO_DHU"
 
 
 def normalize(raw: object) -> dict:

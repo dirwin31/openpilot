@@ -13,6 +13,7 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.longitudinal import StarP
 from openpilot.selfdrive.ui.layouts.settings.starpilot.lateral import StarPilotLateralLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.maps import StarPilotMapsLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.navigation import StarPilotNavigationLayout
+from openpilot.selfdrive.ui.layouts.settings.starpilot.offline_maps import StarPilotOfflineMapsLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.system_settings import StarPilotSystemLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.appearance import StarPilotAppearanceLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.vehicle import StarPilotVehicleSettingsLayout
@@ -41,6 +42,7 @@ class StarPilotLayout(Widget):
           "children": [
             {"title": "Map Data", "panel": "MAPS", "icon": "navigate"},
             {"title": "Navigation", "panel": "NAVIGATION", "icon": "road"},
+            {"title": "Offline Maps", "panel": "OFFLINE_MAPS", "icon": "navigate"},
           ],
         },
         {"title": "Gas / Brake", "panel": "LONGITUDINAL", "icon": "road"},
@@ -72,6 +74,7 @@ class StarPilotLayout(Widget):
     "LATERAL": StarPilotPanelType.LATERAL,
     "MAPS": StarPilotPanelType.MAPS,
     "NAVIGATION": StarPilotPanelType.NAVIGATION,
+    "OFFLINE_MAPS": StarPilotPanelType.OFFLINE_MAPS,
     "VISUALS": StarPilotPanelType.VISUALS,
     "VEHICLE": StarPilotPanelType.VEHICLE,
   }
@@ -103,6 +106,7 @@ class StarPilotLayout(Widget):
       StarPilotPanelType.LATERAL: StarPilotPanelInfo(tr_noop("Steering"), StarPilotLateralLayout()),
       StarPilotPanelType.MAPS: StarPilotPanelInfo(tr_noop("Map Data"), StarPilotMapsLayout()),
       StarPilotPanelType.NAVIGATION: StarPilotPanelInfo(tr_noop("Navigation"), StarPilotNavigationLayout()),
+      StarPilotPanelType.OFFLINE_MAPS: StarPilotPanelInfo(tr_noop("Offline Maps"), StarPilotOfflineMapsLayout()),
       StarPilotPanelType.VISUALS: StarPilotPanelInfo(tr_noop("Appearance"), StarPilotAppearanceLayout()),
       StarPilotPanelType.VEHICLE: StarPilotPanelInfo(tr_noop("Vehicle Settings"), StarPilotVehicleSettingsLayout()),
     }
@@ -156,9 +160,13 @@ class StarPilotLayout(Widget):
 
   def open_navigation(self):
     """Jump straight to the Navigation panel, e.g. from the home screen."""
+    self.open_panel("NAVIGATION")
+
+  def open_panel(self, panel_key: str):
+    """Jump straight to a panel, opening the hub folders above it so Back walks up them."""
     def find(folders, path):
       for item in folders:
-        if item.get("panel") == "NAVIGATION":
+        if item.get("panel") == panel_key:
           return path, item
         found = find(item.get("children", []), path + [item])
         if found is not None:

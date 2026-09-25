@@ -25,7 +25,6 @@ class NavigateButton(Widget):
     self.params = ui_state.ui_params
     self._subtitle = ""
     self._refreshed_at = 0.0
-    self.locked_text = ""  # when set, the button is dimmed and says why it can't be used
 
   def show_event(self):
     super().show_event()
@@ -51,8 +50,7 @@ class NavigateButton(Widget):
     return text.rstrip() + "..."
 
   def _render(self, rect):
-    locked = bool(self.locked_text)
-    rl.draw_rectangle_rounded(rect, 0.19, 10, BUTTON_BG_PRESSED if self.is_pressed and not locked else BUTTON_BG)
+    rl.draw_rectangle_rounded(rect, 0.19, 10, BUTTON_BG_PRESSED if self.is_pressed else BUTTON_BG)
     rl.draw_rectangle_rounded_lines_ex(rect, 0.19, 10, 2, BUTTON_BORDER)
 
     # A simple route glyph: two stops joined by a line.
@@ -66,8 +64,8 @@ class NavigateButton(Widget):
     width = rect.x + rect.width - text_x - 70
     title_size, subtitle_size = 44, 30
     top = rect.y + (rect.height - (title_size + subtitle_size + 8) * FONT_SCALE) / 2
-    rl.draw_text_ex(bold, tr("Navigate"), rl.Vector2(int(text_x), int(top)), title_size, 0, SUBTEXT if locked else TEXT)
-    rl.draw_text_ex(medium, self._fit(medium, self.locked_text or self._subtitle, subtitle_size, width),
+    rl.draw_text_ex(bold, tr("Navigate"), rl.Vector2(int(text_x), int(top)), title_size, 0, TEXT)
+    rl.draw_text_ex(medium, self._fit(medium, self._subtitle, subtitle_size, width),
                     rl.Vector2(int(text_x), int(top + (title_size + 8) * FONT_SCALE)), subtitle_size, 0, SUBTEXT)
 
     chevron_x, chevron_y = rect.x + rect.width - 44, rect.y + rect.height / 2
