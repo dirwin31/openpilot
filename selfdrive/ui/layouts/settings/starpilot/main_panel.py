@@ -11,7 +11,6 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.sounds import StarPilotSo
 from openpilot.selfdrive.ui.layouts.settings.starpilot.driving_model import StarPilotDrivingModelLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.longitudinal import StarPilotLongitudinalLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.lateral import StarPilotLateralLayout
-from openpilot.selfdrive.ui.layouts.settings.starpilot.maps import StarPilotMapsLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.navigation import StarPilotNavigationLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.offline_maps import StarPilotOfflineMapsLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.system_settings import StarPilotSystemLayout
@@ -40,7 +39,6 @@ class StarPilotLayout(Widget):
           "title": "Navigation & Maps",
           "icon": "navigate",
           "children": [
-            {"title": "Map Data", "panel": "MAPS", "icon": "navigate"},
             {"title": "Navigation", "panel": "NAVIGATION", "icon": "road"},
             {"title": "Offline Maps", "panel": "OFFLINE_MAPS", "icon": "navigate"},
           ],
@@ -72,7 +70,6 @@ class StarPilotLayout(Widget):
     "DRIVING_MODEL": StarPilotPanelType.DRIVING_MODEL,
     "LONGITUDINAL": StarPilotPanelType.LONGITUDINAL,
     "LATERAL": StarPilotPanelType.LATERAL,
-    "MAPS": StarPilotPanelType.MAPS,
     "NAVIGATION": StarPilotPanelType.NAVIGATION,
     "OFFLINE_MAPS": StarPilotPanelType.OFFLINE_MAPS,
     "VISUALS": StarPilotPanelType.VISUALS,
@@ -104,7 +101,6 @@ class StarPilotLayout(Widget):
       StarPilotPanelType.DRIVING_MODEL: StarPilotPanelInfo(tr_noop("Driving Model"), StarPilotDrivingModelLayout()),
       StarPilotPanelType.LONGITUDINAL: StarPilotPanelInfo(tr_noop("Gas / Brake"), StarPilotLongitudinalLayout()),
       StarPilotPanelType.LATERAL: StarPilotPanelInfo(tr_noop("Steering"), StarPilotLateralLayout()),
-      StarPilotPanelType.MAPS: StarPilotPanelInfo(tr_noop("Map Data"), StarPilotMapsLayout()),
       StarPilotPanelType.NAVIGATION: StarPilotPanelInfo(tr_noop("Navigation"), StarPilotNavigationLayout()),
       StarPilotPanelType.OFFLINE_MAPS: StarPilotPanelInfo(tr_noop("Offline Maps"), StarPilotOfflineMapsLayout()),
       StarPilotPanelType.VISUALS: StarPilotPanelInfo(tr_noop("Appearance"), StarPilotAppearanceLayout()),
@@ -116,7 +112,6 @@ class StarPilotLayout(Widget):
       StarPilotPanelType.SOUNDS,
       StarPilotPanelType.SYSTEM,
       StarPilotPanelType.LATERAL,
-      StarPilotPanelType.MAPS,
       StarPilotPanelType.NAVIGATION,
       StarPilotPanelType.VISUALS,
       StarPilotPanelType.VEHICLE,
@@ -164,6 +159,10 @@ class StarPilotLayout(Widget):
 
   def open_panel(self, panel_key: str):
     """Jump straight to a panel, opening the hub folders above it so Back walks up them."""
+    if panel_key in ("MAPS", "OFFLINE_MAPS"):  # Map Data now lives inside Offline Maps
+      self._panels[StarPilotPanelType.OFFLINE_MAPS].instance.open_segment(1 if panel_key == "MAPS" else 0)
+      panel_key = "OFFLINE_MAPS"
+
     def find(folders, path):
       for item in folders:
         if item.get("panel") == panel_key:

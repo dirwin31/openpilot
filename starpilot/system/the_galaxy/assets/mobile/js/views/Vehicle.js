@@ -22,6 +22,7 @@ export const Vehicle = {
   },
   methods: {
     openAndroidAuto() { navigate("/navigation/auto") },
+    openOfflineMaps() { navigate("/navigation/maps") },
     statusOf(key) { return this.featureStatus[key] || "untested" },
     async openFeature(f) {
       if (this.busy) return
@@ -70,7 +71,7 @@ export const Vehicle = {
       </GalaxySection>
 
       <p style="color:var(--text-muted); margin:0;">
-        Android Auto setup and offline maps moved to <a href="/navigation/auto" @click.prevent="openAndroidAuto">Navigation › Android Auto</a>.
+        Android Auto setup moved to <a href="/navigation/auto" @click.prevent="openAndroidAuto">Navigation › Android Auto</a>, and offline maps to <a href="/navigation/maps" @click.prevent="openOfflineMaps">Navigation › Offline Maps</a>.
       </p>
     </div>
   `,

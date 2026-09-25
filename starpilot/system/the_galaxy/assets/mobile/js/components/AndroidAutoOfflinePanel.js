@@ -423,11 +423,11 @@ export const AndroidAutoOfflinePanel = {
       <section class="gx-card">
         <div class="gx-section__header">
           <i class="bi bi-cloud-arrow-down"></i>
-          <span class="gx-section__title">Offline Maps for Android Auto</span>
+          <span class="gx-section__title">Map Display</span>
         </div>
         <div style="padding: var(--sp-3); display:grid; gap:6px;">
           <p style="margin:0; color:var(--text-muted);">
-            Save areas and routes so the car's navigation map keeps working without a signal. The comma downloads them on Wi-Fi,
+            The map drawn on the comma and the car screen. Save areas and routes so it keeps working without a signal. The comma downloads them on Wi-Fi,
             keeps them until you delete them, and refreshes them every {{ summary?.refresh_days || 90 }} days.
             The route you're navigating is also saved automatically.
           </p>
