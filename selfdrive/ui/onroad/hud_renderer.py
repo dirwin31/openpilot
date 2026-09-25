@@ -135,7 +135,8 @@ class HudRenderer(Widget):
     if self.draw_current_speed and not ui_state.starpilot_toggles.get("hide_speed", False):
       self._draw_current_speed(rect)
 
-    self._navigation_card.render(rect)
+    if not getattr(ui_state, "nav_map_beside_road", False):  # the map beside it shows the same turn, larger
+      self._navigation_card.render(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size

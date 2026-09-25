@@ -50,7 +50,8 @@ class SpeedLimitWidget(LayoutWidget):
     if self._slc_state is None:
       return
     params = ui_state.ui_params
-    expanded = params.get_bool("SpeedLimitSources")
+    # Beside the car view's map the per-source list is noise; the sign alone is enough.
+    expanded = params.get_bool("SpeedLimitSources") and not getattr(ui_state, "nav_map_beside_road", False)
     self._sign_rect = render_speed_limit_at(self._slc_state, rect, expanded)
 
   def _handle_mouse_press(self, mouse_pos) -> None:
