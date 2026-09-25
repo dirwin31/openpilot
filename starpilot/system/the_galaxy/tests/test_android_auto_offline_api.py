@@ -125,6 +125,5 @@ def test_both_offline_downloaders_share_the_offline_maps_tab():
   assert "tab === 'auto'" not in navigation
   assert "/navigation/maps" in vehicle
   assert "AndroidAutoOfflinePanel, GalaxySection" in navigation, "offline parent sections must render as Galaxy cards"
-  road = (JS_ROOT / "components" / "MapsPanel.js").read_text()
   assert 'title="Offline Maps for Android Auto"' in maps_tab
-  assert '<span class="gx-section__title">Speed Limit &amp; Curve Data</span>' in road
+  assert 'title="Speed Limit &amp; Curve Data"' in maps_tab
