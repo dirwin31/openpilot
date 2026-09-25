@@ -14,7 +14,7 @@ def _client(monkeypatch, tmp_path):
   monkeypatch.setattr(apk_identity, "IMPORT_DIR", tmp_path / "aa" / "import")
   real_job = apk_identity.ImportJob
   monkeypatch.setattr(nav.the_galaxy.apk_identity, "ImportJob", lambda: real_job(root_sha256=root_sha))
-  client, _ = nav._params_client(monkeypatch, {"IsOffroad": True}, "mici")
+  client, _ = nav._params_client(monkeypatch, {"IsOffroad": True, "AndroidAutoEnabled": True}, "mici")
   return client, ident
 
 

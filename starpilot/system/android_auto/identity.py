@@ -2,7 +2,7 @@
 
 The identity (phone certificate, its key, and the Google Automotive Link root used
 to verify the head unit) is extracted from the user's own Android Auto app by
-``apk_identity`` (The Galaxy → Vehicle Controls → Android Auto Identity, or
+``apk_identity`` (The Galaxy → Toggles → Vehicle → Android Auto Certificate, or
 ``tools/android_auto/import_identity.py``) into ``IDENTITY_DIR``. It is never
 committed, never logged, and the key must be readable only by its owner.
 """
@@ -61,7 +61,7 @@ def load_identity(directory: Path | None = None, now: datetime | None = None) ->
   cert, key, root = directory / CERT_NAME, directory / KEY_NAME, directory / ROOT_NAME
   missing = [path.name for path in (cert, key) if not path.is_file()]
   if missing:
-    raise IdentityError(f"Android Auto identity missing ({', '.join(missing)} in {directory}); add it in The Galaxy: Vehicle Controls → Android Auto Identity")
+    raise IdentityError(f"Android Auto identity missing ({', '.join(missing)} in {directory}); add it in The Galaxy: Toggles → Vehicle → Android Auto Certificate")
   if stat.S_IMODE(key.stat().st_mode) & 0o077:
     raise IdentityError(f"{key} must not be readable by other users (chmod 600)")
   try:
@@ -74,7 +74,7 @@ def load_identity(directory: Path | None = None, now: datetime | None = None) ->
   expires = _not_after(cert)
   now = now or datetime.now(UTC)
   if expires is not None and expires <= now:
-    raise IdentityError(f"Android Auto phone certificate expired on {expires.date()}; renew it in The Galaxy: Vehicle Controls → Android Auto Identity")
+    raise IdentityError(f"Android Auto phone certificate expired on {expires.date()}; renew it in The Galaxy: Toggles → Vehicle → Android Auto Certificate")
   days_left = (expires - now).days if expires is not None else -1
   return Identity(str(cert), str(key), str(root) if root.is_file() else None,
                   expires.isoformat() if expires is not None else "unknown", days_left)
