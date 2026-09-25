@@ -1,5 +1,5 @@
 import { NavigationDestinationPanel } from "../components/NavigationDestinationPanel.js?v=nav-destination-6"
-import { MapsPanel } from "../components/MapsPanel.js?v=offline-download-2"
+import { MapsPanel } from "../components/MapsPanel.js?v=offline-download-3"
 import { NavigationKeysPanel } from "../components/NavigationKeysPanel.js"
 import { SpeedLimitsPanel } from "../components/SpeedLimitsPanel.js"
 import { AndroidAutoOfflinePanel } from "../components/AndroidAutoOfflinePanel.js?v=offline-coverage-1"
@@ -38,10 +38,6 @@ export const Navigation = {
       <GalaxyTabs :items="TABS" :active="tab" @select="selectTab" />
       <template v-if="tab === 'maps'">
         <div style="display:grid; gap:12px;">
-          <p style="margin:0; color:var(--text-muted);">
-            Two kinds of offline data, downloaded separately: <strong>Speed Limit &amp; Curve Data</strong> is road data openpilot uses for speed limits and curves;
-            <strong>Map Display</strong> is the map you see on the comma and car screen.
-          </p>
           <GalaxySection title="Speed Limit &amp; Curve Data" icon="bi-speedometer2">
             <div style="padding: var(--sp-3);">
               <MapsPanel />
