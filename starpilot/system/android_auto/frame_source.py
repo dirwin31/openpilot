@@ -194,15 +194,15 @@ class FrameProducer:
         pass
     self.mm = None
 
-  def pending_request(self, now: float | None = None) -> FrameRequest | None:
-    """The requested geometry when demand is live, else None."""
+  def pending_request(self, now: float | None = None, *, require_demand: bool = True) -> FrameRequest | None:
+    """Requested geometry; startup may inspect it before display focus is granted."""
     now = time.monotonic() if now is None else now
     if not self._ensure_open(now):
       return None
     mm = self.mm
     assert mm is not None
     fields = _HEADER.unpack_from(mm, 0)
-    if fields[0] != MAGIC or fields[1] != VERSION or fields[7] <= int(now * 1e9):
+    if fields[0] != MAGIC or fields[1] != VERSION or (require_demand and fields[7] <= int(now * 1e9)):
       return None
     request = FrameRequest(fields[8], fields[9], fields[10], fields[11], fields[14])
     if not (0 < request.width <= MAX_WIDTH and 0 < request.height <= MAX_HEIGHT) or request.interval_us <= 0 or \
@@ -214,7 +214,11 @@ class FrameProducer:
     return self.pending_request(now) is not None
 
   def due(self, request: FrameRequest, now_ns: int) -> bool:
-    return now_ns >= self._next_capture_ns - request.interval_us * 250  # 25% pacing slack, in ns
+    return self.capture_delay(request, now_ns) == 0.0
+
+  def capture_delay(self, request: FrameRequest, now_ns: int) -> float:
+    """Seconds until capture is due, with the same 25% pacing slack as due()."""
+    return max(0, self._next_capture_ns - request.interval_us * 250 - now_ns) / 1e9
 
   def publish(self, request: FrameRequest, pixels, captured_ns: int) -> None:
     """Copy one tightly packed top-down RGBA frame of the requested size."""

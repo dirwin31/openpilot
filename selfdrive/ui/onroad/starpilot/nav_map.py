@@ -308,6 +308,7 @@ class NavMapView(Widget):
     self._dirty = True
     self._animating = False
     self._last_draw = -math.inf
+    self._next_draw = -math.inf
     self._overlay_state: tuple | None = None
     self._tiles: TileTextures | None = None
     self._sm = None
@@ -373,11 +374,22 @@ class NavMapView(Widget):
     since = now - self._last_draw
     if since >= MAP_IDLE_REDRAW:
       return True
-    if since < 1.0 / MAP_MAX_FPS:
+    # Keep an absolute schedule. Comparing against the last render's start
+    # loses an entire car frame whenever preparation or jitter puts us just
+    # short of the interval. Slack absorbs that jitter without raising the
+    # average redraw budget.
+    if now < self._next_draw - 0.25 / MAP_MAX_FPS:
       return False
     gps = self._gps
     moving = gps is not None and gps.fresh and gps.speed > 0.3 and not self._preview_active
     return self._dirty or self._animating or moving
+
+  def _record_draw(self, now: float) -> None:
+    self._last_draw = now
+    interval = 1.0 / MAP_MAX_FPS
+    self._next_draw += interval
+    if self._next_draw <= now:
+      self._next_draw = now + interval
 
   @property
   def offline(self) -> bool:
@@ -571,7 +583,7 @@ class NavMapView(Widget):
     now = time.monotonic()
     dt = max(0.0, min(0.5, now - self._last_frame))
     self._last_frame = now
-    self._last_draw = now
+    self._record_draw(now)
     self._dirty = False
     target, anchor, follow = self._target_camera(rect, now)
     self._step_camera(target, dt, follow)

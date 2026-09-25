@@ -534,12 +534,27 @@ class Supervisor:
     ages: deque[float] = deque(maxlen=120)
     sent_times: deque[float] = deque(maxlen=200)
     unavailable: dict[str, bytes] = {}
+    wait_for_frame = False
     self._stage("streaming")
     while not self._stop.is_set():
-      now = time.monotonic()
-      source.demand(1.0)
-      session.pump(0.005 if session.can_send() else 0.05)
+      # Wait only when there was no frame or the receiver's window is full.
+      # select wakes immediately for touches/ACKs; sleeping after every encode
+      # used to add dead time even when the next frame was already available.
+      timeout = min(interval / 4, 0.01) if wait_for_frame else 0.0
+      handled = session.pump(timeout if session.can_send() else 0.05)
+      # Bound the drain so a burst of input cannot starve video, but do not
+      # make each queued touch or ACK wait for another encode/poll cycle.
+      for _ in range(15):
+        if not handled:
+          break
+        handled = session.pump(0.0)
       session.check_progress()
+      now = time.monotonic()
+      wait_for_frame = True
+      if session.focused:
+        source.demand(1.0)
+      else:
+        source.release_demand()
       if session.touch_events:
         source.send_touches(list(session.touch_events))
         session.touch_events.clear()
@@ -553,9 +568,11 @@ class Supervisor:
           if age <= FRAME_MAX_AGE:
             data, keyframe = encoder.encode_rgba(frame.data, keyframe=session.needs_keyframe)
             session.send_frame(data, frame.captured_ns // 1000, keyframe=keyframe)
-            ages.append(age + encoder.last_encode_ms / 1000)
-            sent_times.append(now)
-            last_fresh = now
+            sent_at = time.monotonic()
+            ages.append(sent_at - frame.captured_ns / 1e9)
+            sent_times.append(sent_at)
+            last_fresh = sent_at
+            wait_for_frame = False
         elif now - last_fresh > UNAVAILABLE_AFTER and now - last_unavailable > 1.0:
           # The UI stopped producing frames (e.g. the offroad render budget ran
           # out). Say so on the car instead of freezing on an old image.
@@ -565,6 +582,7 @@ class Supervisor:
           data, keyframe = encoder.encode_rgba(unavailable[text], keyframe=True)
           session.send_frame(data, time.monotonic_ns() // 1000, keyframe=keyframe)
           last_unavailable = now
+      now = time.monotonic()
       if now >= next_check:
         next_check = now + 1.0
         if not lease.still_connected():
@@ -581,10 +599,6 @@ class Supervisor:
         self._set(stats=stats)
         if int(now - started) % 30 == 0:
           self.log("stats", **stats)
-      if not session.can_send():
-        time.sleep(0.005)
-      else:
-        time.sleep(max(0.0, min(interval / 4, 0.01)))
 
   @staticmethod
   def _unavailable_frame(request: FrameRequest | None, text: str) -> bytes:

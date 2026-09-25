@@ -18,6 +18,36 @@ RENDER_NODE = "/dev/dri/renderD128"
 EGL_OPENGL_ES_API = 0x30A0
 
 
+class RgbaReadback:
+  """Read an existing RGBA framebuffer into storage reused for the session.
+
+  Raylib's GLES texture readback creates/deletes a temporary framebuffer and
+  allocates/frees an image every call. The car renderer already owns the output
+  framebuffer, and publish copies the pixels before the next read.
+  """
+
+  def __init__(self, width: int, height: int):
+    self.width, self.height = width, height
+    self.gl = C.CDLL("libGLESv2.so")
+    self.gl.glBindFramebuffer.argtypes = [C.c_uint, C.c_uint]
+    self.gl.glBindFramebuffer.restype = None
+    self.gl.glReadPixels.argtypes = [C.c_int] * 4 + [C.c_uint, C.c_uint, C.c_void_p]
+    self.gl.glReadPixels.restype = None
+    self._storage = (C.c_ubyte * (width * height * 4))()
+    self.pixels = memoryview(self._storage).cast("B")
+
+  def read(self, framebuffer: int) -> memoryview:
+    # Called after end_texture_mode(), with the default framebuffer bound.
+    # RGBA rows are multiples of eight bytes (negotiated sizes are even), so
+    # all GLES pack alignments work. Output is already flipped by the GPU.
+    self.gl.glBindFramebuffer(0x8D40, framebuffer)  # GL_FRAMEBUFFER
+    try:
+      self.gl.glReadPixels(0, 0, self.width, self.height, 0x1908, 0x1401, self._storage)  # RGBA, UNSIGNED_BYTE
+    finally:
+      self.gl.glBindFramebuffer(0x8D40, 0)
+    return self.pixels
+
+
 class HeadlessContext:
   def __init__(self, width: int, height: int):
     self.egl = C.CDLL("libEGL.so")
