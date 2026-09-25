@@ -94,12 +94,13 @@ def test_update_download_now_and_delete(monkeypatch, tmp_path):
   assert client.post("/api/android_auto/offline/missing/update").status_code == 404
 
 
-def test_android_auto_lives_in_navigation_not_vehicle():
+def test_android_auto_settings_moved_out_of_navigation():
   navigation = (JS_ROOT / "views" / "Navigation.js").read_text()
   vehicle = (JS_ROOT / "views" / "Vehicle.js").read_text()
-  assert 'auto: "Android Auto"' in navigation and 'auto: "auto"' in navigation
-  assert "AndroidAutoOfflinePanel" in navigation and "AndroidAutoIdentityPanel" in navigation
-  assert "AndroidAutoIdentityPanel" not in vehicle and "/navigation/auto" in vehicle
+  settings = (JS_ROOT / "views" / "Settings.js").read_text()
+  assert 'auto: "Android Auto"' not in navigation
+  assert "AndroidAutoOfflinePanel" in navigation and "AndroidAutoIdentityPanel" not in navigation
+  assert "AndroidAutoIdentityPanel" in settings and "/navigation/auto" not in vehicle
   panel = (JS_ROOT / "components" / "AndroidAutoOfflinePanel.js").read_text()
   assert "fetch(" not in panel, "network calls go through api.js"
 
@@ -110,8 +111,7 @@ def test_both_offline_downloaders_share_the_offline_maps_tab():
   assert 'maps: "Offline Maps"' in navigation and 'maps: "maps"' in navigation
   maps_tab = navigation.split("tab === 'maps'", 1)[1].split("</template>", 1)[0]
   assert "<AndroidAutoOfflinePanel />" in maps_tab and "<MapsPanel />" in maps_tab
-  auto_tab = navigation.split("tab === 'auto'", 1)[1].split("</template>", 1)[0]
-  assert "<AndroidAutoOfflinePanel />" not in auto_tab and "/navigation/maps" in auto_tab
+  assert "tab === 'auto'" not in navigation
   assert "/navigation/maps" in vehicle
   display = (JS_ROOT / "components" / "AndroidAutoOfflinePanel.js").read_text()
   road = (JS_ROOT / "components" / "MapsPanel.js").read_text()

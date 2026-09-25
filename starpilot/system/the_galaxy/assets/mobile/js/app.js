@@ -1,13 +1,13 @@
 import { createApp, h } from "vue"
 import { AppShell } from "./components/AppShell.js"
 import { Home } from "./views/Home.js"
-import { Settings } from "./views/Settings.js"
+import { Settings } from "./views/Settings.js?v=aa-master-1"
 import { Tools } from "./views/Tools.js"
 import { Recordings } from "./views/Recordings.js"
 import { Logs } from "./views/Logs.js"
 import { Tuning } from "./views/Tuning.js"
-import { Navigation } from "./views/Navigation.js?v=offline-merge-1"
-import { Vehicle } from "./views/Vehicle.js?v=nav-auto-1"
+import { Navigation } from "./views/Navigation.js?v=aa-master-1"
+import { Vehicle } from "./views/Vehicle.js?v=aa-master-1"
 import { Bluetooth } from "./views/Bluetooth.js?v=aa-identity-2"
 import { SystemTools } from "./views/SystemTools.js"
 import { ToolEmbed } from "./views/ToolEmbed.js"
@@ -63,6 +63,7 @@ const VIEWS = {
 }
 
 function resolveView(path) {
+  if (path === "/navigation/auto") { navigate("/settings/vehicle"); return Settings }
   if (path === "/embed" || path.startsWith("/embed/")) return ToolEmbed
   for (const [root, view] of Object.entries(VIEWS)) {
     if (path === root || (root !== "/" && path.startsWith(root + "/"))) return view

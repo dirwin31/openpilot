@@ -5535,6 +5535,12 @@ def setup(app):
   # The Android Auto phone identity, extracted on device from the user's own copy of the app.
   android_auto_import = apk_identity.ImportJob()
 
+  @app.before_request
+  def require_android_auto_enabled():
+    # Offline map tiles are shared with native navigation and remain available.
+    if (request.path.startswith("/api/android_auto/identity") or request.path == "/api/android_auto/car_screen") and not params.get_bool("AndroidAutoEnabled"):
+      return jsonify({"error": "Enable Android Auto under Toggles → Vehicle first."}), 403
+
   def _android_auto_identity_payload():
     return {
       **apk_identity.identity_status(),
@@ -5559,7 +5565,7 @@ def setup(app):
     try:
       path = android_auto_import.upload_path()
       upload.save(str(path))
-      android_auto_import.start(path=path)
+      android_auto_import.start(path=path, enabled=lambda: params.get_bool("AndroidAutoEnabled"))
     except apk_identity.IdentityImportError as error:
       return jsonify({"error": str(error)}), 409
     except OSError as error:
@@ -5572,7 +5578,7 @@ def setup(app):
     if not url.lower().startswith(("https://", "http://")):
       return jsonify({"error": "Enter an http(s) link to the Android Auto APK or XAPK."}), 400
     try:
-      android_auto_import.start(url=url)
+      android_auto_import.start(url=url, enabled=lambda: params.get_bool("AndroidAutoEnabled"))
     except apk_identity.IdentityImportError as error:
       return jsonify({"error": str(error)}), 409
     return jsonify(_android_auto_identity_payload()), 202

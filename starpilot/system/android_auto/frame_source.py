@@ -194,6 +194,9 @@ class FrameProducer:
         pass
     self.mm = None
 
+  def close(self) -> None:
+    self._close()
+
   def pending_request(self, now: float | None = None, *, require_demand: bool = True) -> FrameRequest | None:
     """Requested geometry; startup may inspect it before display focus is granted."""
     now = time.monotonic() if now is None else now
