@@ -5636,6 +5636,15 @@ def setup(app):
       "presets": [{"radius_km": radius, "max_zoom": zoom, "detail": OFFLINE_AREA_DETAIL.get(zoom, "")} for radius, zoom in OFFLINE_AREA_PRESETS],
     }), 200
 
+  @app.route("/api/android_auto/offline/coverage", methods=["GET"])
+  def android_auto_offline_coverage():
+    try:
+      zoom = int(request.args.get("zoom", ""))
+      bounds = [float(request.args[key]) for key in ("west", "south", "east", "north")]
+      return jsonify(OfflineMaps().coverage(zoom, *bounds)), 200
+    except (KeyError, TypeError, ValueError):
+      return jsonify({"error": "Choose a valid coverage zoom and map bounds."}), 400
+
   @app.route("/api/android_auto/offline/estimate", methods=["POST"])
   def android_auto_offline_estimate():
     payload = request.get_json(silent=True) or {}

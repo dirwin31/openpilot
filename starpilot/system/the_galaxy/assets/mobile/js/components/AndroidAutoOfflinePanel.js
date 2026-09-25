@@ -2,6 +2,7 @@ import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "./GxNotice.js"
 import {
+  coverageToGeoJson,
   directionsToRoutes,
   formatBytes,
   formatDistance,
@@ -9,9 +10,10 @@ import {
   itemBounds,
   itemStatus,
   itemsToGeoJson,
+  presetDetailDescription,
   radiusLabel,
   serviceNotice,
-} from "./auto_offline_helpers.js?v=auto-offline-1"
+} from "./auto_offline_helpers.js?v=auto-offline-3"
 import { getMapboxSearchContext } from "../../../components/navigation/navigation_utilities.js?v=nav-route-selection-1"
 
 const MAPBOX_STYLE = "mapbox://styles/frogsgomoo/cmcfv151j000o01rcdxebhl76"
@@ -127,6 +129,12 @@ export const AndroidAutoOfflinePanel = {
       error: "",
       busy: "",
       mapReady: false,
+      coverageEnabled: true,
+      coverageZoom: 16,
+      coverage: null,
+      coverageError: "",
+      coverageRequest: 0,
+      coverageLoading: false,
       pickOnMap: false,
       areaPoint: null,
       areaPresets: null,
@@ -150,6 +158,8 @@ export const AndroidAutoOfflinePanel = {
     this.poll.start()
   },
   beforeUnmount() {
+    this.coverageRequest += 1
+    clearTimeout(this.coverageTimer)
     this.areaRequest += 1
     this.routeRequest += 1
     this.poll?.destroy()
@@ -186,12 +196,15 @@ export const AndroidAutoOfflinePanel = {
   },
   watch: {
     items() { this.drawSaved() },
+    coverageZoom() { this.scheduleCoverage() },
+    coverageEnabled() { this.scheduleCoverage() },
   },
   methods: {
     async refresh() {
       try {
         this.summary = await api.getAutoOffline()
         this.error = ""
+        if (!this.coverageLoading) this.refreshCoverage()
       } catch (e) {
         this.error = e?.message || "Could not read the offline maps."
       } finally {
@@ -218,9 +231,13 @@ export const AndroidAutoOfflinePanel = {
           attributionControl: false,
         })
         this.map.on("load", () => {
-          for (const [id, data] of [["auto-areas", EMPTY], ["auto-routes", EMPTY], ["auto-candidates", EMPTY]]) {
+          for (const [id, data] of [["auto-coverage", EMPTY], ["auto-areas", EMPTY], ["auto-routes", EMPTY], ["auto-candidates", EMPTY]]) {
             this.map.addSource(id, { type: "geojson", data })
           }
+          this.map.addLayer({ id: "auto-coverage-fill", type: "fill", source: "auto-coverage",
+            paint: { "fill-color": ["case", ["get", "saved"], "#34c778", "#4096ff"], "fill-opacity": 0.3 } })
+          this.map.addLayer({ id: "auto-coverage-line", type: "line", source: "auto-coverage",
+            paint: { "line-color": ["case", ["get", "saved"], "#34c778", "#4096ff"], "line-width": 1 } })
           this.map.addLayer({ id: "auto-areas-fill", type: "fill", source: "auto-areas", paint: { "fill-color": "#9d72ff", "fill-opacity": 0.14 } })
           this.map.addLayer({ id: "auto-areas-line", type: "line", source: "auto-areas", paint: { "line-color": "#9d72ff", "line-width": 2 } })
           this.map.addLayer({ id: "auto-routes-line", type: "line", source: "auto-routes", paint: { "line-color": "#4096ff", "line-width": 4 } })
@@ -229,9 +246,11 @@ export const AndroidAutoOfflinePanel = {
             paint: { "line-color": ["case", ["get", "selected"], "#34c778", "#8a93a6"], "line-width": ["case", ["get", "selected"], 5, 3] },
           })
           this.mapReady = true
+          this.refreshCoverage()
           this.drawSaved()
           this.drawCandidates()
         })
+        this.map.on("moveend", () => this.scheduleCoverage())
         this.map.on("click", (event) => {
           if (!this.pickOnMap) return
           this.pickOnMap = false
@@ -239,6 +258,36 @@ export const AndroidAutoOfflinePanel = {
         })
       } catch (e) {
         this.error = e?.message || "Could not load the map."
+      }
+    },
+    scheduleCoverage() {
+      this.coverageRequest += 1
+      this.coverageLoading = false
+      this.coverage = null
+      this.coverageError = ""
+      this.map?.getSource("auto-coverage")?.setData(EMPTY)
+      clearTimeout(this.coverageTimer)
+      this.coverageTimer = setTimeout(() => this.refreshCoverage(), 250)
+    },
+    async refreshCoverage() {
+      if (!this.mapReady || !this.map || !this.coverageEnabled) return
+      const request = ++this.coverageRequest
+      const bounds = this.map.getBounds()
+      this.coverageLoading = true
+      try {
+        const coverage = await api.getAutoOfflineCoverage({ zoom: this.coverageZoom,
+          west: bounds.getWest(), south: bounds.getSouth(), east: bounds.getEast(), north: bounds.getNorth() })
+        if (request !== this.coverageRequest) return
+        this.coverage = coverage
+        this.coverageError = ""
+        this.map.getSource("auto-coverage")?.setData(coverageToGeoJson(coverage))
+      } catch (e) {
+        if (request !== this.coverageRequest) return
+        this.coverage = null
+        this.map?.getSource("auto-coverage")?.setData(EMPTY)
+        this.coverageError = e?.message || "Could not load downloaded tile coverage."
+      } finally {
+        if (request === this.coverageRequest) this.coverageLoading = false
       }
     },
     drawSaved() {
@@ -438,79 +487,28 @@ export const AndroidAutoOfflinePanel = {
     formatBytes,
     formatDistance,
     formatDuration,
+    presetDetailDescription,
     radiusLabel,
   },
   template: `
     <div style="display:grid; gap:10px;">
       <GxNotice v-if="error" tone="danger" :text="error" style="margin:0;" />
 
-      <section class="gx-card" style="margin:0;">
-        <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
-          <i class="bi bi-cloud-arrow-down" style="font-size:1.15rem;"></i>
-          <span class="gx-section__title">Map Display</span>
-        </div>
-        <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:8px;">
-          <p style="margin:0; color:var(--text-muted); font-size:var(--fs-sm);">
-            Saved areas and active routes are kept offline for the comma and car screen, and refresh on Wi-Fi every {{ summary?.refresh_days || 90 }} days.
-          </p>
-          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px;">
-            <div style="background:rgba(255, 255, 255, 0.03); border:1px solid var(--glass-border, rgba(127,127,127,.15)); border-radius:var(--radius-md); padding:6px 10px;">
-              <div style="font-size:var(--fs-xs); color:var(--text-muted);">Downloader</div>
-              <div style="font-weight:var(--fw-bold); font-size:var(--fs-sm); margin-top:2px;">{{ downloaderLabel }}</div>
-            </div>
-            <div style="background:rgba(255, 255, 255, 0.03); border:1px solid var(--glass-border, rgba(127,127,127,.15)); border-radius:var(--radius-md); padding:6px 10px;">
-              <div style="font-size:var(--fs-xs); color:var(--text-muted);">Storage Used</div>
-              <div style="font-weight:var(--fw-bold); font-size:var(--fs-sm); margin-top:2px;">{{ storageLabel }}</div>
-            </div>
-            <div style="background:rgba(255, 255, 255, 0.03); border:1px solid var(--glass-border, rgba(127,127,127,.15)); border-radius:var(--radius-md); padding:6px 10px;">
-              <div style="font-size:var(--fs-xs); color:var(--text-muted);">Current Route</div>
-              <div style="font-weight:var(--fw-bold); font-size:var(--fs-sm); margin-top:2px;">{{ summary ? activeRouteLabel : 'Checking...' }}</div>
-            </div>
-          </div>
-          <GxNotice v-if="notice" :tone="notice.tone" :text="notice.text" style="margin:0;" />
-          <GxNotice v-if="loaded && summary && !token" tone="warn"
-            text="Add a Mapbox public key in the App Keys tab to search places and draw the map." style="margin:0;" />
-        </div>
-      </section>
+      <p style="margin:0; color:var(--text-muted); font-size:var(--fs-sm);">
+        Saved areas and active routes are kept offline for the comma and car screen, and refresh on Wi-Fi every {{ summary?.refresh_days || 90 }} days.
+      </p>
 
-      <section v-if="token" class="gx-card" style="margin:0; overflow:hidden;">
-        <div ref="map" style="height:280px; border-radius:var(--radius-md); overflow:hidden;"></div>
-        <div v-if="pickOnMap" class="gx-note" style="margin:6px var(--sp-3);">Tap the map where the area should be centred.</div>
-      </section>
+      <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; font-size:var(--fs-sm); color:var(--text-muted); padding:2px 0;">
+        <span>Downloader: <strong style="color:var(--text);">{{ downloaderLabel }}</strong></span>
+        <span style="opacity:0.3;">•</span>
+        <span>Storage: <strong style="color:var(--text);">{{ storageLabel }}</strong></span>
+        <span style="opacity:0.3;">•</span>
+        <span>Current Route: <strong style="color:var(--text);">{{ summary ? activeRouteLabel : 'Checking...' }}</strong></span>
+      </div>
 
-      <section class="gx-card" style="margin:0;">
-        <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
-          <i class="bi bi-hdd-stack" style="font-size:1.15rem;"></i>
-          <span class="gx-section__title" style="font-size:var(--fs-base);">Downloads &amp; Saved Maps</span>
-          <span class="gx-section__count">{{ items.length }}</span>
-        </div>
-        <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:6px;">
-          <div v-if="!items.length" class="gx-empty" style="margin:0; padding:var(--sp-3);">Nothing saved yet. Save an area around home or make a trip's route available offline.</div>
-          <div v-for="item in items" :key="item.id" class="gx-card" style="margin:0; padding:8px 10px; background:rgba(255, 255, 255, 0.02); border:1px solid var(--glass-border, rgba(127,127,127,.15)); border-radius:var(--radius-md);">
-            <div style="display:flex; gap:8px; align-items:flex-start;">
-              <i class="bi" :class="item.kind === 'route' ? 'bi-signpost-split' : 'bi-bounding-box-circles'" style="color:var(--primary); margin-top:2px; font-size:1.1rem;"></i>
-              <div style="flex:1; min-width:0;">
-                <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap;">
-                  <button type="button" style="border:none; background:transparent; color:inherit; padding:0; cursor:pointer; text-align:left; font:inherit;" @click="focus(item)">
-                    <span class="gx-row__label" style="font-weight:var(--fw-bold); font-size:var(--fs-sm); overflow-wrap:anywhere;">{{ item.name }}</span>
-                  </button>
-                  <div style="display:flex; gap:6px; flex-wrap:wrap; margin-left:auto;">
-                    <button v-if="status(item).canDownloadNow" type="button" class="gx-btn gx-btn--tonal" style="min-height:28px; padding:0 8px; font-size:var(--fs-xs);" :disabled="busy === item.id" @click="act(item, 'download_now')"
-                      title="Use the comma's current connection even though it's metered">Download Now</button>
-                    <button v-if="status(item).canUpdate" type="button" class="gx-btn gx-btn--text" style="min-height:28px; padding:0 6px; font-size:var(--fs-xs);" :disabled="busy === item.id" @click="act(item, 'update')">Update</button>
-                    <button v-if="status(item).canDelete" type="button" class="gx-btn gx-btn--text" style="min-height:28px; padding:0 6px; font-size:var(--fs-xs); color:var(--error);" :disabled="busy === item.id" @click="remove(item)">Delete</button>
-                  </div>
-                </div>
-                <div class="gx-row__desc" style="margin-top:2px; font-size:var(--fs-xs);">{{ describe(item) }}</div>
-                <div class="gx-row__desc" style="margin-top:2px; font-size:var(--fs-xs);" :style="status(item).tone === 'danger' ? 'color:var(--error);' : ''">{{ status(item).text }}</div>
-                <div v-if="status(item).progress !== null" role="progressbar" :aria-label="item.name + ' download'" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="Math.floor(status(item).progress * 100)" style="height:4px; border-radius:2px; background:var(--glass-border, rgba(127,127,127,.2)); overflow:hidden; margin-top:4px;">
-                  <div :style="'width:' + Math.round(status(item).progress * 100) + '%;height:100%;background:var(--primary);transition:width .3s;'"></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+      <GxNotice v-if="notice" :tone="notice.tone" :text="notice.text" style="margin:0;" />
+      <GxNotice v-if="loaded && summary && !token" tone="warn"
+        text="Add a Mapbox public key in the App Keys tab to search places and draw the map." style="margin:0;" />
 
       <section class="gx-card" style="margin:0;">
         <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
@@ -559,12 +557,37 @@ export const AndroidAutoOfflinePanel = {
         </div>
       </section>
 
+      <section v-if="token" class="gx-card" style="margin:0; overflow:hidden;">
+        <div style="padding:10px; display:grid; gap:6px;">
+          <label><input type="checkbox" v-model="coverageEnabled" /> Show downloaded tiles</label>
+          <label v-if="coverageEnabled">Tile detail:
+            <select v-model.number="coverageZoom" class="gx-field" aria-label="Downloaded tile zoom level">
+              <option v-for="zoom in 19" :key="zoom - 1" :value="zoom - 1">Zoom {{ zoom - 1 }}{{ ({13: ' · Regional', 14: ' · Road', 15: ' · City', 16: ' · Street'})[zoom - 1] || '' }}</option>
+            </select>
+          </label>
+          <div v-if="coverageEnabled" class="gx-row__desc">
+            <span style="color:#34c778;">■ Saved offline</span> · <span style="color:#4096ff;">■ Temporary cache</span> · Purple outlines: requested areas.
+            Coverage is for the selected zoom only; the background map is online.
+          </div>
+          <div v-if="coverageEnabled" class="gx-row__desc" role="status">
+            <template v-if="coverageError">{{ coverageError }}</template>
+            <template v-else-if="coverage">{{ coverage.tiles.length.toLocaleString() }} downloaded tiles in view at zoom {{ coverage.zoom }}. {{ coverage.truncated ? 'Display limit reached; zoom the map in to see all tiles.' : '' }}</template>
+            <template v-else>Checking downloaded tiles...</template>
+          </div>
+        </div>
+        <div ref="map" style="height:280px; border-radius:var(--radius-md); overflow:hidden;"></div>
+        <div v-if="pickOnMap" class="gx-note" style="margin:6px var(--sp-3);">Tap the map where the area should be centred.</div>
+      </section>
+
       <section class="gx-card" style="margin:0;">
         <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
           <i class="bi bi-bounding-box-circles" style="font-size:1.15rem;"></i>
           <span class="gx-section__title" style="font-size:var(--fs-base);">Save an Area</span>
         </div>
         <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:8px;">
+          <p style="margin:0; color:var(--text-muted); font-size:var(--fs-xs);">
+            Download a coverage radius around a point. Smaller radii include full street-level turns and residential roads, while larger radii cover broader highway networks within device storage.
+          </p>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!position" @click="useCurrentLocation"><i class="bi bi-crosshair"></i> Current Location</button>
             <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!mapReady" @click="pickOnMap = !pickOnMap">
@@ -577,18 +600,53 @@ export const AndroidAutoOfflinePanel = {
             <div v-if="areaLoading" class="gx-row__desc" role="status">Sizing up the area...</div>
             <GxNotice v-if="areaError" tone="danger" :text="areaError" style="margin:0;" />
             <button v-if="areaError" type="button" class="gx-btn gx-btn--tonal" @click="chooseAreaPoint(areaPoint, false)">Retry sizing</button>
-            <div v-for="preset in areaPresets || []" :key="preset.radius_km" class="gx-row" style="border-top:none; min-height:0; padding:6px 0; flex-wrap:wrap; gap:8px;">
+            <div v-for="preset in areaPresets || []" :key="preset.radius_km" class="gx-row" style="border-top:none; min-height:0; padding:8px 0; flex-wrap:wrap; gap:8px;">
               <div class="gx-row__info">
-                <span class="gx-row__label">{{ radiusLabel(preset.radius_km, metric) }} · {{ preset.detail }}</span>
-                <span class="gx-row__desc" style="margin-top:2px;">{{ preset.fits ? 'About ' + formatBytes(preset.bytes) + ' · ' + preset.tiles.toLocaleString() + ' tiles' : 'Too large for the offline storage left' }}</span>
+                <span class="gx-row__label" style="font-weight:var(--fw-bold);">{{ radiusLabel(preset.radius_km, metric) }} radius · {{ preset.detail }}</span>
+                <span class="gx-row__desc" style="margin-top:2px;">{{ presetDetailDescription(preset, metric) }}</span>
+                <div style="font-size:var(--fs-xs); color:var(--text-muted); margin-top:2px;">
+                  {{ preset.fits ? 'Est. ' + formatBytes(preset.bytes) + ' · ' + preset.tiles.toLocaleString() + ' tiles' : 'Too large for available offline storage' }}
+                </div>
               </div>
-              <button type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px;" :disabled="!preset.fits || !!busy" @click="saveArea(preset)">{{ busy === 'area' ? 'Adding to downloads...' : 'Download' }}</button>
+              <button type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px; align-self:center;" :disabled="!preset.fits || !!busy" @click="saveArea(preset)">{{ busy === 'area' ? 'Adding to downloads...' : 'Download' }}</button>
             </div>
           </template>
         </div>
       </section>
 
-
+      <section class="gx-card" style="margin:0;">
+        <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
+          <i class="bi bi-hdd-stack" style="font-size:1.15rem;"></i>
+          <span class="gx-section__title" style="font-size:var(--fs-base);">Downloads &amp; Saved Maps</span>
+          <span class="gx-section__count">{{ items.length }}</span>
+        </div>
+        <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:6px;">
+          <div v-if="!items.length" class="gx-empty" style="margin:0; padding:var(--sp-3);">Nothing saved yet. Save an area around home or make a trip's route available offline.</div>
+          <div v-for="item in items" :key="item.id" class="gx-card" style="margin:0; padding:8px 10px; background:rgba(255, 255, 255, 0.02); border:1px solid var(--glass-border, rgba(127,127,127,.15)); border-radius:var(--radius-md);">
+            <div style="display:flex; gap:8px; align-items:flex-start;">
+              <i class="bi" :class="item.kind === 'route' ? 'bi-signpost-split' : 'bi-bounding-box-circles'" style="color:var(--primary); margin-top:2px; font-size:1.1rem;"></i>
+              <div style="flex:1; min-width:0;">
+                <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap;">
+                  <button type="button" style="border:none; background:transparent; color:inherit; padding:0; cursor:pointer; text-align:left; font:inherit;" @click="focus(item)">
+                    <span class="gx-row__label" style="font-weight:var(--fw-bold); font-size:var(--fs-sm); overflow-wrap:anywhere;">{{ item.name }}</span>
+                  </button>
+                  <div style="display:flex; gap:6px; flex-wrap:wrap; margin-left:auto;">
+                    <button v-if="status(item).canDownloadNow" type="button" class="gx-btn gx-btn--tonal" style="min-height:28px; padding:0 8px; font-size:var(--fs-xs);" :disabled="busy === item.id" @click="act(item, 'download_now')"
+                      title="Use the comma's current connection even though it's metered">Download Now</button>
+                    <button v-if="status(item).canUpdate" type="button" class="gx-btn gx-btn--text" style="min-height:28px; padding:0 6px; font-size:var(--fs-xs);" :disabled="busy === item.id" @click="act(item, 'update')">Update</button>
+                    <button v-if="status(item).canDelete" type="button" class="gx-btn gx-btn--text" style="min-height:28px; padding:0 6px; font-size:var(--fs-xs); color:var(--error);" :disabled="busy === item.id" @click="remove(item)">Delete</button>
+                  </div>
+                </div>
+                <div class="gx-row__desc" style="margin-top:2px; font-size:var(--fs-xs);">{{ describe(item) }}</div>
+                <div class="gx-row__desc" style="margin-top:2px; font-size:var(--fs-xs);" :style="status(item).tone === 'danger' ? 'color:var(--error);' : ''">{{ status(item).text }}</div>
+                <div v-if="status(item).progress !== null" role="progressbar" :aria-label="item.name + ' download'" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="Math.floor(status(item).progress * 100)" style="height:4px; border-radius:2px; background:var(--glass-border, rgba(127,127,127,.2)); overflow:hidden; margin-top:4px;">
+                  <div :style="'width:' + Math.round(status(item).progress * 100) + '%;height:100%;background:var(--primary);transition:width .3s;'"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   `,
 }
