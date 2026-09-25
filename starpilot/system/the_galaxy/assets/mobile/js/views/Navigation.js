@@ -1,8 +1,8 @@
 import { NavigationDestinationPanel } from "../components/NavigationDestinationPanel.js?v=nav-destination-6"
-import { MapsPanel } from "../components/MapsPanel.js?v=offline-merge-1"
+import { MapsPanel } from "../components/MapsPanel.js?v=offline-download-2"
 import { NavigationKeysPanel } from "../components/NavigationKeysPanel.js"
 import { SpeedLimitsPanel } from "../components/SpeedLimitsPanel.js"
-import { AndroidAutoOfflinePanel } from "../components/AndroidAutoOfflinePanel.js?v=offline-merge-1"
+import { AndroidAutoOfflinePanel } from "../components/AndroidAutoOfflinePanel.js?v=offline-download-2"
 import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
 import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-1"
 import { GalaxySection } from "../components/GalaxySection.js"
@@ -46,11 +46,19 @@ export const Navigation = {
       <template v-if="tab === 'maps'">
         <div style="display:grid; gap:12px;">
           <p style="margin:0; color:var(--text-muted);">
-            Two kinds of offline data, downloaded separately: <strong>Map Display</strong> is the map you see on the comma and
-            car screen; <strong>Speed Limit &amp; Curve Data</strong> is road data openpilot uses for speed limits and curves.
+            Two kinds of offline data, downloaded separately: <strong>Speed Limit &amp; Curve Data</strong> is road data openpilot uses for speed limits and curves;
+            <strong>Map Display</strong> is the map you see on the comma and car screen.
           </p>
-          <AndroidAutoOfflinePanel />
-          <MapsPanel />
+          <GalaxySection title="Speed Limit &amp; Curve Data" icon="bi-speedometer2">
+            <div style="padding: var(--sp-3);">
+              <MapsPanel />
+            </div>
+          </GalaxySection>
+          <GalaxySection title="Map Display used with Android Auto" icon="bi-cloud-arrow-down">
+            <div style="padding: var(--sp-3);">
+              <AndroidAutoOfflinePanel />
+            </div>
+          </GalaxySection>
         </div>
       </template>
       <template v-if="tab === 'keys'"><NavigationKeysPanel /></template>

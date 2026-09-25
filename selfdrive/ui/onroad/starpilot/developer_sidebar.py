@@ -90,6 +90,10 @@ class DeveloperSidebar:
     self.max_torque = 0
     self.torque_timer_start = 0.0
 
+    # The Android Auto car screen shows device load where the auto-tune values
+    # (lateral acceleration, steer ratio, stiffness) would be.
+    self.device_load_in_place_of_tuning = False
+
     self._visible = False
     self._metric_color = rl.WHITE
     self._active_ids: list[int] = []
@@ -217,6 +221,7 @@ class DeveloperSidebar:
     live_delay = sm["liveDelay"] if sm.valid.get("liveDelay", False) else None
     live_parameters = sm["liveParameters"] if sm.valid.get("liveParameters", False) else None
     live_torque_parameters = sm["liveTorqueParameters"] if sm.valid.get("liveTorqueParameters", False) else None
+    device_state = sm["deviceState"] if sm.valid.get("deviceState", False) else None
 
     is_metric = ui_state.is_metric
     use_si = ui_state.starpilot_toggles.get("use_si_metrics", False)
@@ -366,6 +371,15 @@ class DeveloperSidebar:
       16: ("SPEED JERK", f"{speed_jerk}"),
       17: (model_name, "")
     }
+    if self.device_load_in_place_of_tuning:
+      # hardwared publishes CPU per core; the driving screen's stats line shows their average, so match it.
+      cpu_list = list(device_state.cpuUsagePercent) if device_state else []
+      cpu_pct = int(sum(cpu_list) / len(cpu_list)) if cpu_list else 0
+      gpu_pct = int(device_state.gpuUsagePercent) if device_state else 0
+      temp_c = int(device_state.maxTempC) if device_state else 0
+      self._metrics.update({5: ("CPU", f"{cpu_pct}%"), 6: ("GPU", f"{gpu_pct}%"), 7: ("TEMP", f"{temp_c}°C")})
+      for metric_id in (5, 6, 7):
+        self._metric_colors.pop(metric_id, None)
 
   def render(self, sidebar_rect: rl.Rectangle):
     if not self._visible:

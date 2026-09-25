@@ -24,8 +24,18 @@ function initFor({ method = "GET", data, form, headers, cache, signal } = {}) {
   return init
 }
 
-function request(url, opts) {
-  return fetch(url, initFor(opts)).then(parse)
+async function request(url, opts) {
+  if (!opts?.timeout) return fetch(url, initFor(opts)).then(parse)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), opts.timeout)
+  try {
+    return await fetch(url, initFor({ ...opts, signal: controller.signal })).then(parse)
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("The comma took too long to respond. Check the connection and try again.")
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function requestOk(url, opts) {
@@ -180,8 +190,8 @@ export const api = {
   removeAndroidAutoIdentity() { return request("/api/android_auto/identity", { method: "DELETE" }) },
   getCarScreen() { return request("/api/android_auto/car_screen", { cache: "no-store" }) },
   setCarScreen(body) { return request("/api/android_auto/car_screen", { method: "POST", data: body }) },
-  getAutoOffline() { return request("/api/android_auto/offline", { cache: "no-store" }) },
-  estimateAutoOffline(body) { return request("/api/android_auto/offline/estimate", { method: "POST", data: body }) },
+  getAutoOffline() { return request("/api/android_auto/offline", { cache: "no-store", timeout: 15000 }) },
+  estimateAutoOffline(body) { return request("/api/android_auto/offline/estimate", { method: "POST", data: body, timeout: 30000 }) },
   addAutoOfflineArea(body) { return request("/api/android_auto/offline/areas", { method: "POST", data: body }) },
   addAutoOfflineRoute(body) { return request("/api/android_auto/offline/routes", { method: "POST", data: body }) },
   autoOfflineAction(id, action) { return request(`/api/android_auto/offline/${encodeURIComponent(id)}/${action}`, { method: "POST" }) },
