@@ -15,36 +15,47 @@ def _client(monkeypatch, tmp_path, position=(36.1, -115.2)):
   return client, OfflineMaps(tmp_path)
 
 
-def test_summary_reports_position_key_presets_and_a_stopped_service(monkeypatch, tmp_path):
+def test_summary_reports_position_key_radius_and_a_stopped_service(monkeypatch, tmp_path):
   client, _ = _client(monkeypatch, tmp_path)
   response = client.get("/api/android_auto/offline")
   assert response.status_code == 200 and response.headers["Cache-Control"].startswith("no-store")
   payload = response.get_json()
   assert payload["items"] == [] and payload["mapboxPublic"] == "pk.test" and payload["isMetric"] is False
   assert payload["position"] == {"latitude": 36.1, "longitude": -115.2}
-  assert [p["max_zoom"] for p in payload["presets"]] == [16, 15, 14, 13]
+  assert payload["areaRadius"] == {"min_km": 1.0, "max_km": 150.0, "default_km": 10.0}
+  assert payload["save_viewed_cache"] is False
   assert payload["service_running"] is False, "no status file means navtilesd hasn't run"
 
 
 def test_area_estimate_then_save(monkeypatch, tmp_path):
   client, maps = _client(monkeypatch, tmp_path)
-  presets = client.post("/api/android_auto/offline/estimate", json={"latitude": 36.1, "longitude": -115.2}).get_json()["presets"]
-  assert len(presets) == 4 and all(p["tiles"] > 0 and p["bytes"] > 0 and p["fits"] for p in presets)
+  area_estimate = client.post("/api/android_auto/offline/estimate", json={"latitude": 36.1, "longitude": -115.2, "radius_km": 18}).get_json()["area"]
+  assert area_estimate["radius_km"] == 18 and area_estimate["max_zoom"] == 15
+  assert area_estimate["tiles"] > 0 and area_estimate["bytes"] > 0 and area_estimate["fits"]
 
-  response = client.post("/api/android_auto/offline/areas", json={"name": "Home", "latitude": 36.1, "longitude": -115.2, "radius_km": 10, "max_zoom": 16})
+  response = client.post("/api/android_auto/offline/areas", json={"name": "Home", "latitude": 36.1, "longitude": -115.2, "radius_km": 18})
   assert response.status_code == 201
   [area] = maps.areas()
-  assert (area.name, area.kind, area.radius_km, area.max_zoom) == ("Home", "area", 10.0, 16)
+  assert (area.name, area.kind, area.radius_km, area.max_zoom) == ("Home", "area", 18.0, 15)
   item = client.get("/api/android_auto/offline").get_json()["items"][0]
   assert item["state"] == "queued" and item["id"] == area.id
 
 
-def test_area_rejects_unlisted_sizes_and_bad_points(monkeypatch, tmp_path):
+def test_area_rejects_out_of_range_sizes_and_bad_points(monkeypatch, tmp_path):
   client, maps = _client(monkeypatch, tmp_path)
   assert client.post("/api/android_auto/offline/areas", json={"latitude": 36.1, "longitude": -115.2, "radius_km": 500, "max_zoom": 18}).status_code == 400
   assert client.post("/api/android_auto/offline/areas", json={"latitude": 95, "longitude": 0, "radius_km": 10, "max_zoom": 16}).status_code == 400
   assert client.post("/api/android_auto/offline/estimate", json={}).status_code == 400
   assert maps.areas() == []
+
+
+def test_viewed_cache_setting_persists(monkeypatch, tmp_path):
+  client, maps = _client(monkeypatch, tmp_path)
+  assert client.post("/api/android_auto/offline/settings", json={"save_viewed_cache": "yes"}).status_code == 400
+  response = client.post("/api/android_auto/offline/settings", json={"save_viewed_cache": True})
+  assert response.status_code == 200 and response.get_json()["save_viewed_cache"] is True
+  assert maps.save_viewed_cache() is True
+  assert client.get("/api/android_auto/offline").get_json()["save_viewed_cache"] is True
 
 
 def test_route_estimate_then_make_available_offline(monkeypatch, tmp_path):
@@ -114,7 +125,6 @@ def test_both_offline_downloaders_share_the_offline_maps_tab():
   assert "tab === 'auto'" not in navigation
   assert "/navigation/maps" in vehicle
   assert "AndroidAutoOfflinePanel, GalaxySection" in navigation, "offline parent sections must render as Galaxy cards"
-  display = (JS_ROOT / "components" / "AndroidAutoOfflinePanel.js").read_text()
   road = (JS_ROOT / "components" / "MapsPanel.js").read_text()
   assert 'title="Offline Maps for Android Auto"' in maps_tab
   assert '<span class="gx-section__title">Speed Limit &amp; Curve Data</span>' in road

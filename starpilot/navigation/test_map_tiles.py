@@ -107,6 +107,32 @@ def test_cached_tile_is_served_without_network(tmp_path):
   service.close()
 
 
+def test_visible_tiles_call_optional_write_through(tmp_path):
+  regular = TileCache(tmp_path / "regular", "test/style", min_free_bytes=0)
+  enabled = True
+  saved = []
+
+  def save(key, data):
+    if enabled:
+      saved.append((key, data))
+      return True
+    return None
+
+  service = TileService(lambda: "token", cache=regular, session=FakeSession(),
+                        write_through=save)
+  first = TileKey(14, 3, 4)
+  service.want([first])
+  assert wait_for(lambda: bool(saved))
+  assert saved == [(first, PNG)]
+
+  enabled = False
+  second = TileKey(14, 3, 5)
+  service.want([second])
+  assert wait_for(lambda: regular.contains(second))
+  assert saved == [(first, PNG)]
+  service.close()
+
+
 def test_offline_backs_off_instead_of_spinning(tmp_path):
   session = FakeSession(error=requests.ConnectionError("offline"))
   service = make_service(tmp_path, session)

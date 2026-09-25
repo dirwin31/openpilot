@@ -233,6 +233,31 @@ def test_route_tiles_already_in_an_area_are_not_downloaded(tmp_path, fast):
   assert [url.split("/")[-1] for url in session.urls] == ["12869"] and "/5890/" in session.urls[0]
 
 
+def test_tiles_saved_while_driving_are_promoted_into_pinned_storage(tmp_path, fast):
+  daemon, _ = make_daemon(tmp_path)
+  key = TileKey(15, 5889, 12869)
+  assert daemon.route_cache.write(key, PNG)
+  assert daemon.maps.mark_auto_saved(key)
+  daemon.step()
+  assert daemon.area_cache.contains(key)
+  assert not daemon.route_cache.path(key).is_file()
+  assert daemon.maps.pending_auto_saved() == []
+  assert daemon.maps.status()["offline_bytes"] == len(PNG)
+
+
+def test_deleting_an_area_keeps_tiles_also_saved_while_driving(tmp_path, fast):
+  daemon, _ = make_daemon(tmp_path)
+  area = daemon.maps.add_area("Driven", 36.1, -115.2, 1.0, 10)
+  key = area.tiles()[0]
+  assert daemon.area_cache.write(key, PNG)
+  assert daemon.maps.mark_auto_saved(key)
+  daemon.maps.finish_auto_saved(key)
+  daemon._offline_bytes = len(PNG)
+  daemon._delete_area(area, [])
+  assert daemon.area_cache.contains(key)
+  assert daemon._offline_bytes == len(PNG)
+
+
 def test_deleting_an_area_keeps_tiles_another_area_shares(tmp_path, fast):
   daemon, _ = make_daemon(tmp_path)
   first = daemon.maps.add_area("A", 36.1, -115.2, 1.0, 10)

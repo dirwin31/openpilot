@@ -22,7 +22,7 @@ from cereal import log
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.starpilot.navigation.destination_store import parse_destination_json
-from openpilot.starpilot.navigation.map_tiles import DEFAULT_STYLE, TileCache, TileService, offline_root
+from openpilot.starpilot.navigation.map_tiles import DEFAULT_STYLE, TileCache, TileService, image_extension, offline_root
 from openpilot.starpilot.navigation.offline_maps import (
   AREA_REFRESH_SECONDS,
   OFFLINE_MAX_BYTES,
@@ -214,7 +214,7 @@ class Navtilesd:
     keep = set()
     for other in remaining:
       keep.update(other.tiles())
-    freed = sum(self.area_cache.remove(key) for key in area.tiles() if key not in keep)
+    freed = sum(self.area_cache.remove(key) for key in area.tiles() if key not in keep and not self.maps.is_auto_saved(key))
     if self._offline_bytes is not None:
       self._offline_bytes = max(0, self._offline_bytes - freed)
     self.maps.forget_area(area.id)
@@ -227,6 +227,36 @@ class Navtilesd:
     self._active_area = None
     self._active_keys = []
     self.area_service.prefetch([])
+
+  def _update_auto_saved(self) -> None:
+    """Promote tiles viewed while driving into the same pinned store as saved areas."""
+    if self._offline_bytes is None:
+      return
+    for key in self.maps.pending_auto_saved():
+      try:
+        data = self.route_cache.path(key).read_bytes()
+      except OSError:
+        if self.area_cache.contains(key):
+          self.maps.finish_auto_saved(key)
+          continue
+        # The regular LRU won the race. Viewing this tile again will queue it again.
+        self.maps.forget_auto_saved(key)
+        continue
+      if image_extension(data) is None:
+        self.maps.forget_auto_saved(key)
+        continue
+      try:
+        previous_size = self.area_cache.path(key).stat().st_size
+      except OSError:
+        previous_size = 0
+      size_change = len(data) - previous_size
+      if self._offline_bytes + max(0, size_change) > OFFLINE_MAX_BYTES:
+        break
+      if not self.area_cache.write(key, data):
+        break
+      self._offline_bytes = max(0, self._offline_bytes + size_change)
+      self.route_cache.remove(key)
+      self.maps.finish_auto_saved(key)
 
   def _update_areas(self, now: float, wall: float) -> None:
     if self._offline_bytes is None:
@@ -337,6 +367,7 @@ class Navtilesd:
     self._update_device()
     self._update_route(now)
     self._update_areas(now, wall)
+    self._update_auto_saved()
     self._write_status(now, wall)
 
   def run(self) -> None:

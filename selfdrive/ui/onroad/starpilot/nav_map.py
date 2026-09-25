@@ -138,12 +138,26 @@ class TileTextures:
     self._token_checked = -math.inf
     self._token_lock = threading.Lock()
     self._textures: OrderedDict[TileKey, rl.Texture] = OrderedDict()
-    # Offline areas are read too; navtilesd does all ahead-of-time downloading.
-    pinned = TileCache(offline_root(), DEFAULT_STYLE, max_bytes=None)
-    self.service = TileService(self._read_token, decode=_decode_tile, cache=TileCache(default_cache_dir(), DEFAULT_STYLE, pinned=pinned))
     self.offline_maps = OfflineMaps()
+    # navtilesd promotes requested driven tiles from the regular cache into the
+    # same pinned store used by explicit offline areas.
+    offline = TileCache(offline_root(), DEFAULT_STYLE, max_bytes=None)
+    regular = TileCache(default_cache_dir(), DEFAULT_STYLE, pinned=offline)
+    self._save_viewed = False
+    self._save_viewed_read = -math.inf
+    self.service = TileService(self._read_token, decode=_decode_tile, cache=regular, write_through=self._save_driven_tile)
     self._offline_status: dict = {}
     self._offline_status_read = -math.inf
+
+  def _save_driven_tile(self, key: TileKey, data: bytes) -> bool | None:
+    del data
+    now = time.monotonic()
+    if now - self._save_viewed_read >= OFFLINE_STATUS_SECONDS:
+      self._save_viewed_read = now
+      self._save_viewed = self.offline_maps.save_viewed_cache()
+    if not self._save_viewed:
+      return None
+    return self.offline_maps.mark_auto_saved(key)
 
   def offline_status(self) -> dict:
     now = time.monotonic()
