@@ -36,6 +36,17 @@ def test_coverage_wraps_at_dateline_and_tracks_deletions(tmp_path):
   assert maps.coverage(2, 170, -20, 190, -1)['tiles'] == [[3, 2, True]]
 
 
+def test_auto_saved_tiles_share_pinned_coverage_and_track_pending_promotion(tmp_path):
+  maps = OfflineMaps(tmp_path)
+  key = TileKey(2, 1, 1)
+  assert maps.mark_auto_saved(key)
+  assert maps.pending_auto_saved() == [key]
+  put(maps.root, 2, 1, 1)
+  assert maps.coverage(2, -180, -85, 180, 85)['tiles'] == [[1, 1, True]]
+  maps.finish_auto_saved(key)
+  assert maps.pending_auto_saved() == [] and maps.is_auto_saved(key)
+
+
 @pytest.mark.parametrize('zoom,bounds', [(19, (-180, -85, 180, 85)), (2, (0, 20, 10, -20)), (2, (float('nan'), 0, 10, 20))])
 def test_coverage_rejects_invalid_bounds(tmp_path, zoom, bounds):
   with pytest.raises(ValueError):

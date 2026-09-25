@@ -1,14 +1,19 @@
 """Offline map planning and the small amount of state the UI and navtilesd share.
 
-Two kinds of saved tiles:
+Three kinds of map tiles:
   * Route tiles: the corridor along a route plus street-level detail around its
     turns and destination. They live in the regular tile cache and age out
     least-recently-used first when it fills.
+  * Driven tiles: when enabled, tiles opened on the map are pinned in the same
+    offline storage as downloaded areas and count toward the same limit.
   * Offline areas: everything within a radius, downloaded on Wi-Fi and pinned
     until the area is deleted. Areas refresh themselves every few months.
 
 State is plain JSON files beside the tiles, each written atomically by one side:
   offline/areas/<id>.json      area definitions (UI writes, navtilesd deletes)
+  offline/auto_saved/...       markers protecting tiles saved while driving
+  offline/auto_saved_pending/  tiles waiting to be promoted from regular cache
+  offline/settings.json        save-as-you-drive preference (UI writes, map reads)
   offline/status.json          download progress (navtilesd writes)
   offline/preview_route.json   the route being previewed in the UI (UI writes)
 """
@@ -53,7 +58,10 @@ SERVICE_STALE_SECONDS = 30.0     # navtilesd rewrites its status every few secon
 MAX_ROUTE_POINTS = 5000
 MAX_DISPLAY_POINTS = 400
 
-# (radius km, max zoom): street detail near home down to regional coverage for a trip.
+AREA_MIN_RADIUS_KM = 1.0
+AREA_MAX_RADIUS_KM = 150.0
+# The native on-device picker remains button-based; The Galaxy supports every
+# radius in this range and derives detail with ``area_zoom_for_radius``.
 AREA_PRESETS = ((10.0, 16), (30.0, 15), (60.0, 14), (150.0, 13))
 
 
@@ -166,6 +174,19 @@ def estimate_area(latitude: float, longitude: float, radius_km: float, max_zoom:
   return count, count * AVERAGE_TILE_BYTES
 
 
+def area_zoom_for_radius(radius_km: float) -> int:
+  """Choose useful detail without letting a large radius explode in size."""
+  if not AREA_MIN_RADIUS_KM <= radius_km <= AREA_MAX_RADIUS_KM:
+    raise ValueError("Area radius is out of range")
+  if radius_km <= 10.0:
+    return 16
+  if radius_km <= 30.0:
+    return 15
+  if radius_km <= 60.0:
+    return 14
+  return 13
+
+
 def format_bytes(size: float) -> str:
   if size >= 1024 ** 3:
     return f"{size / 1024 ** 3:.1f} GB"
@@ -237,6 +258,9 @@ class OfflineMaps:
     self.areas_dir = self.root / "areas"
     self.status_path = self.root / "status.json"
     self.preview_path = self.root / "preview_route.json"
+    self.settings_path = self.root / "settings.json"
+    self.auto_saved_dir = self.root / "auto_saved"
+    self.auto_saved_pending_dir = self.root / "auto_saved_pending"
 
   # areas (UI side)
   def areas(self, include_deleted: bool = False) -> list[OfflineArea]:
@@ -302,7 +326,63 @@ class OfflineMaps:
       "route": status.get("route") or {},
       "service_running": updated > 0 and _now() - updated < SERVICE_STALE_SECONDS,
       "refresh_days": AREA_REFRESH_SECONDS // 86400,
+      "save_viewed_cache": self.save_viewed_cache(),
     }
+
+  def save_viewed_cache(self) -> bool:
+    raw = _read_json(self.settings_path)
+    return bool(raw.get("save_viewed_cache")) if isinstance(raw, dict) else False
+
+  def set_save_viewed_cache(self, enabled: bool) -> None:
+    _write_json(self.settings_path, {"save_viewed_cache": bool(enabled)})
+
+  def auto_saved_marker(self, key: TileKey) -> Path:
+    return self.auto_saved_dir / str(key.z) / str(key.x) / f"{key.y}.saved"
+
+  def auto_saved_pending_marker(self, key: TileKey) -> Path:
+    return self.auto_saved_pending_dir / str(key.z) / str(key.x) / f"{key.y}.saved"
+
+  def mark_auto_saved(self, key: TileKey) -> bool:
+    path, pending = self.auto_saved_marker(key), self.auto_saved_pending_marker(key)
+    try:
+      path.parent.mkdir(parents=True, exist_ok=True)
+      path.touch(exist_ok=True)
+      pending.parent.mkdir(parents=True, exist_ok=True)
+      pending.touch(exist_ok=True)
+      return True
+    except OSError:
+      return False
+
+  def is_auto_saved(self, key: TileKey) -> bool:
+    return self.auto_saved_marker(key).is_file()
+
+  def pending_auto_saved(self, limit: int = 256) -> list[TileKey]:
+    keys = []
+    try:
+      paths = self.auto_saved_pending_dir.glob("*/*/*.saved")
+      for path in paths:
+        try:
+          keys.append(TileKey(int(path.parent.parent.name), int(path.parent.name), int(path.stem)))
+        except ValueError:
+          continue
+        if len(keys) >= limit:
+          break
+    except OSError:
+      pass
+    return keys
+
+  def finish_auto_saved(self, key: TileKey) -> None:
+    try:
+      self.auto_saved_pending_marker(key).unlink()
+    except OSError:
+      pass
+
+  def forget_auto_saved(self, key: TileKey) -> None:
+    self.finish_auto_saved(key)
+    try:
+      self.auto_saved_marker(key).unlink()
+    except OSError:
+      pass
 
   def coverage(self, zoom: int, west: float, south: float, east: float, north: float, limit: int = 4000) -> dict[str, Any]:
     """Actual tile files in the viewport at one exact zoom, bounded for the web map.

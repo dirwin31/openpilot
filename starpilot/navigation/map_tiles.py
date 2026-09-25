@@ -272,7 +272,8 @@ class TileService:
   def __init__(self, token: Callable[[], str], decode: Callable[[bytes, str], Any] | None = None,
                cache: TileCache | None = None, style: str = DEFAULT_STYLE, session: Any = None,
                workers: int = WORKERS, clock: Callable[[], float] = time.monotonic,
-               prefetch_interval: float = PREFETCH_INTERVAL_SECONDS):
+               prefetch_interval: float = PREFETCH_INTERVAL_SECONDS,
+               write_through: Callable[[TileKey, bytes], bool | None] | None = None):
     self.style = style
     self.prefetch_interval = prefetch_interval
     self.cache = cache or TileCache(default_cache_dir(), style)
@@ -280,6 +281,7 @@ class TileService:
     self._decode = decode or (lambda data, ext: data)
     self._session = session or requests.Session()
     self._clock = clock
+    self._write_through = write_through
 
     self._cond = threading.Condition()
     self._visible: list[TileKey] = []
@@ -422,6 +424,7 @@ class TileService:
       if cached is not None:
         data, age = cached
         self.stats["disk"] += 1
+        self._save_viewed(key, data)
         self._deliver(key, data)
         if age > REFRESH_AGE_SECONDS:
           with self._cond:
@@ -438,9 +441,20 @@ class TileService:
     if not self.cache.write(key, data):
       self.stats["write_failed"] += 1
     if deliver:
+      self._save_viewed(key, data)
+    if deliver:
       self._deliver(key, data)
     else:
       self.stats["prefetched"] += 1
+
+  def _save_viewed(self, key: TileKey, data: bytes) -> None:
+    if self._write_through is None or image_extension(data) is None:
+      return
+    try:
+      if self._write_through(key, data) is False:
+        self.stats["write_failed"] += 1
+    except Exception:
+      self.stats["write_failed"] += 1
 
   def _deliver(self, key: TileKey, data: bytes) -> None:
     extension = image_extension(data)
