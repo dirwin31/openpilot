@@ -327,22 +327,28 @@ class ImportJob:
     self.work_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     return self.work_dir / "android-auto-upload.bin"
 
-  def start(self, *, path: Path | None = None, url: str = "") -> None:
+  def start(self, *, path: Path | None = None, url: str = "", enabled=None) -> None:
     with self.lock:  # check and claim together, so two requests cannot both start
       if self.busy():
         raise IdentityImportError("An import is already running")
       self.state = {"state": "running", "stage": "downloading" if url else "reading", "started": time.time(),
                     "downloaded": 0, "total": 0}
-      self.thread = threading.Thread(target=self._run, args=(path, url), name="android_auto_identity_import", daemon=True)
+      self.thread = threading.Thread(target=self._run, args=(path, url, enabled), name="android_auto_identity_import", daemon=True)
       self.thread.start()
 
-  def _run(self, path: Path | None, url: str) -> None:
+  def _run(self, path: Path | None, url: str, enabled=None) -> None:
+    def progress(**values):
+      if enabled is not None and not enabled():
+        raise IdentityImportError("Import cancelled: Android Auto is disabled")
+      self._set(**values)
+
     source = path or self.upload_path()
     try:
+      progress()
       if url:
-        download(url, source, lambda done, total: self._set(downloaded=done, total=total))
-      files, metadata = extract_identity(source, root_sha256=self.root_sha256, progress=lambda stage: self._set(stage=stage))
-      self._set(stage="installing")
+        download(url, source, lambda done, total: progress(downloaded=done, total=total))
+      files, metadata = extract_identity(source, root_sha256=self.root_sha256, progress=lambda stage: progress(stage=stage))
+      progress(stage="installing")
       install_identity(files, metadata, self.identity_dir)
       self._set(state="done", stage="done", finished=time.time(), expires=metadata["expires"],
                 message=f"Identity installed; valid until {metadata['expires'][:10]}")

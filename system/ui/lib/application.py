@@ -510,6 +510,17 @@ class GuiApplication:
   _aa_producer = None
   _aa_texture = None
   _aa_failed = False
+  _aa_enabled = False
+  _aa_owns_render_texture = False
+
+  @property
+  def android_auto_enabled(self) -> bool:
+    return self._aa_enabled
+
+  def set_android_auto_enabled(self, enabled: bool) -> None:
+    if enabled != self._aa_enabled:
+      self._aa_enabled = enabled
+      self._aa_failed = False
 
   def __init__(self, width: int | None = None, height: int | None = None):
     self._set_log_callback()
@@ -1224,6 +1235,8 @@ class GuiApplication:
       return False
 
   def _android_auto_producer(self):
+    if not self._aa_enabled:
+      return None
     if self._aa_producer is None and not self._aa_failed:
       try:
         from openpilot.starpilot.system.android_auto.frame_source import FrameProducer
@@ -1236,9 +1249,24 @@ class GuiApplication:
   def _ensure_android_auto_texture(self) -> None:
     """Allocate the main render texture before drawing when projection needs frames.
 
-    Render thread only, between frames, exactly like a Live UI start. The texture
-    is kept until the window closes to avoid repeated composition switches.
+    Render thread only, between frames, exactly like a Live UI start. Reclaim
+    projection-only resources when the master switch is disabled.
     """
+    if not self._aa_enabled:
+      if self._aa_producer is not None:
+        self._aa_producer.close()
+        self._aa_producer = None
+      self._release_android_auto_texture()
+      # Only reclaim a main texture allocated for projection. Live UI can take
+      # ownership while connected; its capture and rendering must keep working.
+      if self._aa_owns_render_texture and self._ui_stream is None and not self._ui_stream_pending:
+        if self._msaa is not None:
+          self._msaa.unload()
+          self._msaa = None
+        self._unload_render_texture(self._render_texture)
+        self._render_texture = None
+        self._aa_owns_render_texture = False
+      return
     if self._render_texture is not None or not self.android_auto_wants_frames():
       return
     render_texture = rl.load_render_texture(self._render_texture_width, self._render_texture_height)
@@ -1251,6 +1279,7 @@ class GuiApplication:
       return
     rl.set_texture_filter(texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
     self._render_texture = render_texture
+    self._aa_owns_render_texture = True
 
   def _capture_android_auto_frame(self) -> None:
     """Scale the finished frame into the negotiated video geometry and publish it.
@@ -1259,6 +1288,8 @@ class GuiApplication:
     readback is already the encoder's size, top-down and undistorted. Any
     failure disables projection capture only; the native UI keeps rendering.
     """
+    if not self._aa_enabled:
+      return
     producer = self._aa_producer
     if producer is None or self._render_texture is None:
       return

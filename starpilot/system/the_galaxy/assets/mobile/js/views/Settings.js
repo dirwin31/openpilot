@@ -12,6 +12,8 @@ import { GalaxyToggleCard } from "../components/GalaxyToggleCard.js"
 import { GalaxySection } from "../components/GalaxySection.js"
 import { DevModeBanner } from "../components/DevModeBanner.js"
 import { LanguageSelector } from "../components/LanguageSelector.js"
+import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
+import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-1"
 import { languageState, setLanguage, t } from "../i18n.js"
 
 const LEGACY_PERSONALITY_KEYS = new Set([
@@ -26,7 +28,8 @@ const LANGUAGE_SECTION_SLUG = "language"
 
 export const Settings = {
   name: "Settings",
-  components: { SettingTree, PersonalityProfiles, GalaxyToggleCard, GalaxySection, DevModeBanner, LongitudinalMode, LanguageSelector },
+  components: { SettingTree, PersonalityProfiles, GalaxyToggleCard, GalaxySection, DevModeBanner, LongitudinalMode, LanguageSelector,
+    AndroidAutoIdentityPanel, AndroidAutoCarScreenPanel },
   data() {
     return {
       layout: [],
@@ -200,6 +203,14 @@ export const Settings = {
             <LongitudinalMode v-if="modeSection(activeSection)" :section="modeSection(activeSection)" :values="values" @change="onParamChange" />
             <SettingTree :params="ordinaryParams(activeSection)" :parent-key="null" :values="values"
               :expanded="expanded" :lock-reason="lockReason" @change="onParamChange" @manage="toggleManage" />
+            <template v-if="activeSection.name === 'Vehicle' && values.AndroidAutoEnabled">
+              <GalaxySection title="Android Auto Layout" icon="bi-display">
+                <AndroidAutoCarScreenPanel />
+              </GalaxySection>
+              <GalaxySection title="Android Auto Certificate" icon="bi-key">
+                <AndroidAutoIdentityPanel />
+              </GalaxySection>
+            </template>
             <div v-if="!activeSection.params.length" class="gx-empty">{{ tr("No settings in this section.") }}</div>
           </div>
         </div>

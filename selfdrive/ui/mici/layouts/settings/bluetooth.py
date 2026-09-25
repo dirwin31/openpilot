@@ -154,7 +154,7 @@ class BluetoothLayoutMici(NavScroller):
     self._scan_btn = BigButton("scan for devices", "scan", self._dialog_icon, scroll=True)
     self._scan_btn.set_click_callback(lambda: self._manager.set_scanning(True))
     self._scanning_btn = BluetoothScanningButton()
-    self._android_auto = AndroidAutoManager()
+    self._android_auto = None
     self._android_auto_btn = BigButton("android auto", "off", self._dialog_icon, scroll=True)
     self._android_auto_btn.set_click_callback(self._android_auto_actions)
     self._device_buttons = {}
@@ -165,7 +165,7 @@ class BluetoothLayoutMici(NavScroller):
   def show_event(self):
     super().show_event()
     self._manager.set_active(True)
-    self._android_auto.set_active(True)
+    self._sync_android_auto()
     self._scan_on_ready = True
     gui_app.add_nav_stack_tick(self._tick)
 
@@ -173,7 +173,9 @@ class BluetoothLayoutMici(NavScroller):
     if self._manager.status.discovering and self._manager.status.offroad:
       self._manager.set_scanning(False)
     self._manager.set_active(False)
-    self._android_auto.set_active(False)
+    if self._android_auto is not None:
+      self._android_auto.stop()
+      self._android_auto = None
     gui_app.remove_nav_stack_tick(self._tick)
     super().hide_event()
 
@@ -182,13 +184,22 @@ class BluetoothLayoutMici(NavScroller):
     self._scan_on_ready = enabled
     self._manager.set_power(enabled)
 
+  def _sync_android_auto(self):
+    enabled = gui_app.android_auto_enabled and self._manager.status.enabled
+    if enabled and self._android_auto is None:
+      self._android_auto = AndroidAutoManager()
+      self._android_auto.set_active(True)
+    elif not enabled and self._android_auto is not None:
+      self._android_auto.stop()
+      self._android_auto = None
+
   def _rebuild(self):
     status = self._manager.status
     self._power_btn.set_value("on" if status.enabled else "off")
     self._power_btn.set_enabled(status.available and status.offroad)
     self._scan_btn.set_enabled(status.enabled and status.offroad)
     items = [self._power_btn]
-    if status.enabled:
+    if status.enabled and gui_app.android_auto_enabled:
       items.append(self._android_auto_btn)
     for device in status.devices:
       button = self._device_buttons.get(device.address)
@@ -226,6 +237,8 @@ class BluetoothLayoutMici(NavScroller):
     dialog_holder = {}
 
     def apply():
+      if self._android_auto is None or not gui_app.android_auto_enabled:
+        return
       action = dialog_holder["dialog"].get_selected_option()
       if action == "disconnect":
         self._manager.disconnect(device.address)
@@ -262,6 +275,8 @@ class BluetoothLayoutMici(NavScroller):
     return str(status.get("label", state))
 
   def _android_auto_actions(self):
+    if self._android_auto is None or not gui_app.android_auto_enabled:
+      return
     status = self._android_auto.status
     bt = self._manager.status
     options = []
@@ -322,7 +337,7 @@ class BluetoothLayoutMici(NavScroller):
 
     def apply():
       device = labels.get(dialog_holder["dialog"].get_selected_option())
-      if device is not None:
+      if device is not None and self._android_auto is not None and gui_app.android_auto_enabled:
         self._android_auto.select_receiver(device.address, device.name)
 
     options = list(labels)
@@ -356,8 +371,10 @@ class BluetoothLayoutMici(NavScroller):
       ))
 
   def _tick(self):
+    self._sync_android_auto()
     status = self._manager.status
     signature = (
+      gui_app.android_auto_enabled,
       status.available,
       status.enabled,
       status.powered,
@@ -378,11 +395,12 @@ class BluetoothLayoutMici(NavScroller):
     if error:
       self._scan_on_ready = False
       gui_app.push_widget(BigDialog("Bluetooth", error))
-    android_auto_value = self._android_auto_value()
-    if android_auto_value != self._android_auto_btn.get_value():
-      self._android_auto_btn.set_value(android_auto_value)
-    self._android_auto_btn.set_enabled(not self._android_auto.busy)
-    android_auto_error = self._android_auto.consume_error()
-    if android_auto_error:
-      gui_app.push_widget(BigDialog("android auto", android_auto_error))
+    if self._android_auto is not None:
+      android_auto_value = self._android_auto_value()
+      if android_auto_value != self._android_auto_btn.get_value():
+        self._android_auto_btn.set_value(android_auto_value)
+      self._android_auto_btn.set_enabled(not self._android_auto.busy)
+      android_auto_error = self._android_auto.consume_error()
+      if android_auto_error:
+        gui_app.push_widget(BigDialog("android auto", android_auto_error))
     self._handle_prompt()

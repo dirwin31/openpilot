@@ -3315,6 +3315,14 @@
     "icon": "bi-car-front",
     "params": [
       {
+        "key": "AndroidAutoEnabled",
+        "label": "Android Auto",
+        "description": "Enable Android Auto on the car screen. Turn off to stop projection and hide its controls. Live UI remains available. Bluetooth must also be enabled to connect.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "settings_tier": "simple"
+      },
+      {
         "key": "CarMake",
         "label": "Car Make",
         "description": "Select your car make.",

@@ -232,6 +232,7 @@ class UIState:
     self.recording_audio = params.get_bool("RecordAudio") and self.started
 
     self.is_metric = params.get_bool("IsMetric")
+    gui_app.set_android_auto_enabled(params.get_bool("AndroidAutoEnabled"))
     self.always_on_dm = params.get_bool("AlwaysOnDM")
     self.usbgpu_compiled = params.get_bool("UsbGpuCompiled")
     self.usbgpu_active = params.get_bool("UsbGpuActive")

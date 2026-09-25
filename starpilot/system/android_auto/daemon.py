@@ -1,6 +1,6 @@
 """android_autod: local control socket for wireless Android Auto projection.
 
-Runs whenever Bluetooth is enabled and stays idle (no radio, network, encoder
+Runs only when Android Auto and Bluetooth are enabled and stays idle (no radio, network, encoder
 or capture work) until the user presses Start. Commands are one JSON line per
 connection on ``ANDROID_AUTO_SOCKET_PATH``, mirroring bluetooth_managerd.
 
@@ -37,6 +37,10 @@ def _offroad() -> bool:
 
 def handle(supervisor: Supervisor, request: dict[str, Any]) -> dict[str, Any]:
   command = str(request.get("command", ""))
+  if command not in {"status", "stop"}:
+    from openpilot.common.params import Params
+    if not Params().get_bool("AndroidAutoEnabled"):
+      raise RuntimeError("Enable Android Auto under Toggles → Vehicle first")
   if command in PAIRING_COMMANDS and not _offroad():
     raise RuntimeError("Pair the car while parked (offroad)")
   if command == "status":

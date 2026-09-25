@@ -10,7 +10,7 @@ JS_ROOT = Path(__file__).resolve().parent.parent / "assets" / "mobile" / "js"
 def _client(monkeypatch, tmp_path):
   path = tmp_path / "car_screen.json"
   monkeypatch.setattr(car_screen, "CAR_SCREEN_PATH", path)
-  client, _ = nav._params_client(monkeypatch, {"IsOffroad": True}, "mici")
+  client, _ = nav._params_client(monkeypatch, {"IsOffroad": True, "AndroidAutoEnabled": True}, "mici")
   return client, path
 
 
@@ -35,10 +35,24 @@ def test_invalid_values_are_rejected_without_saving(monkeypatch, tmp_path):
   assert not path.exists()
 
 
-def test_car_screen_settings_live_in_the_android_auto_tab():
-  navigation = (JS_ROOT / "views" / "Navigation.js").read_text()
+def test_car_screen_settings_live_under_vehicle_toggle():
+  settings = (JS_ROOT / "views" / "Settings.js").read_text()
   panel = (JS_ROOT / "components" / "AndroidAutoCarScreenPanel.js").read_text()
-  assert "AndroidAutoCarScreenPanel" in navigation and 'title="Car Screen"' in navigation
+  assert "AndroidAutoCarScreenPanel" in settings and "activeSection.name === 'Vehicle' && values.AndroidAutoEnabled" in settings
   for value in ('"split"', '"driving"', '"map"', "map_side", "camera"):
     assert value in panel
   assert "fetch(" not in panel
+
+
+def test_disabled_blocks_layout_and_identity_but_not_live_ui(monkeypatch):
+  client, _ = nav._params_client(monkeypatch, {"IsOffroad": True, "AndroidAutoEnabled": False}, "mici")
+  for path in ("car_screen", "identity", "identity/download", "identity/upload"):
+    assert client.post("/api/android_auto/" + path, json={}).status_code == 403
+  assert client.get("/api/android_auto/identity").status_code == 403
+  assert client.get("/api/android_auto/car_screen").status_code == 403
+  monkeypatch.setattr(nav.the_galaxy.utilities, "get_ui_stream_port", lambda: 8091)
+  memory = nav.WritableFakeParams()
+  monkeypatch.setattr(nav.the_galaxy, "params_memory", memory)
+  response = client.post("/api/ui_stream/start")
+  assert response.status_code == 200
+  assert memory.values["UiStreamRequested"] is True

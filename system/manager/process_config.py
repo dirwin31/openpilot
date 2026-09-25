@@ -129,6 +129,10 @@ def bluetooth_enabled(started: bool, params: Params, CP: car.CarParams, starpilo
   return params.get_bool("BluetoothEnabled")
 
 
+def android_auto_enabled(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
+  return params.get_bool("AndroidAutoEnabled") and params.get_bool("BluetoothEnabled")
+
+
 def soundd_run(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
   return driverview(started, params, CP, starpilot_toggles) or params.get_bool("BluetoothAudioTestActive")
 
@@ -212,7 +216,7 @@ procs = [
 # StarPilot variables
 procs += [
   PythonProcess("bluetooth_managerd", "starpilot.system.bluetooth.daemon", bluetooth_enabled, enabled=TICI),
-  PythonProcess("android_autod", "starpilot.system.android_auto.daemon", bluetooth_enabled, enabled=TICI),
+  PythonProcess("android_autod", "starpilot.system.android_auto.daemon", android_auto_enabled, enabled=TICI),
   PythonProcess("wheel_controlsd", "starpilot.system.wheel_controls.wheel_controlsd", wheel_controls_enabled, enabled=TICI, nice=19),
   PythonProcess("the_galaxy", "starpilot.system.the_galaxy.the_galaxy", always_run, nice=10),
   PythonProcess("galaxy", "starpilot.system.galaxy.galaxy", always_run, nice=10),

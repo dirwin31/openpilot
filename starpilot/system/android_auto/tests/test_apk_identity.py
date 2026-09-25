@@ -159,6 +159,26 @@ def test_install_is_atomic_and_keeps_previous(tmp_path, ident):
   assert apk_identity.identity_status(directory) == {"installed": False, "message": "No Android Auto identity installed"}
 
 
+def test_import_stops_when_master_switch_is_disabled(monkeypatch, tmp_path):
+  source = tmp_path / "upload.apk"
+  source.write_bytes(b"test")
+  enabled = {"value": True}
+
+  def extract(*args, progress, **kwargs):
+    enabled["value"] = False
+    progress("reading")
+    pytest.fail("disabled import continued")
+
+  monkeypatch.setattr(apk_identity, "extract_identity", extract)
+  monkeypatch.setattr(apk_identity, "install_identity", lambda *a: pytest.fail("disabled import installed a certificate"))
+  job = apk_identity.ImportJob(work_dir=tmp_path)
+  job.start(path=source, enabled=lambda: enabled["value"])
+  job.thread.join(timeout=5)
+  assert not job.busy()
+  assert "disabled" in job.status()["error"]
+  assert not source.exists()
+
+
 def test_status_reports_expiry(tmp_path):
   cert, root, key_pem, _ = build_identity(days=5)
   directory = tmp_path / "identity"
