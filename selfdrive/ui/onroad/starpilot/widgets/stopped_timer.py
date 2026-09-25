@@ -19,6 +19,10 @@ class StoppedTimerWidget(Widget):
   BESIDE_MAP_SCALE = 0.5   # the car view's driving pane is narrower with the map beside it
   MAX_WIDTH_FRACTION = 0.8
   LEFT_CONTROLS_RESERVE = 290  # MAX / LIMIT column; the narrow car-view pane has no room to centre over it
+  CAR_MAX_TEXT_WIDTH = 0.78
+  CAR_CARD_PADDING_X = 48
+  CAR_CARD_PADDING_Y = 34
+  CAR_LINE_GAP = 14
 
   def __init__(self, in_reverse: Callable[[], bool] | None = None):
     super().__init__()
@@ -102,6 +106,10 @@ class StoppedTimerWidget(Widget):
     duration = self._duration
     minute_text, second_text = self._format_duration_text(duration)
 
+    if getattr(ui_state, "android_auto_car_view", False):
+      self._render_car_timer(rect, minute_text, second_text)
+      return
+
     left = rect.x
     width = rect.width
     if getattr(ui_state, "nav_map_beside_road", False):
@@ -116,14 +124,7 @@ class StoppedTimerWidget(Widget):
     minute_bottom = rect.y + (210 if scale >= 1.0 else 180 + minute_size.y / 2)
     second_bottom = minute_bottom + 80 * scale
 
-    if duration < 150:
-      transition = (duration - 60) / 90.0
-      duration_color = self._blend_colors(ENGAGED_COLOR, EXPERIMENTAL_COLOR, transition)
-    elif duration < 300:
-      transition = (duration - 150) / 150.0
-      duration_color = self._blend_colors(EXPERIMENTAL_COLOR, TRAFFIC_COLOR, transition)
-    else:
-      duration_color = TRAFFIC_COLOR
+    duration_color = self._duration_color()
 
     center_x = left + width / 2
     rl.draw_text_ex(
@@ -142,6 +143,48 @@ class StoppedTimerWidget(Widget):
       0,
       rl.Color(255, 255, 255, 255),
     )
+
+  def _render_car_timer(self, rect: rl.Rectangle, minute_text: str, second_text: str) -> None:
+    """Centre a legible timer in the Android Auto camera pane, at either width."""
+    full_width = measure_text_cached(self._font_bold, minute_text, self.MINUTE_FONT).x
+    available = max(1.0, rect.width * self.CAR_MAX_TEXT_WIDTH - 2 * self.CAR_CARD_PADDING_X)
+    scale = min(1.0, available / full_width) if full_width > 0 else 1.0
+    scale = max(0.42, scale)
+    minute_font = max(1, int(self.MINUTE_FONT * scale))
+    second_font = max(1, int(self.SECOND_FONT * scale))
+    minute_size = measure_text_cached(self._font_bold, minute_text, minute_font)
+    second_size = measure_text_cached(self._font_normal, second_text, second_font)
+
+    card_width = min(rect.width - 32, max(minute_size.x, second_size.x) + 2 * self.CAR_CARD_PADDING_X)
+    card_height = minute_size.y + second_size.y + self.CAR_LINE_GAP + 2 * self.CAR_CARD_PADDING_Y
+    card = rl.Rectangle(
+      rect.x + (rect.width - card_width) / 2,
+      rect.y + (rect.height - card_height) / 2,
+      card_width,
+      card_height,
+    )
+
+    duration_color = self._duration_color()
+    shadow = rl.Rectangle(card.x + 8, card.y + 10, card.width, card.height)
+    rl.draw_rectangle_rounded(shadow, 0.18, 12, rl.Color(0, 0, 0, 145))
+    rl.draw_rectangle_rounded(card, 0.18, 12, rl.Color(8, 11, 18, 238))
+    rl.draw_rectangle_rounded_lines_ex(card, 0.18, 12, 3, duration_color)
+
+    center_x = card.x + card.width / 2
+    minute_y = card.y + self.CAR_CARD_PADDING_Y
+    second_y = minute_y + minute_size.y + self.CAR_LINE_GAP
+    rl.draw_text_ex(self._font_bold, minute_text,
+                    rl.Vector2(center_x - minute_size.x / 2, minute_y), minute_font, 0, duration_color)
+    rl.draw_text_ex(self._font_normal, second_text,
+                    rl.Vector2(center_x - second_size.x / 2, second_y), second_font, 0, rl.WHITE)
+
+  def _duration_color(self) -> rl.Color:
+    duration = self._duration
+    if duration < 150:
+      return self._blend_colors(ENGAGED_COLOR, EXPERIMENTAL_COLOR, (duration - 60) / 90.0)
+    if duration < 300:
+      return self._blend_colors(EXPERIMENTAL_COLOR, TRAFFIC_COLOR, (duration - 150) / 150.0)
+    return TRAFFIC_COLOR
 
   @staticmethod
   def _blend_colors(start: rl.Color, end: rl.Color, transition: float) -> rl.Color:
