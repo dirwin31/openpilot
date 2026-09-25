@@ -34,6 +34,7 @@ from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import (
   _normalize_maneuver_type,
 )
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.starpilot.navigation.destination_store import parse_destination_json
 from openpilot.starpilot.navigation.offline_maps import OfflineMaps
 from openpilot.starpilot.navigation.map_tiles import (
   TILE_SIZE,
@@ -301,10 +302,12 @@ class GpsFix:
 
 
 class NavMapView(Widget):
-  def __init__(self, *, show_guidance: bool = True, clip: bool = True):
+  def __init__(self, *, show_guidance: bool = True, clip: bool = True, show_navigation_waiting: bool = False):
     super().__init__()
     self._show_guidance = show_guidance
     self._clip = clip  # off when the map owns its whole render target
+    self._show_navigation_waiting = show_navigation_waiting
+    self._navigation_requested = False
     self._dirty = True
     self._animating = False
     self._last_draw = -math.inf
@@ -451,9 +454,12 @@ class NavMapView(Widget):
     if now - self._last_gps_poll >= GPS_POLL_SECONDS:
       self._last_gps_poll = now
       self._poll_gps(now)
+      self._navigation_requested = parse_destination_json(
+        self._params.get("NavDestination", encoding="utf-8")
+      ) is not None
 
     overlay = (id(self._nav), self._desire, self._nav_desire, ui_state.started, self._route_key,
-               self._gps is not None and self._gps.fresh, self.offline)
+               self._gps is not None and self._gps.fresh, self._navigation_requested, self.offline)
     if overlay != self._overlay_state:
       self._overlay_state = overlay
       self._dirty = True
@@ -603,8 +609,9 @@ class NavMapView(Widget):
       if self._clip:
         rl.end_scissor_mode()
 
-    if self._gps is None and not self._preview_active:
-      self._draw_center_message(rect, "Waiting for GPS", "The map appears once the car has a location.")
+    center_message = self._center_message()
+    if center_message is not None:
+      self._draw_center_message(rect, *center_message)
     self._draw_status(rect)
     if self._show_guidance and not self._preview_active:
       self._draw_guidance(rect, now)
@@ -759,6 +766,16 @@ class NavMapView(Widget):
     self._card(card)
     self._text(title, card.x + 36, card.y + 30, 44, TEXT, bold=True)
     self._text(self._fit_text(body, 30, width - 72), card.x + 36, card.y + 94, 30, SUBTEXT)
+
+  def _center_message(self) -> tuple[str, str] | None:
+    if self._preview_active:
+      return None
+    has_fresh_gps = self._gps is not None and self._gps.fresh
+    if self._show_navigation_waiting and self._navigation_requested and not has_fresh_gps:
+      return "Navigation active", "Waiting for GPS to start your route."
+    if self._gps is None:
+      return "Waiting for GPS", "The map appears once the car has a location."
+    return None
 
   def _draw_status(self, rect: rl.Rectangle) -> None:
     badges = []

@@ -1,4 +1,5 @@
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -347,6 +348,25 @@ def test_map_pane_show_and_hide_events():
   pane.set_shown(True)
   pane.set_shown(False)
   assert pane._map.events == ["show", "hide"]
+
+
+def test_android_auto_map_enables_navigation_waiting_state(monkeypatch):
+  created = []
+
+  class FakeMap:
+    def __init__(self, **kwargs):
+      created.append(kwargs)
+
+    def show_event(self):
+      pass
+
+  module = ModuleType("openpilot.selfdrive.ui.onroad.starpilot.nav_map")
+  module.NavMapView = FakeMap
+  monkeypatch.setitem(sys.modules, module.__name__, module)
+
+  pane = car_ui.MapPane()
+  assert pane._ensure_map() is pane._map
+  assert created == [{"show_guidance": True, "clip": False, "show_navigation_waiting": True}]
 
 
 

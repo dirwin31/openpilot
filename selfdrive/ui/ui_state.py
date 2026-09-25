@@ -107,6 +107,9 @@ class UIState:
     # Set by the Android Auto car view while its navigation map is drawn beside the
     # driving view; the driving view then leaves out what the map already shows.
     self.nav_map_beside_road: bool = False
+    # The Android Auto renderer runs in its own process, so car-screen-only layout
+    # changes can key off this without changing the comma's built-in display.
+    self.android_auto_car_view: bool = False
     # Set by the car view when its camera is turned off in The Galaxy: the driving view keeps
     # its border, HUD and alerts over black, and the video stream isn't fetched at all.
     self.car_camera_off: bool = False
