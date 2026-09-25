@@ -53,7 +53,8 @@ def render_adjacent_lanes(renderer) -> None:
   """
   sm = ui_state.sm
   adjacent_enabled = renderer._params.get_bool("AdjacentPath")
-  blind_spot_enabled = renderer._params.get_bool("BlindSpotPath")
+  blind_spot_enabled = (renderer._params.get_bool("BlindSpotPath") and
+                        getattr(ui_state, "android_auto_blind_spot_monitors_visible", True))
 
   if not (adjacent_enabled or blind_spot_enabled):
     return

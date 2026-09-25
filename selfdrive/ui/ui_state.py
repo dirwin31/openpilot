@@ -110,6 +110,9 @@ class UIState:
     # The Android Auto renderer runs in its own process, so car-screen-only layout
     # changes can key off this without changing the comma's built-in display.
     self.android_auto_car_view: bool = False
+    # The car-screen layout can hide blind-spot-only visuals or defer them until
+    # a configured speed without affecting alerts, controls, or the built-in display.
+    self.android_auto_blind_spot_monitors_visible: bool = True
     # Set by the car view when its camera is turned off in The Galaxy: the driving view keeps
     # its border, HUD and alerts over black, and the video stream isn't fetched at all.
     self.car_camera_off: bool = False
