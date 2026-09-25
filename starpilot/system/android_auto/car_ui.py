@@ -22,6 +22,7 @@ Approach adapted from yummydirtx/openpilot ``tools/android_auto/native_renderer.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import sys
@@ -32,7 +33,6 @@ from openpilot.starpilot.system.android_auto.touch import DEFAULT_TOUCH_SOCKET, 
 
 LOGICAL_HEIGHT = 1080  # the landscape UI's design height
 MIN_LOGICAL_WIDTH = 1600
-DEMAND_GRACE = 5.0
 STARTUP_DEMAND_WAIT = 15.0
 NAV_SPLIT_MIN_WIDTH = 1700  # logical width; narrower car screens keep the full driving view
 NAV_SPLIT_FRACTION = 0.42
@@ -448,7 +448,8 @@ def wait_for_request(producer: FrameProducer) -> FrameRequest:
   deadline = time.monotonic() + STARTUP_DEMAND_WAIT
   while time.monotonic() < deadline:
     producer._next_open_check = 0.0
-    request = producer.pending_request()
+    # Geometry is available even if the car has not granted display focus yet.
+    request = producer.pending_request(require_demand=False)
     if request is not None:
       return request
     time.sleep(0.1)
@@ -469,7 +470,7 @@ def run(frames_path: str, touch_path: str) -> int:
   logical_w, logical_h, scale_x, scale_y = logical_size(request)
   visible_w, visible_h = request.width - request.margin_w, request.height - request.margin_h
 
-  from openpilot.starpilot.system.android_auto.headless_egl import HeadlessContext
+  from openpilot.starpilot.system.android_auto.headless_egl import HeadlessContext, RgbaReadback
   context = HeadlessContext(request.width, request.height)
   import pyray as rl
   from openpilot.system.ui.lib.application import MouseEvent, MousePos, gui_app
@@ -499,12 +500,15 @@ def run(frames_path: str, touch_path: str) -> int:
   if msaa is not None:
     install_watertight_shapes()
   output = rl.load_render_texture(request.width, request.height)
+  readback = RgbaReadback(request.width, request.height)
   touch = TouchInput(MouseEvent, MousePos, logical_w, logical_h)
   # A few widgets (list buttons, StarPilot sliders) poll raylib's pointer directly;
   # without a window it would stay at 0,0, so report the car touch position instead.
   rl.get_mouse_position = lambda: rl.Vector2(touch.pos.x, touch.pos.y)
   receiver = TouchReceiver(touch_path)
-  last_demand = time.monotonic()
+  timing_start = time.monotonic()
+  timing_frames = 0
+  timing_totals = [0.0] * 4
   stop = {"flag": False}
   signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
   print(f"car ui {logical_w}x{logical_h} -> {visible_w}x{visible_h} in {request.width}x{request.height}", flush=True)
@@ -513,16 +517,22 @@ def run(frames_path: str, touch_path: str) -> int:
       now = time.monotonic()
       pending = producer.pending_request(now)
       if pending is None:
-        if now - last_demand > DEMAND_GRACE:
-          return 0
+        # Stay warm while the head unit shows its own screen, without rendering
+        # or readback. The supervisor owns our lifetime and stops us on teardown;
+        # the parent check also handles a crashed daemon.
         time.sleep(0.05)
+        timing_start = time.monotonic()
+        timing_frames = 0
+        timing_totals = [0.0] * 4
         continue
-      last_demand = now
       if pending != request:
         return 3  # new geometry: android_autod starts a fresh renderer
       now_ns = time.monotonic_ns()
-      if not producer.due(request, now_ns):
-        time.sleep(0.002)
+      capture_delay = producer.capture_delay(request, now_ns)
+      if capture_delay > 0:
+        # Sleep to the capture deadline instead of waking every 2 ms. Keep
+        # demand/stop checks responsive even with a low configured frame rate.
+        time.sleep(min(capture_delay, 0.05))
         continue
 
       viewport = rl.Rectangle(0, 0, logical_w, logical_h)
@@ -534,9 +544,11 @@ def run(frames_path: str, touch_path: str) -> int:
       main_rect, map_rect = car_layout(settings, started, controls.full_screen(started), logical_w, logical_h)
       ui_state.nav_map_beside_road = main_rect is not None and map_rect is not None
       ui_state.car_camera_off = started and not settings["camera"]
+      updated_at = time.monotonic()
       map_pane.set_shown(map_rect is not None)
       if map_rect is not None:
         map_pane.prepare(map_rect, scale_x, scale_y, now)
+      map_ready_at = time.monotonic()
 
       rl.begin_texture_mode(msaa.render_texture if msaa is not None else content)
       rl.clear_background(rl.Color(6, 6, 15, 255))
@@ -580,11 +592,19 @@ def run(frames_path: str, touch_path: str) -> int:
                           rl.Vector2(0, 0), 0.0, rl.WHITE)
       rl.end_texture_mode()
       gui_app._populate_render_texture_cache()
-      image = rl.load_image_from_texture(output.texture)
-      try:
-        producer.publish(request, rl.ffi.buffer(image.data, request.width * request.height * 4), now_ns)
-      finally:
-        rl.unload_image(image)
+      drawn_at = time.monotonic()
+      producer.publish(request, readback.read(output.id), now_ns)
+      published_at = time.monotonic()
+      timing_frames += 1
+      for index, elapsed in enumerate((updated_at - now_ns / 1e9, map_ready_at - updated_at,
+                                       drawn_at - map_ready_at, published_at - drawn_at)):
+        timing_totals[index] += elapsed
+      if published_at - timing_start >= 10.0:
+        # CPU submission timings; GPU completion may be charged to readback.
+        print(json.dumps({"event": "render_stats", "fps": round(timing_frames / (published_at - timing_start), 1),
+                          **{key: round(total * 1000 / timing_frames, 2) for key, total in zip(
+                            ("update_ms", "map_ms", "draw_ms", "readback_ms"), timing_totals)}}), flush=True)
+        timing_start, timing_frames, timing_totals = published_at, 0, [0.0] * 4
       gui_app._frame += 1
     return 0
   finally:

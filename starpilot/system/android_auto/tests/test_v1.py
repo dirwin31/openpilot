@@ -221,6 +221,27 @@ def test_normalize_hardware_access_unit():
     hw_encoder.normalize_access_unit(b"\x00\x00\x00\x01\x41\x00", keyframe=True)
 
 
+def test_hardware_encoder_reads_only_the_encoded_bytes():
+  import ctypes
+  from types import SimpleNamespace
+
+  raw = b"\x00\x00\x00\x01\x67\x42\x00\x00\x00\x01\x68\xce\x00\x00\x00\x01\x65\x88"
+  encoder = hw_encoder.HardwareH264Encoder.__new__(hw_encoder.HardwareH264Encoder)
+  encoder.handle = 1
+  encoder.width = encoder.height = 2
+  encoder.frame_index = 0
+  encoder.error = ctypes.create_string_buffer(512)
+  # Include stale trailing bytes; they must never enter the access unit.
+  encoder.output = ctypes.create_string_buffer(raw + b"stale", 4096)
+  encoder.lib = SimpleNamespace(aa_encoder_encode=lambda *args: len(raw))
+  data, keyframe = encoder.encode_rgba(bytes(16))
+  assert data == hw_encoder.AUD + raw
+  assert keyframe and encoder.frame_index == 1
+  encoder.lib.aa_encoder_encode = lambda *args: len(encoder.output) + 1
+  with pytest.raises(RuntimeError, match="too large"):
+    encoder.encode_rgba(bytes(16))
+
+
 def test_create_encoder_falls_back_to_software(monkeypatch, tmp_path):
   monkeypatch.setattr(hw_encoder, "LIBRARY", tmp_path / "missing.so")
   events = []

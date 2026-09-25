@@ -127,3 +127,29 @@ def test_route_progress_tracks_the_nearest_point(view):
   view.memory.values["LastGPSPosition"] = gps_state(36.3, -115.3 + 30 * 0.001, updated=5.0)
   view._poll_gps(5.0)
   assert view._route_progress == 30
+
+
+@pytest.mark.parametrize("fps", [15, 30])
+def test_cached_map_keeps_redraw_budget_with_preparation_delay(view, fps):
+  view._animating = True
+  drawn = []
+  for frame in range(fps * 10):
+    # Data updates and texture setup happen after the car loop samples time.
+    now = 100.0 + frame / fps + (0.001 if frame % 3 == 0 else 0.0)
+    if view.needs_redraw(now):
+      drawn.append(frame)
+      view._record_draw(now + 0.003)
+      view._dirty = False
+  assert len(drawn) == 150
+  assert set(np.diff(drawn)) == {fps // 15}
+
+
+def test_cached_map_stays_idle_and_does_not_catch_up_after_a_stall(view):
+  view._record_draw(100.0)
+  view._dirty = False
+  assert not view.needs_redraw(100.5)
+  assert view.needs_redraw(101.0)
+  view._record_draw(101.0)
+  view._animating = True
+  assert not view.needs_redraw(101.01)
+  assert view.needs_redraw(101.07)

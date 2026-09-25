@@ -89,7 +89,10 @@ class HardwareH264Encoder:
                                       self.error, len(self.error))
     if size < 0:
       raise RuntimeError(self.error.value.decode("utf-8", "replace"))
-    data = normalize_access_unit(self.output.raw[:size], keyframe=force)
+    if size > len(self.output):
+      raise RuntimeError("Hardware access unit too large")
+    # .raw copies the entire 2 MiB capacity, even for a small inter frame.
+    data = normalize_access_unit(ctypes.string_at(self.output, size), keyframe=force)
     self.frame_index += 1
     self.last_encode_ms = (time.monotonic() - started) * 1000
     return data, {5, 7, 8}.issubset(nal_types(data))
