@@ -107,6 +107,9 @@ class UIState:
     # Set by the Android Auto car view while its navigation map is drawn beside the
     # driving view; the driving view then leaves out what the map already shows.
     self.nav_map_beside_road: bool = False
+    # Set by the car view when its camera is turned off in The Galaxy: the driving view keeps
+    # its border, HUD and alerts over black, and the video stream isn't fetched at all.
+    self.car_camera_off: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
     self.panda_type: log.PandaState.PandaType = log.PandaState.PandaType.unknown

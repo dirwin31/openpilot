@@ -5,9 +5,12 @@ renders the full landscape StarPilot interface (the comma 3X layout: road
 camera, path, HUD, alerts, sidebar, settings) at the car's resolution in an EGL
 pbuffer, without a window, display power, touch hardware or publishers. Frames
 go to android_autod through the same bounded shared-memory slot as mirroring,
-and car touches arrive as datagrams. Touches are honoured only offroad, the same
-rule the browser streamer uses: nobody changes settings from the car screen while
-driving.
+and car touches arrive as datagrams. Offroad every touch works. Onroad the driving
+view and map ignore touches; only the small quick-menu button (home screen,
+navigate to a favorite, back to driving) and the home screen it opens accept them.
+How the drive is laid out (map beside the driving view, driving view only, map
+only, camera on or off) comes from car_screen.json, set in The Galaxy and applied
+live.
 
 Started and stopped by android_autod; exits when demand stops or its parent dies.
 
@@ -32,7 +35,9 @@ DEMAND_GRACE = 5.0
 STARTUP_DEMAND_WAIT = 15.0
 NAV_SPLIT_MIN_WIDTH = 1700  # logical width; narrower car screens keep the full driving view
 NAV_SPLIT_FRACTION = 0.42
-NAV_PARAM_REFRESH = 2.0
+HOME_ONROAD_TIMEOUT = 45.0  # back to the drive after this long untouched on the home screen
+FAVORITES_REFRESH = 5.0
+MAP_ONLY_BORDER = 14.0
 
 
 class NullPubMaster:
@@ -101,17 +106,37 @@ class TouchInput:
     return self.MouseEvent(self.pos, 0, pressed, released, down, now, cancelled)
 
 
-class NavSplit:
-  """Onroad, put the navigation map beside the driving view on a wide car screen.
+def car_layout(settings: dict, started: bool, on_home: bool, width: int, height: int):
+  """(main layout rect or None, map rect or None) in logical pixels.
 
-  Gated by the "Navigation Widgets" toggle. The map is display-only here: car
-  touches are already refused onroad.
+  Offroad, and onroad once the driver has gone to the home screen, the main
+  layout fills the screen. Onroad it follows The Galaxy's car screen settings.
+  """
+  import pyray as rl
+  full = rl.Rectangle(0, 0, width, height)
+  if not started or on_home:
+    return full, None
+  view = settings.get("onroad_view", "split")
+  if view == "split" and width < NAV_SPLIT_MIN_WIDTH:
+    view = "driving"
+  if view == "driving":
+    return full, None
+  if view == "map":
+    return None, full
+  map_w = round(min(1100, max(700, width * NAV_SPLIT_FRACTION)))
+  if settings.get("map_side") == "left":
+    return rl.Rectangle(map_w, 0, width - map_w, height), rl.Rectangle(0, 0, map_w, height)
+  return rl.Rectangle(0, 0, width - map_w, height), rl.Rectangle(width - map_w, 0, map_w, height)
+
+
+class MapPane:
+  """The navigation map, cached in its own texture and redrawn only when it changes.
+
+  Most car frames then cost one textured quad for the map instead of its tiles,
+  route, markers and text.
   """
 
-  def __init__(self, logical_w: int, logical_h: int):
-    self.logical_w, self.logical_h = logical_w, logical_h
-    self._enabled = False
-    self._checked = -NAV_PARAM_REFRESH
+  def __init__(self):
     self._map = None
     self._shown = False
     self._texture = None
@@ -119,22 +144,10 @@ class NavSplit:
     self._texture_valid = False
     self.redraws = 0
 
-  def rects(self, started: bool, now: float):
-    """(driving rect, map rect) when the split applies, else None."""
-    import pyray as rl
-    if now - self._checked >= NAV_PARAM_REFRESH:
-      self._checked = now
-      from openpilot.selfdrive.ui.ui_state import ui_state
-      self._enabled = self.logical_w >= NAV_SPLIT_MIN_WIDTH and ui_state.params.get_bool("NavigationUI")
-    active = started and self._enabled
-    if active != self._shown and self._map is not None:
-      (self._map.show_event if active else self._map.hide_event)()
-    self._shown = active
-    if not active:
-      return None
-    map_w = round(min(1100, max(700, self.logical_w * NAV_SPLIT_FRACTION)))
-    return (rl.Rectangle(0, 0, self.logical_w - map_w, self.logical_h),
-            rl.Rectangle(self.logical_w - map_w, 0, map_w, self.logical_h))
+  def set_shown(self, shown: bool) -> None:
+    if shown != self._shown and self._map is not None:
+      (self._map.show_event if shown else self._map.hide_event)()
+    self._shown = shown
 
   def _ensure_map(self):
     if self._map is None:
@@ -144,11 +157,7 @@ class NavSplit:
     return self._map
 
   def prepare(self, rect, scale_x: float, scale_y: float, now: float) -> None:
-    """Before the frame: redraw the map into its own texture only when it changed.
-
-    Most car frames then cost one textured quad for the map instead of its
-    tiles, route, markers and text.
-    """
+    """Before the frame: redraw into the texture only when something changed."""
     import pyray as rl
     nav_map = self._ensure_map()
     width, height = max(1, round(rect.width * scale_x)), max(1, round(rect.height * scale_y))
@@ -193,6 +202,134 @@ class NavSplit:
 
   def close(self) -> None:
     self._unload_texture()
+
+
+class MapOnlyStatus:
+  """With the map filling the car screen, keep the drive's essentials on top of it:
+  the engagement-coloured border, the current speed and every alert."""
+
+  def __init__(self):
+    from openpilot.selfdrive.ui.onroad.alert_renderer import AlertRenderer
+    from openpilot.system.ui.lib.application import FontWeight, gui_app
+    self._alerts = AlertRenderer()
+    self._font_bold = gui_app.font(FontWeight.BOLD)
+    self._font_medium = gui_app.font(FontWeight.MEDIUM)
+
+  def render(self, rect) -> None:
+    import pyray as rl
+    from openpilot.common.constants import CV
+    from openpilot.selfdrive.ui.lib.starpilot_status import get_screen_edge_color
+    from openpilot.selfdrive.ui.ui_state import ui_state
+    from openpilot.system.ui.lib.text_measure import measure_text_cached
+    rl.draw_rectangle_lines_ex(rect, MAP_ONLY_BORDER, get_screen_edge_color(ui_state))
+
+    car_state = ui_state.sm["carState"]
+    v_ego = car_state.vEgoCluster if car_state.vEgoCluster > 0 else car_state.vEgo
+    speed = max(0.0, v_ego * (CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH))
+    speed_text, unit = f"{speed:.0f}", "km/h" if ui_state.is_metric else "mph"
+    pill = rl.Rectangle(rect.x + 28, rect.y + rect.height - 28 - 84 - 16 - 132, 170, 132)
+    rl.draw_rectangle_rounded(pill, 0.3, 10, rl.Color(10, 13, 20, 228))
+    speed_size = measure_text_cached(self._font_bold, speed_text, 76)
+    rl.draw_text_ex(self._font_bold, speed_text, rl.Vector2(pill.x + (pill.width - speed_size.x) / 2, pill.y + 14), 76, 0, rl.WHITE)
+    unit_size = measure_text_cached(self._font_medium, unit, 28)
+    rl.draw_text_ex(self._font_medium, unit, rl.Vector2(pill.x + (pill.width - unit_size.x) / 2, pill.y + 92), 28, 0,
+                    rl.Color(170, 180, 196, 255))
+
+    self._alerts.render(rect)
+
+
+class OnroadControls:
+  """The quick menu and where car touches go.
+
+  Each touch is routed when the finger goes down: to the menu if it starts on the
+  button (or anywhere while the menu is open), to the main layout offroad or on
+  the home screen, otherwise nowhere.
+  """
+
+  def __init__(self, main_layout, params=None, params_memory=None, clock=time.monotonic):
+    from openpilot.common.params import Params
+    from openpilot.selfdrive.ui.layouts.main import MainState
+    from openpilot.starpilot.navigation.destination_store import NavigationDestinationStore
+    from openpilot.starpilot.system.android_auto.car_menu import CarQuickMenu
+    self.main_layout = main_layout
+    self._MainState = MainState
+    self._params = params or Params()
+    self.store = NavigationDestinationStore(self._params, params_memory or Params(memory=True))
+    self._clock = clock
+    self.menu = CarQuickMenu(go_home=self.go_home, go_driving=self.go_driving,
+                             navigate=self.navigate, cancel_navigation=self.cancel_navigation, on_open=self.refresh)
+    self.target: str | None = None
+    self.last_touch = clock()
+    self._favorites_read = -FAVORITES_REFRESH
+    self._started = False
+
+  def on_home(self, started: bool) -> bool:
+    return started and self.main_layout._current_mode != self._MainState.ONROAD
+
+  def go_home(self) -> None:
+    self.last_touch = self._clock()
+    self.main_layout._set_current_layout(self._MainState.HOME)
+    self.main_layout._sidebar.set_visible(True)
+    self.menu.on_home = True
+    self.menu.corner = "right"
+
+  def go_driving(self) -> None:
+    self.main_layout._set_mode_for_state()
+    self.menu.on_home = False
+    self.menu.corner = "left"
+
+  def navigate(self, favorite: dict) -> None:
+    self.store.set_destination(favorite)
+    self.menu.nav_active = True
+    self.go_driving()
+
+  def cancel_navigation(self) -> None:
+    self.store.clear_navigation()
+    self.menu.nav_active = False
+
+  def refresh(self) -> None:
+    from openpilot.starpilot.navigation.destination_store import ordered_favorite_destinations, routing_configured
+    self._favorites_read = self._clock()
+    self.menu.favorites = ordered_favorite_destinations(self.store.favorite_destinations())
+    self.menu.routing_ok = routing_configured(self._params)
+    self.menu.nav_active = self.store.active_destination() is not None
+    self.menu.on_home = self.on_home(self._started)
+
+  def update(self, started: bool) -> None:
+    now = self._clock()
+    self._started = started
+    if not started:
+      self.menu.close()
+      return
+    if self.on_home(started):
+      critical = self.main_layout._critical_full_alert_active()
+      if critical or now - self.last_touch > HOME_ONROAD_TIMEOUT:
+        self.go_driving()
+    if now - self._favorites_read >= FAVORITES_REFRESH:
+      self.refresh()
+    self.menu.on_home = self.on_home(started)
+    self.menu.corner = "right" if self.menu.on_home else "left"
+
+  def route(self, touches, touch_input, started: bool, screen) -> tuple[list, list]:
+    """(events for the main layout, events for the menu)."""
+    layout_events, menu_events = [], []
+    layout_ok = not started or self.on_home(started)
+    if self.target == "layout" and not layout_ok:
+      layout_events += touch_input.events([], allowed=False, now=self._clock())
+      self.target = None
+    for touch in touches:
+      if touch.kind == "down":
+        x, y = touch.x * touch_input.logical_w, touch.y * touch_input.logical_h
+        if started and self.menu.captures(x, y, screen):
+          self.target = "menu"
+        elif layout_ok:
+          self.target = "layout"
+        else:
+          self.target = None
+        self.last_touch = self._clock()
+      events = touch_input.events([touch], allowed=self.target is not None, now=self._clock())
+      (menu_events if self.target == "menu" else layout_events).extend(events)
+    return layout_events, menu_events
 
 
 def neutralize_side_effects() -> None:
@@ -248,8 +385,12 @@ def run(frames_path: str, touch_path: str) -> int:
   ui_state.prime_state.start = lambda: None  # no second comma API poller
   ui_state.ui_params.start()
   from openpilot.selfdrive.ui.layouts.main import MainLayout
+  from openpilot.starpilot.system.android_auto.car_screen import CarScreenSettings
   main_layout = MainLayout()
-  nav_split = NavSplit(logical_w, logical_h)
+  map_pane = MapPane()
+  car_settings = CarScreenSettings()
+  controls = OnroadControls(main_layout)
+  map_status: MapOnlyStatus | None = None
 
   content = rl.load_render_texture(visible_w, visible_h)
   from openpilot.system.ui.lib.msaa import MsaaTarget, install_watertight_shapes
@@ -283,32 +424,45 @@ def run(frames_path: str, touch_path: str) -> int:
         time.sleep(0.002)
         continue
 
-      events = touch.events(receiver.drain(), allowed=not ui_state.started, now=now)
-      gui_app._mouse_events = events
-      if events:
-        gui_app._last_mouse_event = events[-1]
+      viewport = rl.Rectangle(0, 0, logical_w, logical_h)
       ui_state.update()
-      split = nav_split.rects(ui_state.started, now)
-      ui_state.nav_map_beside_road = split is not None
-      if split is not None:
-        nav_split.prepare(split[1], scale_x, scale_y, now)
+      started = ui_state.started
+      controls.update(started)
+      layout_events, menu_events = controls.route(receiver.drain(), touch, started, viewport)
+      settings = car_settings.poll()
+      main_rect, map_rect = car_layout(settings, started, controls.on_home(started), logical_w, logical_h)
+      ui_state.nav_map_beside_road = main_rect is not None and map_rect is not None
+      ui_state.car_camera_off = started and not settings["camera"]
+      map_pane.set_shown(map_rect is not None)
+      if map_rect is not None:
+        map_pane.prepare(map_rect, scale_x, scale_y, now)
 
       rl.begin_texture_mode(msaa.render_texture if msaa is not None else content)
       rl.clear_background(rl.Color(6, 6, 15, 255))
       rl.rl_push_matrix()
       rl.rl_scalef(scale_x, scale_y, 1.0)
+      gui_app._mouse_events = layout_events
+      if layout_events:
+        gui_app._last_mouse_event = layout_events[-1]
       for tick in list(gui_app._nav_stack_ticks):
         tick()
-      viewport = rl.Rectangle(0, 0, logical_w, logical_h)
       widgets = gui_app._nav_stack[-gui_app._nav_stack_widgets_to_render:]
       if len(widgets) > 1 and widgets[-1].covers_background(viewport):
         widgets = widgets[-1:]
       for widget in widgets:
-        if widget is main_layout and split is not None:
-          widget.render(split[0])
-          nav_split.draw(split[1])
+        if widget is main_layout:
+          if main_rect is not None:
+            widget.render(main_rect)
+          if map_rect is not None:
+            map_pane.draw(map_rect)
+            if main_rect is None:
+              map_status = map_status or MapOnlyStatus()
+              map_status.render(map_rect)
         else:
           widget.render(viewport)
+      if started:
+        gui_app._mouse_events = menu_events
+        controls.menu.render(viewport)
       rl.rl_pop_matrix()
       rl.end_texture_mode()
       if msaa is not None:
@@ -332,7 +486,7 @@ def run(frames_path: str, touch_path: str) -> int:
     return 0
   finally:
     receiver.close()
-    nav_split.close()
+    map_pane.close()
     if msaa is not None:
       msaa.unload()
     rl.unload_render_texture(content)
