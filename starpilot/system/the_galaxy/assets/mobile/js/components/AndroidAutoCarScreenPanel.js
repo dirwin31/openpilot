@@ -9,7 +9,7 @@ const VIEWS = [
 export const AndroidAutoCarScreenPanel = {
   name: "AndroidAutoCarScreenPanel",
   data() {
-    return { settings: null, saving: false, views: VIEWS }
+    return { settings: null, loading: false, error: "", saving: false, views: VIEWS }
   },
   created() { this.load() },
   computed: {
@@ -18,10 +18,26 @@ export const AndroidAutoCarScreenPanel = {
   },
   methods: {
     async load() {
+      if (this.loading) return
+      this.loading = true
+      this.error = ""
       try {
-        this.settings = (await api.getCarScreen()).settings
+        // The panel mounts as soon as the master toggle changes locally. Its first
+        // request can beat the toggle's PUT to the device and receive a transient 403.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            this.settings = (await api.getCarScreen()).settings
+            return
+          } catch (e) {
+            if (attempt === 2) throw e
+            await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 250 : 750))
+          }
+        }
       } catch (e) {
-        showSnackbar(e?.message || "Could not read the car screen settings.", "error")
+        this.error = e?.message || "Could not read the car screen settings."
+        showSnackbar(this.error, "error")
+      } finally {
+        this.loading = false
       }
     },
     async update(change) {
@@ -41,8 +57,15 @@ export const AndroidAutoCarScreenPanel = {
   },
   template: `
     <div style="padding: var(--sp-3); display:grid; gap:10px;">
-      <div v-if="!settings" class="gx-loading">Loading...</div>
-      <template v-else>
+      <div v-if="loading" class="gx-loading">Loading...</div>
+      <div v-else-if="error" class="gx-row" style="border:none; gap:10px; flex-wrap:wrap;">
+        <div class="gx-row__info">
+          <span class="gx-row__label">Could not load the layout</span>
+          <span class="gx-row__desc">{{ error }}</span>
+        </div>
+        <button type="button" class="gx-btn gx-btn--tonal" @click="load"><i class="bi bi-arrow-clockwise"></i> Retry</button>
+      </div>
+      <template v-else-if="settings">
         <div class="gx-row__label">While Driving</div>
         <label v-for="view in views" :key="view.value" class="gx-row" style="border:none; cursor:pointer; gap:10px;">
           <input type="radio" name="car-screen-view" :checked="settings.onroad_view === view.value" :disabled="saving"

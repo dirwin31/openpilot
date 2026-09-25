@@ -39,6 +39,8 @@ def test_car_screen_settings_live_under_vehicle_toggle():
   settings = (JS_ROOT / "views" / "Settings.js").read_text()
   panel = (JS_ROOT / "components" / "AndroidAutoCarScreenPanel.js").read_text()
   assert "AndroidAutoCarScreenPanel" in settings and "activeSection.name === 'Vehicle' && values.AndroidAutoEnabled" in settings
+  assert 'title="Android Auto"' in settings and 'p.key === "AndroidAutoEnabled"' in settings
+  assert 'v-else-if="error"' in panel and "attempt < 3" in panel and "@click=\"load\"" in panel
   for value in ('"split"', '"driving"', '"map"', "map_side", "camera"):
     assert value in panel
   assert "fetch(" not in panel
