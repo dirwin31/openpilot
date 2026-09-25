@@ -90,6 +90,8 @@ def test_stopped_timer_uses_text_contract(monkeypatch):
 
   assert stopped_timer.StoppedTimerWidget._format_duration_text(61) == ("1 minute", "1 second")
   assert stopped_timer.StoppedTimerWidget._format_duration_text(121) == ("2 minutes", "1 second")
+  assert stopped_timer.StoppedTimerWidget._format_car_duration(61) == ("Stopped", "01:01")
+  assert stopped_timer.StoppedTimerWidget._format_car_duration(12 * 60 + 5) == ("Stopped", "12:05")
 
 
 def test_stopped_timer_draws_positions_and_opaque_seconds(monkeypatch):
@@ -143,7 +145,7 @@ def test_stopped_timer_fits_a_narrow_driving_pane(monkeypatch):
   assert draws[0][2].x + minute_width <= 700
 
 
-def test_android_auto_timer_is_centered_in_full_and_split_camera_panes(monkeypatch):
+def test_android_auto_timer_replaces_speed_in_full_and_split_camera_panes(monkeypatch):
   stopped_timer = _load_stopped_timer(monkeypatch)
   monkeypatch.setattr(stopped_timer, "ui_state", SimpleNamespace(android_auto_car_view=True, nav_map_beside_road=True))
   monkeypatch.setattr(stopped_timer, "measure_text_cached",
@@ -160,5 +162,8 @@ def test_android_auto_timer_is_centered_in_full_and_split_camera_panes(monkeypat
 
     card = cards[1]  # shadow first, opaque card second
     assert abs(card.x + card.width / 2 - (rect.x + rect.width / 2)) < 1
-    assert abs(card.y + card.height / 2 - (rect.y + rect.height / 2)) < 1
-    assert abs(draws[0][2].x + len("1 minute") * draws[0][3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1
+    assert card.y == rect.y + stopped_timer.StoppedTimerWidget.CAR_CARD_TOP
+    assert card.y + card.height < rect.y + rect.height / 2
+    assert (draws[0][1], draws[1][1]) == ("Stopped", "01:01")
+    assert abs(draws[0][2].x + len("Stopped") * draws[0][3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1
+    assert abs(draws[1][2].x + len("01:01") * draws[1][3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1
