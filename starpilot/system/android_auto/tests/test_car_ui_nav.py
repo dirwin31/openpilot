@@ -109,10 +109,24 @@ def controls():
   ]
   params = FakeParams({"MapboxSecretKey": "sk", "FavoriteDestinations": json.dumps(favorites)})
   clock = [100.0]
-  result = car_ui.OnroadControls(FakeMainLayout(), params=params, params_memory=FakeParams(), clock=lambda: clock[0])
+  result = car_ui.OnroadControls(FakeMainLayout(), params=params, params_memory=FakeParams(), clock=lambda: clock[0],
+                                 navigate_screen_factory=FakeNavigateScreen)
   result.clock = clock
   result.params = params
   return result
+
+
+class FakeNavigateScreen:
+  def __init__(self, on_started, on_close):
+    self.on_started, self.on_close = on_started, on_close
+    self.back_label = ""
+    self.events = []
+
+  def show_event(self):
+    self.events.append("show")
+
+  def hide_event(self):
+    self.events.append("hide")
 
 
 def touch_input():
@@ -162,15 +176,117 @@ def test_leaving_the_home_screen_cancels_a_held_touch(controls):
   assert [e.cancelled for e in layout_events] == [True]
 
 
-def test_menu_lists_favorites_home_first_and_navigates(controls):
-  controls.menu.open = True
+def row_keys(controls):
+  return [row.key for row in controls.menu.rows()]
+
+
+def test_menu_puts_navigate_first(controls):
   controls.update(True)
-  assert [f["name"] for f in controls.menu.favorites] == ["House", "Office"]
-  controls.menu.activate("favorites")
-  controls.menu.activate("favorite:0")
-  destination = controls.params.values["NavDestination"]
-  assert "House" in destination
-  assert not controls.menu.open and not controls.on_home(True)
+  assert row_keys(controls) == ["navigate", "home"]
+  assert controls.menu.rows()[0].enabled
+
+
+def test_navigate_opens_the_navigate_screen_and_takes_touches(controls):
+  touches = touch_input()
+  controls.update(True, 0.0)
+  controls.menu.open = True
+  controls.menu.activate("navigate")
+  assert controls.nav_open and not controls.menu.open
+  assert controls.navigate_screen.events == ["show"] and controls.navigate_screen.back_label == "Back to driving"
+  assert controls.full_screen(True)
+  button = controls.menu.button_rect(screen())
+  layout_events, menu_events = controls.route(tap(button.x + 10, button.y + 10), touches, True, screen())
+  assert len(layout_events) == 2 and menu_events == [], "the menu button is hidden under the Navigate screen"
+
+  controls.navigate_screen.on_close()
+  assert not controls.nav_open and controls.navigate_screen.events == ["show", "hide"]
+  assert not controls.on_home(True)
+
+
+def test_starting_a_route_returns_to_the_drive_even_from_the_home_screen(controls):
+  controls.update(True, 0.0)
+  controls.go_home()
+  controls.open_navigate()
+  assert controls.navigate_screen.back_label == "Back"
+  controls.navigate_screen.on_close()
+  assert controls.on_home(True), "Back returns to where the driver came from"
+  controls.open_navigate()
+  controls.navigate_screen.on_started()
+  assert not controls.nav_open and not controls.on_home(True)
+
+
+def test_home_screen_navigate_button_opens_the_same_screen():
+  from openpilot.selfdrive.ui.layouts.main import MainState
+
+  class Home:
+    def __init__(self):
+      self._home_info_card = SimpleNamespace(quick_start_enabled=True)
+      self._navigate_button = SimpleNamespace(locked_text="")
+      self.callback = None
+
+    def set_navigate_callback(self, callback):
+      self.callback = callback
+
+  home = Home()
+  main_layout = SimpleNamespace(_layouts={MainState.HOME: home}, _current_mode=MainState.HOME)
+  controls = car_ui.OnroadControls(main_layout, params=FakeParams({"MapboxSecretKey": "sk"}), params_memory=FakeParams(),
+                                   navigate_screen_factory=FakeNavigateScreen)
+  assert home.callback == controls.open_navigate
+  assert home._home_info_card.quick_start_enabled is False, "Personal Records no longer hides a second navigation page"
+  controls.update(False)
+  home.callback()
+  assert controls.nav_open and controls.full_screen(False)
+
+
+MPH = 0.44704
+
+
+@pytest.mark.parametrize("started, speed, allowed", [
+  (False, None, True),      # offroad: always
+  (True, 0.0, True),
+  (True, 9.9 * MPH, True),
+  (True, 10.0 * MPH, False),
+  (True, -12.0 * MPH, False),  # reversing fast still counts
+  (True, None, False),      # no wheel speed onroad: treat as moving
+])
+def test_speed_gate_uses_wheel_speed_below_10_mph(started, speed, allowed):
+  from openpilot.starpilot.system.android_auto.car_navigate import speed_allows_navigation
+  assert speed_allows_navigation(started, speed) is allowed
+
+
+def test_moving_locks_navigate_and_closes_the_screen(controls):
+  controls.update(True, 5 * MPH)
+  controls.open_navigate()
+  assert controls.nav_open
+  controls.update(True, 15 * MPH)
+  assert not controls.nav_open and not controls.on_home(True)
+  row = controls.menu.rows()[0]
+  assert row.key == "navigate" and not row.enabled and "10 mph" in row.subtitle
+  controls.open_navigate()
+  assert not controls.nav_open, "can't be opened while moving"
+  controls.update(True, 3 * MPH)
+  assert controls.menu.rows()[0].enabled
+
+
+def test_navigate_screen_closes_when_idle_or_on_a_critical_alert(controls):
+  controls.update(True, 0.0)
+  controls.open_navigate()
+  controls.clock[0] += car_ui.HOME_ONROAD_TIMEOUT + 1
+  controls.update(True, 0.0)
+  assert not controls.nav_open
+  controls.open_navigate()
+  controls.main_layout.critical = True
+  controls.update(True, 0.0)
+  assert not controls.nav_open
+
+
+def test_ending_a_route_works_at_any_speed(controls):
+  controls.params.values["NavDestination"] = '{"name": "House", "place_name": "House", "latitude": 36.3, "longitude": -115.3}'
+  controls.update(True, 40 * MPH)
+  assert row_keys(controls) == ["navigate", "cancel", "home"]
+  assert "House" in controls.menu.destination_name
+  controls.menu.activate("cancel")
+  assert "NavDestination" not in controls.params.values
 
 
 def test_menu_home_back_and_cancel(controls):
@@ -178,14 +294,14 @@ def test_menu_home_back_and_cancel(controls):
   assert controls.on_home(True) and controls.main_layout._sidebar.visible
   controls.update(True)
   assert controls.menu.on_home
-  assert controls.menu.rows()[0].key == "driving"
+  assert row_keys(controls)[-1] == "driving"
   controls.menu.activate("driving")
   assert not controls.on_home(True)
 
   controls.params.values["NavDestination"] = '{"name": "House", "place_name": "House", "latitude": 36.3, "longitude": -115.3}'
-  controls.clock[0] += car_ui.FAVORITES_REFRESH
+  controls.clock[0] += car_ui.STATE_REFRESH
   controls.update(True)
-  assert controls.menu.nav_active and "cancel" in [row.key for row in controls.menu.rows()]
+  assert controls.menu.nav_active and "cancel" in row_keys(controls)
   controls.menu.activate("cancel")
   assert "NavDestination" not in controls.params.values
 
@@ -209,8 +325,8 @@ def test_navigation_needs_a_secret_key(controls):
   controls.params.values.pop("MapboxSecretKey")
   controls.menu.open = True
   controls.update(True)
-  controls.menu.activate("favorites")
-  assert controls.menu.rows()[1].title == "Navigation isn't set up"
+  row = controls.menu.rows()[0]
+  assert row.key == "navigate" and not row.enabled and "Mapbox" in row.subtitle
 
 
 def test_map_pane_show_and_hide_events():

@@ -1,4 +1,4 @@
-"""The car view's small onroad button: home screen, navigate to a favorite, back to driving.
+"""The car view's small onroad button: Navigate, end the route, home screen, back to driving.
 
 Onroad the car view ignores taps on the driving view itself; this button and its
 menu are what it accepts instead, so a stray touch never changes anything.
@@ -19,7 +19,6 @@ BUTTON_SIZE = 84.0
 MARGIN = 28.0
 PANEL_WIDTH = 600.0
 ROW_HEIGHT = 96.0
-MAX_FAVORITES = 6
 
 PANEL_BG = rl.Color(12, 15, 24, 250)
 PANEL_BORDER = rl.Color(255, 255, 255, 30)
@@ -43,21 +42,21 @@ class MenuRow:
 
 class CarQuickMenu(Widget):
   def __init__(self, *, go_home: Callable[[], None], go_driving: Callable[[], None],
-               navigate: Callable[[dict], None], cancel_navigation: Callable[[], None],
+               open_navigate: Callable[[], None], cancel_navigation: Callable[[], None],
                on_open: Callable[[], None] | None = None):
     super().__init__()
-    self._on_open = on_open  # refresh favorites / navigation state before the rows are shown
+    self._on_open = on_open  # refresh navigation state before the rows are shown
     self._go_home = go_home
     self._go_driving = go_driving
-    self._navigate = navigate
+    self._open_navigate = open_navigate
     self._cancel_navigation = cancel_navigation
     self._font_bold = self._font_medium = None  # loaded on first draw
     self.open = False
-    self.page = "main"
     self.on_home = False
     self.nav_active = False
+    self.destination_name = ""
     self.routing_ok = True
-    self.favorites: list[dict] = []
+    self.locked_text = ""  # why Navigate can't be opened right now (moving too fast)
     # Bottom-left over the drive; bottom-right on the home screen, where the sidebar's
     # flag button owns the bottom-left corner.
     self.corner = "left"
@@ -71,20 +70,18 @@ class CarQuickMenu(Widget):
     return rl.Rectangle(x, screen.y + screen.height - MARGIN - BUTTON_SIZE, BUTTON_SIZE, BUTTON_SIZE)
 
   def rows(self) -> list[MenuRow]:
-    if self.page == "favorites":
-      rows = [MenuRow("back", "< Back", color=SUBTEXT)]
-      if not self.routing_ok:
-        rows.append(MenuRow("none", "Navigation isn't set up", "Add a Mapbox secret key in The Galaxy", SUBTEXT, False))
-      elif not self.favorites:
-        rows.append(MenuRow("none", "No favorites yet", "Save favorites in The Galaxy or the Navigation panel", SUBTEXT, False))
-      for index, favorite in enumerate(self.favorites[:MAX_FAVORITES]):
-        badges = [label for flag, label in (("is_home", "Home"), ("is_work", "Work")) if favorite.get(flag)]
-        rows.append(MenuRow(f"favorite:{index}", str(favorite.get("name") or "Favorite"), " • ".join(badges)))
-      return rows
-    rows = [MenuRow("driving", "Back to driving", color=ACCENT) if self.on_home else MenuRow("home", "Home screen")]
-    rows.append(MenuRow("favorites", "Navigate to a favorite >"))
+    if not self.routing_ok:
+      rows = [MenuRow("navigate", "Navigate", "Add a Mapbox secret key in The Galaxy", SUBTEXT, False)]
+    elif self.locked_text:
+      rows = [MenuRow("navigate", "Navigate", self.locked_text, SUBTEXT, False)]
+    elif self.nav_active:
+      rows = [MenuRow("navigate", "Navigate", f"To {self.destination_name} • tap to change" if self.destination_name else "Change destination", ACCENT)]
+    else:
+      rows = [MenuRow("navigate", "Navigate", "Search, favorites and recent places", ACCENT)]
     if self.nav_active:
-      rows.append(MenuRow("cancel", "Cancel navigation", color=DANGER))
+      # Ending a route never needs the car to slow down.
+      rows.append(MenuRow("cancel", "End route", color=DANGER))
+    rows.append(MenuRow("driving", "Back to driving") if self.on_home else MenuRow("home", "Home screen"))
     return rows
 
   def panel_rect(self, screen: rl.Rectangle) -> rl.Rectangle:
@@ -127,7 +124,6 @@ class CarQuickMenu(Widget):
   def activate(self, key: str) -> None:
     if key == "button":
       self.open = not self.open
-      self.page = "main"
       if self.open and self._on_open is not None:
         self._on_open()
     elif key == "outside":
@@ -138,23 +134,15 @@ class CarQuickMenu(Widget):
     elif key == "driving":
       self.close()
       self._go_driving()
-    elif key == "favorites":
-      self.page = "favorites"
-    elif key == "back":
-      self.page = "main"
+    elif key == "navigate":
+      self.close()
+      self._open_navigate()
     elif key == "cancel":
       self.close()
       self._cancel_navigation()
-    elif key.startswith("favorite:"):
-      index = int(key.split(":", 1)[1])
-      if 0 <= index < len(self.favorites):
-        favorite = self.favorites[index]
-        self.close()
-        self._navigate(favorite)
 
   def close(self) -> None:
     self.open = False
-    self.page = "main"
 
   # ── drawing ───────────────────────────────────────────────────────────────
 

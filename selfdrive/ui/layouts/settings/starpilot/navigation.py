@@ -298,10 +298,16 @@ class NavigationManagerView(PanelManagerView):
 
 
 class StarPilotNavigationLayout(_SettingsPage):
-  """On-device destination search and navigation management panel."""
+  """On-device destination search and navigation management panel.
 
-  def __init__(self):
+  ``include_offline=False`` leaves out the Offline maps section, for hosts (the car's
+  Navigate screen) that only pick a destination. ``on_started`` runs after a route starts.
+  """
+
+  def __init__(self, include_offline: bool = True, on_started=None):
     super().__init__()
+    self._include_offline = include_offline
+    self._on_started = on_started
     self._params = FrameCachedParams()
     self._params_memory = Params(memory=True)
     self._store = _NavigationParams(self._params, self._params_memory)
@@ -365,7 +371,7 @@ class StarPilotNavigationLayout(_SettingsPage):
     now = rl.get_time()
     if self._last_state_refresh < 0 or now - self._last_state_refresh >= 0.5:
       self._refresh_navigation_state()
-    if self._offline_refreshed < 0 or now - self._offline_refreshed >= OFFLINE_REFRESH_SECONDS:
+    if self._include_offline and (self._offline_refreshed < 0 or now - self._offline_refreshed >= OFFLINE_REFRESH_SECONDS):
       self._refresh_offline_state()
 
   def _refresh_offline_state(self):
@@ -668,6 +674,8 @@ class StarPilotNavigationLayout(_SettingsPage):
     self._selected_favorite = None
     self._clear_route_preview()
     self._refresh_navigation_state(force=True)
+    if self._on_started is not None:
+      self._on_started()
 
   def _cancel_navigation(self):
     self._store.clear_navigation()
@@ -1303,7 +1311,8 @@ class StarPilotNavigationLayout(_SettingsPage):
       )
       y += NAV_EMPTY_HEIGHT + NAV_GAP
 
-    self._draw_offline_section(x, y, width, manager)
+    if self._include_offline:
+      self._draw_offline_section(x, y, width, manager)
 
   def _measure_navigation_content_height(self, content_width: float) -> float:
     del content_width
@@ -1325,5 +1334,6 @@ class StarPilotNavigationLayout(_SettingsPage):
       height += NAV_SECTION_HEIGHT + len(self._recent_destinations) * NAV_ROW_HEIGHT + NAV_GAP
     if not self._search_results and not self._favorites and not self._recent_destinations and not self._search_loading and not self._search_error:
       height += NAV_EMPTY_HEIGHT + NAV_GAP
-    height += sum(row_height for _, row_height, _ in self._offline_layout())
+    if self._include_offline:
+      height += sum(row_height for _, row_height, _ in self._offline_layout())
     return height + NAV_INSET

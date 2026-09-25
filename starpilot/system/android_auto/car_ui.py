@@ -6,8 +6,9 @@ camera, path, HUD, alerts, sidebar, settings) at the car's resolution in an EGL
 pbuffer, without a window, display power, touch hardware or publishers. Frames
 go to android_autod through the same bounded shared-memory slot as mirroring,
 and car touches arrive as datagrams. Offroad every touch works. Onroad the driving
-view and map ignore touches; only the small quick-menu button (home screen,
-navigate to a favorite, back to driving) and the home screen it opens accept them.
+view and map ignore touches; only the small quick-menu button (Navigate, end route,
+home screen, back to driving) and the screens it opens accept them. Destinations are
+set on one Navigate screen (car_navigate.py), onroad only below 10 mph of wheel speed.
 How the drive is laid out (map beside the driving view, driving view only, map
 only, camera on or off) comes from car_screen.json, set in The Galaxy and applied
 live.
@@ -36,7 +37,7 @@ STARTUP_DEMAND_WAIT = 15.0
 NAV_SPLIT_MIN_WIDTH = 1700  # logical width; narrower car screens keep the full driving view
 NAV_SPLIT_FRACTION = 0.42
 HOME_ONROAD_TIMEOUT = 45.0  # back to the drive after this long untouched on the home screen
-FAVORITES_REFRESH = 5.0
+STATE_REFRESH = 5.0
 MAP_ONLY_BORDER = 14.0
 
 
@@ -238,15 +239,23 @@ class MapOnlyStatus:
     self._alerts.render(rect)
 
 
+def vehicle_speed(ui_state) -> float | None:
+  """The car's own wheel speed in m/s (never GPS), or None without a recent carState."""
+  sm = ui_state.sm
+  if not sm.recv_frame["carState"] or not sm.alive["carState"]:
+    return None
+  return sm["carState"].vEgo
+
+
 class OnroadControls:
-  """The quick menu and where car touches go.
+  """The quick menu, the Navigate screen, and where car touches go.
 
   Each touch is routed when the finger goes down: to the menu if it starts on the
-  button (or anywhere while the menu is open), to the main layout offroad or on
-  the home screen, otherwise nowhere.
+  button (or anywhere while the menu is open), to the main layout offroad, on the
+  home screen or on the Navigate screen, otherwise nowhere.
   """
 
-  def __init__(self, main_layout, params=None, params_memory=None, clock=time.monotonic):
+  def __init__(self, main_layout, params=None, params_memory=None, clock=time.monotonic, navigate_screen_factory=None):
     from openpilot.common.params import Params
     from openpilot.selfdrive.ui.layouts.main import MainState
     from openpilot.starpilot.navigation.destination_store import NavigationDestinationStore
@@ -257,11 +266,32 @@ class OnroadControls:
     self.store = NavigationDestinationStore(self._params, params_memory or Params(memory=True))
     self._clock = clock
     self.menu = CarQuickMenu(go_home=self.go_home, go_driving=self.go_driving,
-                             navigate=self.navigate, cancel_navigation=self.cancel_navigation, on_open=self.refresh)
+                             open_navigate=self.open_navigate, cancel_navigation=self.cancel_navigation, on_open=self.refresh)
     self.target: str | None = None
     self.last_touch = clock()
-    self._favorites_read = -FAVORITES_REFRESH
+    self._state_read = -STATE_REFRESH
     self._started = False
+    self.nav_allowed = True
+    self.nav_open = False
+    self._nav_return_home = False
+    self._navigate_screen_factory = navigate_screen_factory
+    self._navigate_screen = None
+    # The home screen's Navigate button opens the same Navigate screen, and its
+    # Personal Records card stays records: one place to start a route.
+    home = getattr(main_layout, "_layouts", {}).get(MainState.HOME)
+    self._home = home
+    if home is not None:
+      home.set_navigate_callback(self.open_navigate)
+      home._home_info_card.quick_start_enabled = False
+
+  @property
+  def navigate_screen(self):
+    if self._navigate_screen is None:
+      factory = self._navigate_screen_factory
+      if factory is None:
+        from openpilot.starpilot.system.android_auto.car_navigate import CarNavigateScreen as factory
+      self._navigate_screen = factory(self._route_started, self.close_navigate)
+    return self._navigate_screen
 
   def on_home(self, started: bool) -> bool:
     return started and self.main_layout._current_mode != self._MainState.ONROAD
@@ -278,49 +308,93 @@ class OnroadControls:
     self.menu.on_home = False
     self.menu.corner = "left"
 
-  def navigate(self, favorite: dict) -> None:
-    self.store.set_destination(favorite)
-    self.menu.nav_active = True
-    self.go_driving()
+  def open_navigate(self) -> None:
+    if not self.nav_allowed or self.nav_open:
+      return
+    self.menu.close()
+    self.last_touch = self._clock()
+    self._nav_return_home = not self._started or self.on_home(self._started)
+    from openpilot.system.ui.lib.multilang import tr
+    screen = self.navigate_screen
+    screen.back_label = tr("Back") if self._nav_return_home else tr("Back to driving")
+    self.nav_open = True
+    screen.show_event()
+
+  def close_navigate(self, to_driving: bool = False) -> None:
+    if not self.nav_open:
+      return
+    self.nav_open = False
+    self._pop_overlays()
+    self.navigate_screen.hide_event()
+    self.refresh()
+    if self._started and (to_driving or not self._nav_return_home):
+      self.go_driving()
+
+  def _route_started(self) -> None:
+    self.close_navigate(to_driving=True)
+
+  def _pop_overlays(self) -> None:
+    """Close a keyboard or dialog the Navigate screen left open over the main layout."""
+    from openpilot.system.ui.lib.application import gui_app
+    stack = gui_app._nav_stack
+    if self.main_layout not in stack:
+      return
+    while len(stack) > 1 and stack[-1] is not self.main_layout:
+      gui_app.pop_widget()
 
   def cancel_navigation(self) -> None:
     self.store.clear_navigation()
     self.menu.nav_active = False
 
   def refresh(self) -> None:
-    from openpilot.starpilot.navigation.destination_store import ordered_favorite_destinations, routing_configured
-    self._favorites_read = self._clock()
-    self.menu.favorites = ordered_favorite_destinations(self.store.favorite_destinations())
+    from openpilot.starpilot.navigation.destination_store import routing_configured
+    self._state_read = self._clock()
     self.menu.routing_ok = routing_configured(self._params)
-    self.menu.nav_active = self.store.active_destination() is not None
+    destination = self.store.active_destination()
+    self.menu.nav_active = destination is not None
+    self.menu.destination_name = str((destination or {}).get("place_name") or (destination or {}).get("name") or "")
     self.menu.on_home = self.on_home(self._started)
 
-  def update(self, started: bool) -> None:
+  def update(self, started: bool, speed_ms: float | None = 0.0) -> None:
+    from openpilot.starpilot.system.android_auto.car_navigate import locked_text, speed_allows_navigation
     now = self._clock()
     self._started = started
+    self.nav_allowed = speed_allows_navigation(started, speed_ms)
+    lock = "" if self.nav_allowed else locked_text()
+    self.menu.locked_text = lock
+    if self._home is not None:
+      self._home._navigate_button.locked_text = lock
+    if self.nav_open and started:
+      critical = self.main_layout._critical_full_alert_active()
+      if not self.nav_allowed or critical or now - self.last_touch > HOME_ONROAD_TIMEOUT:
+        self.close_navigate(to_driving=True)
     if not started:
       self.menu.close()
       return
-    if self.on_home(started):
+    if self.on_home(started) and not self.nav_open:
       critical = self.main_layout._critical_full_alert_active()
       if critical or now - self.last_touch > HOME_ONROAD_TIMEOUT:
         self.go_driving()
-    if now - self._favorites_read >= FAVORITES_REFRESH:
+    if now - self._state_read >= STATE_REFRESH:
       self.refresh()
     self.menu.on_home = self.on_home(started)
     self.menu.corner = "right" if self.menu.on_home else "left"
 
+  def full_screen(self, started: bool) -> bool:
+    """Whether the main layout (or the Navigate screen) fills the car screen instead of the drive layout."""
+    return self.nav_open or self.on_home(started)
+
   def route(self, touches, touch_input, started: bool, screen) -> tuple[list, list]:
-    """(events for the main layout, events for the menu)."""
+    """(events for the main layout or Navigate screen, events for the menu)."""
     layout_events, menu_events = [], []
-    layout_ok = not started or self.on_home(started)
+    layout_ok = not started or self.full_screen(started)
     if self.target == "layout" and not layout_ok:
       layout_events += touch_input.events([], allowed=False, now=self._clock())
       self.target = None
     for touch in touches:
       if touch.kind == "down":
         x, y = touch.x * touch_input.logical_w, touch.y * touch_input.logical_h
-        if started and self.menu.captures(x, y, screen):
+        if started and not self.nav_open and self.menu.captures(x, y, screen):
           self.target = "menu"
         elif layout_ok:
           self.target = "layout"
@@ -427,10 +501,10 @@ def run(frames_path: str, touch_path: str) -> int:
       viewport = rl.Rectangle(0, 0, logical_w, logical_h)
       ui_state.update()
       started = ui_state.started
-      controls.update(started)
+      controls.update(started, vehicle_speed(ui_state))
       layout_events, menu_events = controls.route(receiver.drain(), touch, started, viewport)
       settings = car_settings.poll()
-      main_rect, map_rect = car_layout(settings, started, controls.on_home(started), logical_w, logical_h)
+      main_rect, map_rect = car_layout(settings, started, controls.full_screen(started), logical_w, logical_h)
       ui_state.nav_map_beside_road = main_rect is not None and map_rect is not None
       ui_state.car_camera_off = started and not settings["camera"]
       map_pane.set_shown(map_rect is not None)
@@ -450,7 +524,9 @@ def run(frames_path: str, touch_path: str) -> int:
       if len(widgets) > 1 and widgets[-1].covers_background(viewport):
         widgets = widgets[-1:]
       for widget in widgets:
-        if widget is main_layout:
+        if widget is main_layout and controls.nav_open:
+          controls.navigate_screen.render(viewport)
+        elif widget is main_layout:
           if main_rect is not None:
             widget.render(main_rect)
           if map_rect is not None:
@@ -460,7 +536,7 @@ def run(frames_path: str, touch_path: str) -> int:
               map_status.render(map_rect)
         else:
           widget.render(viewport)
-      if started:
+      if started and not controls.nav_open:
         gui_app._mouse_events = menu_events
         controls.menu.render(viewport)
       rl.rl_pop_matrix()
