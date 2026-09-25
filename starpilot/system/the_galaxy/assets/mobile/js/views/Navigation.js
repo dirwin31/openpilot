@@ -2,6 +2,9 @@ import { NavigationDestinationPanel } from "../components/NavigationDestinationP
 import { MapsPanel } from "../components/MapsPanel.js"
 import { NavigationKeysPanel } from "../components/NavigationKeysPanel.js"
 import { SpeedLimitsPanel } from "../components/SpeedLimitsPanel.js"
+import { AndroidAutoOfflinePanel } from "../components/AndroidAutoOfflinePanel.js?v=auto-offline-1"
+import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
+import { GalaxySection } from "../components/GalaxySection.js"
 import { GalaxyTabs } from "../components/GalaxyTabs.js"
 import { useTabRouting } from "../composables.js"
 
@@ -10,15 +13,19 @@ const TABS = {
   maps: "Maps",
   keys: "App Keys",
   speeds: "Speed Limits",
+  auto: "Android Auto",
 }
 
 export const Navigation = {
   name: "Navigation",
-  components: { NavigationDestinationPanel, MapsPanel, NavigationKeysPanel, SpeedLimitsPanel, GalaxyTabs },
+  components: {
+    NavigationDestinationPanel, MapsPanel, NavigationKeysPanel, SpeedLimitsPanel, GalaxyTabs,
+    AndroidAutoOfflinePanel, AndroidAutoIdentityPanel, GalaxySection,
+  },
   data() { return { TABS } },
   setup() {
     return useTabRouting("/navigation", {
-      nav: "", maps: "maps", keys: "keys", speeds: "speeds",
+      nav: "", maps: "maps", keys: "keys", speeds: "speeds", auto: "auto",
     })
   },
   template: `
@@ -34,6 +41,14 @@ export const Navigation = {
       <template v-if="tab === 'maps'"><MapsPanel /></template>
       <template v-if="tab === 'keys'"><NavigationKeysPanel /></template>
       <template v-if="tab === 'speeds'"><SpeedLimitsPanel /></template>
+      <template v-if="tab === 'auto'">
+        <div style="display:grid; gap:12px;">
+          <AndroidAutoOfflinePanel />
+          <GalaxySection title="Android Auto Identity" icon="bi-key">
+            <AndroidAutoIdentityPanel />
+          </GalaxySection>
+        </div>
+      </template>
     </div>
   `,
 }

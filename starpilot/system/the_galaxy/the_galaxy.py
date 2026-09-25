@@ -171,6 +171,15 @@ from openpilot.starpilot.common.testing_grounds import (
   TESTING_GROUNDS_STATE_PATH as SHARED_TESTING_GROUNDS_STATE_PATH,
 )
 from openpilot.starpilot.navigation.destination_store import normalize_destination_payload, routing_configured, update_recent_destinations
+from openpilot.starpilot.navigation.offline_maps import (
+  AREA_PRESETS as OFFLINE_AREA_PRESETS,
+  OFFLINE_MAX_BYTES,
+  AVERAGE_TILE_BYTES as OFFLINE_TILE_BYTES,
+  OfflineMaps,
+  clean_route_points,
+  estimate_area as estimate_offline_area,
+  route_tiles as offline_route_tiles,
+)
 from openpilot.starpilot.system.the_galaxy.factory_reset import remove_path as _run_factory_reset_delete
 from openpilot.starpilot.system.the_galaxy import flm_workspace, utilities
 from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interrupted_update, public_recovery_status, recover_interrupted_update
@@ -5378,6 +5387,7 @@ def setup(app):
       "/assets/components/home/home.js",
       "/assets/components/home/home.css",
       "/assets/mobile/js/params.js",
+      "/assets/mobile/js/api.js",
       "/assets/mobile/js/components/ScreenBrightnessControl.js",
       "/assets/components/tools/device_settings.js",
       "/assets/components/tools/device_settings.css",
@@ -5572,6 +5582,114 @@ def setup(app):
       return jsonify({"error": "An import is running."}), 409
     apk_identity.remove_identity()
     return jsonify(_android_auto_identity_payload()), 200
+
+  # Offline map tiles for the Android Auto navigation map; navtilesd does the downloading.
+  OFFLINE_AREA_DETAIL = {16: "Street detail", 15: "City detail", 14: "Road detail", 13: "Regional"}
+
+  def _offline_position():
+    position = _get_navigation_last_position() or {}
+    try:
+      return {"latitude": float(position["latitude"]), "longitude": float(position["longitude"])}
+    except (KeyError, TypeError, ValueError):
+      return None
+
+  def _offline_point(payload):
+    try:
+      latitude, longitude = float(payload.get("latitude")), float(payload.get("longitude"))
+    except (TypeError, ValueError):
+      return None
+    if not (math.isfinite(latitude) and math.isfinite(longitude) and -85.0 <= latitude <= 85.0 and -180.0 <= longitude <= 180.0):
+      return None
+    return latitude, longitude
+
+  def _offline_room(offline_maps, size):
+    return offline_maps.summary()["offline_bytes"] + size <= OFFLINE_MAX_BYTES
+
+  @app.route("/api/android_auto/offline", methods=["GET"])
+  def android_auto_offline():
+    return jsonify({
+      **OfflineMaps().summary(),
+      "position": _offline_position(),
+      "mapboxPublic": params.get("MapboxPublicKey", encoding="utf8") or "",
+      "isMetric": params.get_bool("IsMetric"),
+      "presets": [{"radius_km": radius, "max_zoom": zoom, "detail": OFFLINE_AREA_DETAIL.get(zoom, "")} for radius, zoom in OFFLINE_AREA_PRESETS],
+    }), 200
+
+  @app.route("/api/android_auto/offline/estimate", methods=["POST"])
+  def android_auto_offline_estimate():
+    payload = request.get_json(silent=True) or {}
+    offline_maps = OfflineMaps()
+    if "points" in payload:
+      points = clean_route_points(payload.get("points"))
+      if points is None:
+        return jsonify({"error": "That route could not be read."}), 400
+      tiles = len(offline_route_tiles(points))
+      size = tiles * OFFLINE_TILE_BYTES
+      return jsonify({"tiles": tiles, "bytes": size, "fits": _offline_room(offline_maps, size)}), 200
+    point = _offline_point(payload)
+    if point is None:
+      return jsonify({"error": "Choose a place on the map first."}), 400
+    presets = []
+    for radius, zoom in OFFLINE_AREA_PRESETS:
+      tiles, size = estimate_offline_area(point[0], point[1], radius, zoom)
+      presets.append({"radius_km": radius, "max_zoom": zoom, "detail": OFFLINE_AREA_DETAIL.get(zoom, ""),
+                      "tiles": tiles, "bytes": size, "fits": _offline_room(offline_maps, size)})
+    return jsonify({"presets": presets}), 200
+
+  @app.route("/api/android_auto/offline/areas", methods=["POST"])
+  def android_auto_offline_add_area():
+    payload = request.get_json(silent=True) or {}
+    point = _offline_point(payload)
+    preset = next(((radius, zoom) for radius, zoom in OFFLINE_AREA_PRESETS
+                   if radius == payload.get("radius_km") and zoom == payload.get("max_zoom")), None)
+    if point is None or preset is None:
+      return jsonify({"error": "Choose a place and one of the listed sizes."}), 400
+    offline_maps = OfflineMaps()
+    _, size = estimate_offline_area(point[0], point[1], *preset)
+    if not _offline_room(offline_maps, size):
+      return jsonify({"error": "Not enough offline storage left. Delete an area or route first."}), 409
+    name = str(payload.get("name") or "").strip()[:80] or f"{point[0]:.3f}, {point[1]:.3f}"
+    area = offline_maps.add_area(name, point[0], point[1], *preset)
+    return jsonify({"id": area.id}), 201
+
+  @app.route("/api/android_auto/offline/routes", methods=["POST"])
+  def android_auto_offline_add_route():
+    payload = request.get_json(silent=True) or {}
+    points = clean_route_points(payload.get("points"))
+    if points is None:
+      return jsonify({"error": "That route could not be read."}), 400
+    offline_maps = OfflineMaps()
+    if not _offline_room(offline_maps, len(offline_route_tiles(points)) * OFFLINE_TILE_BYTES):
+      return jsonify({"error": "Not enough offline storage left. Delete an area or route first."}), 409
+    try:
+      distance, duration = float(payload.get("distance_m") or 0.0), float(payload.get("duration_s") or 0.0)
+    except (TypeError, ValueError):
+      distance = duration = 0.0
+    name = str(payload.get("name") or "").strip()[:80] or "Saved route"
+    origin = str(payload.get("origin_name") or "").strip()[:80]
+    route = offline_maps.add_route(name, points, distance, duration, origin)
+    return jsonify({"id": route.id}), 201
+
+  @app.route("/api/android_auto/offline/<item_id>/<action>", methods=["POST"])
+  def android_auto_offline_action(item_id, action):
+    offline_maps = OfflineMaps()
+    if offline_maps.get(item_id) is None:
+      return jsonify({"error": "That offline map no longer exists."}), 404
+    if action == "update":
+      offline_maps.request_update(item_id)
+    elif action == "download_now":
+      offline_maps.allow_metered(item_id)
+    else:
+      return jsonify({"error": "Unknown action."}), 400
+    return jsonify({"ok": True}), 200
+
+  @app.route("/api/android_auto/offline/<item_id>", methods=["DELETE"])
+  def android_auto_offline_delete(item_id):
+    offline_maps = OfflineMaps()
+    if offline_maps.get(item_id) is None:
+      return jsonify({"error": "That offline map no longer exists."}), 404
+    offline_maps.delete_area(item_id)
+    return jsonify({"ok": True}), 200
 
   @app.route("/api/wheel-controls/status", methods=["GET"])
   def wheel_controls_status():
