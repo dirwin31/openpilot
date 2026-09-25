@@ -106,3 +106,36 @@ def test_stopped_timer_draws_positions_and_opaque_seconds(monkeypatch):
   assert draws[1][2].y == 270
   assert draws[1][3] == 66
   assert draws[1][5].a == 255
+
+
+def _render_sizes(monkeypatch, stopped_timer, width, beside_map, duration=61):
+  monkeypatch.setattr(stopped_timer, "ui_state", SimpleNamespace(nav_map_beside_road=beside_map))
+  # Width grows with the font size, like real text.
+  monkeypatch.setattr(stopped_timer, "measure_text_cached",
+                      lambda _font, text, size: SimpleNamespace(x=len(text) * size * 0.55, y=size * 0.8))
+  widget = stopped_timer.StoppedTimerWidget()
+  widget._duration = duration
+  draws = []
+  monkeypatch.setattr(stopped_timer.rl, "draw_text_ex", lambda *args: draws.append(args))
+  widget._render(stopped_timer.rl.Rectangle(0, 0, width, 1080))
+  return draws
+
+
+def test_stopped_timer_halves_beside_the_car_map(monkeypatch):
+  stopped_timer = _load_stopped_timer(monkeypatch)
+  full = _render_sizes(monkeypatch, stopped_timer, 2160, beside_map=False)
+  beside = _render_sizes(monkeypatch, stopped_timer, 2160, beside_map=True)
+  assert (full[0][3], full[1][3]) == (176, 66)
+  assert (beside[0][3], beside[1][3]) == (88, 33)
+  # Smaller text stays centred where the current speed is drawn (y = 180).
+  assert abs(beside[0][2].y + 88 * 0.8 / 2 - 180) < 1
+
+
+def test_stopped_timer_fits_a_narrow_driving_pane(monkeypatch):
+  stopped_timer = _load_stopped_timer(monkeypatch)
+  draws = _render_sizes(monkeypatch, stopped_timer, 700, beside_map=True, duration=12 * 60 + 5)
+  reserve = stopped_timer.StoppedTimerWidget.LEFT_CONTROLS_RESERVE
+  minute_width = len("12 minutes") * draws[0][3] * 0.55
+  assert minute_width <= 0.8 * (700 - reserve) + 1
+  assert draws[0][2].x >= reserve, "clear of the MAX / LIMIT column"
+  assert draws[0][2].x + minute_width <= 700
