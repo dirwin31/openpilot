@@ -38,6 +38,20 @@ def test_formatting():
     "0 KB", "9 MB", "2.0 GB", "22 mi", "2.1 mi", "3.3 km", "31 min", "1 h 15 min", "19 mi", "30 km"]
 
 
+def test_preset_detail_description():
+  assert evaluate('''return [
+    presetDetailDescription({radius_km: 10, max_zoom: 16}, false),
+    presetDetailDescription({radius_km: 30, max_zoom: 15}, false),
+    presetDetailDescription({radius_km: 60, max_zoom: 14}, true),
+    presetDetailDescription({radius_km: 150, max_zoom: 13}, false),
+  ]''') == [
+    "Full street-level detail: local roads, street names, alleys and turns within a 6 mi radius.",
+    "City & metro detail: city streets, avenues and neighborhood connectors within a 19 mi radius.",
+    "Road network: major thoroughfares, state routes and county highways within a 60 km radius.",
+    "Regional highways: interstates, freeways and major transit corridors within a 93 mi radius.",
+  ]
+
+
 def test_item_status_wording_and_actions():
   result = evaluate('''const now = 1000000
   return {
@@ -98,3 +112,14 @@ def test_saved_items_become_map_features_and_bounds():
   assert result["routeBounds"] == [-115.2, 36.1, -115.1, 36.2]
   west, south, east, north = result["areaBounds"]
   assert west < -115.2 < east and south < 36.1 < north
+
+
+def test_downloaded_tile_footprints_show_exact_zoom_and_storage_kind():
+  result = evaluate('return coverageToGeoJson({zoom: 1, tiles: [[1, 1, true], [0, 0, false]]})')
+  saved, cached = result['features']
+  assert saved['properties'] == {'saved': True, 'zoom': 1}
+  assert cached['properties']['saved'] is False
+  ring = saved['geometry']['coordinates'][0]
+  assert ring[0] == ring[-1] == [0, 0]
+  assert ring[1] == [180, 0]
+  assert abs(ring[2][1] + 85.05112878) < 1e-6

@@ -125,3 +125,43 @@ test('offline request timeout aborts the fetch and reports a retryable error', a
     globalThis.fetch = originalFetch
   }
 })
+
+test('coverage updates the overlay without moving the map and ignores stale results', async () => {
+  const state = instance()
+  let drawn
+  state.mapReady = true
+  state.map = {
+    getBounds: () => ({ getWest: () => -180, getEast: () => 180, getSouth: () => -85, getNorth: () => 85 }),
+    getSource: () => ({ setData: (data) => { drawn = data } }),
+  }
+  const old = deferred()
+  api.getAutoOfflineCoverage = () => old.promise
+  const pending = state.refreshCoverage()
+  state.coverageZoom = 15
+  api.getAutoOfflineCoverage = async () => ({ zoom: 15, tiles: [[1, 2, true]], truncated: false })
+  await state.refreshCoverage()
+  old.resolve({ zoom: 16, tiles: [] })
+  await pending
+  assert.equal(state.coverage.zoom, 15)
+  assert.equal(drawn.features.length, 1)
+  assert.equal(drawn.features[0].properties.saved, true)
+  assert.equal(state.coverageLoading, false)
+})
+
+test('coverage failure clears stale footprints and later refresh recovers', async () => {
+  const state = instance()
+  let drawn
+  state.mapReady = true
+  state.map = {
+    getBounds: () => ({ getWest: () => 0, getEast: () => 10, getSouth: () => 0, getNorth: () => 10 }),
+    getSource: () => ({ setData: (data) => { drawn = data } }),
+  }
+  api.getAutoOfflineCoverage = async () => { throw new Error('Disconnected') }
+  await state.refreshCoverage()
+  assert.equal(state.coverageError, 'Disconnected')
+  assert.deepEqual(drawn.features, [])
+  api.getAutoOfflineCoverage = async () => ({ zoom: 16, tiles: [], truncated: false })
+  await state.refreshCoverage()
+  assert.equal(state.coverageError, '')
+  assert.deepEqual(state.coverage.tiles, [])
+})

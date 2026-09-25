@@ -23,6 +23,22 @@ export function radiusLabel(km, metric) {
   return metric ? `${Math.round(km)} km` : `${Math.round(km * 0.621371)} mi`
 }
 
+export function presetDetailDescription(preset, metric) {
+  const radius = radiusLabel(preset?.radius_km, metric)
+  switch (preset?.max_zoom) {
+    case 16:
+      return `Full street-level detail: local roads, street names, alleys and turns within a ${radius} radius.`
+    case 15:
+      return `City & metro detail: city streets, avenues and neighborhood connectors within a ${radius} radius.`
+    case 14:
+      return `Road network: major thoroughfares, state routes and county highways within a ${radius} radius.`
+    case 13:
+      return `Regional highways: interstates, freeways and major transit corridors within a ${radius} radius.`
+    default:
+      return `${preset?.detail || 'Map detail'} within a ${radius} radius.`
+  }
+}
+
 function ageText(completedAt, now) {
   const days = Math.floor(Math.max(0, now - completedAt) / 86400)
   if (days === 0) return "today"
@@ -123,4 +139,19 @@ export function itemBounds(item) {
   const lons = ring.map((c) => c[0])
   const lats = ring.map((c) => c[1])
   return [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)]
+}
+
+// Exact Web Mercator tile footprints, not the requested area boundaries.
+export function coverageToGeoJson(coverage) {
+  const n = 2 ** coverage.zoom
+  const longitude = (x) => x / n * 360 - 180
+  const latitude = (y) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI
+  return { type: "FeatureCollection", features: (coverage.tiles || []).map(([x, y, saved]) => ({
+    type: "Feature", properties: { saved, zoom: coverage.zoom },
+    geometry: { type: "Polygon", coordinates: [[
+      [longitude(x), latitude(y)], [longitude(x + 1), latitude(y)],
+      [longitude(x + 1), latitude(y + 1)], [longitude(x), latitude(y + 1)],
+      [longitude(x), latitude(y)],
+    ]] },
+  })) }
 }
