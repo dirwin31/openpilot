@@ -489,6 +489,7 @@ def run(frames_path: str, touch_path: str) -> int:
   from openpilot.selfdrive.ui.layouts.main import MainLayout
   from openpilot.starpilot.system.android_auto.car_screen import CarScreenSettings
   main_layout = MainLayout()
+  main_layout._dev_sidebar.device_load_in_place_of_tuning = True
   map_pane = MapPane()
   car_settings = CarScreenSettings()
   controls = OnroadControls(main_layout)

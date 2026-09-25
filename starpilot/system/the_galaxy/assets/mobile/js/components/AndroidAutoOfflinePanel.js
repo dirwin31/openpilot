@@ -130,11 +130,16 @@ export const AndroidAutoOfflinePanel = {
       pickOnMap: false,
       areaPoint: null,
       areaPresets: null,
+      areaLoading: false,
+      areaError: "",
+      areaRequest: 0,
       routeFrom: null,
       routeTo: null,
       routes: [],
       routeIndex: 0,
       routeEstimate: null,
+      routeError: "",
+      routeRequest: 0,
       findingRoute: false,
     }
   },
@@ -145,6 +150,8 @@ export const AndroidAutoOfflinePanel = {
     this.poll.start()
   },
   beforeUnmount() {
+    this.areaRequest += 1
+    this.routeRequest += 1
     this.poll?.destroy()
     this.map?.remove()
     this.map = null
@@ -164,6 +171,8 @@ export const AndroidAutoOfflinePanel = {
       if (!this.summary.service_running) return "Not running"
       if (this.items.some((item) => item.state === "downloading")) return "Downloading"
       if (this.items.some((item) => item.state === "waiting_wifi")) return "Waiting for Wi-Fi"
+      if (this.items.some((item) => item.state === "queued")) return "Queued"
+      if (this.items.some((item) => ["incomplete", "storage_full", "no_space"].includes(item.state))) return "Needs attention"
       return "Idle"
     },
     activeRouteLabel() {
@@ -226,7 +235,7 @@ export const AndroidAutoOfflinePanel = {
         this.map.on("click", (event) => {
           if (!this.pickOnMap) return
           this.pickOnMap = false
-          this.chooseAreaPoint({ latitude: event.lngLat.lat, longitude: event.lngLat.lng, name: "" })
+          this.chooseAreaPoint({ latitude: event.lngLat.lat, longitude: event.lngLat.lng, name: "" }, false)
         })
       } catch (e) {
         this.error = e?.message || "Could not load the map."
@@ -248,11 +257,11 @@ export const AndroidAutoOfflinePanel = {
       features.sort((a, b) => Number(a.properties.selected) - Number(b.properties.selected))
       this.map.getSource("auto-candidates")?.setData({ type: "FeatureCollection", features })
     },
-    showPoint(point) {
+    showPoint(point, recenter = true) {
       if (!this.map || !window.mapboxgl) return
       this.marker?.remove()
       this.marker = new window.mapboxgl.Marker({ color: "#9d72ff" }).setLngLat([point.longitude, point.latitude]).addTo(this.map)
-      this.map.flyTo({ center: [point.longitude, point.latitude], zoom: 9 })
+      if (recenter) this.map.flyTo({ center: [point.longitude, point.latitude], zoom: 9 })
     },
     focus(item) {
       if (!this.map) return
@@ -269,21 +278,31 @@ export const AndroidAutoOfflinePanel = {
       }
       this.chooseAreaPoint({ ...this.position, name: "" })
     },
-    async chooseAreaPoint(point) {
+    async chooseAreaPoint(point, recenter = true) {
+      if (this.busy) return
+      const request = ++this.areaRequest
+      this.pickOnMap = false
       this.areaPoint = point
       this.areaPresets = null
-      this.showPoint(point)
+      this.areaError = ""
+      this.areaLoading = true
+      this.showPoint(point, recenter)
       try {
         const payload = await api.estimateAutoOffline({ latitude: point.latitude, longitude: point.longitude })
-        if (this.areaPoint === point) this.areaPresets = payload?.presets || []
+        if (request !== this.areaRequest) return
+        if (!payload?.presets?.length) throw new Error("No area sizes returned. Try again.")
+        this.areaPresets = payload.presets
       } catch (e) {
-        showSnackbar(e?.message || "Could not size that area.", "error")
+        if (request === this.areaRequest) this.areaError = e?.message || "Could not size that area. Try again."
+      } finally {
+        if (request === this.areaRequest) this.areaLoading = false
       }
+      if (request !== this.areaRequest) return
       if (!point.name && this.token) {
         try {
           const payload = await api.mapboxReverseCity(point.latitude, point.longitude, this.token)
           const name = payload?.features?.[0]?.properties?.name
-          if (this.areaPoint === point && name) this.areaPoint = { ...point, name }
+          if (request === this.areaRequest && name) this.areaPoint = { ...point, name }
         } catch (e) { /* keep the coordinates as the name */ }
       }
     },
@@ -300,6 +319,7 @@ export const AndroidAutoOfflinePanel = {
           radius_km: preset.radius_km, max_zoom: preset.max_zoom,
         })
         showSnackbar(`Saving ${radiusLabel(preset.radius_km, this.metric)} around ${this.areaName()} for offline use.`)
+        this.areaRequest += 1
         this.areaPoint = null
         this.areaPresets = null
         this.marker?.remove()
@@ -313,6 +333,8 @@ export const AndroidAutoOfflinePanel = {
 
     // ── routes ─────────────────────────────────────────────────────────────
     clearRoutes() {
+      this.routeRequest += 1
+      this.routeError = ""
       this.routes = []
       this.routeIndex = 0
       this.routeEstimate = null
@@ -347,14 +369,16 @@ export const AndroidAutoOfflinePanel = {
       await this.estimateRoute()
     },
     async estimateRoute() {
+      const request = ++this.routeRequest
       const route = this.selectedRoute
+      this.routeError = ""
       this.routeEstimate = null
       if (!route) return
       try {
         const estimate = await api.estimateAutoOffline({ points: route.points })
-        if (route === this.selectedRoute) this.routeEstimate = estimate
+        if (request === this.routeRequest) this.routeEstimate = estimate
       } catch (e) {
-        showSnackbar(e?.message || "Could not size that route.", "error")
+        if (request === this.routeRequest) this.routeError = e?.message || "Could not size that route."
       }
     },
     async saveRoute() {
@@ -417,146 +441,154 @@ export const AndroidAutoOfflinePanel = {
     radiusLabel,
   },
   template: `
-    <div style="display:grid; gap:12px;">
+    <div style="display:grid; gap:10px;">
       <GxNotice v-if="error" tone="danger" :text="error" style="margin:0;" />
 
-      <section class="gx-card">
-        <div class="gx-section__header">
-          <i class="bi bi-cloud-arrow-down"></i>
+      <section class="gx-card" style="margin:0;">
+        <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
+          <i class="bi bi-cloud-arrow-down" style="font-size:1.15rem;"></i>
           <span class="gx-section__title">Map Display</span>
         </div>
-        <div style="padding: var(--sp-3); display:grid; gap:6px;">
-          <p style="margin:0; color:var(--text-muted);">
-            The map drawn on the comma and the car screen. Save areas and routes so it keeps working without a signal. The comma downloads them on Wi-Fi,
-            keeps them until you delete them, and refreshes them every {{ summary?.refresh_days || 90 }} days.
-            The route you're navigating is also saved automatically.
+        <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:8px;">
+          <p style="margin:0; color:var(--text-muted); font-size:var(--fs-sm);">
+            Saved areas and active routes are kept offline for the comma and car screen, and refresh on Wi-Fi every {{ summary?.refresh_days || 90 }} days.
           </p>
-          <div class="gx-row" style="border-top:none; min-height:0; padding:4px 0;">
-            <span class="gx-row__label">Downloader</span>
-            <span class="gx-row__value">{{ downloaderLabel }}</span>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px;">
+            <div style="background:rgba(255, 255, 255, 0.03); border:1px solid var(--glass-border, rgba(127,127,127,.15)); border-radius:var(--radius-md); padding:6px 10px;">
+              <div style="font-size:var(--fs-xs); color:var(--text-muted);">Downloader</div>
+              <div style="font-weight:var(--fw-bold); font-size:var(--fs-sm); margin-top:2px;">{{ downloaderLabel }}</div>
+            </div>
+            <div style="background:rgba(255, 255, 255, 0.03); border:1px solid var(--glass-border, rgba(127,127,127,.15)); border-radius:var(--radius-md); padding:6px 10px;">
+              <div style="font-size:var(--fs-xs); color:var(--text-muted);">Storage Used</div>
+              <div style="font-weight:var(--fw-bold); font-size:var(--fs-sm); margin-top:2px;">{{ storageLabel }}</div>
+            </div>
+            <div style="background:rgba(255, 255, 255, 0.03); border:1px solid var(--glass-border, rgba(127,127,127,.15)); border-radius:var(--radius-md); padding:6px 10px;">
+              <div style="font-size:var(--fs-xs); color:var(--text-muted);">Current Route</div>
+              <div style="font-weight:var(--fw-bold); font-size:var(--fs-sm); margin-top:2px;">{{ summary ? activeRouteLabel : 'Checking...' }}</div>
+            </div>
           </div>
-          <div class="gx-row" style="border-top:none; min-height:0; padding:4px 0;">
-            <span class="gx-row__label">Storage Used</span>
-            <span class="gx-row__value">{{ storageLabel }}</span>
-          </div>
-          <div class="gx-row" style="border-top:none; min-height:0; padding:4px 0;">
-            <span class="gx-row__label">Current Route</span>
-            <span class="gx-row__value">{{ summary ? activeRouteLabel : 'Checking...' }}</span>
-          </div>
-          <GxNotice v-if="notice" :tone="notice.tone" :text="notice.text" style="margin:8px 0 0;" />
+          <GxNotice v-if="notice" :tone="notice.tone" :text="notice.text" style="margin:0;" />
           <GxNotice v-if="loaded && summary && !token" tone="warn"
-            text="Add a Mapbox public key in the App Keys tab to search places and draw the map." style="margin:8px 0 0;" />
+            text="Add a Mapbox public key in the App Keys tab to search places and draw the map." style="margin:0;" />
         </div>
       </section>
 
-      <section v-if="token" class="gx-card">
-        <div ref="map" style="height:340px; border-radius:var(--radius-md); overflow:hidden;"></div>
-        <div v-if="pickOnMap" class="gx-note" style="margin:8px var(--sp-3);">Tap the map where the area should be centred.</div>
+      <section v-if="token" class="gx-card" style="margin:0; overflow:hidden;">
+        <div ref="map" style="height:280px; border-radius:var(--radius-md); overflow:hidden;"></div>
+        <div v-if="pickOnMap" class="gx-note" style="margin:6px var(--sp-3);">Tap the map where the area should be centred.</div>
       </section>
 
-      <section class="gx-card">
-        <div class="gx-section__header">
-          <i class="bi bi-signpost-split"></i>
-          <span class="gx-section__title">Make a Route Available Offline</span>
+      <section class="gx-card" style="margin:0;">
+        <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
+          <i class="bi bi-hdd-stack" style="font-size:1.15rem;"></i>
+          <span class="gx-section__title" style="font-size:var(--fs-base);">Downloads &amp; Saved Maps</span>
+          <span class="gx-section__count">{{ items.length }}</span>
         </div>
-        <div style="padding: var(--sp-3); display:grid; gap:8px;">
-          <div class="gx-row" style="border-top:none; flex-wrap:wrap; gap:8px;">
-            <span class="gx-row__label" style="min-width:48px;">From</span>
+        <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:6px;">
+          <div v-if="!items.length" class="gx-empty" style="margin:0; padding:var(--sp-3);">Nothing saved yet. Save an area around home or make a trip's route available offline.</div>
+          <div v-for="item in items" :key="item.id" class="gx-card" style="margin:0; padding:8px 10px; background:rgba(255, 255, 255, 0.02); border:1px solid var(--glass-border, rgba(127,127,127,.15)); border-radius:var(--radius-md);">
+            <div style="display:flex; gap:8px; align-items:flex-start;">
+              <i class="bi" :class="item.kind === 'route' ? 'bi-signpost-split' : 'bi-bounding-box-circles'" style="color:var(--primary); margin-top:2px; font-size:1.1rem;"></i>
+              <div style="flex:1; min-width:0;">
+                <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap;">
+                  <button type="button" style="border:none; background:transparent; color:inherit; padding:0; cursor:pointer; text-align:left; font:inherit;" @click="focus(item)">
+                    <span class="gx-row__label" style="font-weight:var(--fw-bold); font-size:var(--fs-sm); overflow-wrap:anywhere;">{{ item.name }}</span>
+                  </button>
+                  <div style="display:flex; gap:6px; flex-wrap:wrap; margin-left:auto;">
+                    <button v-if="status(item).canDownloadNow" type="button" class="gx-btn gx-btn--tonal" style="min-height:28px; padding:0 8px; font-size:var(--fs-xs);" :disabled="busy === item.id" @click="act(item, 'download_now')"
+                      title="Use the comma's current connection even though it's metered">Download Now</button>
+                    <button v-if="status(item).canUpdate" type="button" class="gx-btn gx-btn--text" style="min-height:28px; padding:0 6px; font-size:var(--fs-xs);" :disabled="busy === item.id" @click="act(item, 'update')">Update</button>
+                    <button v-if="status(item).canDelete" type="button" class="gx-btn gx-btn--text" style="min-height:28px; padding:0 6px; font-size:var(--fs-xs); color:var(--error);" :disabled="busy === item.id" @click="remove(item)">Delete</button>
+                  </div>
+                </div>
+                <div class="gx-row__desc" style="margin-top:2px; font-size:var(--fs-xs);">{{ describe(item) }}</div>
+                <div class="gx-row__desc" style="margin-top:2px; font-size:var(--fs-xs);" :style="status(item).tone === 'danger' ? 'color:var(--error);' : ''">{{ status(item).text }}</div>
+                <div v-if="status(item).progress !== null" role="progressbar" :aria-label="item.name + ' download'" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="Math.floor(status(item).progress * 100)" style="height:4px; border-radius:2px; background:var(--glass-border, rgba(127,127,127,.2)); overflow:hidden; margin-top:4px;">
+                  <div :style="'width:' + Math.round(status(item).progress * 100) + '%;height:100%;background:var(--primary);transition:width .3s;'"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="gx-card" style="margin:0;">
+        <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
+          <i class="bi bi-signpost-split" style="font-size:1.15rem;"></i>
+          <span class="gx-section__title" style="font-size:var(--fs-base);">Make a Route Available Offline</span>
+        </div>
+        <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:8px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="min-width:42px; font-size:var(--fs-sm); font-weight:var(--fw-medium); color:var(--text-muted);">From</span>
             <PlaceSearch :token="token" :position="position" :selected="routeFrom"
               :placeholder="position ? 'Current location' : 'Search where you start'"
               @select="routeFrom = $event; clearRoutes()" @clear="routeFrom = null; clearRoutes()" />
           </div>
-          <div class="gx-row" style="border-top:none; flex-wrap:wrap; gap:8px;">
-            <span class="gx-row__label" style="min-width:48px;">To</span>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="min-width:42px; font-size:var(--fs-sm); font-weight:var(--fw-medium); color:var(--text-muted);">To</span>
             <PlaceSearch :token="token" :position="position" :selected="routeTo" placeholder="Search your destination"
               @select="routeTo = $event; clearRoutes()" @clear="routeTo = null; clearRoutes()" />
           </div>
-          <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button type="button" class="gx-btn gx-btn--tonal" :disabled="!routeTo || findingRoute || !token" @click="findRoutes">
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:2px;">
+            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 14px;" :disabled="!routeTo || findingRoute || !token" @click="findRoutes">
               <i class="bi bi-search"></i> {{ findingRoute ? 'Finding routes...' : 'Find Routes' }}
             </button>
           </div>
-          <div v-if="routes.length" style="display:grid; gap:4px;">
-            <label v-for="(route, index) in routes" :key="route.id" class="gx-row" style="border:none; cursor:pointer; gap:8px;">
+          <div v-if="routes.length" style="display:grid; gap:4px; margin-top:4px;">
+            <label v-for="(route, index) in routes" :key="route.id" class="gx-row" style="border:none; min-height:0; padding:6px 8px; cursor:pointer; gap:8px; border-radius:var(--radius-md);">
               <input type="radio" name="auto-offline-route" :checked="index === routeIndex" @change="selectRoute(index)" style="accent-color:var(--primary);" />
               <div class="gx-row__info">
                 <span class="gx-row__label">{{ route.label }}</span>
-                <span class="gx-row__desc">{{ formatDuration(route.duration_s) }} · {{ formatDistance(route.distance_m, metric) }}</span>
+                <span class="gx-row__desc" style="margin-top:2px;">{{ formatDuration(route.duration_s) }} · {{ formatDistance(route.distance_m, metric) }}</span>
               </div>
             </label>
-            <div class="gx-row" style="border-top:none; flex-wrap:wrap; gap:8px;">
+            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:4px 0;">
               <span class="gx-row__desc" style="margin:0; flex:1;">
                 <template v-if="routeEstimate">About {{ formatBytes(routeEstimate.bytes) }} · {{ routeEstimate.tiles.toLocaleString() }} tiles,
                   with street detail at every turn and the destination.</template>
-                <template v-else>Sizing the route...</template>
+                <template v-else-if="!routeError">Sizing the route...</template>
               </span>
-              <button type="button" class="gx-btn" :disabled="!routeEstimate || !routeEstimate.fits || busy === 'route'" @click="saveRoute">
+              <button type="button" class="gx-btn" style="min-height:36px; padding:0 14px;" :disabled="!routeEstimate || !routeEstimate.fits || busy === 'route'" @click="saveRoute">
                 <i class="bi bi-download"></i> {{ busy === 'route' ? 'Saving...' : 'Make Available Offline' }}
               </button>
             </div>
+            <GxNotice v-if="routeError" tone="danger" :text="routeError" style="margin:0;" />
+            <button v-if="routeError" type="button" class="gx-btn gx-btn--tonal" @click="estimateRoute">Retry sizing</button>
             <GxNotice v-if="routeEstimate && !routeEstimate.fits" tone="warn" text="Not enough offline storage left for this route. Delete an area or route first." style="margin:0;" />
           </div>
         </div>
       </section>
 
-      <section class="gx-card">
-        <div class="gx-section__header">
-          <i class="bi bi-bounding-box-circles"></i>
-          <span class="gx-section__title">Save an Area</span>
+      <section class="gx-card" style="margin:0;">
+        <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
+          <i class="bi bi-bounding-box-circles" style="font-size:1.15rem;"></i>
+          <span class="gx-section__title" style="font-size:var(--fs-base);">Save an Area</span>
         </div>
-        <div style="padding: var(--sp-3); display:grid; gap:8px;">
+        <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:8px;">
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-            <button type="button" class="gx-btn gx-btn--tonal" :disabled="!position" @click="useCurrentLocation"><i class="bi bi-crosshair"></i> Current Location</button>
-            <button type="button" class="gx-btn gx-btn--tonal" :disabled="!mapReady" @click="pickOnMap = !pickOnMap">
+            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!position" @click="useCurrentLocation"><i class="bi bi-crosshair"></i> Current Location</button>
+            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!mapReady" @click="pickOnMap = !pickOnMap">
               <i class="bi bi-pin-map"></i> {{ pickOnMap ? 'Cancel' : 'Pick on Map' }}
             </button>
             <PlaceSearch :token="token" :position="position" placeholder="Or search a city or place" @select="chooseAreaPoint($event)" />
           </div>
           <template v-if="areaPoint">
             <div class="gx-row__label" style="margin-top:4px;">Around {{ areaName() }}</div>
-            <div v-if="!areaPresets" class="gx-row__desc">Sizing up the area...</div>
-            <div v-for="preset in areaPresets || []" :key="preset.radius_km" class="gx-row" style="border-top:none; flex-wrap:wrap; gap:8px;">
+            <div v-if="areaLoading" class="gx-row__desc" role="status">Sizing up the area...</div>
+            <GxNotice v-if="areaError" tone="danger" :text="areaError" style="margin:0;" />
+            <button v-if="areaError" type="button" class="gx-btn gx-btn--tonal" @click="chooseAreaPoint(areaPoint, false)">Retry sizing</button>
+            <div v-for="preset in areaPresets || []" :key="preset.radius_km" class="gx-row" style="border-top:none; min-height:0; padding:6px 0; flex-wrap:wrap; gap:8px;">
               <div class="gx-row__info">
                 <span class="gx-row__label">{{ radiusLabel(preset.radius_km, metric) }} · {{ preset.detail }}</span>
-                <span class="gx-row__desc">{{ preset.fits ? 'About ' + formatBytes(preset.bytes) + ' · ' + preset.tiles.toLocaleString() + ' tiles' : 'Too large for the offline storage left' }}</span>
+                <span class="gx-row__desc" style="margin-top:2px;">{{ preset.fits ? 'About ' + formatBytes(preset.bytes) + ' · ' + preset.tiles.toLocaleString() + ' tiles' : 'Too large for the offline storage left' }}</span>
               </div>
-              <button type="button" class="gx-btn gx-btn--tonal" :disabled="!preset.fits || busy === 'area'" @click="saveArea(preset)">Save</button>
+              <button type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px;" :disabled="!preset.fits || !!busy" @click="saveArea(preset)">{{ busy === 'area' ? 'Adding to downloads...' : 'Download' }}</button>
             </div>
           </template>
         </div>
       </section>
 
-      <section class="gx-card">
-        <div class="gx-section__header">
-          <i class="bi bi-hdd-stack"></i>
-          <span class="gx-section__title">Saved Offline Maps</span>
-          <span class="gx-section__count">{{ items.length }}</span>
-        </div>
-        <div style="padding: var(--sp-3); display:grid; gap:8px;">
-          <div v-if="!items.length" class="gx-empty" style="margin:0;">Nothing saved yet. Save an area around home or make a trip's route available offline.</div>
-          <div v-for="item in items" :key="item.id" class="gx-card" style="margin:0; padding:var(--sp-2) var(--sp-3);">
-            <div style="display:flex; gap:8px; align-items:flex-start;">
-              <i class="bi" :class="item.kind === 'route' ? 'bi-signpost-split' : 'bi-bounding-box-circles'" style="color:var(--primary); margin-top:3px;"></i>
-              <div style="flex:1; min-width:0;">
-                <button type="button" style="border:none; background:transparent; color:inherit; padding:0; cursor:pointer; text-align:left; font:inherit;" @click="focus(item)">
-                  <span class="gx-row__label" style="overflow-wrap:anywhere;">{{ item.name }}</span>
-                </button>
-                <div class="gx-row__desc">{{ describe(item) }}</div>
-                <div class="gx-row__desc" :style="status(item).tone === 'danger' ? 'color:var(--error);' : ''">{{ status(item).text }}</div>
-                <div v-if="status(item).progress !== null" style="height:6px; border-radius:3px; background:var(--glass-border, rgba(127,127,127,.2)); overflow:hidden; margin-top:6px;">
-                  <div :style="'width:' + Math.round(status(item).progress * 100) + '%;height:100%;background:var(--primary);transition:width .3s;'"></div>
-                </div>
-              </div>
-            </div>
-            <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; margin-top:8px;">
-              <button v-if="status(item).canDownloadNow" type="button" class="gx-btn gx-btn--tonal" :disabled="busy === item.id" @click="act(item, 'download_now')"
-                title="Use the comma's current connection even though it's metered">Download Now</button>
-              <button v-if="status(item).canUpdate" type="button" class="gx-btn gx-btn--text" :disabled="busy === item.id" @click="act(item, 'update')">Update</button>
-              <button v-if="status(item).canDelete" type="button" class="gx-btn gx-btn--text" style="color:var(--error);" :disabled="busy === item.id" @click="remove(item)">Delete</button>
-            </div>
-          </div>
-        </div>
-      </section>
+
     </div>
   `,
 }
