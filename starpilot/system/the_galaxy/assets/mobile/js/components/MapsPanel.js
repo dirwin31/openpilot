@@ -312,11 +312,11 @@ export const MapsPanel = {
       <GxNotice v-if="error" tone="danger" :text="error" style="margin:0;" />
       <section class="gx-card">
         <div class="gx-section__header">
-          <i class="bi bi-map"></i>
-          <span class="gx-section__title">Offline Maps</span>
+          <i class="bi bi-speedometer2"></i>
+          <span class="gx-section__title">Speed Limit &amp; Curve Data</span>
         </div>
         <div style="padding: var(--sp-3); display:grid; gap:6px;">
-          <p style="margin:0; color:var(--text-muted);">Select regions, start downloads, and manage offline maps entirely from Galaxy.</p>
+          <p style="margin:0; color:var(--text-muted);">Road data openpilot uses for speed limits and curve control, by state or country. It doesn't draw the map.</p>
           <div class="gx-row" style="border-top:none; min-height:0; padding:4px 0;">
             <span class="gx-row__label">Downloader</span>
             <span class="gx-row__value">{{ downloaderLabel }}</span>

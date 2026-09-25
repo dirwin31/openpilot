@@ -120,3 +120,34 @@ def test_manage_a_saved_area(page, monkeypatch):
   page.activate("area_action:delete")
   dialogs[0](page_module.DialogResult.CONFIRM)
   assert page._offline.get(area.id).deleted and page.selected_area_id is None
+
+
+class FakeRoadData:
+  def __init__(self):
+    self.events = []
+
+  def show_event(self):
+    self.events.append("show")
+
+  def hide_event(self):
+    self.events.append("hide")
+
+
+def test_speed_limit_data_is_a_segment_of_the_same_page(tmp_path):
+  built = []
+  layout = page_module.StarPilotOfflineMapsLayout(offline=OfflineMaps(tmp_path), params=FakeParams({"MapboxPublicKey": "pk"}),
+                                                  road_data_factory=lambda: built.append(FakeRoadData()) or built[-1])
+  layout.show_event()
+  assert layout.segment == page_module.SEGMENT_DISPLAY and built == [], "mapd's page is only built when opened"
+
+  layout.open_segment(page_module.SEGMENT_ROAD_DATA)
+  road = built[0]
+  assert road.events == ["show"]
+
+  layout.hide_event()
+  layout.show_event()
+  assert layout.segment == page_module.SEGMENT_ROAD_DATA, "a dialog closing doesn't bounce back to the map display"
+  assert road.events == ["show", "hide", "show"]
+
+  layout.open_segment(page_module.SEGMENT_DISPLAY)
+  assert road.events[-1] == "hide" and len(built) == 1

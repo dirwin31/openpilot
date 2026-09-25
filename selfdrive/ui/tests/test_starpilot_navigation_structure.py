@@ -80,7 +80,6 @@ def test_driving_controls_contains_nested_navigation_folder_and_leaf_routes():
   navigation_maps = controls["children"][0]
   assert "panel" not in navigation_maps
   assert navigation_maps["children"] == [
-    {"title": "Map Data", "panel": "MAPS", "icon": "navigate"},
     {"title": "Navigation", "panel": "NAVIGATION", "icon": "road"},
     {"title": "Offline Maps", "panel": "OFFLINE_MAPS", "icon": "navigate"},
   ]
@@ -96,7 +95,7 @@ def test_driving_model_is_a_root_leaf_and_existing_panel_routes_are_preserved():
   assert driving_model["icon"] == "aicar"
   assert "children" not in driving_model
   assert StarPilotLayout.PANEL_TYPE_MAP["DRIVING_MODEL"] == StarPilotPanelType.DRIVING_MODEL
-  assert StarPilotLayout.PANEL_TYPE_MAP["MAPS"] == StarPilotPanelType.MAPS
+  assert "MAPS" not in StarPilotLayout.PANEL_TYPE_MAP, "Map Data lives inside Offline Maps"
   assert StarPilotLayout.PANEL_TYPE_MAP["NAVIGATION"] == StarPilotPanelType.NAVIGATION
   assert StarPilotPanelType.NAVIGATION.value == 13
   assert StarPilotLayout.PANEL_TYPE_MAP["OFFLINE_MAPS"] == StarPilotPanelType.OFFLINE_MAPS
@@ -128,9 +127,13 @@ class _PanelSpy:
     self.show_count = 0
     self.hide_count = 0
     self.current_sub_panel = ""
+    self.segment = None
 
   def show_event(self):
     self.show_count += 1
+
+  def open_segment(self, segment):
+    self.segment = segment
 
   def hide_event(self):
     self.hide_count += 1
@@ -187,11 +190,11 @@ def test_nested_hub_navigation_back_and_depth_values(monkeypatch):
   layout._update_depth()
   assert depths[-1] == 2
 
-  _click_title(layout, "Map Data")
-  assert layout._current_panel == StarPilotPanelType.MAPS
-  assert layout._selected_leaf["title"] == "Map Data"
+  _click_title(layout, "Offline Maps")
+  assert layout._current_panel == StarPilotPanelType.OFFLINE_MAPS
+  assert layout._selected_leaf["title"] == "Offline Maps"
   assert depths[-1] == 3
-  maps_panel = layout._panels[StarPilotPanelType.MAPS].instance
+  maps_panel = layout._panels[StarPilotPanelType.OFFLINE_MAPS].instance
   assert (maps_panel.show_count, maps_panel.hide_count) == (1, 0)
 
   layout.navigate_back()
@@ -250,8 +253,8 @@ def test_breadcrumb_paths_and_folder_jump_back(monkeypatch):
     ("Navigation & Maps", "action:hub:2"),
   ]
 
-  _click_title(layout, "Map Data")
-  assert BreadcrumbController.build_path()[-1] == ("Map Data", "action:panel")
+  _click_title(layout, "Offline Maps")
+  assert BreadcrumbController.build_path()[-1] == ("Offline Maps", "action:panel")
 
   nav_stack = [layout, object()]
   monkeypatch.setattr(gui_app, "_nav_stack", nav_stack, raising=False)
@@ -268,15 +271,15 @@ def test_home_breadcrumb_clears_hub_path_panel_stack_and_active_panel(monkeypatc
   layout, _ = _make_layout(monkeypatch)
   _click_title(layout, "Driving Controls")
   _click_title(layout, "Navigation & Maps")
-  _click_title(layout, "Map Data")
-  layout._panel_stack.append((StarPilotPanelType.MAPS, "details"))
+  _click_title(layout, "Offline Maps")
+  layout._panel_stack.append((StarPilotPanelType.OFFLINE_MAPS, "details"))
 
   nav_stack = [layout, object(), object()]
   monkeypatch.setattr(gui_app, "_nav_stack", nav_stack, raising=False)
   monkeypatch.setattr(gui_app, "pop_widget", lambda: nav_stack.pop(), raising=False)
   BreadcrumbController().handle_click("action:home")
 
-  maps_panel = layout._panels[StarPilotPanelType.MAPS].instance
+  maps_panel = layout._panels[StarPilotPanelType.OFFLINE_MAPS].instance
   assert nav_stack == [layout]
   assert layout._hub_path == []
   assert layout._selected_leaf is None
@@ -350,9 +353,9 @@ def test_breadcrumb_panel_stack_unwinds_nav_stack(monkeypatch):
   layout, _ = _make_layout(monkeypatch)
   _click_title(layout, "Driving Controls")
   _click_title(layout, "Navigation & Maps")
-  _click_title(layout, "Map Data")
-  layout._panel_stack.append((StarPilotPanelType.MAPS, "sub1"))
-  layout._panel_stack.append((StarPilotPanelType.MAPS, "sub2"))
+  _click_title(layout, "Offline Maps")
+  layout._panel_stack.append((StarPilotPanelType.OFFLINE_MAPS, "sub1"))
+  layout._panel_stack.append((StarPilotPanelType.OFFLINE_MAPS, "sub2"))
 
   nav_stack = [layout, object(), object()]
   monkeypatch.setattr(gui_app, "_nav_stack", nav_stack, raising=False)
@@ -361,7 +364,7 @@ def test_breadcrumb_panel_stack_unwinds_nav_stack(monkeypatch):
   BreadcrumbController().handle_click("action:panel_stack:0")
   assert nav_stack == [layout]
   assert len(layout._panel_stack) == 1
-  assert layout._panel_stack[0] == (StarPilotPanelType.MAPS, "sub1")
+  assert layout._panel_stack[0] == (StarPilotPanelType.OFFLINE_MAPS, "sub1")
 
 
 
@@ -373,3 +376,12 @@ def test_open_panel_jumps_to_offline_maps_with_the_folders_behind_it(monkeypatch
   assert depths[-1] == 3
   layout.navigate_back()
   assert layout._current_panel == StarPilotPanelType.MAIN and depths[-1] == 2, "Back walks up to Navigation & Maps"
+
+
+def test_map_data_deep_link_opens_offline_maps_on_the_speed_limit_segment(monkeypatch):
+  layout, _ = _make_layout(monkeypatch)
+  offline = layout._panels[StarPilotPanelType.OFFLINE_MAPS].instance
+  layout.open_panel("MAPS")
+  assert layout._current_panel == StarPilotPanelType.OFFLINE_MAPS and offline.segment == 1
+  layout.open_panel("OFFLINE_MAPS")
+  assert offline.segment == 0, "the car screen's Offline Maps button lands on the map display"
