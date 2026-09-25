@@ -70,6 +70,8 @@ class HomeInfoCard(Widget):
     self._drive_stats = drive_stats
     self._online_provider = online_provider
     self._gps_provider = gps_provider
+    # The car screen turns this off: its Navigate screen is the one place to start a route.
+    self.quick_start_enabled = True
 
     self._show_records = False
     self._quick_start_available = False
@@ -143,7 +145,8 @@ class HomeInfoCard(Widget):
     favorites = load_favorite_destinations(raw_favorites)
     self._favorites = ordered_favorite_destinations(favorites, limit=ROW_COUNT)
     self._quick_start_available = (
-      routing_configured(self._params)
+      self.quick_start_enabled
+      and routing_configured(self._params)
       and bool(self._favorites)
       and self._is_online()
       and self._has_gps()
