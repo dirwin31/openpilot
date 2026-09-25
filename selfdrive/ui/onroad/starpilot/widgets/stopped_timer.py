@@ -14,6 +14,11 @@ from openpilot.system.ui.widgets import Widget
 
 class StoppedTimerWidget(Widget):
   SHOW_AFTER_SECONDS = 60
+  MINUTE_FONT = 176
+  SECOND_FONT = 66
+  BESIDE_MAP_SCALE = 0.5   # the car view's driving pane is narrower with the map beside it
+  MAX_WIDTH_FRACTION = 0.8
+  LEFT_CONTROLS_RESERVE = 290  # MAX / LIMIT column; the narrow car-view pane has no room to centre over it
 
   def __init__(self, in_reverse: Callable[[], bool] | None = None):
     super().__init__()
@@ -86,12 +91,30 @@ class StoppedTimerWidget(Widget):
       f"{seconds} second{'s' if seconds != 1 else ''}",
     )
 
+  def _scale(self, minute_text: str, width: float) -> float:
+    scale = self.BESIDE_MAP_SCALE if getattr(ui_state, "nav_map_beside_road", False) else 1.0
+    full_width = measure_text_cached(self._font_bold, minute_text, self.MINUTE_FONT).x
+    if full_width > 0:
+      scale = min(scale, self.MAX_WIDTH_FRACTION * width / full_width)
+    return max(0.3, scale)
+
   def _render(self, rect: rl.Rectangle) -> None:
     duration = self._duration
     minute_text, second_text = self._format_duration_text(duration)
 
-    minute_size = measure_text_cached(self._font_bold, minute_text, 176)
-    second_size = measure_text_cached(self._font_normal, second_text, 66)
+    left = rect.x
+    width = rect.width
+    if getattr(ui_state, "nav_map_beside_road", False):
+      left += self.LEFT_CONTROLS_RESERVE
+      width = max(1.0, width - self.LEFT_CONTROLS_RESERVE)
+    scale = self._scale(minute_text, width)
+    minute_font = int(self.MINUTE_FONT * scale)  # round down so a fitted size never overflows
+    second_font = int(self.SECOND_FONT * scale)
+    minute_size = measure_text_cached(self._font_bold, minute_text, minute_font)
+    second_size = measure_text_cached(self._font_normal, second_text, second_font)
+    # Full size keeps the original layout; smaller sizes stay centred where the speed would be.
+    minute_bottom = rect.y + (210 if scale >= 1.0 else 180 + minute_size.y / 2)
+    second_bottom = minute_bottom + 80 * scale
 
     if duration < 150:
       transition = (duration - 60) / 90.0
@@ -102,20 +125,20 @@ class StoppedTimerWidget(Widget):
     else:
       duration_color = TRAFFIC_COLOR
 
-    center_x = rect.x + rect.width / 2
+    center_x = left + width / 2
     rl.draw_text_ex(
       self._font_bold,
       minute_text,
-      rl.Vector2(center_x - minute_size.x / 2, rect.y + 210 - minute_size.y),
-      176,
+      rl.Vector2(center_x - minute_size.x / 2, minute_bottom - minute_size.y),
+      minute_font,
       0,
       duration_color,
     )
     rl.draw_text_ex(
       self._font_normal,
       second_text,
-      rl.Vector2(center_x - second_size.x / 2, rect.y + 290 - second_size.y),
-      66,
+      rl.Vector2(center_x - second_size.x / 2, second_bottom - second_size.y),
+      second_font,
       0,
       rl.Color(255, 255, 255, 255),
     )

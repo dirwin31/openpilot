@@ -289,6 +289,7 @@ def run(frames_path: str, touch_path: str) -> int:
         gui_app._last_mouse_event = events[-1]
       ui_state.update()
       split = nav_split.rects(ui_state.started, now)
+      ui_state.nav_map_beside_road = split is not None
       if split is not None:
         nav_split.prepare(split[1], scale_x, scale_y, now)
 

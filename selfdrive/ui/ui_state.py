@@ -104,6 +104,9 @@ class UIState:
     self.usbgpu_active: bool = self.params.get_bool("UsbGpuActive")
     self.usbgpu_loading: bool = self.params.get_bool("UsbGpuLoading")
     self.started: bool = False
+    # Set by the Android Auto car view while its navigation map is drawn beside the
+    # driving view; the driving view then leaves out what the map already shows.
+    self.nav_map_beside_road: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
     self.panda_type: log.PandaState.PandaType = log.PandaState.PandaType.unknown
