@@ -11,6 +11,8 @@ def _load_stopped_timer(monkeypatch):
     Vector2=lambda x, y: SimpleNamespace(x=x, y=y),
     WHITE=SimpleNamespace(r=255, g=255, b=255, a=255),
     draw_text_ex=lambda *_args: None,
+    draw_rectangle_rounded=lambda *_args: None,
+    draw_rectangle_rounded_lines_ex=lambda *_args: None,
   )
   monkeypatch.setitem(sys.modules, "pyray", rl)
 
@@ -139,3 +141,24 @@ def test_stopped_timer_fits_a_narrow_driving_pane(monkeypatch):
   assert minute_width <= 0.8 * (700 - reserve) + 1
   assert draws[0][2].x >= reserve, "clear of the MAX / LIMIT column"
   assert draws[0][2].x + minute_width <= 700
+
+
+def test_android_auto_timer_is_centered_in_full_and_split_camera_panes(monkeypatch):
+  stopped_timer = _load_stopped_timer(monkeypatch)
+  monkeypatch.setattr(stopped_timer, "ui_state", SimpleNamespace(android_auto_car_view=True, nav_map_beside_road=True))
+  monkeypatch.setattr(stopped_timer, "measure_text_cached",
+                      lambda _font, text, size: SimpleNamespace(x=len(text) * size * 0.55, y=size * 0.8))
+
+  for rect in (stopped_timer.rl.Rectangle(0, 0, 1920, 1080), stopped_timer.rl.Rectangle(806, 0, 1114, 1080)):
+    widget = stopped_timer.StoppedTimerWidget()
+    widget._duration = 61
+    cards, draws = [], []
+    monkeypatch.setattr(stopped_timer.rl, "draw_rectangle_rounded",
+                        lambda card, *_args, cards=cards: cards.append(card))
+    monkeypatch.setattr(stopped_timer.rl, "draw_text_ex", lambda *args, draws=draws: draws.append(args))
+    widget._render(rect)
+
+    card = cards[1]  # shadow first, opaque card second
+    assert abs(card.x + card.width / 2 - (rect.x + rect.width / 2)) < 1
+    assert abs(card.y + card.height / 2 - (rect.y + rect.height / 2)) < 1
+    assert abs(draws[0][2].x + len("1 minute") * draws[0][3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1

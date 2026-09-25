@@ -121,6 +121,17 @@ def test_stale_fix_is_not_fresh(view):
   assert not view._gps.fresh
 
 
+def test_android_auto_map_shows_active_navigation_waiting_for_gps(view):
+  view._show_navigation_waiting = True
+  view._navigation_requested = True
+
+  assert view._center_message() == ("Navigation active", "Waiting for GPS to start your route.")
+  view._gps = nav_map.GpsFix(36.3, -115.3, 0.0, 0.0, 0.0, False)
+  assert view._center_message() == ("Navigation active", "Waiting for GPS to start your route.")
+  view._gps.fresh = True
+  assert view._center_message() is None
+
+
 def test_route_progress_tracks_the_nearest_point(view):
   points = [(36.3, -115.3 + i * 0.001) for i in range(50)]
   view._route_world = nav_map._route_world(points)

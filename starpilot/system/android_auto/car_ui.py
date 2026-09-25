@@ -153,7 +153,7 @@ class MapPane:
   def _ensure_map(self):
     if self._map is None:
       from openpilot.selfdrive.ui.onroad.starpilot.nav_map import NavMapView
-      self._map = NavMapView(show_guidance=True, clip=False)
+      self._map = NavMapView(show_guidance=True, clip=False, show_navigation_waiting=True)
       self._map.show_event()
     return self._map
 
@@ -476,6 +476,7 @@ def run(frames_path: str, touch_path: str) -> int:
   from openpilot.system.ui.lib.application import MouseEvent, MousePos, gui_app
   from openpilot.selfdrive.ui.ui_state import device, ui_state
 
+  ui_state.android_auto_car_view = True
   gui_app._width, gui_app._height = logical_w, logical_h
   gui_app._scale = scale_y
   gui_app._render_texture = None
