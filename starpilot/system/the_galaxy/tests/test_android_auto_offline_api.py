@@ -115,5 +115,5 @@ def test_both_offline_downloaders_share_the_offline_maps_tab():
   assert "/navigation/maps" in vehicle
   display = (JS_ROOT / "components" / "AndroidAutoOfflinePanel.js").read_text()
   road = (JS_ROOT / "components" / "MapsPanel.js").read_text()
-  assert '<span class="gx-section__title">Map Display</span>' in display
+  assert 'title="Map Display used with Android Auto"' in maps_tab
   assert '<span class="gx-section__title">Speed Limit &amp; Curve Data</span>' in road

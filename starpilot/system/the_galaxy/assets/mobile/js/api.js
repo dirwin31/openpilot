@@ -191,6 +191,7 @@ export const api = {
   getCarScreen() { return request("/api/android_auto/car_screen", { cache: "no-store" }) },
   setCarScreen(body) { return request("/api/android_auto/car_screen", { method: "POST", data: body }) },
   getAutoOffline() { return request("/api/android_auto/offline", { cache: "no-store", timeout: 15000 }) },
+  getAutoOfflineCoverage(bounds) { return request(`/api/android_auto/offline/coverage?${new URLSearchParams(bounds)}`, { cache: "no-store", timeout: 15000 }) },
   estimateAutoOffline(body) { return request("/api/android_auto/offline/estimate", { method: "POST", data: body, timeout: 30000 }) },
   addAutoOfflineArea(body) { return request("/api/android_auto/offline/areas", { method: "POST", data: body }) },
   addAutoOfflineRoute(body) { return request("/api/android_auto/offline/routes", { method: "POST", data: body }) },

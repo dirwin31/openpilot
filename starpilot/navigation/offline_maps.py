@@ -27,7 +27,9 @@ from pathlib import Path
 from typing import Any
 
 from openpilot.starpilot.navigation.map_tiles import (
+  DEFAULT_STYLE,
   TILE_SIZE,
+  TileCache,
   TileKey,
   corridor_tiles,
   default_cache_dir,
@@ -301,6 +303,57 @@ class OfflineMaps:
       "service_running": updated > 0 and _now() - updated < SERVICE_STALE_SECONDS,
       "refresh_days": AREA_REFRESH_SECONDS // 86400,
     }
+
+  def coverage(self, zoom: int, west: float, south: float, east: float, north: float, limit: int = 4000) -> dict[str, Any]:
+    """Actual tile files in the viewport at one exact zoom, bounded for the web map.
+
+    Saved tiles take precedence over temporary route-cache duplicates. Planning and
+    download counters deliberately aren't used as evidence of cached coverage.
+    """
+    if not 0 <= zoom <= 18 or not all(math.isfinite(v) for v in (west, south, east, north)) or not -90 <= south <= north <= 90:
+      raise ValueError("Invalid coverage bounds or zoom")
+    if east < west:
+      east += 360
+    if east < west:
+      raise ValueError("Invalid coverage bounds")
+    n = 1 << zoom
+    first_x = math.floor((west + 180) / 360 * n)
+    last_x = math.floor((east + 180) / 360 * n)
+    def tile_y(latitude):
+      lat = math.radians(max(-85.05112878, min(85.05112878, latitude)))
+      return max(0, min(n - 1, math.floor((1 - math.asinh(math.tan(lat)) / math.pi) / 2 * n)))
+    first_y, last_y = tile_y(north), tile_y(south)
+    found = {}
+    for base, saved in ((self.root, True), (self.base, False)):
+      root = TileCache(base, DEFAULT_STYLE).root / str(zoom)
+      try:
+        columns = list(root.iterdir())
+      except OSError:
+        continue
+      for column in columns:
+        if not column.name.isdigit():
+          continue
+        x = int(column.name)
+        if not 0 <= x < n or (last_x - first_x < n and (x - first_x) % n > last_x - first_x):
+          continue
+        try:
+          for tile in column.iterdir():
+            if tile.suffix != ".png" or not tile.stem.isdigit():
+              continue
+            y = int(tile.stem)
+            if not first_y <= y <= last_y or (x, y) in found:
+              continue
+            try:
+              if not tile.is_file() or tile.stat().st_size == 0:
+                continue
+            except OSError:
+              continue
+            if len(found) >= limit:
+              return {"zoom": zoom, "tiles": list(found.values()), "truncated": True}
+            found[x, y] = [x, y, saved]
+        except OSError:
+          continue
+    return {"zoom": zoom, "tiles": list(found.values()), "truncated": False}
 
   def request_update(self, area_id: str) -> None:
     for area in self.areas():
