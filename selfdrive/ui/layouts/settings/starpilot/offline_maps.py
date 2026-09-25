@@ -1,7 +1,10 @@
-"""Offline Maps: see what the navigation map has saved, save new areas, update or delete them.
+"""Offline Maps: both kinds of offline data in one place.
 
-navtilesd does the downloading; this page only writes area records through
-OfflineMaps and reads the progress navtilesd reports.
+  * Map display: what the navigation map has saved. Save new areas, update or
+    delete them. navtilesd does the downloading; this page only writes area
+    records through OfflineMaps and reads the progress navtilesd reports.
+  * Speed limit data: mapd's road data by state or country (the Map Data page,
+    embedded as-is).
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import queue
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -20,6 +24,7 @@ import pyray as rl
 from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   AETHER_LIST_METRICS,
   AetherListColors,
+  AetherSegmentedControl,
   DEFAULT_PANEL_STYLE,
   PanelManagerView,
   draw_action_pill,
@@ -54,6 +59,20 @@ EMPTY_HEIGHT = 140.0
 REFRESH_SECONDS = 2.0
 AREA_DETAIL = {16: "street detail", 15: "city detail", 14: "road detail", 13: "regional"}
 
+SEGMENT_DISPLAY = 0
+SEGMENT_ROAD_DATA = 1
+SEGMENT_HEIGHT = 68.0
+CAPTION_HEIGHT = 44.0
+SEGMENT_CAPTIONS = (
+  "The map on the comma and car screen. Saved areas keep it working without signal.",
+  "Road data for speed limits and curve control, by state or country. Doesn't draw the map.",
+)
+
+
+def _road_data_layout():
+  from openpilot.selfdrive.ui.layouts.settings.starpilot.maps import StarPilotMapsLayout
+  return StarPilotMapsLayout()
+
 
 class OfflineMapsManagerView(PanelManagerView):
   METRICS = METRICS
@@ -79,7 +98,7 @@ class OfflineMapsManagerView(PanelManagerView):
 
 
 class StarPilotOfflineMapsLayout(_SettingsPage):
-  def __init__(self, offline: OfflineMaps | None = None, params=None):
+  def __init__(self, offline: OfflineMaps | None = None, params=None, road_data_factory: Callable[[], Any] | None = None):
     super().__init__()
     self._params = params or FrameCachedParams()
     self._store = NavigationDestinationStore(self._params)
@@ -100,7 +119,55 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
     self._refreshed = -1.0
     self._manager_view = OfflineMapsManagerView(self)
 
+    self.segment = SEGMENT_DISPLAY
+    self._road_data_factory = road_data_factory or _road_data_layout
+    self._road_data = None  # built on first use: it subscribes to mapd
+    self._segments: AetherSegmentedControl | None = None
+    self._shown = False
+
+  # ── segments ──────────────────────────────────────────────────────────────
+
+  @property
+  def road_data(self):
+    if self._road_data is None:
+      self._road_data = self._road_data_factory()
+    return self._road_data
+
+  def _segment_view(self, segment: int):
+    return self.road_data if segment == SEGMENT_ROAD_DATA else self._manager_view
+
+  def open_segment(self, segment: int) -> None:
+    segment = SEGMENT_ROAD_DATA if segment == SEGMENT_ROAD_DATA else SEGMENT_DISPLAY
+    if segment == self.segment:
+      return
+    if self._shown:
+      self._segment_view(self.segment).hide_event()
+    self.segment = segment
+    if self._shown:
+      self._segment_view(segment).show_event()
+
+  def _render(self, rect: rl.Rectangle):
+    if self._segments is None:
+      self._segments = AetherSegmentedControl([tr("Map display"), tr("Speed limit data")], lambda: self.segment, self.open_segment,
+                                              style=PANEL_STYLE, suppress_background=True)
+    self._segments.render(rl.Rectangle(rect.x + INSET, rect.y, rect.width - INSET * 2, SEGMENT_HEIGHT))
+    caption_y = rect.y + SEGMENT_HEIGHT + 8
+    font = gui_app.font(FontWeight.NORMAL)
+    rl.draw_text_ex(font, tr(SEGMENT_CAPTIONS[self.segment]), rl.Vector2(rect.x + INSET + 4, caption_y + 8), 26, 0, AetherListColors.SUBTEXT)
+    top = SEGMENT_HEIGHT + 8 + CAPTION_HEIGHT
+    self._segment_view(self.segment).render(rl.Rectangle(rect.x, rect.y + top, rect.width, max(1.0, rect.height - top)))
+
+  def hide_event(self):
+    self._shown = False
+    if self.segment == SEGMENT_ROAD_DATA:
+      self.road_data.hide_event()
+    super().hide_event()
+
   def show_event(self):
+    # The segment survives a re-show (dialogs hide and re-show the page); deep links pick one with open_segment.
+    self._shown = True
+    if self.segment == SEGMENT_ROAD_DATA:
+      self.road_data.show_event()
     self._generation += 1
     self._session_token = str(uuid.uuid4())
     self.chooser = None
