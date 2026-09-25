@@ -47,6 +47,9 @@ AVERAGE_TILE_BYTES = 30_000      # navigation-night 512 px tiles: ~17 KB suburba
 OFFLINE_MAX_BYTES = 2 * 1024 ** 3
 AREA_REFRESH_SECONDS = 90 * 24 * 3600
 PREVIEW_ROUTE_MAX_AGE = 30 * 60
+SERVICE_STALE_SECONDS = 30.0     # navtilesd rewrites its status every few seconds while it runs
+MAX_ROUTE_POINTS = 5000
+MAX_DISPLAY_POINTS = 400
 
 # (radius km, max zoom): street detail near home down to regional coverage for a trip.
 AREA_PRESETS = ((10.0, 16), (30.0, 15), (60.0, 14), (150.0, 13))
@@ -173,6 +176,7 @@ def format_bytes(size: float) -> str:
 
 @dataclass
 class OfflineArea:
+  """A saved offline item: an area around a point, or a route (``kind == "route"``)."""
   id: str
   name: str
   latitude: float
@@ -183,9 +187,45 @@ class OfflineArea:
   update_requested: float = 0.0
   deleted: bool = False
   allow_metered: bool = False  # "Download now": use any connection, not just unmetered Wi-Fi
+  kind: str = "area"
+  points: list[list[float]] | None = None  # route geometry as [lat, lon]
+  distance_m: float = 0.0
+  duration_s: float = 0.0
+  origin_name: str = ""
 
   def tiles(self) -> list[TileKey]:
+    if self.kind == "route":
+      return route_tiles([(lat, lon) for lat, lon in self.points or []])
     return area_tiles(self.latitude, self.longitude, self.radius_km, self.max_zoom)
+
+
+def clean_route_points(raw: Any) -> list[tuple[float, float]] | None:
+  """Validate [lat, lon] pairs (or {latitude, longitude}) and thin very long routes."""
+  if not isinstance(raw, list) or len(raw) < 2 or len(raw) > 20 * MAX_ROUTE_POINTS:
+    return None
+  points: list[tuple[float, float]] = []
+  for item in raw:
+    try:
+      if isinstance(item, dict):
+        latitude, longitude = float(item["latitude"]), float(item["longitude"])
+      else:
+        latitude, longitude = float(item[0]), float(item[1])
+    except (KeyError, IndexError, TypeError, ValueError):
+      return None
+    if not (math.isfinite(latitude) and math.isfinite(longitude) and -90.0 <= latitude <= 90.0 and -180.0 <= longitude <= 180.0):
+      return None
+    points.append((latitude, longitude))
+  return thin_points(points, MAX_ROUTE_POINTS)
+
+
+def thin_points(points: Sequence[tuple[float, float]], limit: int) -> list[tuple[float, float]]:
+  if len(points) <= limit:
+    return list(points)
+  stride = math.ceil(len(points) / limit)
+  thinned = list(points[::stride])
+  if thinned[-1] != points[-1]:
+    thinned.append(points[-1])
+  return thinned
 
 
 class OfflineMaps:
@@ -219,6 +259,48 @@ class OfflineMaps:
     area = OfflineArea(uuid.uuid4().hex[:12], name, float(latitude), float(longitude), float(radius_km), int(max_zoom), _now())
     self._save_area(area)
     return area
+
+  def add_route(self, name: str, points: Sequence[tuple[float, float]], distance_m: float = 0.0, duration_s: float = 0.0,
+                origin_name: str = "") -> OfflineArea:
+    latitude, longitude = points[-1]
+    area = OfflineArea(uuid.uuid4().hex[:12], name, float(latitude), float(longitude), 0.0, 0, _now(), kind="route",
+                       points=[[round(lat, 6), round(lon, 6)] for lat, lon in points], distance_m=float(distance_m),
+                       duration_s=float(duration_s), origin_name=origin_name)
+    self._save_area(area)
+    return area
+
+  def get(self, area_id: str) -> OfflineArea | None:
+    return next((area for area in self.areas(include_deleted=True) if area.id == area_id), None)
+
+  def summary(self) -> dict[str, Any]:
+    """Saved items merged with their download progress, for The Galaxy."""
+    status = self.status()
+    progress = status.get("areas") or {}
+    updated = float(status.get("updated") or 0.0)
+    items = []
+    for area in self.areas(include_deleted=True):
+      state = progress.get(area.id) or {}
+      item = {
+        "id": area.id, "kind": area.kind, "name": area.name, "latitude": area.latitude, "longitude": area.longitude,
+        "radius_km": area.radius_km, "max_zoom": area.max_zoom, "created": area.created, "allow_metered": area.allow_metered,
+        "state": "removing" if area.deleted else state.get("state", "queued"),
+        "done": int(state.get("done") or 0), "total": int(state.get("total") or 0), "bytes": int(state.get("bytes") or 0),
+        "completed_at": float(state.get("completed_at") or 0.0), "metered_wifi": bool(state.get("metered_wifi")),
+      }
+      if area.kind == "route":
+        item.update(distance_m=area.distance_m, duration_s=area.duration_s, origin_name=area.origin_name,
+                    points=[[lat, lon] for lat, lon in thin_points([(lat, lon) for lat, lon in area.points or []], MAX_DISPLAY_POINTS)])
+      items.append(item)
+    return {
+      "items": items,
+      "offline_bytes": int(status.get("offline_bytes") or 0),
+      "max_bytes": OFFLINE_MAX_BYTES,
+      "unmetered": bool(status.get("unmetered")),
+      "offline": bool(status.get("offline")),
+      "route": status.get("route") or {},
+      "service_running": updated > 0 and _now() - updated < SERVICE_STALE_SECONDS,
+      "refresh_days": AREA_REFRESH_SECONDS // 86400,
+    }
 
   def request_update(self, area_id: str) -> None:
     for area in self.areas():

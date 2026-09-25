@@ -267,3 +267,37 @@ def test_update_downloads_every_tile_again(tmp_path, fast):
   daemon.maps.request_update(area.id)
   assert run_until(daemon, lambda: daemon.maps.status()["areas"][area.id]["completed_at"] > completed_at)
   assert len(session.urls) == 2 * first_pass
+
+
+def test_saved_route_downloads_its_route_tiles(tmp_path, fast):
+  daemon, session = make_daemon(tmp_path)
+  points = l_shaped_route(15, 0.002)
+  route = daemon.maps.add_route("Trip", points, 5000.0, 600.0, "Home")
+  assert route.kind == "route" and route.tiles() == route_tiles(points)
+  assert run_until(daemon, lambda: daemon.maps.status().get("areas", {}).get(route.id, {}).get("state") == "complete")
+  assert all(daemon.area_cache.contains(key) for key in route_tiles(points))
+
+  summary = daemon.maps.summary()
+  [item] = summary["items"]
+  assert item["kind"] == "route" and item["state"] == "complete" and item["origin_name"] == "Home"
+  assert summary["service_running"] is True
+
+
+def test_summary_thins_long_routes_for_display(tmp_path):
+  maps = OfflineMaps(tmp_path)
+  points = [(36.0 + i * 1e-4, -115.0) for i in range(3000)]
+  maps.add_route("Long", points)
+  [item] = maps.summary()["items"]
+  assert len(item["points"]) <= 401 and item["points"][-1] == [points[-1][0], points[-1][1]]
+  assert maps.summary()["service_running"] is False
+
+
+def test_clean_route_points_validates_and_thins():
+  from openpilot.starpilot.navigation.offline_maps import MAX_ROUTE_POINTS, clean_route_points
+  assert clean_route_points([[36.1, -115.2], {"latitude": 36.2, "longitude": -115.1}]) == [(36.1, -115.2), (36.2, -115.1)]
+  assert clean_route_points([[36.1, -115.2]]) is None
+  assert clean_route_points([[36.1, -115.2], [91, 0]]) is None
+  assert clean_route_points("nope") is None
+  long_route = [[36.0 + i * 1e-5, -115.0] for i in range(MAX_ROUTE_POINTS * 3)]
+  thinned = clean_route_points(long_route)
+  assert len(thinned) <= MAX_ROUTE_POINTS + 1 and thinned[-1] == tuple(long_route[-1])

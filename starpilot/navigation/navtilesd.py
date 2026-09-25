@@ -36,6 +36,7 @@ LOOP_SECONDS = 1.0
 AREA_CHECK_SECONDS = 5.0
 PREVIEW_CHECK_SECONDS = 3.0
 STATUS_SECONDS = 2.0
+STATUS_HEARTBEAT_SECONDS = 10.0  # rewrite even when unchanged so readers can tell the service is alive
 ROUTE_RETRY_SECONDS = 60.0
 LIVE_ROUTE_STALE_SECONDS = 30.0
 AREA_VERIFY_ATTEMPTS = 3
@@ -97,6 +98,7 @@ class Navtilesd:
     self._area_status: dict[str, dict] = dict(self.maps.status().get("areas", {}))
     self._offline_bytes: int | None = None
     self._status_written = -math.inf
+    self._status_heartbeat = -math.inf
     self._last_status: dict | None = None
 
   def _token(self) -> str:
@@ -322,9 +324,10 @@ class Navtilesd:
       "unmetered": self.unmetered,
       "offline": self.route_service.offline or not self.network_up,
     }
-    if status != self._last_status:
+    if status != self._last_status or now - self._status_heartbeat >= STATUS_HEARTBEAT_SECONDS:
       self._last_status = json.loads(json.dumps(status))
       self.maps.write_status(dict(status, updated=wall))
+      self._status_heartbeat = now
     self._status_written = now
 
   def step(self, now: float | None = None, wall: float | None = None) -> None:

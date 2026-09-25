@@ -1,7 +1,6 @@
 import { api, showSnackbar } from "../api.js"
 import { navigate, toolHref } from "../store.js"
 import { GalaxySection } from "../components/GalaxySection.js"
-import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
 
 const FEATURES = [
   { key: "doors", name: "Lock/Unlock Doors", icon: "bi-door-closed", desc: "Send lock or unlock commands remotely to your vehicle.", embed: "/manage_doors" },
@@ -10,7 +9,7 @@ const FEATURES = [
 
 export const Vehicle = {
   name: "Vehicle",
-  components: { GalaxySection, AndroidAutoIdentityPanel },
+  components: { GalaxySection },
   data() {
     return {
       features: FEATURES,
@@ -22,6 +21,7 @@ export const Vehicle = {
     featureList() { return this.features },
   },
   methods: {
+    openAndroidAuto() { navigate("/navigation/auto") },
     statusOf(key) { return this.featureStatus[key] || "untested" },
     async openFeature(f) {
       if (this.busy) return
@@ -69,9 +69,9 @@ export const Vehicle = {
         </div>
       </GalaxySection>
 
-      <GalaxySection title="Android Auto Identity" icon="bi-key" :collapsible="false">
-        <AndroidAutoIdentityPanel />
-      </GalaxySection>
+      <p style="color:var(--text-muted); margin:0;">
+        Android Auto setup and offline maps moved to <a href="/navigation/auto" @click.prevent="openAndroidAuto">Navigation › Android Auto</a>.
+      </p>
     </div>
   `,
 }

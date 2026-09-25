@@ -178,6 +178,12 @@ export const api = {
   getAndroidAutoIdentity() { return request("/api/android_auto/identity", { cache: "no-store" }) },
   downloadAndroidAutoApk(url) { return request("/api/android_auto/identity/download", { method: "POST", data: { url } }) },
   removeAndroidAutoIdentity() { return request("/api/android_auto/identity", { method: "DELETE" }) },
+  getAutoOffline() { return request("/api/android_auto/offline", { cache: "no-store" }) },
+  estimateAutoOffline(body) { return request("/api/android_auto/offline/estimate", { method: "POST", data: body }) },
+  addAutoOfflineArea(body) { return request("/api/android_auto/offline/areas", { method: "POST", data: body }) },
+  addAutoOfflineRoute(body) { return request("/api/android_auto/offline/routes", { method: "POST", data: body }) },
+  autoOfflineAction(id, action) { return request(`/api/android_auto/offline/${encodeURIComponent(id)}/${action}`, { method: "POST" }) },
+  deleteAutoOffline(id) { return request(`/api/android_auto/offline/${encodeURIComponent(id)}`, { method: "DELETE" }) },
 
   carFeaturesCheck(tool = "") {
     const query = tool ? `?tool=${encodeURIComponent(tool)}` : ""
@@ -208,6 +214,10 @@ export const api = {
   mapboxGeocode(query, accessToken, context = {}) {
     const params = new URLSearchParams({ access_token: accessToken, q: query, ...context })
     return request(`https://api.mapbox.com/search/geocode/v6/forward?${params.toString()}`, { cache: "no-store" })
+  },
+  mapboxReverseCity(latitude, longitude, accessToken) {
+    const params = new URLSearchParams({ longitude: String(longitude), latitude: String(latitude), types: "place", limit: "1", access_token: accessToken })
+    return request(`https://api.mapbox.com/search/geocode/v6/reverse?${params.toString()}`, { cache: "no-store" })
   },
   mapboxDirections(from, to, accessToken) {
     const origin = `${from.longitude},${from.latitude}`
