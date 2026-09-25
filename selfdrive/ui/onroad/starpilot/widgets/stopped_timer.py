@@ -19,10 +19,12 @@ class StoppedTimerWidget(Widget):
   BESIDE_MAP_SCALE = 0.5   # the car view's driving pane is narrower with the map beside it
   MAX_WIDTH_FRACTION = 0.8
   LEFT_CONTROLS_RESERVE = 290  # MAX / LIMIT column; the narrow car-view pane has no room to centre over it
-  CAR_MAX_TEXT_WIDTH = 0.78
-  CAR_CARD_PADDING_X = 48
-  CAR_CARD_PADDING_Y = 34
-  CAR_LINE_GAP = 14
+  CAR_LABEL_FONT = 88
+  CAR_TIMER_FONT = 72
+  CAR_CARD_PADDING_X = 38
+  CAR_CARD_PADDING_Y = 28
+  CAR_CARD_TOP = 70
+  CAR_LINE_GAP = 8
 
   def __init__(self, in_reverse: Callable[[], bool] | None = None):
     super().__init__()
@@ -95,6 +97,10 @@ class StoppedTimerWidget(Widget):
       f"{seconds} second{'s' if seconds != 1 else ''}",
     )
 
+  @staticmethod
+  def _format_car_duration(duration: int) -> tuple[str, str]:
+    return "Stopped", f"{duration // 60:02d}:{duration % 60:02d}"
+
   def _scale(self, minute_text: str, width: float) -> float:
     scale = self.BESIDE_MAP_SCALE if getattr(ui_state, "nav_map_beside_road", False) else 1.0
     full_width = measure_text_cached(self._font_bold, minute_text, self.MINUTE_FONT).x
@@ -104,12 +110,12 @@ class StoppedTimerWidget(Widget):
 
   def _render(self, rect: rl.Rectangle) -> None:
     duration = self._duration
-    minute_text, second_text = self._format_duration_text(duration)
 
     if getattr(ui_state, "android_auto_car_view", False):
-      self._render_car_timer(rect, minute_text, second_text)
+      self._render_car_timer(rect, *self._format_car_duration(duration))
       return
 
+    minute_text, second_text = self._format_duration_text(duration)
     left = rect.x
     width = rect.width
     if getattr(ui_state, "nav_map_beside_road", False):
@@ -144,22 +150,22 @@ class StoppedTimerWidget(Widget):
       rl.Color(255, 255, 255, 255),
     )
 
-  def _render_car_timer(self, rect: rl.Rectangle, minute_text: str, second_text: str) -> None:
-    """Centre a legible timer in the Android Auto camera pane, at either width."""
-    full_width = measure_text_cached(self._font_bold, minute_text, self.MINUTE_FONT).x
-    available = max(1.0, rect.width * self.CAR_MAX_TEXT_WIDTH - 2 * self.CAR_CARD_PADDING_X)
+  def _render_car_timer(self, rect: rl.Rectangle, label_text: str, timer_text: str) -> None:
+    """Replace the Android Auto speed readout with a compact stopped timer."""
+    full_width = measure_text_cached(self._font_bold, label_text, self.CAR_LABEL_FONT).x
+    available = max(1.0, rect.width - 2 * (self.LEFT_CONTROLS_RESERVE + self.CAR_CARD_PADDING_X))
     scale = min(1.0, available / full_width) if full_width > 0 else 1.0
-    scale = max(0.42, scale)
-    minute_font = max(1, int(self.MINUTE_FONT * scale))
-    second_font = max(1, int(self.SECOND_FONT * scale))
-    minute_size = measure_text_cached(self._font_bold, minute_text, minute_font)
-    second_size = measure_text_cached(self._font_normal, second_text, second_font)
+    scale = max(0.6, scale)
+    label_font = max(1, int(self.CAR_LABEL_FONT * scale))
+    timer_font = max(1, int(self.CAR_TIMER_FONT * scale))
+    label_size = measure_text_cached(self._font_bold, label_text, label_font)
+    timer_size = measure_text_cached(self._font_normal, timer_text, timer_font)
 
-    card_width = min(rect.width - 32, max(minute_size.x, second_size.x) + 2 * self.CAR_CARD_PADDING_X)
-    card_height = minute_size.y + second_size.y + self.CAR_LINE_GAP + 2 * self.CAR_CARD_PADDING_Y
+    card_width = min(rect.width - 32, max(label_size.x, timer_size.x) + 2 * self.CAR_CARD_PADDING_X)
+    card_height = label_size.y + timer_size.y + self.CAR_LINE_GAP + 2 * self.CAR_CARD_PADDING_Y
     card = rl.Rectangle(
       rect.x + (rect.width - card_width) / 2,
-      rect.y + (rect.height - card_height) / 2,
+      rect.y + self.CAR_CARD_TOP,
       card_width,
       card_height,
     )
@@ -171,12 +177,12 @@ class StoppedTimerWidget(Widget):
     rl.draw_rectangle_rounded_lines_ex(card, 0.18, 12, 3, duration_color)
 
     center_x = card.x + card.width / 2
-    minute_y = card.y + self.CAR_CARD_PADDING_Y
-    second_y = minute_y + minute_size.y + self.CAR_LINE_GAP
-    rl.draw_text_ex(self._font_bold, minute_text,
-                    rl.Vector2(center_x - minute_size.x / 2, minute_y), minute_font, 0, duration_color)
-    rl.draw_text_ex(self._font_normal, second_text,
-                    rl.Vector2(center_x - second_size.x / 2, second_y), second_font, 0, rl.WHITE)
+    label_y = card.y + self.CAR_CARD_PADDING_Y
+    timer_y = label_y + label_size.y + self.CAR_LINE_GAP
+    rl.draw_text_ex(self._font_bold, label_text,
+                    rl.Vector2(center_x - label_size.x / 2, label_y), label_font, 0, duration_color)
+    rl.draw_text_ex(self._font_normal, timer_text,
+                    rl.Vector2(center_x - timer_size.x / 2, timer_y), timer_font, 0, rl.WHITE)
 
   def _duration_color(self) -> rl.Color:
     duration = self._duration
