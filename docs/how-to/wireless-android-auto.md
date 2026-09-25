@@ -132,7 +132,16 @@ service idle; changes apply from the next session.
 Everything is under `/data/android_auto/logs/` on the comma:
 
 - `session-YYYYMMDD-HHMMSS.jsonl`: one file per **start**, covering every retry until **stop**. One JSON object per line, UTC timestamps. The newest 20 are kept.
-- `car_ui.log`: output of the car-layout renderer for the current session (startup, crashes).
+- `car_ui.log`: output of the car-layout renderer for the current session (startup, crashes, and `render_stats` every 10 seconds while drawing).
+
+`render_stats` reports produced FPS and average per-frame `update_ms`, `map_ms`,
+`draw_ms`, and `readback_ms`. These are CPU wall times; GPU work submitted during
+drawing can finish during readback and be counted there. Compare these with the
+session's sent `fps`, `encode_ms`, `frame_age_p95_ms`, and receiver `pending` count
+to distinguish rendering delays from encoding or delivery delays. The Bluetooth
+panel shows sent FPS over five seconds, including startup time in that window.
+While the car shows its own screen, frame production pauses and the renderer stays
+loaded until the session ends.
 
 Readable timeline of the latest session, without the hands-free chatter:
 

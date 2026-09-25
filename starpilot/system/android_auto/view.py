@@ -86,6 +86,9 @@ class ViewSource:
   def demand(self, seconds: float = 1.0) -> None:
     self.source.demand(seconds)
 
+  def release_demand(self) -> None:
+    self.source.release_demand()
+
   def latest(self):
     frame = self.source.latest()
     if frame is not None:
