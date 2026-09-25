@@ -196,6 +196,8 @@ class AugmentedRoadView(CameraView):
 
   @staticmethod
   def _camera_view() -> int:
+    if getattr(ui_state, "car_camera_off", False):
+      return CAMERA_VIEW_NONE
     params = ui_state.ui_params
     camera_view = params.get_int("CameraView", return_default=True, default=CAMERA_VIEW_STANDARD)
     if camera_view not in (CAMERA_VIEW_AUTO, CAMERA_VIEW_DRIVER, CAMERA_VIEW_STANDARD, CAMERA_VIEW_WIDE, CAMERA_VIEW_NONE):

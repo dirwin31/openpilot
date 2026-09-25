@@ -1,0 +1,85 @@
+import { api, showSnackbar } from "../api.js"
+
+const VIEWS = [
+  { value: "split", label: "Map + Driving", desc: "The driving view and the navigation map side by side." },
+  { value: "driving", label: "Driving View", desc: "The StarPilot driving view fills the car screen." },
+  { value: "map", label: "Map Only", desc: "The map fills the screen, with the status border, your speed and alerts on top." },
+]
+
+export const AndroidAutoCarScreenPanel = {
+  name: "AndroidAutoCarScreenPanel",
+  data() {
+    return { settings: null, saving: false, views: VIEWS }
+  },
+  created() { this.load() },
+  computed: {
+    showsDriving() { return this.settings && this.settings.onroad_view !== "map" },
+    isSplit() { return this.settings && this.settings.onroad_view === "split" },
+  },
+  methods: {
+    async load() {
+      try {
+        this.settings = (await api.getCarScreen()).settings
+      } catch (e) {
+        showSnackbar(e?.message || "Could not read the car screen settings.", "error")
+      }
+    },
+    async update(change) {
+      if (!this.settings || this.saving) return
+      const previous = this.settings
+      this.settings = { ...this.settings, ...change }
+      this.saving = true
+      try {
+        this.settings = (await api.setCarScreen(change)).settings
+      } catch (e) {
+        this.settings = previous
+        showSnackbar(e?.message || "Could not save the car screen settings.", "error")
+      } finally {
+        this.saving = false
+      }
+    },
+  },
+  template: `
+    <div style="padding: var(--sp-3); display:grid; gap:10px;">
+      <div v-if="!settings" class="gx-loading">Loading...</div>
+      <template v-else>
+        <div class="gx-row__label">While Driving</div>
+        <label v-for="view in views" :key="view.value" class="gx-row" style="border:none; cursor:pointer; gap:10px;">
+          <input type="radio" name="car-screen-view" :checked="settings.onroad_view === view.value" :disabled="saving"
+            @change="update({ onroad_view: view.value })" style="accent-color:var(--primary); width:18px; height:18px; flex:none;" />
+          <div class="gx-row__info">
+            <span class="gx-row__label">{{ view.label }}</span>
+            <span class="gx-row__desc">{{ view.desc }}</span>
+          </div>
+        </label>
+
+        <div class="gx-row" style="border-top:1px solid var(--glass-border, rgba(127,127,127,.2)); gap:10px; flex-wrap:wrap;" :style="isSplit ? '' : 'opacity:.5;'">
+          <div class="gx-row__info">
+            <span class="gx-row__label">Map Side</span>
+            <span class="gx-row__desc">Which half of the car screen the map takes.</span>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button v-for="side in ['left', 'right']" :key="side" type="button" class="gx-btn"
+              :class="settings.map_side === side ? '' : 'gx-btn--tonal'" :disabled="!isSplit || saving"
+              @click="update({ map_side: side })">{{ side === 'left' ? 'Left' : 'Right' }}</button>
+          </div>
+        </div>
+
+        <label class="gx-row" style="gap:10px; cursor:pointer;" :style="showsDriving ? '' : 'opacity:.5;'">
+          <div class="gx-row__info">
+            <span class="gx-row__label">Show Road Camera</span>
+            <span class="gx-row__desc">Off keeps the coloured border, speeds, status and alerts over black, and saves the video work.</span>
+          </div>
+          <input type="checkbox" :checked="settings.camera" :disabled="!showsDriving || saving"
+            @change="update({ camera: $event.target.checked })" style="accent-color:var(--primary); width:20px; height:20px; flex:none;" />
+        </label>
+
+        <p class="gx-row__desc" style="margin:0;">
+          Changes reach the car screen within a second while it's connected, or apply the next time it connects.
+          While driving, the small <strong>•••</strong> button in the bottom-left corner of the car screen opens the home screen,
+          starts navigation to a favorite and returns to the drive.
+        </p>
+      </template>
+    </div>
+  `,
+}

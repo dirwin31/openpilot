@@ -184,6 +184,7 @@ from openpilot.starpilot.system.the_galaxy.factory_reset import remove_path as _
 from openpilot.starpilot.system.the_galaxy import flm_workspace, utilities
 from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interrupted_update, public_recovery_status, recover_interrupted_update
 from openpilot.starpilot.system.android_auto import apk_identity
+from openpilot.starpilot.system.android_auto import car_screen as aa_car_screen
 from openpilot.starpilot.system.bluetooth import BluetoothClient
 from openpilot.starpilot.system.wheel_controls import (
   CONTROLLER_ACTION_OPTIONS,
@@ -5582,6 +5583,26 @@ def setup(app):
       return jsonify({"error": "An import is running."}), 409
     apk_identity.remove_identity()
     return jsonify(_android_auto_identity_payload()), 200
+
+  # How the Android Auto car view lays out the drive. car_ui re-reads the file within a
+  # second, so changes apply live while the car is connected, or next time otherwise.
+  @app.route("/api/android_auto/car_screen", methods=["GET"])
+  def android_auto_car_screen():
+    return jsonify({"settings": aa_car_screen.load(), "defaults": aa_car_screen.DEFAULTS}), 200
+
+  @app.route("/api/android_auto/car_screen", methods=["POST"])
+  def android_auto_car_screen_save():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+      return jsonify({"error": "Send the car screen settings as JSON."}), 400
+    merged = {**aa_car_screen.load(), **payload}
+    if aa_car_screen.normalize(merged) != {key: merged[key] for key in aa_car_screen.DEFAULTS}:
+      return jsonify({"error": "Unknown car screen setting."}), 400
+    try:
+      saved = aa_car_screen.save(merged)
+    except OSError as error:
+      return jsonify({"error": f"Could not save: {error}"}), 500
+    return jsonify({"settings": saved}), 200
 
   # Offline map tiles for the Android Auto navigation map; navtilesd does the downloading.
   OFFLINE_AREA_DETAIL = {16: "Street detail", 15: "City detail", 14: "Road detail", 13: "Regional"}
