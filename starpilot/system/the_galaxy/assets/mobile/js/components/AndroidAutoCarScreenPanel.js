@@ -8,6 +8,9 @@ const VIEWS = [
 
 export const AndroidAutoCarScreenPanel = {
   name: "AndroidAutoCarScreenPanel",
+  props: {
+    isMetric: { type: Boolean, default: false },
+  },
   data() {
     return { settings: null, loading: false, error: "", saving: false, views: VIEWS }
   },
@@ -15,6 +18,10 @@ export const AndroidAutoCarScreenPanel = {
   computed: {
     showsDriving() { return this.settings && this.settings.onroad_view !== "map" },
     isSplit() { return this.settings && this.settings.onroad_view === "split" },
+    blindSpotEnabled() { return this.settings?.blind_spot_monitors !== false },
+    speedFactor() { return this.isMetric ? 3.6 : 2.2369362921 },
+    speedUnit() { return this.isMetric ? "km/h" : "mph" },
+    blindSpotMinSpeed() { return Math.round((this.settings?.blind_spot_min_speed_ms || 0) * this.speedFactor) },
   },
   methods: {
     async load() {
@@ -52,6 +59,14 @@ export const AndroidAutoCarScreenPanel = {
         showSnackbar(e?.message || "Could not save the car screen settings.", "error")
       } finally {
         this.saving = false
+      }
+    },
+    updateBlindSpotSpeed(event) {
+      const raw = String(event.target.value ?? "").trim()
+      const value = Number(raw)
+      const maximum = this.isMetric ? 200 : 125
+      if (raw && Number.isFinite(value)) {
+        this.update({ blind_spot_min_speed_ms: Math.min(maximum, Math.max(0, value)) / this.speedFactor })
       }
     },
   },
@@ -95,6 +110,27 @@ export const AndroidAutoCarScreenPanel = {
           </div>
           <input type="checkbox" :checked="settings.camera" :disabled="!showsDriving || saving"
             @change="update({ camera: $event.target.checked })" style="accent-color:var(--primary); width:20px; height:20px; flex:none;" />
+        </label>
+
+        <label class="gx-row" style="gap:10px; cursor:pointer;">
+          <div class="gx-row__info">
+            <span class="gx-row__label">Show Blind Spot Monitors</span>
+            <span class="gx-row__desc">Show blind-spot borders, adjacent-lane warnings, and configured side-camera previews on the car screen.</span>
+          </div>
+          <input type="checkbox" :checked="blindSpotEnabled" :disabled="saving"
+            @change="update({ blind_spot_monitors: $event.target.checked })" style="accent-color:var(--primary); width:20px; height:20px; flex:none;" />
+        </label>
+
+        <label class="gx-row" style="gap:10px; flex-wrap:wrap;" :style="blindSpotEnabled ? '' : 'opacity:.5;'">
+          <div class="gx-row__info">
+            <span class="gx-row__label">Blind Spot Minimum Speed</span>
+            <span class="gx-row__desc">Show the monitors only at or above this speed. Set 0 to show them at every speed.</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <input class="gx-field" type="number" min="0" :max="isMetric ? 200 : 125" step="1"
+              :value="blindSpotMinSpeed" :disabled="!blindSpotEnabled || saving" @change="updateBlindSpotSpeed" style="width:90px;" />
+            <span class="gx-row__value">{{ speedUnit }}</span>
+          </div>
         </label>
 
         <p class="gx-row__desc" style="margin:0;">

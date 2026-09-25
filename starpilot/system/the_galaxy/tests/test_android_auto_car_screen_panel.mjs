@@ -73,5 +73,20 @@ test("the Android Auto master toggle has its own section below the vehicle setti
   const settingsTree = settingsSource.indexOf("<SettingTree")
   const androidAutoSection = settingsSource.indexOf('title="Android Auto"')
   assert.ok(settingsTree >= 0 && androidAutoSection > settingsTree)
+  assert.match(settingsSource.slice(settingsTree, androidAutoSection), /<\/div>\s*<GalaxySection/)
   assert.match(settingsSource.slice(androidAutoSection), /:param="androidAutoParam\(activeSection\)"/)
+})
+
+test("blind-spot controls convert the displayed unit back to metres per second", () => {
+  const state = instance()
+  state.isMetric = false
+  state.speedFactor = panel.computed.speedFactor.call(state)
+  let change
+  state.update = (value) => { change = value }
+
+  state.updateBlindSpotSpeed({ target: { value: "30" } })
+
+  assert.ok(Math.abs(change.blind_spot_min_speed_ms - 13.4112) < 0.001)
+  assert.match(panel.template, /Show Blind Spot Monitors/)
+  assert.match(panel.template, /Blind Spot Minimum Speed/)
 })

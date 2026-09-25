@@ -181,7 +181,8 @@ def get_traffic_border_colors() -> tuple[rl.Color, rl.Color] | None:
     return None
   params = ui_state.ui_params
   show_signal = params.get_bool("SignalMetrics")
-  show_blindspot = params.get_bool("BlindSpotMetrics")
+  blind_spot_allowed = getattr(ui_state, "android_auto_blind_spot_monitors_visible", True)
+  show_blindspot = params.get_bool("BlindSpotMetrics") and blind_spot_allowed
   if not (show_signal or show_blindspot):
     return None
 
@@ -191,6 +192,8 @@ def get_traffic_border_colors() -> tuple[rl.Color, rl.Color] | None:
     vasm_left, vasm_right = get_fresh_vasm_state(ui_state.params_memory)
     left_blindspot = left_blindspot or vasm_left
     right_blindspot = right_blindspot or vasm_right
+  if not blind_spot_allowed:
+    left_blindspot = right_blindspot = False
   left_blinker = car_state.leftBlinker
   right_blinker = car_state.rightBlinker
 

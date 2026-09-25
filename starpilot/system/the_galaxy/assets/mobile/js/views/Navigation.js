@@ -18,7 +18,7 @@ export const Navigation = {
   name: "Navigation",
   components: {
     NavigationDestinationPanel, MapsPanel, NavigationKeysPanel, SpeedLimitsPanel, GalaxyTabs,
-    AndroidAutoOfflinePanel,
+    AndroidAutoOfflinePanel, GalaxySection,
   },
   data() { return { TABS } },
   setup() {
@@ -47,7 +47,7 @@ export const Navigation = {
               <MapsPanel />
             </div>
           </GalaxySection>
-          <GalaxySection title="Map Display used with Android Auto" icon="bi-cloud-arrow-down">
+          <GalaxySection title="Offline Maps for Android Auto" icon="bi-cloud-arrow-down">
             <div style="padding: var(--sp-3);">
               <AndroidAutoOfflinePanel />
             </div>
