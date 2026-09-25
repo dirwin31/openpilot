@@ -13,7 +13,7 @@ import { GalaxySection } from "../components/GalaxySection.js"
 import { DevModeBanner } from "../components/DevModeBanner.js"
 import { LanguageSelector } from "../components/LanguageSelector.js"
 import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
-import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-1"
+import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-2"
 import { languageState, setLanguage, t } from "../i18n.js"
 
 const LEGACY_PERSONALITY_KEYS = new Set([
@@ -79,7 +79,10 @@ export const Settings = {
     tr(key, fallback = key) { return t(key, fallback) },
     isModeParam(p) { return p.key === LONGITUDINAL_MODE_KEY || !!p.longitudinal_mode },
     modeSection(s) { return this.layout.find(section => section.name === s.name && section.params.some(p => p.key === LONGITUDINAL_MODE_KEY)) },
-    ordinaryParams(s) { return s.params.filter(p => !this.isModeParam(p)) },
+    ordinaryParams(s) {
+      return s.params.filter(p => !this.isModeParam(p) && !(s.name === "Vehicle" && p.key === "AndroidAutoEnabled"))
+    },
+    androidAutoParam(s) { return s.params.find(p => p.key === "AndroidAutoEnabled") },
     async load() {
       try {
         const [layout, values, defaults] = await Promise.all([
@@ -203,6 +206,10 @@ export const Settings = {
             <LongitudinalMode v-if="modeSection(activeSection)" :section="modeSection(activeSection)" :values="values" @change="onParamChange" />
             <SettingTree :params="ordinaryParams(activeSection)" :parent-key="null" :values="values"
               :expanded="expanded" :lock-reason="lockReason" @change="onParamChange" @manage="toggleManage" />
+            <GalaxySection v-if="activeSection.name === 'Vehicle' && androidAutoParam(activeSection)" title="Android Auto" icon="bi-android2">
+              <GalaxyToggleCard :param="androidAutoParam(activeSection)" :value="values.AndroidAutoEnabled" :values="values"
+                :locked="lockReason(androidAutoParam(activeSection)) !== ''" @change="onParamChange" />
+            </GalaxySection>
             <template v-if="activeSection.name === 'Vehicle' && values.AndroidAutoEnabled">
               <GalaxySection title="Android Auto Layout" icon="bi-display">
                 <AndroidAutoCarScreenPanel />
