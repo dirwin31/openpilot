@@ -2,6 +2,7 @@ import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "./GxNotice.js"
 import {
+  circlePolygon,
   coverageToGeoJson,
   directionsToRoutes,
   formatBytes,
@@ -10,7 +11,6 @@ import {
   itemBounds,
   itemStatus,
   itemsToGeoJson,
-  presetDetailDescription,
   radiusLabel,
   serviceNotice,
 } from "./auto_offline_helpers.js?v=auto-offline-3"
@@ -137,10 +137,13 @@ export const AndroidAutoOfflinePanel = {
       coverageLoading: false,
       pickOnMap: false,
       areaPoint: null,
-      areaPresets: null,
+      areaRadiusKm: 10,
+      areaRadiusInitialized: false,
+      areaEstimate: null,
       areaLoading: false,
       areaError: "",
       areaRequest: 0,
+      cacheSettingBusy: false,
       routeFrom: null,
       routeTo: null,
       routes: [],
@@ -160,6 +163,7 @@ export const AndroidAutoOfflinePanel = {
   beforeUnmount() {
     this.coverageRequest += 1
     clearTimeout(this.coverageTimer)
+    clearTimeout(this.areaTimer)
     this.areaRequest += 1
     this.routeRequest += 1
     this.poll?.destroy()
@@ -193,6 +197,8 @@ export const AndroidAutoOfflinePanel = {
       return remaining > 0 ? `Saving · ${Math.floor(((total - remaining) / total) * 100)}%` : "Saved for offline"
     },
     selectedRoute() { return this.routes[this.routeIndex] || null },
+    areaRadiusMin() { return Number(this.summary?.areaRadius?.min_km) || 1 },
+    areaRadiusMax() { return Number(this.summary?.areaRadius?.max_km) || 150 },
   },
   watch: {
     items() { this.drawSaved() },
@@ -203,6 +209,10 @@ export const AndroidAutoOfflinePanel = {
     async refresh() {
       try {
         this.summary = await api.getAutoOffline()
+        if (!this.areaRadiusInitialized) {
+          this.areaRadiusKm = Number(this.summary?.areaRadius?.default_km) || 10
+          this.areaRadiusInitialized = true
+        }
         this.error = ""
         if (!this.coverageLoading) this.refreshCoverage()
       } catch (e) {
@@ -231,7 +241,7 @@ export const AndroidAutoOfflinePanel = {
           attributionControl: false,
         })
         this.map.on("load", () => {
-          for (const [id, data] of [["auto-coverage", EMPTY], ["auto-areas", EMPTY], ["auto-routes", EMPTY], ["auto-candidates", EMPTY]]) {
+          for (const [id, data] of [["auto-coverage", EMPTY], ["auto-areas", EMPTY], ["auto-selection", EMPTY], ["auto-routes", EMPTY], ["auto-candidates", EMPTY]]) {
             this.map.addSource(id, { type: "geojson", data })
           }
           this.map.addLayer({ id: "auto-coverage-fill", type: "fill", source: "auto-coverage",
@@ -240,6 +250,8 @@ export const AndroidAutoOfflinePanel = {
             paint: { "line-color": ["case", ["get", "saved"], "#34c778", "#4096ff"], "line-width": 1 } })
           this.map.addLayer({ id: "auto-areas-fill", type: "fill", source: "auto-areas", paint: { "fill-color": "#9d72ff", "fill-opacity": 0.14 } })
           this.map.addLayer({ id: "auto-areas-line", type: "line", source: "auto-areas", paint: { "line-color": "#9d72ff", "line-width": 2 } })
+          this.map.addLayer({ id: "auto-selection-fill", type: "fill", source: "auto-selection", paint: { "fill-color": "#f5b642", "fill-opacity": 0.18 } })
+          this.map.addLayer({ id: "auto-selection-line", type: "line", source: "auto-selection", paint: { "line-color": "#f5b642", "line-width": 3 } })
           this.map.addLayer({ id: "auto-routes-line", type: "line", source: "auto-routes", paint: { "line-color": "#4096ff", "line-width": 4 } })
           this.map.addLayer({
             id: "auto-candidates-line", type: "line", source: "auto-candidates",
@@ -248,6 +260,7 @@ export const AndroidAutoOfflinePanel = {
           this.mapReady = true
           this.refreshCoverage()
           this.drawSaved()
+          this.drawAreaSelection()
           this.drawCandidates()
         })
         this.map.on("moveend", () => this.scheduleCoverage())
@@ -306,11 +319,23 @@ export const AndroidAutoOfflinePanel = {
       features.sort((a, b) => Number(a.properties.selected) - Number(b.properties.selected))
       this.map.getSource("auto-candidates")?.setData({ type: "FeatureCollection", features })
     },
+    drawAreaSelection() {
+      if (!this.mapReady) return
+      const features = this.areaPoint ? [{
+        type: "Feature", properties: {},
+        geometry: { type: "Polygon", coordinates: [circlePolygon(this.areaPoint.latitude, this.areaPoint.longitude, this.areaRadiusKm)] },
+      }] : []
+      this.map.getSource("auto-selection")?.setData({ type: "FeatureCollection", features })
+    },
     showPoint(point, recenter = true) {
       if (!this.map || !window.mapboxgl) return
       this.marker?.remove()
       this.marker = new window.mapboxgl.Marker({ color: "#9d72ff" }).setLngLat([point.longitude, point.latitude]).addTo(this.map)
-      if (recenter) this.map.flyTo({ center: [point.longitude, point.latitude], zoom: 9 })
+      this.drawAreaSelection()
+      if (recenter) {
+        const [west, south, east, north] = itemBounds({ latitude: point.latitude, longitude: point.longitude, radius_km: this.areaRadiusKm })
+        this.map.fitBounds([[west, south], [east, north]], { padding: 45, maxZoom: 14 })
+      }
     },
     focus(item) {
       if (!this.map) return
@@ -329,54 +354,89 @@ export const AndroidAutoOfflinePanel = {
     },
     async chooseAreaPoint(point, recenter = true) {
       if (this.busy) return
-      const request = ++this.areaRequest
       this.pickOnMap = false
       this.areaPoint = point
-      this.areaPresets = null
+      this.showPoint(point, recenter)
+      await this.estimateArea()
+      const isSelected = () => this.areaPoint?.latitude === point.latitude && this.areaPoint?.longitude === point.longitude
+      if (!isSelected() || point.name || !this.token) return
+      try {
+        const payload = await api.mapboxReverseCity(point.latitude, point.longitude, this.token)
+        const name = payload?.features?.[0]?.properties?.name
+        if (isSelected() && name) this.areaPoint = { ...point, name }
+      } catch (e) { /* keep the coordinates as the name */ }
+    },
+    setAreaRadius(event) {
+      const value = Number(event?.target?.value)
+      this.areaRadiusKm = Math.min(this.areaRadiusMax, Math.max(this.areaRadiusMin, Number.isFinite(value) ? value : 10))
+      this.drawAreaSelection()
+      if (!this.areaPoint) return
+      clearTimeout(this.areaTimer)
+      this.areaRequest += 1
+      this.areaEstimate = null
       this.areaError = ""
       this.areaLoading = true
-      this.showPoint(point, recenter)
+      this.areaTimer = setTimeout(() => this.estimateArea(), 250)
+    },
+    async estimateArea() {
+      if (!this.areaPoint) return
+      clearTimeout(this.areaTimer)
+      const request = ++this.areaRequest
+      this.areaEstimate = null
+      this.areaError = ""
+      this.areaLoading = true
       try {
-        const payload = await api.estimateAutoOffline({ latitude: point.latitude, longitude: point.longitude })
+        const payload = await api.estimateAutoOffline({
+          latitude: this.areaPoint.latitude, longitude: this.areaPoint.longitude, radius_km: this.areaRadiusKm,
+        })
         if (request !== this.areaRequest) return
-        if (!payload?.presets?.length) throw new Error("No area sizes returned. Try again.")
-        this.areaPresets = payload.presets
+        if (!payload?.area) throw new Error("No area estimate returned. Try again.")
+        this.areaEstimate = payload.area
       } catch (e) {
         if (request === this.areaRequest) this.areaError = e?.message || "Could not size that area. Try again."
       } finally {
         if (request === this.areaRequest) this.areaLoading = false
-      }
-      if (request !== this.areaRequest) return
-      if (!point.name && this.token) {
-        try {
-          const payload = await api.mapboxReverseCity(point.latitude, point.longitude, this.token)
-          const name = payload?.features?.[0]?.properties?.name
-          if (request === this.areaRequest && name) this.areaPoint = { ...point, name }
-        } catch (e) { /* keep the coordinates as the name */ }
       }
     },
     areaName() {
       const point = this.areaPoint
       return point?.name || (point ? `${point.latitude.toFixed(3)}, ${point.longitude.toFixed(3)}` : "")
     },
-    async saveArea(preset) {
-      if (!this.areaPoint || this.busy) return
+    async saveArea() {
+      if (!this.areaPoint || !this.areaEstimate || this.busy) return
       this.busy = "area"
       try {
         await api.addAutoOfflineArea({
           name: this.areaName(), latitude: this.areaPoint.latitude, longitude: this.areaPoint.longitude,
-          radius_km: preset.radius_km, max_zoom: preset.max_zoom,
+          radius_km: this.areaRadiusKm,
         })
-        showSnackbar(`Saving ${radiusLabel(preset.radius_km, this.metric)} around ${this.areaName()} for offline use.`)
+        showSnackbar(`Saving ${radiusLabel(this.areaRadiusKm, this.metric)} around ${this.areaName()} for offline use.`)
         this.areaRequest += 1
         this.areaPoint = null
-        this.areaPresets = null
+        this.areaEstimate = null
         this.marker?.remove()
+        this.map?.getSource("auto-selection")?.setData(EMPTY)
         await this.refresh()
       } catch (e) {
         showSnackbar(e?.message || "Could not save the area.", "error")
       } finally {
         this.busy = ""
+      }
+    },
+    async setSaveViewedCache(event) {
+      if (!this.summary || this.cacheSettingBusy) return
+      const enabled = !!event?.target?.checked
+      const previous = !!this.summary.save_viewed_cache
+      this.summary = { ...this.summary, save_viewed_cache: enabled }
+      this.cacheSettingBusy = true
+      try {
+        const result = await api.setAutoOfflineSettings({ save_viewed_cache: enabled })
+        this.summary = { ...this.summary, save_viewed_cache: !!result.save_viewed_cache }
+      } catch (e) {
+        this.summary = { ...this.summary, save_viewed_cache: previous }
+        showSnackbar(e?.message || "Could not update the save-as-you-drive setting.", "error")
+      } finally {
+        this.cacheSettingBusy = false
       }
     },
 
@@ -458,7 +518,7 @@ export const AndroidAutoOfflinePanel = {
         const parts = [item.origin_name ? `From ${item.origin_name}` : "", formatDistance(item.distance_m, this.metric), item.duration_s ? formatDuration(item.duration_s) : ""]
         return parts.filter(Boolean).join(" · ")
       }
-      const detail = (this.summary?.presets || []).find((p) => p.max_zoom === item.max_zoom)?.detail || ""
+      const detail = ({ 16: "Street detail", 15: "City detail", 14: "Road detail", 13: "Regional" })[item.max_zoom] || ""
       return [`${radiusLabel(item.radius_km, this.metric)} around`, detail].filter(Boolean).join(" · ")
     },
     async act(item, action) {
@@ -487,7 +547,6 @@ export const AndroidAutoOfflinePanel = {
     formatBytes,
     formatDistance,
     formatDuration,
-    presetDetailDescription,
     radiusLabel,
   },
   template: `
@@ -497,6 +556,19 @@ export const AndroidAutoOfflinePanel = {
       <p style="margin:0; color:var(--text-muted); font-size:var(--fs-sm);">
         Saved areas and active routes are kept offline for the comma and car screen, and refresh on Wi-Fi every {{ summary?.refresh_days || 90 }} days.
       </p>
+
+      <section class="gx-card" style="margin:0;">
+        <div class="gx-row" style="border:none; padding:10px var(--sp-3); align-items:flex-start;">
+          <div class="gx-row__info">
+            <span class="gx-row__label">Save Maps as You Drive</span>
+            <span class="gx-row__desc">While the comma is connected, tiles opened by navigation and the car screen are saved into the same pinned offline storage as downloaded areas. They share the 2 GB limit and are not evicted by the temporary cache. Turning this off stops saving new tiles and keeps ones already saved.</span>
+          </div>
+          <label class="gx-switch" style="flex:none; margin-top:2px;">
+            <input type="checkbox" aria-label="Save maps as you drive" :checked="!!summary?.save_viewed_cache" :disabled="!summary || cacheSettingBusy" @change="setSaveViewedCache" />
+            <span class="gx-switch__track"></span><span class="gx-switch__thumb"></span>
+          </label>
+        </div>
+      </section>
 
       <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; font-size:var(--fs-sm); color:var(--text-muted); padding:2px 0;">
         <span>Downloader: <strong style="color:var(--text);">{{ downloaderLabel }}</strong></span>
@@ -597,18 +669,22 @@ export const AndroidAutoOfflinePanel = {
           </div>
           <template v-if="areaPoint">
             <div class="gx-row__label" style="margin-top:4px;">Around {{ areaName() }}</div>
+            <label style="display:grid; gap:5px;">
+              <span class="gx-row__label">Radius: {{ radiusLabel(areaRadiusKm, metric) }}</span>
+              <input type="range" :min="areaRadiusMin" :max="areaRadiusMax" step="1" :value="areaRadiusKm" @input="setAreaRadius" aria-label="Offline area radius" style="width:100%; accent-color:var(--primary);" />
+              <span class="gx-row__desc">The yellow circle on the map is the area that will be downloaded.</span>
+            </label>
             <div v-if="areaLoading" class="gx-row__desc" role="status">Sizing up the area...</div>
             <GxNotice v-if="areaError" tone="danger" :text="areaError" style="margin:0;" />
-            <button v-if="areaError" type="button" class="gx-btn gx-btn--tonal" @click="chooseAreaPoint(areaPoint, false)">Retry sizing</button>
-            <div v-for="preset in areaPresets || []" :key="preset.radius_km" class="gx-row" style="border-top:none; min-height:0; padding:8px 0; flex-wrap:wrap; gap:8px;">
+            <button v-if="areaError" type="button" class="gx-btn gx-btn--tonal" @click="estimateArea">Retry sizing</button>
+            <div v-if="areaEstimate" class="gx-row" style="border-top:none; min-height:0; padding:8px 0; flex-wrap:wrap; gap:8px;">
               <div class="gx-row__info">
-                <span class="gx-row__label" style="font-weight:var(--fw-bold);">{{ radiusLabel(preset.radius_km, metric) }} radius · {{ preset.detail }}</span>
-                <span class="gx-row__desc" style="margin-top:2px;">{{ presetDetailDescription(preset, metric) }}</span>
+                <span class="gx-row__label" style="font-weight:var(--fw-bold);">{{ radiusLabel(areaEstimate.radius_km, metric) }} radius · {{ areaEstimate.detail }}</span>
                 <div style="font-size:var(--fs-xs); color:var(--text-muted); margin-top:2px;">
-                  {{ preset.fits ? 'Est. ' + formatBytes(preset.bytes) + ' · ' + preset.tiles.toLocaleString() + ' tiles' : 'Too large for available offline storage' }}
+                  {{ areaEstimate.fits ? 'Est. ' + formatBytes(areaEstimate.bytes) + ' · ' + areaEstimate.tiles.toLocaleString() + ' tiles' : 'Too large for available offline storage' }}
                 </div>
               </div>
-              <button type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px; align-self:center;" :disabled="!preset.fits || !!busy" @click="saveArea(preset)">{{ busy === 'area' ? 'Adding to downloads...' : 'Download' }}</button>
+              <button type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px; align-self:center;" :disabled="!areaEstimate.fits || !!busy" @click="saveArea">{{ busy === 'area' ? 'Adding to downloads...' : 'Download' }}</button>
             </div>
           </template>
         </div>
