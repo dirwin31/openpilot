@@ -16,6 +16,7 @@ builds), so a pass proves the comma side only, not Honda compatibility.
 
 import argparse
 import json
+import os
 import signal
 import socket
 import threading
@@ -23,6 +24,7 @@ import time
 from types import SimpleNamespace
 
 from openpilot.starpilot.system.android_auto import identity as identity_store
+from openpilot.starpilot.system.android_auto.car_screen import DHU_ENV
 from openpilot.starpilot.system.android_auto.supervisor import Cancelled, Supervisor
 
 
@@ -43,6 +45,8 @@ def main() -> int:
   parser.add_argument("--synthetic", action="store_true", help="stream a test pattern instead of the UI")
   args = parser.parse_args()
 
+  # The car view inherits this: on a desk there's no wheel speed, so destinations stay settable.
+  os.environ[DHU_ENV] = "1"
   supervisor = Supervisor(synthetic=args.synthetic)
   config = supervisor.config
   config["verify_head_unit"] = False

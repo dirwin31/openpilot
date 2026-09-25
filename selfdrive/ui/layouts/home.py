@@ -66,6 +66,9 @@ class HomeLayout(Widget):
     self._exp_mode_button = ExperimentalModeButton()
     self._navigate_button = NavigateButton()
     self.navigate_callback: Callable | None = None
+    # Set by the Android Auto car view: its Navigate card takes the place of the
+    # Navigate button and the Personal Records card.
+    self.nav_card: Widget | None = None
     self._setup_callbacks()
 
   def show_event(self):
@@ -242,6 +245,12 @@ class HomeLayout(Widget):
       self.right_column_rect.x, self.right_column_rect.y, self.right_column_rect.width, exp_height
     )
     self._exp_mode_button.render(exp_rect)
+
+    if self.nav_card is not None:
+      top = exp_rect.y + exp_height + SPACING
+      self.nav_card.render(rl.Rectangle(self.right_column_rect.x, top, self.right_column_rect.width,
+                                        self.right_column_rect.y + self.right_column_rect.height - top))
+      return
 
     nav_height = 125
     nav_rect = rl.Rectangle(
