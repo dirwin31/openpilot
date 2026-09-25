@@ -12,12 +12,24 @@ from openpilot.starpilot.system.android_auto.touch import TouchEvent
 def test_settings_default_validate_and_round_trip(tmp_path):
   path = tmp_path / "car_screen.json"
   assert car_screen.load(path) == car_screen.DEFAULTS
-  saved = car_screen.save({"onroad_view": "map", "map_side": "left", "camera": False, "bogus": 1}, path)
-  assert saved == {"onroad_view": "map", "map_side": "left", "camera": False}
+  saved = car_screen.save({"onroad_view": "map", "map_side": "left", "camera": False,
+                           "blind_spot_monitors": False, "blind_spot_min_speed_ms": 8.0, "bogus": 1}, path)
+  assert saved == {"onroad_view": "map", "map_side": "left", "camera": False,
+                   "blind_spot_monitors": False, "blind_spot_min_speed_ms": 8.0}
   assert car_screen.load(path) == saved
-  assert car_screen.normalize({"onroad_view": "sideways", "camera": "yes"}) == car_screen.DEFAULTS
+  assert car_screen.normalize({"onroad_view": "sideways", "camera": "yes", "blind_spot_monitors": "yes",
+                               "blind_spot_min_speed_ms": -1}) == car_screen.DEFAULTS
   path.write_text("{not json")
   assert car_screen.load(path) == car_screen.DEFAULTS
+
+
+def test_blind_spot_monitors_support_off_always_and_minimum_speed():
+  assert car_screen.blind_spot_monitors_visible(car_screen.DEFAULTS, None)
+  assert not car_screen.blind_spot_monitors_visible({**car_screen.DEFAULTS, "blind_spot_monitors": False}, 30.0)
+  settings = {**car_screen.DEFAULTS, "blind_spot_min_speed_ms": 10.0}
+  assert not car_screen.blind_spot_monitors_visible(settings, None)
+  assert not car_screen.blind_spot_monitors_visible(settings, 9.99)
+  assert car_screen.blind_spot_monitors_visible(settings, 10.0)
 
 
 def test_settings_reload_live_when_the_file_changes(tmp_path):

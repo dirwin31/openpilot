@@ -298,6 +298,8 @@ class PipSideCamera(Widget):
     right_blinker = bool(car_state.rightBlinker)
     left_bsm = bool(car_state.leftBlindspot) or vasm_left
     right_bsm = bool(car_state.rightBlindspot) or vasm_right
+    if not getattr(ui_state, "android_auto_blind_spot_monitors_visible", True):
+      left_bsm = right_bsm = False
 
     sides = []
     for image_side, vehicle_side, blinker, blindspot in (

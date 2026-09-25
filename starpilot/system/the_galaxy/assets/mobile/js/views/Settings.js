@@ -13,7 +13,7 @@ import { GalaxySection } from "../components/GalaxySection.js"
 import { DevModeBanner } from "../components/DevModeBanner.js"
 import { LanguageSelector } from "../components/LanguageSelector.js"
 import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
-import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-2"
+import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-3"
 import { languageState, setLanguage, t } from "../i18n.js"
 
 const LEGACY_PERSONALITY_KEYS = new Set([
@@ -198,27 +198,29 @@ export const Settings = {
 
           <LanguageSelector v-if="activeSectionSlug === 'language'" :device-value="currentLanguage" />
 
-          <div v-else class="gx-card">
-            <div class="gx-section__header">
-              <i class="bi" :class="activeSection.icon"></i>
-              <span class="gx-section__title">{{ tr(activeSection.name, activeSection.name) }}</span>
+          <div v-else style="display:grid; gap:12px;">
+            <div class="gx-card">
+              <div class="gx-section__header">
+                <i class="bi" :class="activeSection.icon"></i>
+                <span class="gx-section__title">{{ tr(activeSection.name, activeSection.name) }}</span>
+              </div>
+              <LongitudinalMode v-if="modeSection(activeSection)" :section="modeSection(activeSection)" :values="values" @change="onParamChange" />
+              <SettingTree :params="ordinaryParams(activeSection)" :parent-key="null" :values="values"
+                :expanded="expanded" :lock-reason="lockReason" @change="onParamChange" @manage="toggleManage" />
+              <div v-if="!activeSection.params.length" class="gx-empty">{{ tr("No settings in this section.") }}</div>
             </div>
-            <LongitudinalMode v-if="modeSection(activeSection)" :section="modeSection(activeSection)" :values="values" @change="onParamChange" />
-            <SettingTree :params="ordinaryParams(activeSection)" :parent-key="null" :values="values"
-              :expanded="expanded" :lock-reason="lockReason" @change="onParamChange" @manage="toggleManage" />
             <GalaxySection v-if="activeSection.name === 'Vehicle' && androidAutoParam(activeSection)" title="Android Auto" icon="bi-android2">
               <GalaxyToggleCard :param="androidAutoParam(activeSection)" :value="values.AndroidAutoEnabled" :values="values"
                 :locked="lockReason(androidAutoParam(activeSection)) !== ''" @change="onParamChange" />
             </GalaxySection>
             <template v-if="activeSection.name === 'Vehicle' && values.AndroidAutoEnabled">
               <GalaxySection title="Android Auto Layout" icon="bi-display">
-                <AndroidAutoCarScreenPanel />
+                <AndroidAutoCarScreenPanel :is-metric="!!values.IsMetric" />
               </GalaxySection>
               <GalaxySection title="Android Auto Certificate" icon="bi-key">
                 <AndroidAutoIdentityPanel />
               </GalaxySection>
             </template>
-            <div v-if="!activeSection.params.length" class="gx-empty">{{ tr("No settings in this section.") }}</div>
           </div>
         </div>
       </template>
