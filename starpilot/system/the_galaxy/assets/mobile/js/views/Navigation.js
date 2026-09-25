@@ -4,6 +4,7 @@ import { NavigationKeysPanel } from "../components/NavigationKeysPanel.js"
 import { SpeedLimitsPanel } from "../components/SpeedLimitsPanel.js"
 import { AndroidAutoOfflinePanel } from "../components/AndroidAutoOfflinePanel.js?v=auto-offline-1"
 import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
+import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-1"
 import { GalaxySection } from "../components/GalaxySection.js"
 import { GalaxyTabs } from "../components/GalaxyTabs.js"
 import { useTabRouting } from "../composables.js"
@@ -20,7 +21,7 @@ export const Navigation = {
   name: "Navigation",
   components: {
     NavigationDestinationPanel, MapsPanel, NavigationKeysPanel, SpeedLimitsPanel, GalaxyTabs,
-    AndroidAutoOfflinePanel, AndroidAutoIdentityPanel, GalaxySection,
+    AndroidAutoOfflinePanel, AndroidAutoIdentityPanel, AndroidAutoCarScreenPanel, GalaxySection,
   },
   data() { return { TABS } },
   setup() {
@@ -43,6 +44,9 @@ export const Navigation = {
       <template v-if="tab === 'speeds'"><SpeedLimitsPanel /></template>
       <template v-if="tab === 'auto'">
         <div style="display:grid; gap:12px;">
+          <GalaxySection title="Car Screen" icon="bi-display">
+            <AndroidAutoCarScreenPanel />
+          </GalaxySection>
           <AndroidAutoOfflinePanel />
           <GalaxySection title="Android Auto Identity" icon="bi-key">
             <AndroidAutoIdentityPanel />

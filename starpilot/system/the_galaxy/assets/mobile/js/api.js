@@ -178,6 +178,8 @@ export const api = {
   getAndroidAutoIdentity() { return request("/api/android_auto/identity", { cache: "no-store" }) },
   downloadAndroidAutoApk(url) { return request("/api/android_auto/identity/download", { method: "POST", data: { url } }) },
   removeAndroidAutoIdentity() { return request("/api/android_auto/identity", { method: "DELETE" }) },
+  getCarScreen() { return request("/api/android_auto/car_screen", { cache: "no-store" }) },
+  setCarScreen(body) { return request("/api/android_auto/car_screen", { method: "POST", data: body }) },
   getAutoOffline() { return request("/api/android_auto/offline", { cache: "no-store" }) },
   estimateAutoOffline(body) { return request("/api/android_auto/offline/estimate", { method: "POST", data: body }) },
   addAutoOfflineArea(body) { return request("/api/android_auto/offline/areas", { method: "POST", data: body }) },
