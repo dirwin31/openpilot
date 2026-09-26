@@ -29,7 +29,8 @@ from typing import Any
 from openpilot.starpilot.system.android_auto import identity as identity_store
 from openpilot.starpilot.system.android_auto.auto_connect import AutoConnectPolicy
 from openpilot.starpilot.system.android_auto.bootstrap import NAMES, BootstrapError, WirelessBootstrap
-from openpilot.starpilot.system.android_auto.frame_source import DEFAULT_PATH as DEFAULT_FRAME_PATH, FrameRequest
+from openpilot.starpilot.system.android_auto.frame_source import (DEFAULT_PATH as DEFAULT_FRAME_PATH, FLAG_ASYNC_READBACK, FLAG_NV12,
+                                                                  FORMAT_NV12, FrameRequest)
 from openpilot.starpilot.system.android_auto.touch import DEFAULT_TOUCH_SOCKET
 from openpilot.starpilot.system.android_auto.view import CAR_FRAME_PATH, ViewSource, renderer_available
 from openpilot.starpilot.system.android_auto.session import AuthenticationRejected, PeerRequestedStop, ProjectionSession
@@ -660,10 +661,14 @@ class Supervisor:
     from openpilot.starpilot.system.android_auto.hw_encoder import create_encoder
     software_fps = min(SOFTWARE_FPS, config["fps"]) if config["fps"] else SOFTWARE_FPS
     encoder, fps = create_encoder(mode.width, mode.height, preference=config["encoder"], bitrate_kbps=config["bitrate_kbps"],
-                                  margin_height=mode.margin_height, software_fps=software_fps, log=self.log)
+                                  margin_height=mode.margin_height, software_fps=software_fps, log=self.log,
+                                  rate_control=config["rate_control"])
     fps = min(fps, mode.fps, config["fps"] or fps)
     interval = 1.0 / fps
-    request = FrameRequest(mode.width, mode.height, mode.margin_width, mode.margin_height, int(interval * 1e6))
+    flags = (FLAG_NV12 if config["gpu_nv12"] and getattr(encoder, "supports_nv12", False) else 0) | \
+            (FLAG_ASYNC_READBACK if config["async_readback"] else 0)
+    request = FrameRequest(mode.width, mode.height, mode.margin_width, mode.margin_height, int(interval * 1e6), flags)
+    self.log("frame_pipeline", nv12=bool(flags & FLAG_NV12), async_readback=bool(flags & FLAG_ASYNC_READBACK))
     view = config["view"]
     if view == "car" and not self._synthetic and self._renderer_command is None and not renderer_available():
       view = "mirror"
@@ -723,7 +728,8 @@ class Supervisor:
         if frame is not None:
           age = now - frame.captured_ns / 1e9
           if age <= FRAME_MAX_AGE:
-            data, keyframe = encoder.encode_rgba(frame.data, keyframe=session.needs_keyframe)
+            encode = encoder.encode_nv12 if frame.pixel_format == FORMAT_NV12 else encoder.encode_rgba
+            data, keyframe = encode(frame.data, keyframe=session.needs_keyframe)
             session.send_frame(data, frame.captured_ns // 1000, keyframe=keyframe)
             sent_at = time.monotonic()
             ages.append(sent_at - frame.captured_ns / 1e9)

@@ -96,6 +96,11 @@ DEFAULT_CONFIG = {
   "encoder": "auto",           # "auto": hardware H.264 at 30 fps, else libx264; "hardware" / "software" to force
   "fps": 0,                    # 0 = automatic (30 with hardware, 15 with software); otherwise a cap, 5-30
   "bitrate_kbps": 6000,
+  "rate_control": "cbr",       # hardware encoder: "cbr" holds the bitrate (easier on the car's Wi-Fi); "vbr" as before
+  "gpu_nv12": True,            # car view: convert to the encoder's NV12 on the GPU (a third of the RGBA readback)
+  "async_readback": True,      # car view: read frames back without stalling the renderer on the GPU
+  "render_profile": True,      # car view: always-on sampling profile in logs/render_profile.txt (and .1.txt)
+  "render_profile_kb": 256,    # size cap per render_profile file
   "wifi_interface": "wlan0",
   "device_name": "StarPilot",
   "version_status": 0,         # WifiVersionResponse status (0 = success) for receivers that negotiate a version
@@ -124,6 +129,9 @@ def load_config(path: Path | None = None) -> dict:
   if config["connection"] not in ("wireless", "wired"):
     config["connection"] = "wireless"
   config["bitrate_kbps"] = max(1000, min(12000, int(config["bitrate_kbps"])))
+  if config["rate_control"] not in ("cbr", "vbr"):
+    config["rate_control"] = "cbr"
+  config["render_profile_kb"] = max(16, min(4096, int(config["render_profile_kb"])))
   config["rfcomm_cache"] = {str(address).upper(): channel for address, channel in config["rfcomm_cache"].items()
                             if type(channel) is int and 1 <= channel <= 30}
   return config

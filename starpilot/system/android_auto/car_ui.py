@@ -28,7 +28,8 @@ import signal
 import sys
 import time
 
-from openpilot.starpilot.system.android_auto.frame_source import FrameProducer, FrameRequest
+from openpilot.starpilot.system.android_auto.frame_source import (FLAG_ASYNC_READBACK, FLAG_NV12, FORMAT_NV12, FORMAT_RGBA,
+                                                                  FrameProducer, FrameRequest, frame_bytes)
 from openpilot.starpilot.system.android_auto.touch import DEFAULT_TOUCH_SOCKET, TouchEvent, TouchReceiver
 
 LOGICAL_HEIGHT = 1080  # the landscape UI's design height
@@ -39,6 +40,93 @@ NAV_SPLIT_FRACTION = 0.42
 HOME_ONROAD_TIMEOUT = 45.0  # back to the drive after this long untouched on the home screen
 STATE_REFRESH = 5.0
 MAP_ONLY_BORDER = 14.0
+STATS_INTERVAL = 10.0
+GPU_SAMPLE_EVERY = 30  # frames: wait for the GPU on one frame in 30 to measure gpu_ms
+
+# Per-frame averages in render_stats. Wall-clock milliseconds except cpu_ms, the
+# renderer thread's own CPU time: frame_ms well above cpu_ms means it was waiting
+# (for a CPU core, it runs at nice 10, or for the GPU driver), not working.
+# gpu_ms, measured on every GPU_SAMPLE_EVERY-th frame only, is how long the GPU
+# still had to go after the CPU finished that frame.
+STAT_KEYS = ("update_ms", "map_ms", "layout_ms", "map_draw_ms", "menu_ms", "compose_ms", "cache_ms", "convert_ms",
+             "gpu_ms", "readback_ms", "readback_wait_ms", "publish_ms", "frame_ms", "cpu_ms")
+DRAW_KEYS = ("layout_ms", "map_draw_ms", "menu_ms", "compose_ms", "cache_ms")  # the former draw_ms
+
+
+# The value structs the layouts build every frame. Only these are touched: on the
+# comma's cffi even reading .fields of an opaque raylib struct aborts the process.
+FAST_STRUCTS = ("Vector2", "Vector3", "Vector4", "Rectangle", "Color", "Camera2D", "Matrix", "NPatchInfo")
+
+
+def _has_pointer(ctype) -> bool:
+  if ctype.kind == "pointer":
+    return True
+  if ctype.kind == "array":
+    return _has_pointer(ctype.item)
+  if ctype.kind == "struct":
+    return any(_has_pointer(field.type) for _, field in ctype.fields or ())
+  return False
+
+
+def use_fast_struct_constructors(rl) -> list[str]:
+  """Build pyray value structs (Vector2, Rectangle, Color, ...) with a plain ffi.new.
+
+  pyray's generic constructor inspects every field on every call so it can
+  handle pointer fields: about 15 us per struct on the comma, and the layouts
+  build a few hundred per frame. A struct without pointers needs only ffi.new
+  (about 3 us, identical bytes).
+  """
+  ffi = rl.ffi
+  patched = []
+  for name in FAST_STRUCTS:
+    if getattr(getattr(rl, name, None), "__name__", "") != "func":
+      continue  # missing, or no longer pyray's generated constructor
+    try:
+      ctype = ffi.typeof(name)
+      ffi.sizeof(ctype)  # complete types only
+    except Exception:
+      continue
+    if ctype.kind != "struct" or _has_pointer(ctype):
+      continue
+    pointer_type, new = ffi.typeof(f"{name} *"), ffi.new
+
+    def construct(*args, _pointer_type=pointer_type, _new=new):
+      return _new(_pointer_type, args)[0]
+
+    construct.__name__ = f"fast_{name}"
+    setattr(rl, name, construct)
+    patched.append(name)
+  return patched
+
+
+class RenderStats:
+  """Accumulates per-section frame times and reports averages every STATS_INTERVAL seconds."""
+
+  def __init__(self, now: float):
+    self.reset(now)
+
+  def reset(self, now: float) -> None:
+    self.started, self.frames = now, 0
+    self.totals = dict.fromkeys(STAT_KEYS, 0.0)
+    self.sampled: dict[str, int] = {}
+
+  def add(self, key: str, seconds: float, sampled: bool = False) -> None:
+    """``sampled``: measured on some frames only, so averaged over those."""
+    self.totals[key] += seconds
+    if sampled:
+      self.sampled[key] = self.sampled.get(key, 0) + 1
+
+  def frame_done(self, now: float, **extra) -> dict | None:
+    self.frames += 1
+    if now - self.started < STATS_INTERVAL:
+      return None
+    frames = self.frames
+    report = {"event": "render_stats", "fps": round(frames / (now - self.started), 1),
+              **{key: round(total * 1000 / max(1, self.sampled.get(key, frames)), 2) for key, total in self.totals.items()}}
+    report["draw_ms"] = round(sum(report[key] for key in DRAW_KEYS), 2)
+    report.update(extra)
+    self.reset(now)
+    return report
 
 
 class NullPubMaster:
@@ -470,9 +558,10 @@ def run(frames_path: str, touch_path: str) -> int:
   logical_w, logical_h, scale_x, scale_y = logical_size(request)
   visible_w, visible_h = request.width - request.margin_w, request.height - request.margin_h
 
-  from openpilot.starpilot.system.android_auto.headless_egl import HeadlessContext, RgbaReadback
+  from openpilot.starpilot.system.android_auto.headless_egl import FrameReadback, HeadlessContext
   context = HeadlessContext(request.width, request.height)
   import pyray as rl
+  fast_structs = use_fast_struct_constructors(rl)
   from openpilot.system.ui.lib.application import MouseEvent, MousePos, gui_app
   from openpilot.selfdrive.ui.ui_state import device, ui_state
 
@@ -502,18 +591,51 @@ def run(frames_path: str, touch_path: str) -> int:
   if msaa is not None:
     install_watertight_shapes()
   output = rl.load_render_texture(request.width, request.height)
-  readback = RgbaReadback(request.width, request.height)
+  converter = None
+  if request.flags & FLAG_NV12:
+    from openpilot.starpilot.system.android_auto import gpu_nv12
+    try:
+      converter = gpu_nv12.Nv12Converter(request.width, request.height)
+    except Exception as error:
+      print(json.dumps({"event": "nv12_unavailable", "error": str(error)[:200]}), flush=True)
+  pixel_format = FORMAT_NV12 if converter is not None else FORMAT_RGBA
+  readback = FrameReadback(frame_bytes(request.width, request.height, pixel_format),
+                           asynchronous=bool(request.flags & FLAG_ASYNC_READBACK))
+  rgba_regions = [(output.id, request.width, request.height, 0)]
+  print(json.dumps({"event": "pipeline", "format": "nv12" if converter is not None else "rgba",
+                    "readback": "async" if readback.asynchronous else "sync",
+                    "msaa": msaa.samples if msaa is not None else 0, "fast_structs": len(fast_structs)}), flush=True)
   touch = TouchInput(MouseEvent, MousePos, logical_w, logical_h)
   # A few widgets (list buttons, StarPilot sliders) poll raylib's pointer directly;
   # without a window it would stay at 0,0, so report the car touch position instead.
   rl.get_mouse_position = lambda: rl.Vector2(touch.pos.x, touch.pos.y)
   receiver = TouchReceiver(touch_path)
-  timing_start = time.monotonic()
-  timing_frames = 0
-  timing_totals = [0.0] * 4
+  stats = RenderStats(time.monotonic())
+  sampler = None
+  from openpilot.starpilot.system.android_auto import identity as identity_store
+  config = identity_store.load_config()
+  if config["render_profile"]:
+    from openpilot.starpilot.system.android_auto.render_profile import RenderSampler
+    sampler = RenderSampler(identity_store.LOG_DIR / "render_profile.txt", max_bytes=config["render_profile_kb"] * 1024)
+    sampler.start()
+  frame_count = 0
+  in_flight = {"captured_ns": 0}
   stop = {"flag": False}
   signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
   print(f"car ui {logical_w}x{logical_h} -> {visible_w}x{visible_h} in {request.width}x{request.height}", flush=True)
+
+  def publish_readback() -> None:
+    """Hand the frame read back last to android_autod."""
+    started = time.monotonic()
+    try:
+      pixels = readback.finish()
+      ready = time.monotonic()
+      producer.publish(request, pixels, in_flight["captured_ns"], pixel_format, advance=False)
+    finally:
+      readback.release()
+    stats.add("readback_wait_ms", ready - started)
+    stats.add("publish_ms", time.monotonic() - ready)
+
   try:
     while not stop["flag"] and os.getppid() == parent:
       now = time.monotonic()
@@ -522,24 +644,36 @@ def run(frames_path: str, touch_path: str) -> int:
         # Stay warm while the head unit shows its own screen, without rendering
         # or readback. The supervisor owns our lifetime and stops us on teardown;
         # the parent check also handles a crashed daemon.
+        if readback.pending:
+          readback.release()
+        if sampler is not None:
+          sampler.rendering = False
         time.sleep(0.05)
-        timing_start = time.monotonic()
-        timing_frames = 0
-        timing_totals = [0.0] * 4
+        stats.reset(time.monotonic())
         continue
       if pending != request:
         return 3  # new geometry: android_autod starts a fresh renderer
       now_ns = time.monotonic_ns()
       capture_delay = producer.capture_delay(request, now_ns)
       if capture_delay > 0:
+        if readback.pending:
+          publish_readback()  # never hold a finished frame back just to pace the next one
+        if sampler is not None:
+          sampler.rendering = False
         # Sleep to the capture deadline instead of waking every 2 ms. Keep
         # demand/stop checks responsive even with a low configured frame rate.
         time.sleep(min(capture_delay, 0.05))
         continue
 
+      if sampler is not None:
+        sampler.rendering = True
+      frame_count += 1
+      frame_began, cpu_began = now_ns / 1e9, time.thread_time()
       viewport = rl.Rectangle(0, 0, logical_w, logical_h)
       ui_state.update()
       started = ui_state.started
+      if sampler is not None:
+        sampler.onroad = started
       speed_ms = navigation_speed(ui_state)
       controls.update(started, speed_ms)
       layout_events, menu_events = controls.route(receiver.drain(), touch, started, viewport)
@@ -548,12 +682,20 @@ def run(frames_path: str, touch_path: str) -> int:
       ui_state.nav_map_beside_road = main_rect is not None and map_rect is not None
       ui_state.car_camera_off = started and not settings["camera"]
       ui_state.android_auto_blind_spot_monitors_visible = blind_spot_monitors_visible(settings, speed_ms)
-      updated_at = time.monotonic()
+      mark = time.monotonic()
+      stats.add("update_ms", mark - frame_began)
       map_pane.set_shown(map_rect is not None)
       if map_rect is not None:
         map_pane.prepare(map_rect, scale_x, scale_y, now)
-      map_ready_at = time.monotonic()
+      stats.add("map_ms", time.monotonic() - mark)
+      if readback.pending:
+        # The previous frame, read back while this one was updating. Waiting any
+        # later only adds latency: on the comma the wait tracks the GPU's own
+        # frame time (3-5 ms), not how long the CPU was busy in between.
+        publish_readback()
 
+      mark = time.monotonic()
+      map_draw = 0.0
       rl.begin_texture_mode(msaa.render_texture if msaa is not None else content)
       rl.clear_background(rl.Color(6, 6, 15, 255))
       rl.rl_push_matrix()
@@ -573,15 +715,22 @@ def run(frames_path: str, touch_path: str) -> int:
           if main_rect is not None:
             widget.render(main_rect)
           if map_rect is not None:
+            map_began = time.monotonic()
             map_pane.draw(map_rect)
             if main_rect is None:
               map_status = map_status or MapOnlyStatus()
               map_status.render(map_rect)
+            map_draw += time.monotonic() - map_began
         else:
           widget.render(viewport)
+      menu_began = time.monotonic()
+      stats.add("layout_ms", menu_began - mark - map_draw)
+      stats.add("map_draw_ms", map_draw)
       if started and not controls.nav_open:
         gui_app._mouse_events = menu_events
         controls.menu.render(viewport)
+      mark = time.monotonic()
+      stats.add("menu_ms", mark - menu_began)
       rl.rl_pop_matrix()
       rl.end_texture_mode()
       if msaa is not None:
@@ -595,25 +744,42 @@ def run(frames_path: str, touch_path: str) -> int:
                           rl.Rectangle(request.margin_w // 2, request.margin_h // 2, visible_w, visible_h),
                           rl.Vector2(0, 0), 0.0, rl.WHITE)
       rl.end_texture_mode()
+      stats.add("compose_ms", time.monotonic() - mark)
+      mark = time.monotonic()
       gui_app._populate_render_texture_cache()
-      drawn_at = time.monotonic()
-      producer.publish(request, readback.read(output.id), now_ns)
-      published_at = time.monotonic()
-      timing_frames += 1
-      for index, elapsed in enumerate((updated_at - now_ns / 1e9, map_ready_at - updated_at,
-                                       drawn_at - map_ready_at, published_at - drawn_at)):
-        timing_totals[index] += elapsed
-      if published_at - timing_start >= 10.0:
-        # CPU submission timings; GPU completion may be charged to readback.
-        print(json.dumps({"event": "render_stats", "fps": round(timing_frames / (published_at - timing_start), 1),
-                          **{key: round(total * 1000 / timing_frames, 2) for key, total in zip(
-                            ("update_ms", "map_ms", "draw_ms", "readback_ms"), timing_totals)}}), flush=True)
-        timing_start, timing_frames, timing_totals = published_at, 0, [0.0] * 4
+      stats.add("cache_ms", time.monotonic() - mark)
+      mark = time.monotonic()
+      regions = converter.convert(output.texture) if converter is not None else rgba_regions
+      stats.add("convert_ms", time.monotonic() - mark)
+      if frame_count % GPU_SAMPLE_EVERY == 0:
+        mark = time.monotonic()
+        readback.gpu_finish()
+        stats.add("gpu_ms", time.monotonic() - mark, sampled=True)
+      mark = time.monotonic()
+      producer.advance(request, now_ns)
+      readback.start(regions)
+      in_flight["captured_ns"] = now_ns
+      stats.add("readback_ms", time.monotonic() - mark)
+      if not readback.asynchronous:
+        publish_readback()
+      done = time.monotonic()
+      stats.add("frame_ms", done - frame_began)
+      stats.add("cpu_ms", time.thread_time() - cpu_began)
+      report = stats.frame_done(done)
+      if report is not None:
+        print(json.dumps(report), flush=True)
+        if sampler is not None:
+          sampler.summary = report
       gui_app._frame += 1
     return 0
   finally:
+    if sampler is not None:
+      sampler.close()
     receiver.close()
     map_pane.close()
+    readback.close()
+    if converter is not None:
+      converter.close()
     if msaa is not None:
       msaa.unload()
     rl.unload_render_texture(content)

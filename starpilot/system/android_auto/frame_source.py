@@ -1,6 +1,6 @@
 """Bounded shared-memory handoff of UI frames from the render thread to android_autod.
 
-One fixed ``/dev/shm`` file holds a small header and a single RGBA frame slot:
+One fixed ``/dev/shm`` file holds a small header and a single frame slot:
 
 * The consumer (android_autod) creates the file, writes the frame geometry it
   wants (the negotiated video size and the receiver's margins) and keeps
@@ -12,6 +12,10 @@ One fixed ``/dev/shm`` file holds a small header and a single RGBA frame slot:
   it under a sequence lock (odd while writing).
 * There is exactly one slot: an unconsumed frame is simply overwritten, so a
   slow encoder or head unit can never build a backlog or stall rendering.
+* Frames are RGBA, or NV12 (the encoder's own layout, 1.5 bytes per pixel) when
+  the consumer asks for it with ``FLAG_NV12`` and the producer can convert on
+  the GPU. Each published frame records its format, so a producer that only
+  does RGBA (the comma's own UI, for mirroring) still works.
 
 Timestamps are ``time.monotonic_ns()`` (CLOCK_MONOTONIC), comparable across
 processes on Linux. No locks are shared across processes; a torn read is
@@ -33,13 +37,22 @@ HEADER_SIZE = 4096
 MAX_WIDTH, MAX_HEIGHT = 1920, 1080
 FILE_SIZE = HEADER_SIZE + MAX_WIDTH * MAX_HEIGHT * 4
 
+FORMAT_RGBA, FORMAT_NV12 = 0, 1
+FLAG_NV12 = 1             # consumer: send NV12 if you can
+FLAG_ASYNC_READBACK = 2   # consumer: read frames back without stalling on the GPU (one step later)
+
 # magic, version, seq, width, height, captured_ns, frame_id, demand_until_ns,
-# req_width, req_height, margin_w, margin_h, reserved, reserved, interval_us, reserved
+# req_width, req_height, margin_w, margin_h, req_flags, frame_format, interval_us, reserved
 _HEADER = struct.Struct("<IIQIIQQQIIIIIIII")
 _SEQ_OFFSET = 8
 _DEMAND_OFFSET = 40
+_FORMAT_OFFSET = 68
 _SEQ = struct.Struct("<Q")
 _DEMAND = struct.Struct("<Q")
+
+
+def frame_bytes(width: int, height: int, pixel_format: int) -> int:
+  return width * height * 3 // 2 if pixel_format == FORMAT_NV12 else width * height * 4
 
 
 @dataclass(frozen=True)
@@ -49,6 +62,7 @@ class FrameRequest:
   margin_w: int
   margin_h: int
   interval_us: int
+  flags: int = 0
 
   def content(self, source_w: int, source_h: int) -> tuple[int, int, int, int]:
     return fit_content(source_w, source_h, self.width, self.height, self.margin_w, self.margin_h)
@@ -61,6 +75,7 @@ class Frame:
   height: int
   captured_ns: int
   frame_id: int
+  pixel_format: int = FORMAT_RGBA
 
 
 def fit_content(source_w: int, source_h: int, width: int, height: int, margin_w: int, margin_h: int) -> tuple[int, int, int, int]:
@@ -97,7 +112,7 @@ class FrameConsumer:
     r = self.request or FrameRequest(0, 0, 0, 0, 0)
     seq = _SEQ.unpack_from(self.mm, _SEQ_OFFSET)[0] if self.mm[:4] == struct.pack("<I", MAGIC) else 0
     _HEADER.pack_into(self.mm, 0, MAGIC, VERSION, seq & ~1, 0, 0, 0, 0, demand_until_ns,
-                      r.width, r.height, r.margin_w, r.margin_h, 0, 0, r.interval_us, 0)
+                      r.width, r.height, r.margin_w, r.margin_h, r.flags, 0, r.interval_us, 0)
 
   def configure(self, request: FrameRequest) -> None:
     if not (0 < request.width <= MAX_WIDTH and 0 < request.height <= MAX_HEIGHT) or request.width % 2 or request.height % 2:
@@ -121,18 +136,18 @@ class FrameConsumer:
         time.sleep(0.001)
         continue
       fields = _HEADER.unpack_from(self.mm, 0)
-      width, height, captured_ns, frame_id = fields[3], fields[4], fields[5], fields[6]
+      width, height, captured_ns, frame_id, pixel_format = fields[3], fields[4], fields[5], fields[6], fields[13]
       if fields[0] != MAGIC or frame_id == 0 or (frame_id, captured_ns) == self.last_key:
         return None
       request = self.request
-      if request is None or (width, height) != (request.width, request.height):
+      if request is None or (width, height) != (request.width, request.height) or pixel_format not in (FORMAT_RGBA, FORMAT_NV12):
         return None
-      size = width * height * 4
+      size = frame_bytes(width, height, pixel_format)
       data = self.mm[HEADER_SIZE:HEADER_SIZE + size]
       if _SEQ.unpack_from(self.mm, _SEQ_OFFSET)[0] != seq1:
         continue
       self.last_key = (frame_id, captured_ns)
-      return Frame(data, width, height, captured_ns, frame_id)
+      return Frame(data, width, height, captured_ns, frame_id, pixel_format)
     return None
 
   def close(self) -> None:
@@ -207,7 +222,7 @@ class FrameProducer:
     fields = _HEADER.unpack_from(mm, 0)
     if fields[0] != MAGIC or fields[1] != VERSION or (require_demand and fields[7] <= int(now * 1e9)):
       return None
-    request = FrameRequest(fields[8], fields[9], fields[10], fields[11], fields[14])
+    request = FrameRequest(fields[8], fields[9], fields[10], fields[11], fields[14], fields[12])
     if not (0 < request.width <= MAX_WIDTH and 0 < request.height <= MAX_HEIGHT) or request.interval_us <= 0 or \
        request.margin_w >= request.width or request.margin_h >= request.height:
       return None
@@ -223,10 +238,15 @@ class FrameProducer:
     """Seconds until capture is due, with the same 25% pacing slack as due()."""
     return max(0, self._next_capture_ns - request.interval_us * 250 - now_ns) / 1e9
 
-  def publish(self, request: FrameRequest, pixels, captured_ns: int) -> None:
-    """Copy one tightly packed top-down RGBA frame of the requested size."""
+  def publish(self, request: FrameRequest, pixels, captured_ns: int, pixel_format: int = FORMAT_RGBA,
+              advance: bool = True) -> None:
+    """Copy one tightly packed top-down frame (RGBA or NV12) of the requested size.
+
+    ``advance=False`` when the caller already called ``advance`` at capture
+    time (a frame read back asynchronously is published one step later).
+    """
     mm = self.mm
-    size = request.width * request.height * 4
+    size = frame_bytes(request.width, request.height, pixel_format)
     if mm is None or len(pixels) < size:
       return
     seq = _SEQ.unpack_from(mm, _SEQ_OFFSET)[0]
@@ -234,8 +254,14 @@ class FrameProducer:
     mm[HEADER_SIZE:HEADER_SIZE + size] = memoryview(pixels)[:size]
     self.frame_id += 1
     struct.pack_into("<IIQQ", mm, 16, request.width, request.height, captured_ns, self.frame_id)
+    struct.pack_into("<I", mm, _FORMAT_OFFSET, pixel_format)
     _SEQ.pack_into(mm, _SEQ_OFFSET, (seq | 1) + 1)
     self.captures += 1
+    if advance:
+      self.advance(request, captured_ns)
+
+  def advance(self, request: FrameRequest, captured_ns: int) -> None:
+    """Move the capture schedule on by one frame captured at ``captured_ns``."""
     interval_ns = request.interval_us * 1000
     # Advance on the schedule so render jitter does not drift; after a gap, restart from now.
     self._next_capture_ns += interval_ns
