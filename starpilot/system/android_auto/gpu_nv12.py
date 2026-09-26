@@ -11,7 +11,9 @@ portably, so each plane is packed four bytes to an RGBA texel:
 Read back in row order, the two targets are exactly the tightly packed NV12
 frame. The integer arithmetic matches ``hw/rgba_to_nv12.h`` (BT.601 limited
 range, rounded 2x2 chroma average), so either path gives the car the same
-picture. Source texel row 0 is the top of the image, as ``car_ui`` draws it.
+picture. By default source texel row 0 is the top of the image. ``compose`` and
+margins let the car renderer convert its UI texture directly, folding the
+top-down flip and padding into these passes instead of copying a full RGBA frame.
 """
 
 from __future__ import annotations
@@ -36,8 +38,20 @@ void main() {
 
 FRAGMENT_COMMON = """
 uniform sampler2D texture0;
+uniform ivec2 sourceOffset;
+uniform int composeSource;
 out vec4 finalColor;
-ivec3 px(int x, int y) { return ivec3(texelFetch(texture0, ivec2(x, y), 0).rgb * 255.0 + 0.5); }
+ivec3 px(int x, int y) {
+  ivec2 p = ivec2(x, y) - sourceOffset;
+  ivec2 size = textureSize(texture0, 0);
+  if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) return ivec3(6, 6, 15);
+  if (composeSource != 0) p.y = size.y - 1 - p.y;
+  vec4 color = texelFetch(texture0, p, 0);
+  // Match the old composition pass's alpha blend onto the frame background.
+  // UI overlays can leave non-opaque alpha even after an opaque clear.
+  if (composeSource != 0) color.rgb = mix(vec3(6.0, 6.0, 15.0) / 255.0, color.rgb, color.a);
+  return ivec3(color.rgb * 255.0 + 0.5);
+}
 int luma(ivec3 p) { return ((66 * p.r + 129 * p.g + 25 * p.b + 128) >> 8) + 16; }
 vec2 chroma(int x, int y) {
   ivec3 a = (px(x, y) + px(x + 1, y) + px(x, y + 1) + px(x + 1, y + 1) + 2) >> 2;
@@ -69,12 +83,15 @@ def supported(width: int, height: int) -> bool:
 
 
 class Nv12Converter:
-  def __init__(self, width: int, height: int):
+  def __init__(self, width: int, height: int, *, margin_w: int = 0, margin_h: int = 0, compose: bool = False):
     if not supported(width, height):
       raise ValueError("NV12 conversion needs a width divisible by 4 and an even height")
+    if not 0 <= margin_w < width or not 0 <= margin_h < height:
+      raise ValueError("NV12 margins must leave a visible image")
     import pyray as rl
     self.rl = rl
     self.width, self.height = width, height
+    self.source_size = (width - margin_w, height - margin_h)
     self.shaders = []
     self.targets = []
     try:
@@ -83,13 +100,22 @@ class Nv12Converter:
         if not shader.id or shader.id == rl.rl_get_shader_id_default():
           raise RuntimeError("NV12 shader did not compile")
         self.shaders.append(shader)
+        # The old composition pass places floor(margin_h / 2) rows above the
+        # flipped texture. Readback starts at the bottom, so an odd extra row
+        # belongs at the start of the encoded image, matching that pass exactly.
+        offset = rl.ffi.new("int[]", [margin_w // 2, margin_h - margin_h // 2])
+        compose_value = rl.ffi.new("int *", int(compose))
+        rl.set_shader_value(shader, rl.get_shader_location(shader, "sourceOffset"), offset, rl.ShaderUniformDataType.SHADER_UNIFORM_IVEC2)
+        rl.set_shader_value(shader, rl.get_shader_location(shader, "composeSource"), compose_value, rl.ShaderUniformDataType.SHADER_UNIFORM_INT)
       self.targets = [rl.load_render_texture(width // 4, height), rl.load_render_texture(width // 4, height // 2)]
     except BaseException:
       self.close()
       raise
 
   def convert(self, source) -> list[tuple[int, int, int, int]]:
-    """Convert ``source`` (a texture of width x height) and return its readback regions."""
+    """Convert the visible UI texture and return padded, top-down readback regions."""
+    if (source.width, source.height) != self.source_size:
+      raise ValueError("NV12 source dimensions do not match the visible area")
     rl = self.rl
     for shader, target in zip(self.shaders, self.targets, strict=True):
       rl.begin_texture_mode(target)
@@ -97,7 +123,7 @@ class Nv12Converter:
       rl.rl_set_blend_factors(GL_ONE, GL_ZERO, GL_FUNC_ADD)
       rl.begin_blend_mode(rl.BlendMode.BLEND_CUSTOM)
       rl.begin_shader_mode(shader)
-      rl.draw_texture_pro(source, rl.Rectangle(0, 0, self.width, self.height),
+      rl.draw_texture_pro(source, rl.Rectangle(0, 0, source.width, source.height),
                           rl.Rectangle(0, 0, target.texture.width, target.texture.height), rl.Vector2(0, 0), 0.0, rl.WHITE)
       rl.end_shader_mode()
       rl.end_blend_mode()
