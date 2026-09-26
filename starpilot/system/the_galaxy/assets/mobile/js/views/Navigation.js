@@ -2,7 +2,7 @@ import { NavigationDestinationPanel } from "../components/NavigationDestinationP
 import { MapsPanel } from "../components/MapsPanel.js?v=offline-download-4"
 import { NavigationKeysPanel } from "../components/NavigationKeysPanel.js"
 import { SpeedLimitsPanel } from "../components/SpeedLimitsPanel.js"
-import { AndroidAutoOfflinePanel } from "../components/AndroidAutoOfflinePanel.js?v=offline-coverage-2"
+import { AndroidAutoOfflinePanel } from "../components/AndroidAutoOfflinePanel.js?v=offline-layout-1"
 import { GalaxySection } from "../components/GalaxySection.js"
 import { GalaxyTabs } from "../components/GalaxyTabs.js"
 import { useTabRouting } from "../composables.js"

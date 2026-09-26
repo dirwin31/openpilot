@@ -593,7 +593,7 @@ export const AndroidAutoOfflinePanel = {
       <GxNotice v-if="loaded && summary && !token" tone="warn"
         text="Add a Mapbox public key in the App Keys tab to search places and draw the map." style="margin:0;" />
 
-      <section class="gx-card" style="margin:0;">
+      <section class="gx-card" style="margin:0; overflow:hidden;">
         <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
           <i class="bi bi-bounding-box-circles" style="font-size:1.15rem;"></i>
           <span class="gx-section__title" style="font-size:var(--fs-base);">Save an Area</span>
@@ -637,13 +637,36 @@ export const AndroidAutoOfflinePanel = {
               <button type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px; align-self:center;" :disabled="!areaEstimate.fits || !!busy" @click="saveArea">{{ busy === 'area' ? 'Adding to downloads...' : 'Download' }}</button>
             </div>
           </template>
+          <template v-if="token">
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; border-top:1px solid var(--glass-border, rgba(127,127,127,.15)); padding-top:10px;">
+              <label v-if="coverageEnabled">Tile detail:
+                <select v-model.number="coverageZoom" class="gx-field" aria-label="Downloaded tile zoom level">
+                  <option v-for="zoom in 19" :key="zoom - 1" :value="zoom - 1">Zoom {{ zoom - 1 }}{{ ({13: ' · Regional', 14: ' · Road', 15: ' · City', 16: ' · Street'})[zoom - 1] || '' }}</option>
+                </select>
+              </label>
+              <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                <input type="checkbox" v-model="coverageEnabled" /> Show downloaded tiles
+              </label>
+            </div>
+            <div v-if="coverageEnabled" class="gx-row__desc">
+              <span style="color:#34c778;">■ Saved offline</span> · <span style="color:#4096ff;">■ Temporary cache</span> · Purple outlines: requested areas.
+              Coverage is for the selected zoom only; the background map is online.
+            </div>
+            <div v-if="coverageEnabled" class="gx-row__desc" role="status">
+              <template v-if="coverageError">{{ coverageError }}</template>
+              <template v-else-if="coverage">{{ coverage.tiles.length.toLocaleString() }} downloaded tiles in view at zoom {{ coverage.zoom }}. {{ coverage.truncated ? 'Display limit reached; zoom the map in to see all tiles.' : '' }}</template>
+              <template v-else>Checking downloaded tiles...</template>
+            </div>
+          </template>
         </div>
+        <div v-if="token" ref="map" style="height:280px; border-radius:var(--radius-md); overflow:hidden;"></div>
+        <div v-if="pickOnMap" class="gx-note" style="margin:6px var(--sp-3);">Tap the map where the area should be centred.</div>
       </section>
 
       <section class="gx-card" style="margin:0;">
         <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
           <i class="bi bi-signpost-split" style="font-size:1.15rem;"></i>
-          <span class="gx-section__title" style="font-size:var(--fs-base);">Make a Route Available Offline</span>
+          <span class="gx-section__title" style="font-size:var(--fs-base);">Save a Specific Route</span>
         </div>
         <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:8px;">
           <div style="display:flex; align-items:center; gap:8px;">
@@ -685,32 +708,6 @@ export const AndroidAutoOfflinePanel = {
             <GxNotice v-if="routeEstimate && !routeEstimate.fits" tone="warn" text="Not enough offline storage left for this route. Delete an area or route first." style="margin:0;" />
           </div>
         </div>
-      </section>
-
-      <section v-if="token" class="gx-card" style="margin:0; overflow:hidden;">
-        <div style="padding:10px; display:grid; gap:6px;">
-          <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-            <label v-if="coverageEnabled">Tile detail:
-              <select v-model.number="coverageZoom" class="gx-field" aria-label="Downloaded tile zoom level">
-                <option v-for="zoom in 19" :key="zoom - 1" :value="zoom - 1">Zoom {{ zoom - 1 }}{{ ({13: ' · Regional', 14: ' · Road', 15: ' · City', 16: ' · Street'})[zoom - 1] || '' }}</option>
-              </select>
-            </label>
-            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-              <input type="checkbox" v-model="coverageEnabled" /> Show downloaded tiles
-            </label>
-          </div>
-          <div v-if="coverageEnabled" class="gx-row__desc">
-            <span style="color:#34c778;">■ Saved offline</span> · <span style="color:#4096ff;">■ Temporary cache</span> · Purple outlines: requested areas.
-            Coverage is for the selected zoom only; the background map is online.
-          </div>
-          <div v-if="coverageEnabled" class="gx-row__desc" role="status">
-            <template v-if="coverageError">{{ coverageError }}</template>
-            <template v-else-if="coverage">{{ coverage.tiles.length.toLocaleString() }} downloaded tiles in view at zoom {{ coverage.zoom }}. {{ coverage.truncated ? 'Display limit reached; zoom the map in to see all tiles.' : '' }}</template>
-            <template v-else>Checking downloaded tiles...</template>
-          </div>
-        </div>
-        <div ref="map" style="height:280px; border-radius:var(--radius-md); overflow:hidden;"></div>
-        <div v-if="pickOnMap" class="gx-note" style="margin:6px var(--sp-3);">Tap the map where the area should be centred.</div>
       </section>
 
       <section class="gx-card" style="margin:0;">
