@@ -87,6 +87,43 @@ def _menu(clock, options=None):
   return FavoriteRadialMenu(params, memory, lambda: options, clock=lambda: clock[0]), params, memory
 
 
+def test_corner_cache_reuses_translation_and_tracks_size_and_press(monkeypatch):
+  from openpilot.system.ui.lib.application import gui_app
+  menu, _, _ = _menu([0.0])
+  pending, textures, shapes, draws, blends = {}, {}, [], [], []
+
+  def cached(key, width, height, render, supersample):
+    pending.setdefault(key, (width, height, render))
+    return textures.get(key)
+
+  monkeypatch.setattr(gui_app, "cached_render_texture", cached)
+  monkeypatch.setattr(menu, "_draw_corner_hint_shape", lambda *args: shapes.append(args))
+  monkeypatch.setattr(rl, "begin_blend_mode", lambda mode: blends.append(mode))
+  monkeypatch.setattr(rl, "end_blend_mode", lambda: blends.append("end"))
+  monkeypatch.setattr(rl, "draw_texture_pro", lambda tex, src, dst, *args: draws.append((tex, src.height, dst.x, dst.y)))
+
+  menu.render_corner_hint(rl.Rectangle(10, 20, 2160, 1080))
+  assert shapes == [(10, 1100, 1.0, False)]  # usable immediately, even before cache fills
+  key, (width, height, render) = next(iter(pending.items()))
+  # The deferred callback must retain the original size/state despite a later change.
+  menu._corner_press = object()
+  menu._rect = rl.Rectangle(100, 200, 1080, 540)
+  render()
+  assert shapes[-1] == (0, 150, 1.0, False)
+  textures[key] = SimpleNamespace(width=width, height=height)
+  menu._corner_press = None
+  menu.render_corner_hint(rl.Rectangle(30, 40, 2160, 1080))
+  assert len(shapes) == 2 and len(pending) == 1
+  assert draws[-1][1:] == (-150, 30, 970)
+  assert blends == [rl.BlendMode.BLEND_ALPHA_PREMULTIPLY, "end"]
+
+  menu._corner_press = object()
+  menu.render_corner_hint(rl.Rectangle(30, 40, 2160, 1080))
+  assert len(pending) == 2 and shapes[-1][-1] is True
+  menu.render_corner_hint(rl.Rectangle(30, 40, 1080, 540))
+  assert len(pending) == 3 and shapes[-1][2] == 0.5
+
+
 def test_radial_menu_opens_from_corner_tap_and_arranges_three_slots_on_an_arc():
   clock = [0.0]
   menu, _params, _memory = _menu(clock)
@@ -782,7 +819,9 @@ def test_render_during_wave_flash_animation(monkeypatch):
   from openpilot.system.ui.lib.application import gui_app
   drawn_rings = []
   monkeypatch.setattr(gui_app, "font", lambda *a, **kw: rl.Font())
-  monkeypatch.setattr(menu, "_measure_text", lambda *a, **kw: rl.Vector2(100.0, 20.0))
+  # Class methods also measure text; an instance-only stub leaves those calls
+  # using an uninitialized native font in this headless test.
+  monkeypatch.setattr(FavoriteRadialMenu, "_measure_text", staticmethod(lambda *a, **kw: rl.Vector2(100.0, 20.0)))
   monkeypatch.setattr(rl, "draw_ring", lambda *args: drawn_rings.append(args))
   monkeypatch.setattr(rl, "draw_circle_v", lambda *args: None)
   monkeypatch.setattr(rl, "draw_rectangle_rounded", lambda *args: None)

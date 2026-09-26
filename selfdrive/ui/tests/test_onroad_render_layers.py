@@ -2,6 +2,8 @@ import importlib
 import sys
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 
 def _load_augmented_road_view(monkeypatch):
   def stub_module(name, **attributes):
@@ -239,3 +241,69 @@ def test_starpilot_road_overlays_use_the_parent_scissor(monkeypatch):
   view._render_extra_road_overlays(object())
 
   assert events == ["path_edges", "adjacent_lanes", "stopping_point"]
+
+
+@pytest.mark.parametrize("android_auto", [False, True], ids=["device", "android_auto"])
+def test_radial_favorites_lifecycle_is_bypassed_only_for_android_auto(monkeypatch, mocker, android_auto):
+  Mock = mocker.Mock
+  module = _load_starpilot_onroad_view(monkeypatch)
+  rect = module.rl.Rectangle(0, 0, 1000, 600)
+  state = module.ui_state
+  state.android_auto_car_view = android_auto
+  state.started = True
+  state.ui_params, state.params_memory, state.sm = object(), object(), object()
+  module.gui_app.mouse_events = [object()]
+  original_events = list(module.gui_app.mouse_events)
+
+  def base_init(view, *_args):
+    view._content_rect = rect
+    view._hud_renderer = SimpleNamespace(_exp_button=object())
+    view.driver_state_renderer = SimpleNamespace(is_rhd=False)
+    view.alert_renderer = Mock()
+    view._draw_hud_controls = True
+
+  monkeypatch.setattr(module.AugmentedRoadView, "__init__", base_init)
+  monkeypatch.setattr(module.AugmentedRoadView, "_child", lambda self, widget: widget, raising=False)
+  monkeypatch.setattr(module.AugmentedRoadView, "is_in_reverse", lambda self: False, raising=False)
+  monkeypatch.setattr(module.AugmentedRoadView, "_render",
+                      lambda self, area: self._draw_border(area) if state.started else None, raising=False)
+  parent_click = Mock()
+  monkeypatch.setattr(module.AugmentedRoadView, "_handle_mouse_press", parent_click, raising=False)
+  monkeypatch.setattr(module.PedalIconsWidget, "__init__", lambda self, *_args: None)
+  monkeypatch.setattr(module, "PipSideCamera", Mock())
+  monkeypatch.setattr(module, "WidgetLayoutManager", lambda *_args: Mock(zones={}))
+  menu = Mock()
+  menu.process_mouse_events.return_value = False
+  menu.blocks_pointer.return_value = True
+  factory = Mock(return_value=menu)
+  monkeypatch.setattr(module, "FavoriteRadialMenu", factory)
+  monkeypatch.setattr(module, "get_pulse_glide_border_color", lambda *_args: module.rl.BLACK)
+  for name in ("begin_scissor_mode", "end_scissor_mode", "draw_rectangle_lines_ex", "draw_rectangle_rounded_lines_ex"):
+    monkeypatch.setattr(module.rl, name, lambda *_args: None)
+
+  view = module.StarPilotOnroadView()
+  view._stopped_timer_widget.replaces_current_speed = False
+  view._get_border_width = lambda: 0
+  view._layout_alerts_around_side_camera = lambda: False
+  view._full_alert_showing = lambda: False
+  for name in ("_render_slc", "_render_overlays", "_render_road_name"):
+    monkeypatch.setattr(view, name, lambda: None)
+
+  view._render(rect)
+  view._handle_mouse_press(object())
+  view._draw_hud_controls = False
+  view._render(rect)
+  state.started = False
+  view._render(rect)
+  assert module.gui_app.mouse_events == original_events
+  if android_auto:
+    factory.assert_not_called()
+    assert view._favorite_radial_menu is None
+    parent_click.assert_called_once()
+  else:
+    factory.assert_called_once()
+    assert menu.process_mouse_events.call_count == 2
+    menu.render_corner_hint.assert_called_once_with(rect)
+    menu.render.assert_called_once_with(rect)
+    assert menu.collapse.call_count == 2
+    parent_click.assert_not_called()
