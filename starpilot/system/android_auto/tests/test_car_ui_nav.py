@@ -104,6 +104,9 @@ class FakeParams:
   def put(self, key, value):
     self.values[key] = value
 
+  def put_bool(self, key, value):
+    self.values[key] = bool(value)
+
   def remove(self, key):
     self.values.pop(key, None)
 
@@ -210,15 +213,21 @@ def row_keys(controls):
   return [row.key for row in controls.menu.rows()]
 
 
+def drive(controls):
+  """Mid-drive on the drive layout (a drive itself starts on the home screen)."""
+  controls.update(True, 0.0)
+  controls.go_driving()
+
+
 def test_menu_puts_navigate_first(controls):
-  controls.update(True)
-  assert row_keys(controls) == ["navigate", "home"]
+  drive(controls)
+  assert row_keys(controls) == ["navigate", "home", "offroad"]
   assert controls.menu.rows()[0].enabled
 
 
 def test_navigate_opens_the_navigate_screen_and_takes_touches(controls):
   touches = touch_input()
-  controls.update(True, 0.0)
+  drive(controls)
   controls.menu.open = True
   controls.menu.activate("navigate")
   assert controls.nav_open and not controls.menu.open
@@ -311,7 +320,7 @@ def test_navigate_screen_closes_when_idle_or_on_a_critical_alert(controls):
 def test_ending_a_route_works_at_any_speed(controls):
   controls.params.values["NavDestination"] = '{"name": "House", "place_name": "House", "latitude": 36.3, "longitude": -115.3}'
   controls.update(True, 40 * MPH)
-  assert row_keys(controls) == ["navigate", "cancel", "home"]
+  assert row_keys(controls) == ["navigate", "cancel", "home", "offroad"]
   assert "House" in controls.menu.destination_name
   controls.menu.activate("cancel")
   assert "NavDestination" not in controls.params.values
@@ -322,7 +331,7 @@ def test_menu_home_back_and_cancel(controls):
   assert controls.on_home(True) and controls.main_layout._sidebar.visible
   controls.update(True)
   assert controls.menu.on_home
-  assert row_keys(controls)[-1] == "driving"
+  assert row_keys(controls)[-2:] == ["driving", "offroad"]
   controls.menu.activate("driving")
   assert not controls.on_home(True)
 
@@ -334,7 +343,53 @@ def test_menu_home_back_and_cancel(controls):
   assert "NavDestination" not in controls.params.values
 
 
+def test_go_offroad_needs_park_and_a_confirmation(controls, monkeypatch):
+  from openpilot.starpilot.common import starpilot_variables
+  updates = []
+  monkeypatch.setattr(starpilot_variables, "update_starpilot_toggles", lambda: updates.append(True))
+
+  controls.update(True, 0.0, parked=False)
+  offroad = controls.menu.rows()[-1]
+  assert offroad.key == "offroad" and not offroad.enabled
+  controls.menu.activate("offroad")
+  assert not controls.menu.confirming_offroad
+
+  controls.update(True, 0.0, parked=True)
+  controls.menu.activate("button")
+  controls.menu.activate("offroad")
+  assert row_keys(controls) == ["offroad_prompt", "offroad_confirm", "offroad_cancel"]
+  controls.menu.activate("offroad_cancel")
+  assert not controls.menu.confirming_offroad and controls.menu.open
+  assert "ForceOffroad" not in controls.params.values
+
+  controls.menu.activate("offroad")
+  controls.update(True, 0.0, parked=False)
+  assert not controls.menu.confirming_offroad, "shifting out of Park drops the confirmation"
+
+  controls.update(True, 0.0, parked=True)
+  controls.menu.activate("offroad")
+  controls.menu.activate("offroad_confirm")
+  assert controls.params.values["ForceOffroad"] is True and controls.params.values["ForceOnroad"] is False
+  assert updates and not controls.menu.open and not controls.menu.confirming_offroad
+
+
+def test_vehicle_parked_reads_the_gear():
+  from cereal import car
+  gear = car.CarState.GearShifter
+
+  class SM(dict):
+    def __init__(self, shifter, alive=True):
+      super().__init__(carState=SimpleNamespace(gearShifter=shifter))
+      self.recv_frame, self.alive, self.valid = {"carState": 1}, {"carState": alive}, {"carState": True}
+
+  assert car_ui.vehicle_parked(SimpleNamespace(sm=SM(gear.park)), environ={})
+  assert not car_ui.vehicle_parked(SimpleNamespace(sm=SM(gear.drive)), environ={})
+  assert not car_ui.vehicle_parked(SimpleNamespace(sm=SM(gear.park, alive=False)), environ={})
+  assert car_ui.vehicle_parked(SimpleNamespace(sm=SM(gear.drive)), environ={car_screen.DHU_ENV: "1"})
+
+
 def test_home_screen_returns_to_the_drive_when_idle_or_on_a_critical_alert(controls):
+  drive(controls)
   controls.go_home()
   controls.clock[0] += car_ui.HOME_ONROAD_TIMEOUT - 1
   controls.update(True)
@@ -347,6 +402,44 @@ def test_home_screen_returns_to_the_drive_when_idle_or_on_a_critical_alert(contr
   controls.main_layout.critical = True
   controls.update(True)
   assert not controls.on_home(True)
+
+
+def test_a_drive_starts_on_the_home_screen_and_stays_while_slow(controls):
+  controls.update(False, 0.0)
+  controls.main_layout._prev_onroad = False
+  controls.update(True, 0.0)
+  assert controls.on_home(True) and controls.main_layout._prev_onroad
+  assert controls.main_layout._sidebar.visible and controls.menu.corner == "right"
+  controls.clock[0] += car_ui.HOME_ONROAD_TIMEOUT * 10
+  controls.update(True, 5 * MPH)
+  assert controls.on_home(True), "no idle timeout on the drive-start home screen below the Navigate lock"
+  controls.update(True, 20 * MPH)
+  assert not controls.on_home(True), "past the Navigate lock the drive layout takes over"
+
+
+def test_drive_start_home_yields_to_a_critical_alert(controls):
+  controls.update(True, 0.0)
+  controls.main_layout.critical = True
+  controls.update(True, 0.0)
+  assert not controls.on_home(True)
+
+
+def test_connecting_mid_drive_at_speed_opens_the_drive(controls):
+  controls.update(True, 30 * MPH)
+  assert not controls.on_home(True)
+
+
+def test_card_start_is_drive_view_until_a_favorite_is_picked(controls):
+  controls.update(True, 0.0)
+  card = controls.nav_card
+  assert card.drive_view and card.allowed("start")
+  card.activate("home")
+  assert not card.drive_view and card.allowed("start"), "a picked favorite turns it back into Start"
+  card.activate("home")
+  card.activate("start")
+  assert not controls.on_home(True) and "NavDestination" not in controls.params.values
+  controls.update(False, 0.0)
+  assert not card.drive_view and not card.allowed("start"), "offroad there is no drive view"
 
 
 def test_navigation_needs_a_secret_key(controls):
@@ -420,7 +513,7 @@ def test_button_moves_off_the_sidebar_flag_on_the_home_screen(controls):
 # ── home screen Navigate card ─────────────────────────────────────────────────
 
 def test_card_offers_home_and_work(controls):
-  controls.update(True, 0.0)
+  controls.update(False, 0.0)
   card = controls.nav_card
   assert card.home["name"] == "House" and card.work["name"] == "Office"
   assert not card.allowed("start"), "Start waits for Home or Work"
@@ -457,16 +550,23 @@ def test_card_other_opens_the_navigate_page(controls):
   assert controls.nav_open
 
 
-def test_card_locks_above_10_mph_but_can_end_a_route(controls):
-  controls.params.values["NavDestination"] = '{"name": "House", "place_name": "House", "latitude": 36.3, "longitude": -115.3}'
-  controls.update(True, 0.0)
+def test_card_home_work_and_start_work_at_any_speed_but_search_locks(controls):
+  drive(controls)
+  controls.go_home()
+  controls.update(True, 40 * MPH)
   card = controls.nav_card
-  card.activate("work")
-  controls.update(True, 20 * MPH)
   assert "10 mph" in card.status_text()
-  assert not any(card.allowed(key) for key in ("home", "work", "start", "other"))
+  assert all(card.allowed(key) for key in ("home", "work", "start")) and not card.allowed("other")
+  card.activate("work")
   card.activate("start")
-  assert "House" in controls.params.values["NavDestination"], "Start does nothing while moving"
+  assert "Office" in controls.params.values["NavDestination"] and not controls.on_home(True)
+
+
+def test_card_can_end_a_route_while_moving(controls):
+  controls.params.values["NavDestination"] = '{"name": "House", "place_name": "House", "latitude": 36.3, "longitude": -115.3}'
+  controls.update(True, 20 * MPH)
+  card = controls.nav_card
+  assert "House" in card.status_text()
   card.activate("end")
   assert "NavDestination" not in controls.params.values
 

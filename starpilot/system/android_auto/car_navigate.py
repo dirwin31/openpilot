@@ -466,9 +466,11 @@ class CarNavigateCard(Widget):
   OTHER_HEIGHT = 104.0
   GAP = 22.0
 
-  def __init__(self, *, start: Callable[[dict], None], open_other: Callable[[], None], end_route: Callable[[], None]):
+  def __init__(self, *, start: Callable[[dict], None], open_other: Callable[[], None], end_route: Callable[[], None],
+               drive: Callable[[], None] | None = None):
     super().__init__()
-    self._start, self._open_other, self._end_route = start, open_other, end_route
+    self._start, self._open_other, self._end_route, self._drive = start, open_other, end_route, drive
+    self.started = False  # onroad: with nothing selected, Start becomes Drive view
     self.home: dict | None = None
     self.work: dict | None = None
     self.selected: str | None = None  # "home" or "work"
@@ -494,25 +496,34 @@ class CarNavigateCard(Widget):
     return self.home if key == "home" else self.work if key == "work" else None
 
   @property
+  def drive_view(self) -> bool:
+    """Whether the Start button is Drive view: onroad, with no Home or Work picked."""
+    return self.started and self._drive is not None and self.favorite(self.selected or "") is None
+
+  @property
   def can_set(self) -> bool:
     return self.routing_ok and not self.locked_text
 
   def allowed(self, key: str) -> bool:
+    # Home / Work and Start are one tap each, so they work at any speed; the search
+    # screen behind Other destination keeps the speed lock.
     if key == "end":
       return bool(self.destination_name)
     if key == "start":
-      return self.can_set and self.favorite(self.selected or "") is not None
+      return self.drive_view or (self.routing_ok and self.favorite(self.selected or "") is not None)
     if key == "other":
       return self.can_set
-    return self.can_set and self.favorite(key) is not None
+    return self.routing_ok and self.favorite(key) is not None
 
   def status_text(self) -> str:
     if not self.routing_ok:
       return tr("Add a Mapbox secret key in The Galaxy to navigate")
-    if self.locked_text:
-      return self.locked_text
     if self.destination_name:
       return tr("Navigating to {}").format(self.destination_name)
+    if self.locked_text:
+      return tr("Pick Home or Work; search unlocks below {} mph").format(int(NAV_UNLOCK_MPH))
+    if self.started:
+      return tr("Pick Home or Work, or go to the drive view")
     return tr("Pick Home or Work, then Start")
 
   # ── geometry and input ────────────────────────────────────────────────────
@@ -553,6 +564,8 @@ class CarNavigateCard(Widget):
       return
     if key in ("home", "work"):
       self.selected = None if self.selected == key else key
+    elif key == "start" and self.drive_view:
+      self._drive()
     elif key == "start":
       favorite = self.favorite(self.selected or "")
       self.selected = None
@@ -610,7 +623,12 @@ class CarNavigateCard(Widget):
     alpha = 255 if enabled else 60
     rl.draw_rectangle_rounded(start, 0.3, 10, rl.Color(START.r, START.g, START.b, 210 if enabled and self._pressed == "start" else alpha))
     target = self.favorite(self.selected or "")
-    label = tr("Start to {}").format(target.get("name") or tr("destination")) if enabled and target else tr("Start")
+    if self.drive_view:
+      label = tr("Drive view")
+    elif enabled and target:
+      label = tr("Start to {}").format(target.get("name") or tr("destination"))
+    else:
+      label = tr("Start")
     self._centered(bold, label, 44, start, start.y + (start.height - 44) / 2, rl.Color(8, 24, 14, 255) if enabled else SUBTEXT)
 
     other, enabled = rects["other"], self.allowed("other")

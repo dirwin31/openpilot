@@ -1,4 +1,4 @@
-"""The car view's small onroad button: Navigate, end the route, home screen, back to driving.
+"""The car view's small onroad button: Navigate, end the route, home screen, back to driving, go offroad.
 
 Onroad the car view ignores taps on the driving view itself; this button and its
 menu are what it accepts instead, so a stray touch never changes anything.
@@ -43,13 +43,14 @@ class MenuRow:
 class CarQuickMenu(Widget):
   def __init__(self, *, go_home: Callable[[], None], go_driving: Callable[[], None],
                open_navigate: Callable[[], None], cancel_navigation: Callable[[], None],
-               on_open: Callable[[], None] | None = None):
+               go_offroad: Callable[[], None] | None = None, on_open: Callable[[], None] | None = None):
     super().__init__()
     self._on_open = on_open  # refresh navigation state before the rows are shown
     self._go_home = go_home
     self._go_driving = go_driving
     self._open_navigate = open_navigate
     self._cancel_navigation = cancel_navigation
+    self._go_offroad = go_offroad
     self._font_bold = self._font_medium = None  # loaded on first draw
     self.open = False
     self.on_home = False
@@ -57,6 +58,8 @@ class CarQuickMenu(Widget):
     self.destination_name = ""
     self.routing_ok = True
     self.locked_text = ""  # why Navigate can't be opened right now (moving too fast)
+    self.parked = False  # Go offroad needs the car in Park
+    self.confirming_offroad = False
     # Bottom-left over the drive; bottom-right on the home screen, where the sidebar's
     # flag button owns the bottom-left corner.
     self.corner = "left"
@@ -70,6 +73,10 @@ class CarQuickMenu(Widget):
     return rl.Rectangle(x, screen.y + screen.height - MARGIN - BUTTON_SIZE, BUTTON_SIZE, BUTTON_SIZE)
 
   def rows(self) -> list[MenuRow]:
+    if self.confirming_offroad:
+      return [MenuRow("offroad_prompt", "Go offroad?", "Resume from the home screen when ready", TEXT, False),
+              MenuRow("offroad_confirm", "Go offroad", color=DANGER),
+              MenuRow("offroad_cancel", "Cancel")]
     if not self.routing_ok:
       rows = [MenuRow("navigate", "Navigate", "Add a Mapbox secret key in The Galaxy", SUBTEXT, False)]
     elif self.locked_text:
@@ -82,6 +89,11 @@ class CarQuickMenu(Widget):
       # Ending a route never needs the car to slow down.
       rows.append(MenuRow("cancel", "End route", color=DANGER))
     rows.append(MenuRow("driving", "Back to driving") if self.on_home else MenuRow("home", "Home screen"))
+    if self._go_offroad is not None:
+      if self.parked:
+        rows.append(MenuRow("offroad", "Go offroad", "Force the comma offroad", DANGER))
+      else:
+        rows.append(MenuRow("offroad", "Go offroad", "Shift into Park first", SUBTEXT, False))
     return rows
 
   def panel_rect(self, screen: rl.Rectangle) -> rl.Rectangle:
@@ -124,10 +136,11 @@ class CarQuickMenu(Widget):
   def activate(self, key: str) -> None:
     if key == "button":
       self.open = not self.open
+      self.confirming_offroad = False
       if self.open and self._on_open is not None:
         self._on_open()
     elif key == "outside":
-      self.open = False
+      self.close()
     elif key == "home":
       self.close()
       self._go_home()
@@ -140,9 +153,18 @@ class CarQuickMenu(Widget):
     elif key == "cancel":
       self.close()
       self._cancel_navigation()
+    elif key == "offroad" and self.parked:
+      self.confirming_offroad = True
+    elif key == "offroad_cancel":
+      self.confirming_offroad = False
+    elif key == "offroad_confirm":
+      self.close()
+      if self.parked and self._go_offroad is not None:
+        self._go_offroad()
 
   def close(self) -> None:
     self.open = False
+    self.confirming_offroad = False
 
   # ── drawing ───────────────────────────────────────────────────────────────
 

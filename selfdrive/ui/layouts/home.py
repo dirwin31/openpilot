@@ -11,6 +11,7 @@ from openpilot.selfdrive.ui.widgets.home_info_card import HomeInfoCard
 from openpilot.selfdrive.ui.widgets.setup import SetupWidget
 from openpilot.selfdrive.ui.lib.starpilot_version import starpilot_display_description
 from openpilot.starpilot.common.model_lab import model_lab_pair_display_name_from_params
+from openpilot.starpilot.common.starpilot_variables import update_starpilot_toggles
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from openpilot.system.ui.lib.multilang import tr, trn
@@ -58,6 +59,7 @@ class HomeLayout(Widget):
 
     self.update_notif_rect = rl.Rectangle(0, 0, 200, HEADER_HEIGHT - 10)
     self.alert_notif_rect = rl.Rectangle(0, 0, 220, HEADER_HEIGHT - 10)
+    self.resume_onroad_rect = rl.Rectangle(0, 0, 360, HEADER_HEIGHT - 10)
 
     self._drive_stats = DriveStatsDashboard(self.params)
     self._setup_widget = SetupWidget()
@@ -149,6 +151,21 @@ class HomeLayout(Widget):
     self.alert_notif_rect.x = notif_x
     self.alert_notif_rect.y = self.header_rect.y + (self.header_rect.height - 60) // 2
 
+    self.resume_onroad_rect.x = notif_x + (self.alert_notif_rect.width + 20 if self.alert_count > 0 else 0)
+    self.resume_onroad_rect.y = self.alert_notif_rect.y
+
+  @staticmethod
+  def _force_offroad() -> bool:
+    # Only the Android Auto car view offers Resume Onroad; the device screen uses Settings.
+    return ui_state.android_auto_car_view and bool(ui_state.starpilot_toggles.get("force_offroad"))
+
+  def _resume_onroad(self):
+    """Clear Force Offroad (from Settings, The Galaxy or the car view's menu) back to Default."""
+    self.params.put_bool("ForceOffroad", False)
+    self.params.put_bool("ForceOnroad", False)
+    ui_state.starpilot_toggles["force_offroad"] = False
+    update_starpilot_toggles()
+
   def _handle_mouse_release(self, mouse_pos: MousePos):
     super()._handle_mouse_release(mouse_pos)
 
@@ -156,6 +173,8 @@ class HomeLayout(Widget):
       self._set_state(HomeLayoutState.UPDATE)
     elif self.alert_count > 0 and rl.check_collision_point_rec(mouse_pos, self.alert_notif_rect):
       self._set_state(HomeLayoutState.ALERTS)
+    elif self._force_offroad() and rl.check_collision_point_rec(mouse_pos, self.resume_onroad_rect):
+      self._resume_onroad()
 
   def _render_header(self):
     font = gui_app.font(FontWeight.MEDIUM)
@@ -194,8 +213,22 @@ class HomeLayout(Widget):
       text_y = self.alert_notif_rect.y + (self.alert_notif_rect.height - text_size.y) // 2
       rl.draw_text_ex(font, alert_text, rl.Vector2(int(text_x), int(text_y)), HEAD_BUTTON_FONT_SIZE, 0, rl.WHITE)
 
+    # Resume onroad button (Galaxy aurora green pill), shown on the car view while Force Offroad is on
+    force_offroad = self._force_offroad()
+    if force_offroad:
+      version_text_width -= self.resume_onroad_rect.width + (20 if self.alert_count > 0 else 0)
+
+      rl.draw_rectangle_rounded(self.resume_onroad_rect, 0.4, 12, rl.Color(38, 150, 110, 255))
+      rl.draw_rectangle_rounded_lines_ex(self.resume_onroad_rect, 0.4, 12, 1.5, rl.Color(110, 220, 170, 200))
+
+      resume_text = tr("RESUME ONROAD")
+      text_size = measure_text_cached(font, resume_text, HEAD_BUTTON_FONT_SIZE)
+      text_x = self.resume_onroad_rect.x + (self.resume_onroad_rect.width - text_size.x) // 2
+      text_y = self.resume_onroad_rect.y + (self.resume_onroad_rect.height - text_size.y) // 2
+      rl.draw_text_ex(font, resume_text, rl.Vector2(int(text_x), int(text_y)), HEAD_BUTTON_FONT_SIZE, 0, rl.WHITE)
+
     # Version text (right aligned)
-    if self.update_available or self.alert_count > 0:
+    if self.update_available or self.alert_count > 0 or force_offroad:
       version_text_width -= SPACING * 1.5
 
     version_rect = rl.Rectangle(self.header_rect.x + self.header_rect.width - version_text_width, self.header_rect.y,

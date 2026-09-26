@@ -165,8 +165,9 @@ export const AndroidAutoCarScreenPanel = {
 
         <p class="gx-row__desc" style="margin:0;">
           Changes reach the car screen within a second while it's connected, or apply the next time it connects.
+          Each drive starts on the home screen: start a route, or tap Drive view, to switch to this layout.
           While driving, the small <strong>•••</strong> button in the bottom-left corner of the car screen opens the home screen,
-          starts navigation to a favorite and returns to the drive.
+          starts navigation to a favorite, returns to the drive, or (in Park) takes the comma offroad until you tap Resume Onroad on the home screen.
         </p>
       </template>
     </div>
