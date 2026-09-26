@@ -62,5 +62,8 @@ class AndroidAutoClient:
   def prepare_pairing(self) -> None:
     self.call("prepare_pairing")
 
+  def set_auto_connect(self, enabled: bool) -> None:
+    self.call("set_auto_connect", enabled=enabled)
+
   def devices(self) -> list[dict[str, Any]]:
     return list(self.call("devices").get("devices", []))

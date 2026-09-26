@@ -99,7 +99,9 @@ DEFAULT_CONFIG = {
   "wifi_interface": "wlan0",
   "device_name": "StarPilot",
   "version_status": 0,         # WifiVersionResponse status (0 = success) for receivers that negotiate a version
-  "phone_class": True,         # while pairing/projecting, present as a phone: HFP gateway + smartphone Class of Device
+  "phone_class": True,         # while pairing/connecting, present as a phone: HFP gateway + smartphone Class of Device
+  "auto_connect": True,        # start projection on its own when the chosen car is on (onroad, or it reaches the comma)
+  "rfcomm_cache": {},          # car address -> Android Auto RFCOMM channel learned over SDP, to skip discovery next time
 }
 
 
@@ -122,6 +124,8 @@ def load_config(path: Path | None = None) -> dict:
   if config["connection"] not in ("wireless", "wired"):
     config["connection"] = "wireless"
   config["bitrate_kbps"] = max(1000, min(12000, int(config["bitrate_kbps"])))
+  config["rfcomm_cache"] = {str(address).upper(): channel for address, channel in config["rfcomm_cache"].items()
+                            if type(channel) is int and 1 <= channel <= 30}
   return config
 
 
