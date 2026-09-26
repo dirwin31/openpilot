@@ -208,6 +208,24 @@ def hot_render_function(sampler):
   sampler.sample(sys._getframe())
 
 
+def test_sampler_reports_parameter_keys_without_values_or_wrapping(tmp_path):
+  sampler = RenderSampler(tmp_path / "profile.txt")
+  sampler.rendering = True
+  # Code objects are hashable; use a small stand-in with attributes for the sampler.
+  class Code:
+    co_name = "get"
+    co_filename = "/data/openpilot/common/params.py"
+    co_firstlineno = 220
+
+  frame = SimpleNamespace(f_code=Code(), f_lineno=222, f_locals={"key": "BorderWidth", "value": "private-value"}, f_back=None)
+  sampler.sample(frame)
+  report = sampler.report()
+  assert "100.0%  get(BorderWidth)" in report
+  assert "not read counts" in report and "private-value" not in report
+  sampler.flush()
+  assert not sampler.param_samples
+
+
 def test_render_sampler_counts_render_stacks_and_idle(tmp_path):
   clock = [0.0]
   sampler = RenderSampler(tmp_path / "render_profile.txt", clock=lambda: clock[0])

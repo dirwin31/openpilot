@@ -88,6 +88,8 @@ def _menu(clock, options=None, cache_render_texture=None):
                             cache_render_texture=cache_render_texture), params, memory
 
 
+
+
 def test_radial_menu_opens_from_corner_tap_and_arranges_three_slots_on_an_arc():
   clock = [0.0]
   menu, _params, _memory = _menu(clock)
@@ -827,7 +829,9 @@ def test_render_during_wave_flash_animation(monkeypatch):
   from openpilot.system.ui.lib.application import gui_app
   drawn_rings = []
   monkeypatch.setattr(gui_app, "font", lambda *a, **kw: rl.Font())
-  monkeypatch.setattr(menu, "_measure_text", lambda *a, **kw: rl.Vector2(100.0, 20.0))
+  # Class methods also measure text; an instance-only stub leaves those calls
+  # using an uninitialized native font in this headless test.
+  monkeypatch.setattr(FavoriteRadialMenu, "_measure_text", staticmethod(lambda *a, **kw: rl.Vector2(100.0, 20.0)))
   monkeypatch.setattr(rl, "draw_ring", lambda *args: drawn_rings.append(args))
   monkeypatch.setattr(rl, "draw_circle_v", lambda *args: None)
   monkeypatch.setattr(rl, "draw_rectangle_rounded", lambda *args: None)

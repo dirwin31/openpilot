@@ -1,5 +1,6 @@
 import json
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -35,6 +36,29 @@ def view(monkeypatch):
 def gps_state(latitude, longitude, bearing=0.0, speed=0.0, updated=None, has_fix=True):
   return json.dumps({"latitude": latitude, "longitude": longitude, "bearing": bearing, "speed": speed,
                      "hasFix": has_fix, "updatedAtMonotonic": updated or 0.0})
+
+
+def test_prepared_render_polls_once_and_next_frame_is_fresh(view, monkeypatch):
+  calls = []
+  view._tiles = SimpleNamespace(upload=lambda: calls.append("upload"), service=SimpleNamespace(offline=False))
+  view._sm = SimpleNamespace(update=lambda _: calls.append("poll"),
+                             updated=dict.fromkeys(("navRoute", "navInstruction", "starpilotModelV2"), False))
+  # Widget.render normally calls _update_state; exercise that call without GL.
+  monkeypatch.setattr(view, "render", lambda rect: (view._update_state(), calls.append("draw")))
+  view.update()
+  view.render_prepared(nav_map.rl.Rectangle(0, 0, 100, 100))
+  assert calls == ["upload", "poll", "draw"]
+  view.update()
+  assert calls[-2:] == ["upload", "poll"]
+
+  def failed_render(rect):
+    raise RuntimeError("draw failed")
+
+  monkeypatch.setattr(view, "render", failed_render)
+  with pytest.raises(RuntimeError, match="draw failed"):
+    view.render_prepared(nav_map.rl.Rectangle(0, 0, 100, 100))
+  view.update()
+  assert calls[-2:] == ["upload", "poll"]
 
 
 def test_camera_round_trips_with_rotation():

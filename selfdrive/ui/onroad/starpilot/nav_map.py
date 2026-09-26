@@ -323,6 +323,7 @@ class NavMapView(Widget):
     self._show_navigation_waiting = show_navigation_waiting
     self._navigation_requested = False
     self._dirty = True
+    self._rendering_prepared = False
     self._animating = False
     self._last_draw = -math.inf
     self._next_draw = -math.inf
@@ -386,6 +387,14 @@ class NavMapView(Widget):
     """Advance data (tiles, messages, GPS) without drawing; see needs_redraw."""
     self._update_state()
 
+  def render_prepared(self, rect: rl.Rectangle) -> None:
+    """Draw after update(), retaining widget layout/input without polling twice."""
+    self._rendering_prepared = True
+    try:
+      self.render(rect)
+    finally:
+      self._rendering_prepared = False
+
   def needs_redraw(self, now: float) -> bool:
     """For callers that cache the map in a texture: is a new frame worth drawing?"""
     since = now - self._last_draw
@@ -422,6 +431,8 @@ class NavMapView(Widget):
       self._sm = messaging.SubMaster(["navInstruction", "navRoute", "starpilotModelV2"])
 
   def _update_state(self) -> None:
+    if self._rendering_prepared:
+      return
     self._ensure_started()
     if self._tiles.upload():
       self._dirty = True
