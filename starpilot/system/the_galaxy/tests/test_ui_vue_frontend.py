@@ -502,7 +502,7 @@ def test_ui_all_remaining_classic_tools_native_no_embed():
   assert "GalaxyEmbed" not in tuning and "LateralTuningPanel" in tuning
   assert _read("js/components/MapsPanel.js") and _read("js/components/NavigationKeysPanel.js")
   destination = _read("js/components/NavigationDestinationPanel.js")
-  assert '"./views/Navigation.js?v=offline-merge-1"' in _read("js/app.js")
+  assert '"./views/Navigation.js?v=tile-detail-2"' in _read("js/app.js")
   assert '"../components/NavigationDestinationPanel.js?v=nav-destination-6"' in _read("js/views/Navigation.js")
   assert "mapboxSuggest" in destination and "mapboxRetrieve" in destination
   assert "mapboxGeocode" in destination and "mapboxDirections" in destination
