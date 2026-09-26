@@ -1,8 +1,10 @@
 """Hardware H.264 for Android Auto: ctypes wrapper around hw/libaa_encoder.so, and encoder selection.
 
 The library owns a dedicated Qualcomm V4L2 encoder session (separate from
-loggerd's), converts RGBA to NV12 with NEON straight into its ION buffer, and
-returns one access unit per call. ``create_encoder`` validates it with a forced
+loggerd's), converts RGBA to NV12 with NEON straight into its ION buffer (or
+copies NV12 the car renderer already converted on the GPU), and returns one
+access unit per call. ABI 3 adds NV12 input and constant-bitrate rate control;
+an ABI 2 library still works, RGBA and VBR only. ``create_encoder`` validates it with a forced
 keyframe before a session starts and falls back to libx264 on any failure. The
 codec is never swapped mid-session.
 
@@ -19,7 +21,9 @@ from pathlib import Path
 from openpilot.starpilot.system.android_auto.encoder import MAX_ACCESS_UNIT, START_CODE, H264Encoder, nal_types
 
 LIBRARY = Path(__file__).with_name("hw") / "libaa_encoder.so"
-ABI = 2
+ABI = 3
+SUPPORTED_ABIS = (2, 3)
+OPTION_CBR = 1
 MAX_WIDTH, MAX_HEIGHT, HW_FPS = 1280, 720, 30
 AUD = b"\x00\x00\x00\x01\x09\xf0"
 
@@ -50,7 +54,7 @@ class HardwareH264Encoder:
   backend = "qcom-v4l2"
 
   def __init__(self, width: int, height: int, fps: int = HW_FPS, bitrate_kbps: int = 6000, margin_height: int = 0,
-               library: Path = LIBRARY):
+               library: Path = LIBRARY, rate_control: str = "cbr"):
     if not (0 < width <= MAX_WIDTH and 0 < height <= MAX_HEIGHT) or width % 2 or height % 2 or fps != HW_FPS:
       raise ValueError("Hardware encoder supports even sizes up to 1280x720 at 30 fps")
     if margin_height % 4:
@@ -61,32 +65,49 @@ class HardwareH264Encoder:
     self.handle = None
     self.lib = ctypes.CDLL(str(library))
     self.lib.aa_encoder_abi.restype = ctypes.c_int
-    if self.lib.aa_encoder_abi() != ABI:
+    self.abi = self.lib.aa_encoder_abi()
+    if self.abi not in SUPPORTED_ABIS:
       raise RuntimeError("libaa_encoder.so ABI mismatch; rebuild")
     pointer = ctypes.c_void_p
-    self.lib.aa_encoder_create.argtypes = [ctypes.c_int] * 5 + [pointer, ctypes.c_size_t]
+    encode_args = [pointer, pointer, ctypes.c_size_t, ctypes.c_int, pointer, ctypes.c_size_t, pointer, ctypes.c_size_t]
+    self.lib.aa_encoder_create.argtypes = [ctypes.c_int] * (6 if self.abi >= 3 else 5) + [pointer, ctypes.c_size_t]
     self.lib.aa_encoder_create.restype = pointer
-    self.lib.aa_encoder_encode.argtypes = [pointer, pointer, ctypes.c_size_t, ctypes.c_int, pointer, ctypes.c_size_t,
-                                           pointer, ctypes.c_size_t]
+    self.lib.aa_encoder_encode.argtypes = encode_args
     self.lib.aa_encoder_encode.restype = ctypes.c_int
+    self.supports_nv12 = self.abi >= 3
+    if self.supports_nv12:
+      self.lib.aa_encoder_encode_nv12.argtypes = encode_args
+      self.lib.aa_encoder_encode_nv12.restype = ctypes.c_int
+    self.rate_control = "cbr" if rate_control == "cbr" and self.abi >= 3 else "vbr"
     self.lib.aa_encoder_destroy.argtypes = [pointer]
     self.lib.aa_encoder_destroy.restype = None
     self.error = ctypes.create_string_buffer(512)
     self.output = ctypes.create_string_buffer(MAX_ACCESS_UNIT)
-    self.handle = self.lib.aa_encoder_create(width, height, fps, int(bitrate_kbps) * 1000, margin_height, self.error, len(self.error))
+    options = (OPTION_CBR if self.rate_control == "cbr" else 0,) if self.abi >= 3 else ()
+    self.handle = self.lib.aa_encoder_create(width, height, fps, int(bitrate_kbps) * 1000, margin_height, *options,
+                                             self.error, len(self.error))
     if not self.handle:
       raise RuntimeError(self.error.value.decode("utf-8", "replace") or "hardware encoder unavailable")
 
   def encode_rgba(self, rgba, *, keyframe: bool = False) -> tuple[bytes, bool]:
-    if not self.handle:
-      raise RuntimeError("Encoder has been closed")
     if len(rgba) != self.width * self.height * 4:
       raise ValueError("Expected tightly packed RGBA at the negotiated size")
+    return self._encode(self.lib.aa_encoder_encode, rgba, keyframe)
+
+  def encode_nv12(self, nv12, *, keyframe: bool = False) -> tuple[bytes, bool]:
+    if not self.supports_nv12:
+      raise RuntimeError("libaa_encoder.so predates NV12 input; rebuild")
+    if len(nv12) != self.width * self.height * 3 // 2:
+      raise ValueError("Expected tightly packed NV12 at the negotiated size")
+    return self._encode(self.lib.aa_encoder_encode_nv12, nv12, keyframe)
+
+  def _encode(self, function, pixels, keyframe: bool) -> tuple[bytes, bool]:
+    if not self.handle:
+      raise RuntimeError("Encoder has been closed")
     started = time.monotonic()
-    source = ctypes.c_char_p(bytes(rgba)) if not isinstance(rgba, bytes) else ctypes.c_char_p(rgba)
+    source = ctypes.c_char_p(bytes(pixels)) if not isinstance(pixels, bytes) else ctypes.c_char_p(pixels)
     force = keyframe or self.frame_index == 0
-    size = self.lib.aa_encoder_encode(self.handle, source, len(rgba), int(force), self.output, len(self.output),
-                                      self.error, len(self.error))
+    size = function(self.handle, source, len(pixels), int(force), self.output, len(self.output), self.error, len(self.error))
     if size < 0:
       raise RuntimeError(self.error.value.decode("utf-8", "replace"))
     if size > len(self.output):
@@ -104,7 +125,7 @@ class HardwareH264Encoder:
 
 
 def create_encoder(width: int, height: int, *, preference: str, bitrate_kbps: int, margin_height: int,
-                   software_fps: int, log) -> tuple[object, int]:
+                   software_fps: int, log, rate_control: str = "cbr") -> tuple[object, int]:
   """Return ``(encoder, fps)``: hardware at 30 fps when it works, else libx264."""
   if preference not in ("auto", "hardware", "software"):
     preference = "auto"
@@ -113,10 +134,12 @@ def create_encoder(width: int, height: int, *, preference: str, bitrate_kbps: in
     try:
       if not LIBRARY.is_file():
         raise RuntimeError(f"{LIBRARY.name} not built")
-      encoder = HardwareH264Encoder(width, height, bitrate_kbps=max(bitrate_kbps, 4000), margin_height=margin_height)
+      encoder = HardwareH264Encoder(width, height, bitrate_kbps=max(bitrate_kbps, 4000), margin_height=margin_height,
+                                    rate_control=rate_control)
       # Exercise the driver and the keyframe contract before promising a session.
       encoder.encode_rgba(bytes(width * height * 4), keyframe=True)
-      log("encoder", backend=encoder.backend, fps=HW_FPS)
+      log("encoder", backend=encoder.backend, fps=HW_FPS, abi=encoder.abi, rate_control=encoder.rate_control,
+          nv12=encoder.supports_nv12)
       return encoder, HW_FPS
     except Exception as error:
       if encoder is not None:
