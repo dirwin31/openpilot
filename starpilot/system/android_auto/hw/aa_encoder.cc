@@ -1,5 +1,8 @@
 // Isolated Qualcomm H.264 session for Android Auto projection. No cereal publisher,
 // camera buffers, realtime priority, or background thread. Exactly one input in flight.
+// Input is RGBA (converted here with NEON) or NV12 already converted on the GPU by the
+// car renderer (copied into the encoder's padded layout). ABI 3 adds the NV12 entry
+// point and create() options (AA_ENCODER_CBR).
 // Buffer/ioctl conventions follow system/loggerd/encoder/v4l_encoder.cc and
 // msgq/visionipc/visionbuf_ion.cc. Built for larch64 by this directory's SConscript.
 //
@@ -29,6 +32,7 @@
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr unsigned CODECCONFIG = 0x00020000;
+constexpr int AA_ENCODER_CBR = 1;  // hold the configured bitrate instead of letting it float with scene complexity
 constexpr size_t MAX_PACKET = 2 * 1024 * 1024 - 10;
 
 void check(bool ok, const char *what) {
@@ -85,14 +89,14 @@ struct Buffer {
 };
 
 struct Encoder {
-  int fd = -1, width, height, fps, stride, uv_offset, margin_height;
+  int fd = -1, width, height, fps, stride, uv_offset, margin_height, options;
   bool capture_on = false, input_on = false, failed = false;
   unsigned frame = 0;
   double timing[3] = {};
   Buffer input;
   std::vector<std::unique_ptr<Buffer>> outputs;
   std::vector<unsigned char> header;
-  Encoder(int w, int h, int rate, int margin) : width(w), height(h), fps(rate), margin_height(margin) {}
+  Encoder(int w, int h, int rate, int margin, int opts) : width(w), height(h), fps(rate), margin_height(margin), options(opts) {}
   ~Encoder() {
     // Closing the device releases its DMA references before ION storage dies.
     if (fd >= 0) {
@@ -154,7 +158,8 @@ struct Encoder {
     control(V4L2_CID_MPEG_VIDC_VIDEO_NUM_P_FRAMES, fps - 1);
     control(V4L2_CID_MPEG_VIDC_VIDEO_NUM_B_FRAMES, 0);
     control(V4L2_CID_MPEG_VIDEO_HEADER_MODE, V4L2_MPEG_VIDEO_HEADER_MODE_SEPARATE);
-    control(V4L2_CID_MPEG_VIDC_VIDEO_RATE_CONTROL, V4L2_CID_MPEG_VIDC_VIDEO_RATE_CONTROL_VBR_CFR);
+    control(V4L2_CID_MPEG_VIDC_VIDEO_RATE_CONTROL, options & AA_ENCODER_CBR ? V4L2_CID_MPEG_VIDC_VIDEO_RATE_CONTROL_CBR_CFR
+                                                                         : V4L2_CID_MPEG_VIDC_VIDEO_RATE_CONTROL_VBR_CFR);
     control(V4L2_CID_MPEG_VIDC_VIDEO_PRIORITY, V4L2_MPEG_VIDC_VIDEO_PRIORITY_REALTIME_DISABLE);
     control(V4L2_CID_MPEG_VIDC_VIDEO_IDR_PERIOD, 1);
     control(V4L2_CID_MPEG_VIDEO_H264_PROFILE, V4L2_MPEG_VIDEO_H264_PROFILE_BASELINE);
@@ -184,11 +189,26 @@ struct Encoder {
     if (failed) throw std::runtime_error("Encoder failed; reopen required");
     if (!rgba || !dest || length != size_t(width * height * 4)) throw std::runtime_error("Invalid RGBA input");
     auto started = Clock::now();
-    auto deadline = started + std::chrono::milliseconds(200);
     auto *base = static_cast<unsigned char *>(input.addr);
     int top = margin_height / 2;
     rgba_to_nv12(rgba + size_t(top) * width * 4, base + top * stride, width, height - margin_height,
                  stride, uv_offset - top / 2 * stride);
+    return submit(key, dest, capacity, started);
+  }
+  size_t encode_nv12(const unsigned char *nv12, size_t length, bool key,
+                     unsigned char *dest, size_t capacity) {
+    if (failed) throw std::runtime_error("Encoder failed; reopen required");
+    if (!nv12 || !dest || length != size_t(width) * height * 3 / 2) throw std::runtime_error("Invalid NV12 input");
+    auto started = Clock::now();
+    auto *base = static_cast<unsigned char *>(input.addr);
+    // Tightly packed planes into the encoder's padded ones (same stride for Y and UV).
+    for (int row = 0; row < height; ++row) memcpy(base + size_t(row) * stride, nv12 + size_t(row) * width, width);
+    const unsigned char *uv = nv12 + size_t(width) * height;
+    for (int row = 0; row < height / 2; ++row) memcpy(base + uv_offset + size_t(row) * stride, uv + size_t(row) * width, width);
+    return submit(key, dest, capacity, started);
+  }
+  size_t submit(bool key, unsigned char *dest, size_t capacity, Clock::time_point started) {
+    auto deadline = started + std::chrono::milliseconds(200);
     auto converted = Clock::now();
     input.sync(false);
     if (key) control(V4L2_CID_MPEG_VIDC_VIDEO_REQUEST_IFRAME, 1);
@@ -244,16 +264,16 @@ struct Encoder {
 }
 
 extern "C" {
-int aa_encoder_abi() { return 2; }
+int aa_encoder_abi() { return 3; }
 void aa_encoder_timing(void *ptr, double *output) {
   if (ptr && output) std::copy_n(static_cast<Encoder *>(ptr)->timing, 3, output);
 }
-void *aa_encoder_create(int width, int height, int fps, int bitrate, int margin_height, char *error, size_t size) {
+void *aa_encoder_create(int width, int height, int fps, int bitrate, int margin_height, int options, char *error, size_t size) {
   try {
     if (width < 2 || width > 1280 || height < 2 || height > 720 || width % 2 || height % 2 ||
         fps != 30 || bitrate < 1000000 || bitrate > 20000000 || margin_height < 0 ||
-        margin_height >= height || margin_height % 4) throw std::runtime_error("Unsupported encoder configuration");
-    auto encoder = std::make_unique<Encoder>(width, height, fps, margin_height);
+        margin_height >= height || margin_height % 4 || (options & ~AA_ENCODER_CBR)) throw std::runtime_error("Unsupported encoder configuration");
+    auto encoder = std::make_unique<Encoder>(width, height, fps, margin_height, options);
     encoder->init(bitrate); return encoder.release();
   } catch (const std::exception &e) { error_text(error, size, e); return nullptr; }
 }
@@ -263,6 +283,17 @@ int aa_encoder_encode(void *ptr, const unsigned char *rgba, size_t length,
   try {
     if (!encoder) throw std::runtime_error("Encoder closed");
     return encoder->encode(rgba, length, key, output, capacity);
+  } catch (const std::exception &e) {
+    if (encoder) encoder->failed = true;
+    error_text(error, size, e); return -1;
+  }
+}
+int aa_encoder_encode_nv12(void *ptr, const unsigned char *nv12, size_t length,
+                           int key, unsigned char *output, size_t capacity, char *error, size_t size) {
+  auto *encoder = static_cast<Encoder *>(ptr);
+  try {
+    if (!encoder) throw std::runtime_error("Encoder closed");
+    return encoder->encode_nv12(nv12, length, key, output, capacity);
   } catch (const std::exception &e) {
     if (encoder) encoder->failed = true;
     error_text(error, size, e); return -1;

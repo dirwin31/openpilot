@@ -18,34 +18,133 @@ RENDER_NODE = "/dev/dri/renderD128"
 EGL_OPENGL_ES_API = 0x30A0
 
 
-class RgbaReadback:
-  """Read an existing RGBA framebuffer into storage reused for the session.
+GL_FRAMEBUFFER = 0x8D40
+GL_RGBA, GL_UNSIGNED_BYTE = 0x1908, 0x1401
+GL_PIXEL_PACK_BUFFER = 0x88EB
+GL_STREAM_READ = 0x88E1
+GL_MAP_READ_BIT = 0x0001
+GL_SYNC_GPU_COMMANDS_COMPLETE = 0x9117
+GL_SYNC_FLUSH_COMMANDS_BIT = 0x0001
+GL_TIMEOUT_EXPIRED, GL_WAIT_FAILED = 0x911B, 0x911D
+FENCE_TIMEOUT_NS = 200_000_000
 
-  Raylib's GLES texture readback creates/deletes a temporary framebuffer and
-  allocates/frees an image every call. The car renderer already owns the output
-  framebuffer, and publish copies the pixels before the next read.
+
+class FrameReadback:
+  """Read RGBA framebuffers into one packed frame, optionally without stalling on the GPU.
+
+  ``start`` reads each region (framebuffer, width, height, byte offset) of the
+  frame; ``finish`` returns the pixels, valid until ``release``.
+
+  Synchronous: ``start`` is glReadPixels into memory reused for the session;
+  the call waits for the GPU to finish the frame. (Raylib's own texture readback
+  creates a framebuffer and allocates an image every call.)
+
+  Asynchronous: ``start`` queues the reads into a pixel-pack buffer behind a
+  fence and returns at once. ``finish`` waits for the fence, normally long
+  signalled because the caller does the next frame's CPU work in between, and
+  maps the buffer. One frame is in flight at a time.
   """
 
-  def __init__(self, width: int, height: int):
-    self.width, self.height = width, height
-    self.gl = C.CDLL("libGLESv2.so")
-    self.gl.glBindFramebuffer.argtypes = [C.c_uint, C.c_uint]
-    self.gl.glBindFramebuffer.restype = None
-    self.gl.glReadPixels.argtypes = [C.c_int] * 4 + [C.c_uint, C.c_uint, C.c_void_p]
-    self.gl.glReadPixels.restype = None
-    self._storage = (C.c_ubyte * (width * height * 4))()
-    self.pixels = memoryview(self._storage).cast("B")
+  def __init__(self, size: int, asynchronous: bool = False):
+    self.size, self.asynchronous = size, asynchronous
+    self.pending = self._mapped = False
+    self._fence = None
+    gl = self.gl = C.CDLL("libGLESv2.so")
+    signatures = {
+      "glBindFramebuffer": (None, [C.c_uint, C.c_uint]),
+      "glReadPixels": (None, [C.c_int] * 4 + [C.c_uint, C.c_uint, C.c_void_p]),
+      "glGenBuffers": (None, [C.c_int, C.POINTER(C.c_uint)]),
+      "glDeleteBuffers": (None, [C.c_int, C.POINTER(C.c_uint)]),
+      "glBindBuffer": (None, [C.c_uint, C.c_uint]),
+      "glBufferData": (None, [C.c_uint, C.c_ssize_t, C.c_void_p, C.c_uint]),
+      "glMapBufferRange": (C.c_void_p, [C.c_uint, C.c_ssize_t, C.c_ssize_t, C.c_uint]),
+      "glUnmapBuffer": (C.c_ubyte, [C.c_uint]),
+      "glFenceSync": (C.c_void_p, [C.c_uint, C.c_uint]),
+      "glClientWaitSync": (C.c_uint, [C.c_void_p, C.c_uint, C.c_uint64]),
+      "glDeleteSync": (None, [C.c_void_p]),
+      "glFlush": (None, []),
+      "glFinish": (None, []),
+    }
+    for name, (result, args) in signatures.items():
+      function = getattr(gl, name)
+      function.restype, function.argtypes = result, args
+    self._buffer = C.c_uint(0)
+    if asynchronous:
+      gl.glGenBuffers(1, C.byref(self._buffer))
+      gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, self._buffer)
+      gl.glBufferData(GL_PIXEL_PACK_BUFFER, size, None, GL_STREAM_READ)
+      gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+      self.pixels = None
+    else:
+      self._storage = (C.c_ubyte * size)()
+      self.pixels = memoryview(self._storage).cast("B")
 
-  def read(self, framebuffer: int) -> memoryview:
-    # Called after end_texture_mode(), with the default framebuffer bound.
-    # RGBA rows are multiples of eight bytes (negotiated sizes are even), so
-    # all GLES pack alignments work. Output is already flipped by the GPU.
-    self.gl.glBindFramebuffer(0x8D40, framebuffer)  # GL_FRAMEBUFFER
+  def start(self, regions: list[tuple[int, int, int, int]]) -> None:
+    # Called with the default framebuffer bound (after end_texture_mode()). RGBA
+    # rows are multiples of four bytes, so every GLES pack alignment works.
+    gl = self.gl
+    if self.pending:
+      raise RuntimeError("Previous frame was not finished")
+    if self.asynchronous:
+      gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, self._buffer)
+    base = 0 if self.asynchronous else C.addressof(self._storage)
     try:
-      self.gl.glReadPixels(0, 0, self.width, self.height, 0x1908, 0x1401, self._storage)  # RGBA, UNSIGNED_BYTE
+      for framebuffer, width, height, offset in regions:
+        if offset + width * height * 4 > self.size:
+          raise ValueError("Readback region outside the frame")
+        gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer)
+        gl.glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, C.c_void_p(base + offset))
     finally:
-      self.gl.glBindFramebuffer(0x8D40, 0)
-    return self.pixels
+      gl.glBindFramebuffer(GL_FRAMEBUFFER, 0)
+      if self.asynchronous:
+        gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+    if self.asynchronous:
+      self._fence = gl.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
+      gl.glFlush()  # start the GPU on it now, not at the next implicit flush
+    self.pending = True
+
+  def gpu_finish(self) -> None:
+    """Wait for all queued GPU work (diagnostics only; it defeats asynchronous readback)."""
+    self.gl.glFinish()
+
+  def finish(self) -> memoryview:
+    if not self.pending:
+      raise RuntimeError("No frame to finish")
+    if not self.asynchronous:
+      return self.pixels
+    gl = self.gl
+    fence, self._fence = self._fence, None
+    result = gl.glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, FENCE_TIMEOUT_NS)
+    gl.glDeleteSync(fence)
+    if result in (GL_TIMEOUT_EXPIRED, GL_WAIT_FAILED):
+      self.pending = False
+      raise RuntimeError(f"GPU readback did not complete ({result:#x})")
+    gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, self._buffer)
+    address = gl.glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, self.size, GL_MAP_READ_BIT)
+    if not address:
+      gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+      self.pending = False
+      raise RuntimeError("Could not map the readback buffer")
+    self._mapped = True
+    return memoryview((C.c_ubyte * self.size).from_address(address)).cast("B")
+
+  def release(self) -> None:
+    """Done with the pixels from ``finish`` (or drop an unfinished frame)."""
+    gl = self.gl
+    if self._mapped:
+      gl.glUnmapBuffer(GL_PIXEL_PACK_BUFFER)
+      gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+      self._mapped = False
+    if self._fence is not None:
+      gl.glDeleteSync(self._fence)
+      self._fence = None
+    self.pending = False
+
+  def close(self) -> None:
+    self.release()
+    if self._buffer.value:
+      self.gl.glDeleteBuffers(1, C.byref(self._buffer))
+      self._buffer = C.c_uint(0)
 
 
 class HeadlessContext:

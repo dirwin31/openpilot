@@ -147,6 +147,11 @@ service idle; changes apply from the next session.
 | `encoder` | `"auto"` | `"auto"`: hardware H.264, falling back to libx264; `"hardware"` / `"software"` to force |
 | `fps` | `0` | `0` = automatic (30 hardware, 15 software); otherwise a cap, 5–30 |
 | `bitrate_kbps` | `6000` | 1000–12000 |
+| `rate_control` | `"cbr"` | hardware encoder: `"cbr"` holds the bitrate steady; `"vbr"` lets it vary with the picture, as before |
+| `gpu_nv12` | `true` | car layout: convert to the encoder's NV12 on the GPU, so a third of the RGBA data is read back and the encoder does no conversion |
+| `async_readback` | `true` | car layout: read each frame back without stalling the renderer on the GPU (published one update step later) |
+| `render_profile` | `true` | car layout: keep the always-on sampling profile in `logs/render_profile.txt` |
+| `render_profile_kb` | `256` | size of each `render_profile` file before it rotates (16–4096) |
 | `verify_head_unit` | `true` | verify the car's certificate against `root-cert.pem` |
 | `auto_connect` | `true` | start projection when the chosen car is on; stop once it has been gone for 60 s |
 | `rfcomm_channel` | `0` | `0` = discover over SDP; set only to work around a broken SDP record |
@@ -160,13 +165,38 @@ service idle; changes apply from the next session.
 Everything is under `/data/android_auto/logs/` on the comma:
 
 - `session-YYYYMMDD-HHMMSS.jsonl`: one file per **start**, covering every retry until **stop**. One JSON object per line, UTC timestamps. The newest 20 are kept.
-- `car_ui.log`: output of the car-layout renderer for the current session (startup, crashes, and `render_stats` every 10 seconds while drawing).
+- `car_ui.log`: output of the car-layout renderer, rewritten each time the renderer starts (startup, crashes, and `render_stats` every 10 seconds while drawing).
+- `render_profile.txt` / `render_profile.1.txt`: where the renderer's time goes, one entry per minute of projection (below).
 
-`render_stats` reports produced FPS and average per-frame `update_ms`, `map_ms`,
-`draw_ms`, and `readback_ms`. These are CPU wall times; GPU work submitted during
-drawing can finish during readback and be counted there. Compare these with the
-session's sent `fps`, `encode_ms`, `frame_age_p95_ms`, and receiver `pending` count
-to distinguish rendering delays from encoding or delivery delays. The Bluetooth
+`render_stats` reports produced FPS and average per-frame wall times in
+milliseconds: `update_ms` (UI state and touch routing), `map_ms` (map tiles),
+`layout_ms` (drawing the layout), `map_draw_ms`, `menu_ms`, `compose_ms` (anti-aliasing
+resolve and placing the picture in the car's frame), `cache_ms`, `convert_ms` (GPU
+NV12 pass), `readback_ms`, `readback_wait_ms` (waiting for the GPU to finish the
+frame), `publish_ms` (copying it to android_autod), and `frame_ms` for the whole
+frame. `draw_ms` is the sum of the drawing sections, comparable with older logs.
+`cpu_ms` is the renderer's own CPU time: `frame_ms` well above `cpu_ms` means it was
+waiting for a CPU core (it runs at nice 10) or the GPU driver rather than working.
+The `pipeline` line at startup says whether frames are NV12 or RGBA and read back
+asynchronously. Compare these with the session's sent `fps`, `encode_ms`,
+`frame_age_p95_ms`, and receiver `pending` count to distinguish rendering delays
+from encoding or delivery delays.
+
+`render_profile.txt` (next to the session logs) shows where the car renderer's
+time goes, drive after drive, with nothing to start: a sampler looks at the
+renderer 25 times a second and every minute appends the busiest functions and
+lines, whether that minute was onroad, and its `render_stats`. When the file
+reaches `render_profile_kb` it becomes `render_profile.1.txt` (replacing the older
+one) and a new file starts. Read the "on the stack" section: the innermost-function
+and line sections credit pure-Python work to the next raylib/GL call. It costs the
+renderer about 0.5 ms per frame; set `render_profile` to `false` to turn it off.
+`gpu_ms` in `render_stats` is measured on one frame in 30: how long the GPU still
+had to go after the CPU finished that frame.
+
+Without a car, `tools/android_auto/car_view_probe.py` renders the car layout on the
+comma and reports its frame rate and encode time (`--rgba --sync-readback
+--rate-control vbr` for the previous pipeline), and `tools/android_auto/nv12_check.py`
+checks the GPU NV12 conversion against the CPU one. The Bluetooth
 panel shows sent FPS over five seconds, including startup time in that window.
 While the car shows its own screen, frame production pauses and the renderer stays
 loaded until the session ends.
