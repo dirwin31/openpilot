@@ -34,6 +34,16 @@ from openpilot.system.ui.lib.text_measure import draw_text_with_shadow, measure_
 from cereal import log
 AlertSize = log.SelfdriveState.AlertSize
 
+# The car screen's side-camera bubbles sit over the bottom alert band. They already show
+# the lane change, so these banners are dropped there when a bubble would cover their text.
+BUBBLE_REDUNDANT_ALERTS = frozenset({
+  "preLaneChangeLeft",
+  "preLaneChangeRight",
+  "laneChange",
+  "laneChangeBlocked",
+  "laneChangeBlockedLoud",
+})
+
 
 class StarPilotOnroadView(AugmentedRoadView):
   def __init__(self, stream_type: VisionStreamType = VisionStreamType.VISION_STREAM_ROAD):
@@ -119,6 +129,9 @@ class StarPilotOnroadView(AugmentedRoadView):
       if self._favorite_input_consumed:
         gui_app.mouse_events[:] = []
 
+    # Keyed off the last frame's PiP: this frame's alert draws before the PiP decides.
+    alerts_over_side_camera = self._layout_alerts_around_side_camera()
+
     try:
       self._hud_renderer.draw_current_speed = (
         ui_state.started and not self._stopped_timer_widget.replaces_current_speed
@@ -137,6 +150,15 @@ class StarPilotOnroadView(AugmentedRoadView):
         self._render_road_name()
 
       self._pip_sidecam.render(self._content_rect)
+      if alerts_over_side_camera:
+        rl.begin_scissor_mode(
+          int(round(self._content_rect.x)), int(round(self._content_rect.y)),
+          int(round(self._content_rect.width)), int(round(self._content_rect.height)),
+        )
+        try:
+          self.alert_renderer.render(self._content_rect)
+        finally:
+          rl.end_scissor_mode()
 
       # The picker is an app-drawer modal, so it intentionally draws above
       # PiP and other on-road overlays while active.
@@ -153,6 +175,19 @@ class StarPilotOnroadView(AugmentedRoadView):
         self._favorite_radial_menu.collapse()
     finally:
       gui_app.mouse_events[:] = original_events
+
+  def _layout_alerts_around_side_camera(self) -> bool:
+    """On the car screen, keep the side-camera bubbles from covering alert text.
+
+    The bubbles stay put so the eye knows where to find them; a lane-change banner they
+    make redundant is hidden only if a bubble would cover its text, and any other alert
+    is drawn above them. Returns whether alerts must be drawn after the PiP this frame.
+    """
+    bubbles_up = ui_state.android_auto_car_view and self._pip_sidecam.showing
+    self.alert_renderer.hidden_alert_names = BUBBLE_REDUNDANT_ALERTS if bubbles_up else frozenset()
+    self.alert_renderer.covers = self._pip_sidecam.covers if bubbles_up else None
+    self._draw_alerts = not bubbles_up
+    return bubbles_up
 
   def _draw_border(self, rect: rl.Rectangle):
     border_width = self._get_border_width()

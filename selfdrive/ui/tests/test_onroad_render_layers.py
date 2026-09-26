@@ -141,6 +141,7 @@ def test_extra_road_overlays_render_between_model_and_hud_and_alerts_last(monkey
   view.driver_state_renderer = Renderer("driver_state")
   view.alert_renderer = Renderer("alert")
   view._draw_driver_state = True
+  view._draw_alerts = True
   view._pm = SimpleNamespace(send=lambda *_args: events.append("publish"))
 
   monkeypatch.setattr(augmented_road_view.rl, "begin_scissor_mode", lambda *_args: events.append("scissor_begin"))
@@ -165,6 +166,35 @@ def test_extra_road_overlays_render_between_model_and_hud_and_alerts_last(monkey
     "border",
     "publish",
   ]
+
+
+def test_android_auto_side_camera_can_hide_lane_change_banners_and_lifts_other_alerts(monkeypatch):
+  starpilot_onroad_view = _load_starpilot_onroad_view(monkeypatch)
+  view = object.__new__(starpilot_onroad_view.StarPilotOnroadView)
+  view.alert_renderer = SimpleNamespace(hidden_alert_names=frozenset(), covers=None)
+  view._pip_sidecam = SimpleNamespace(showing=True, covers=lambda _area: True)
+  ui_state = starpilot_onroad_view.ui_state
+
+  ui_state.android_auto_car_view = True
+  assert view._layout_alerts_around_side_camera()
+  assert not view._draw_alerts
+  assert {"preLaneChangeLeft", "preLaneChangeRight", "laneChange", "laneChangeBlocked",
+          "laneChangeBlockedLoud"} == view.alert_renderer.hidden_alert_names
+  assert view.alert_renderer.covers is view._pip_sidecam.covers
+
+  view._pip_sidecam.showing = False
+  assert not view._layout_alerts_around_side_camera()
+  assert view._draw_alerts
+  assert view.alert_renderer.hidden_alert_names == frozenset()
+  assert view.alert_renderer.covers is None
+
+  # The comma's own screen keeps its alerts as they are, bubbles or not.
+  ui_state.android_auto_car_view = False
+  view._pip_sidecam.showing = True
+  assert not view._layout_alerts_around_side_camera()
+  assert view._draw_alerts
+  assert view.alert_renderer.hidden_alert_names == frozenset()
+  assert view.alert_renderer.covers is None
 
 
 def test_full_alert_detection_uses_the_alert_size(monkeypatch):

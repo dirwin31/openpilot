@@ -192,6 +192,8 @@ class PipSideCamera(Widget):
 
     self.client = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_DRIVER, conflate=True)
     self._stream_type = VisionStreamType.VISION_STREAM_DRIVER
+    # What the last frame drew, for views that lay out around it: ("bubble" | "curved", rect).
+    self._drawn: list[tuple[str, rl.Rectangle]] = []
     self._last_connection_attempt = 0.0
     self.frame = None
     self._last_frame_id = -1
@@ -361,6 +363,7 @@ class PipSideCamera(Widget):
 
   def _render(self, content_rect: rl.Rectangle):
     """Fetch the current driver frame, then draw it for the configured shape."""
+    self._drawn = []
     if not ui_state.started:
       return None
 
@@ -375,6 +378,7 @@ class PipSideCamera(Widget):
         crop = self._crop_rect(side)
         if crop is not None:
           self._draw_curved(content_rect, crop)
+          self._drawn.append(("curved", content_rect))
     else:
       # Raybig: one circular bubble per active side.
       for side in sides:
@@ -383,7 +387,28 @@ class PipSideCamera(Widget):
           continue
         bubble = self._bubble_rect(content_rect, side)
         self._draw_bubble(bubble, crop)
+        self._drawn.append(("bubble", bubble))
     return None
+
+  @property
+  def showing(self) -> bool:
+    return bool(self._drawn)
+
+  def covers(self, area: rl.Rectangle) -> bool:
+    """Whether the last frame's side camera overlaps area."""
+    for shape, rect in self._drawn:
+      if shape == "curved":
+        if rect.x < area.x + area.width and area.x < rect.x + rect.width and \
+           rect.y < area.y + area.height and area.y < rect.y + rect.height:
+          return True
+        continue
+      radius = rect.width / 2
+      cx, cy = rect.x + radius, rect.y + radius
+      nearest_x = min(max(cx, area.x), area.x + area.width)
+      nearest_y = min(max(cy, area.y), area.y + area.height)
+      if (cx - nearest_x) ** 2 + (cy - nearest_y) ** 2 < radius ** 2:
+        return True
+    return False
 
   def _pick_side(self, sides: list[str]) -> str | None:
     """Return the active side whose blinker/BSM most recently turned on.

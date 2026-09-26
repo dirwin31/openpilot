@@ -1,4 +1,5 @@
 import time
+from collections.abc import Callable
 import pyray as rl
 from dataclasses import dataclass
 from cereal import messaging, log, custom
@@ -89,6 +90,10 @@ class AlertRenderer(Widget):
 
     self._prev_alert: Alert | None = None
     self._current_alert: Alert | None = None
+    # Event names (the part of alertType before "/") the owning view drops while their text
+    # would land under something it draws on top, as reported by covers(text_rect).
+    self.hidden_alert_names: frozenset[str] = frozenset()
+    self.covers: Callable[[rl.Rectangle], bool] | None = None
 
     self._alert_y_filter = BounceFilter(0, 0.1, 1 / gui_app.target_fps, initialized=False)
     self._alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
@@ -131,6 +136,30 @@ class AlertRenderer(Widget):
     self._prev_alert = ret
     return ret
 
+  def _is_covered(self, alert: Alert, rect: rl.Rectangle) -> bool:
+    if self.covers is None or (alert.alert_type or "").split("/", 1)[0] not in self.hidden_alert_names:
+      return False
+    return self.covers(self._text_bounds(alert, rect))
+
+  def _text_bounds(self, alert: Alert, rect: rl.Rectangle) -> rl.Rectangle:
+    """Where a settled alert's text lands: text1 centred in its band, text2 just below."""
+    band = self._get_alert_rect(rect, alert.size)
+    if alert.size == AlertSize.full:
+      return band
+    max_width = int(band.width - ALERT_PADDING * 2)
+    lines = [(self._alert_text1_label, alert.text1, SMALL_FONT_SIZE if alert.size == AlertSize.small else MID_FONT_SIZE_1)]
+    if alert.size == AlertSize.mid and alert.text2:
+      lines.append((self._alert_text2_label, alert.text2, MID_FONT_SIZE_2))
+    width = height = text1_height = 0.0
+    for label, text, font_size in lines:
+      label.set_text(text)
+      label.set_font_size(font_size)
+      line_height = label.get_content_height(max_width)
+      text1_height = text1_height or line_height
+      height += line_height
+      width = max(width, label.text_width)
+    return rl.Rectangle(band.x + (band.width - width) / 2, band.y + (band.height - text1_height) / 2, width, height)
+
   def will_render(self) -> tuple[Alert | None, bool]:
     """Return cached alert state without re-polling get_alert(). Safe to call multiple times per frame."""
     alert = self._current_alert
@@ -144,6 +173,8 @@ class AlertRenderer(Widget):
 
   def _render(self, rect: rl.Rectangle) -> bool:
     alert = self.get_alert(ui_state.sm)
+    if alert is not None and self._is_covered(alert, rect):
+      alert = self._prev_alert = None  # vanish rather than slide out from under the cover
     self._current_alert = alert
 
     self._alpha_filter.update(0 if alert is None else 1)
