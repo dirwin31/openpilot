@@ -7,7 +7,7 @@ pbuffer, without a window, display power, touch hardware or publishers. Frames
 go to android_autod through the same bounded shared-memory slot as mirroring,
 and car touches arrive as datagrams. Offroad every touch works. Onroad the driving
 view and map ignore touches; only the small quick-menu button (Navigate, end route,
-home screen, back to driving) and the screens it opens accept them. Destinations are
+home screen, back to driving, go offroad) and the screens it opens accept them. Destinations are
 set on one Navigate screen (car_navigate.py), onroad only below 10 mph of wheel speed.
 How the drive is laid out (map beside the driving view, driving view only, map
 only, camera on or off) comes from car_screen.json, set in The Galaxy and applied
@@ -39,6 +39,8 @@ NAV_SPLIT_MIN_WIDTH = 1700  # logical width; narrower car screens keep the full 
 NAV_SPLIT_FRACTION = 0.42
 MAP_BORDER = 32  # physical pixels for motion between cached map redraws
 HOME_ONROAD_TIMEOUT = 45.0  # back to the drive after this long untouched on the home screen
+# A drive starts on the home screen, which stays up (no idle timeout) until a route starts,
+# Drive view is tapped, a critical alert shows, or the car is past the Navigate speed lock.
 STATE_REFRESH = 5.0
 MAP_ONLY_BORDER = 14.0
 STATS_INTERVAL = 10.0
@@ -413,6 +415,19 @@ def vehicle_speed(ui_state) -> float | None:
   return sm["carState"].vEgo
 
 
+def vehicle_parked(ui_state, environ=os.environ) -> bool:
+  """Whether a recent carState has the car in Park. A Desktop Head Unit session counts
+  as parked: the comma is on a desk."""
+  from openpilot.starpilot.system.android_auto.car_screen import DHU_ENV
+  if environ.get(DHU_ENV) == "1":
+    return True
+  sm = ui_state.sm
+  if not sm.recv_frame["carState"] or not sm.alive["carState"] or not sm.valid["carState"]:
+    return False
+  from cereal import car
+  return sm["carState"].gearShifter == car.CarState.GearShifter.park
+
+
 def navigation_speed(ui_state, environ=os.environ) -> float | None:
   """The speed the destination lock checks. A Desktop Head Unit session is pinned
   below the limit: the comma is on a desk, with no wheel speed to read."""
@@ -442,11 +457,13 @@ class OnroadControls:
     self.store = NavigationDestinationStore(self._params, params_memory or Params(memory=True))
     self._clock = clock
     self.menu = CarQuickMenu(go_home=self.go_home, go_driving=self.go_driving,
-                             open_navigate=self.open_navigate, cancel_navigation=self.cancel_navigation, on_open=self.refresh)
+                             open_navigate=self.open_navigate, cancel_navigation=self.cancel_navigation,
+                             go_offroad=self.go_offroad, on_open=self.refresh)
     self.target: str | None = None
     self.last_touch = clock()
     self._state_read = -STATE_REFRESH
     self._started = False
+    self._hold_home = False  # the home screen shown at drive start; no idle timeout while slow
     self.nav_allowed = True
     self.nav_open = False
     self._nav_return_home = False
@@ -454,7 +471,8 @@ class OnroadControls:
     self._navigate_screen = None
     # On the car's home screen the Navigate card (Home / Work, Start, Other destination)
     # replaces the Navigate button and the Personal Records card.
-    self.nav_card = CarNavigateCard(start=self.start_favorite, open_other=self.open_navigate, end_route=self.cancel_navigation)
+    self.nav_card = CarNavigateCard(start=self.start_favorite, open_other=self.open_navigate, end_route=self.cancel_navigation,
+                                    drive=self.go_driving)
     home = getattr(main_layout, "_layouts", {}).get(MainState.HOME)
     self._home = home
     if home is not None:
@@ -481,6 +499,7 @@ class OnroadControls:
     self.menu.corner = "right"
 
   def go_driving(self) -> None:
+    self._hold_home = False
     self.main_layout._set_mode_for_state()
     self.menu.on_home = False
     self.menu.corner = "left"
@@ -525,13 +544,20 @@ class OnroadControls:
       gui_app.pop_widget()
 
   def start_favorite(self, favorite: dict) -> None:
-    """Home card Start: set the route, then open the drive in the chosen car screen layout."""
-    if not self.nav_allowed:
-      return
+    """Home card Start (any speed): set the route, then open the drive in the chosen car screen layout."""
     self.store.set_destination(favorite)
     self.refresh()
     if self._started:
       self.go_driving()
+
+  def go_offroad(self) -> None:
+    """Menu Go offroad (confirmed, in Park): force the comma offroad until Resume Onroad on the home screen."""
+    from openpilot.starpilot.common.starpilot_variables import update_starpilot_toggles
+    if not self.menu.parked:
+      return
+    self._params.put_bool("ForceOnroad", False)
+    self._params.put_bool("ForceOffroad", True)
+    update_starpilot_toggles()
 
   def cancel_navigation(self) -> None:
     self.store.clear_navigation()
@@ -549,14 +575,26 @@ class OnroadControls:
     self.nav_card.destination_name = self.menu.destination_name
     self.nav_card.set_favorites(self.store.favorite_destinations())
 
-  def update(self, started: bool, speed_ms: float | None = 0.0) -> None:
+  def update(self, started: bool, speed_ms: float | None = 0.0, parked: bool = False) -> None:
     from openpilot.starpilot.system.android_auto.car_navigate import locked_text, speed_allows_navigation
     now = self._clock()
-    self._started = started
+    was_started, self._started = self._started, started
+    self.menu.parked = parked
+    if not parked:
+      self.menu.confirming_offroad = False
     self.nav_allowed = speed_allows_navigation(started, speed_ms)
     lock = "" if self.nav_allowed else locked_text()
     self.menu.locked_text = lock
     self.nav_card.locked_text = lock
+    self.nav_card.started = started
+    if started and not was_started and self.nav_allowed:
+      # Start the drive on the home screen instead of the drive layout, and keep the
+      # main layout's own offroad->onroad switch from undoing it this frame.
+      self.go_home()
+      self.main_layout._prev_onroad = True
+      self._hold_home = True
+    elif not started:
+      self._hold_home = False
     if self.nav_open and started:
       critical = self.main_layout._critical_full_alert_active()
       if not self.nav_allowed or critical or now - self.last_touch > HOME_ONROAD_TIMEOUT:
@@ -568,7 +606,8 @@ class OnroadControls:
       return
     if self.on_home(started) and not self.nav_open:
       critical = self.main_layout._critical_full_alert_active()
-      if critical or now - self.last_touch > HOME_ONROAD_TIMEOUT:
+      held = self._hold_home and self.nav_allowed
+      if critical or (not held and now - self.last_touch > HOME_ONROAD_TIMEOUT):
         self.go_driving()
     self.menu.on_home = self.on_home(started)
     self.menu.corner = "right" if self.menu.on_home else "left"
@@ -755,7 +794,7 @@ def run(frames_path: str, touch_path: str) -> int:
       if sampler is not None:
         sampler.onroad = started
       speed_ms = navigation_speed(ui_state)
-      controls.update(started, speed_ms)
+      controls.update(started, speed_ms, vehicle_parked(ui_state))
       layout_events, menu_events = controls.route(receiver.drain(), touch, started, viewport)
       settings = car_settings.poll()
       main_layout._dev_sidebar.metric_override = [STATUS_METRICS[slot][0] for slot in settings["status_slots"]]
