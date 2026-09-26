@@ -60,6 +60,7 @@ GPS_STALE_SECONDS = 3.0
 DEAD_RECKON_LIMIT = 1.0
 NAV_STALE_SECONDS = 3.5
 ROUTE_STALE_SECONDS = 30.0  # navigationd republishes the route every few seconds while it has one
+ROUTE_CHUNK_SEGMENTS = 128
 TOKEN_REFRESH_SECONDS = 30.0
 OFFLINE_STATUS_SECONDS = 2.0
 MAP_MAX_FPS = 15.0       # redraw cap when drawing into a cached texture
@@ -346,6 +347,7 @@ class NavMapView(Widget):
     self._display_bearing = 0.0
 
     self._route_world = np.zeros((0, 2))
+    self._route_bounds: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
     self._route_key: tuple | None = None
     self._route_received = -math.inf
     self._route_progress = 0
@@ -676,6 +678,25 @@ class NavMapView(Widget):
   def _project(self, points: np.ndarray, camera: Camera, anchor: tuple[float, float], tile_scale: float):
     return camera.to_screen(points[:, 0], points[:, 1], anchor, tile_scale)
 
+  def _route_slice(self, rect: rl.Rectangle, camera: Camera, anchor: tuple[float, float], tile_scale: float,
+                   margin: float) -> slice:
+    """Conservatively trim offscreen route ends before AA's per-frame projection."""
+    points = self._route_world
+    if self._route_bounds is None or self._route_bounds[0] is not points:
+      starts = np.arange(0, len(points) - 1, ROUTE_CHUNK_SEGMENTS)
+      # Include both ends of every segment, including those crossing a chunk boundary.
+      low = np.minimum.reduceat(np.minimum(points[:-1], points[1:]), starts, axis=0)
+      high = np.maximum.reduceat(np.maximum(points[:-1], points[1:]), starts, axis=0)
+      self._route_bounds = points, low, high
+    _, low, high = self._route_bounds
+    corners = np.array([camera.to_world(x, y, anchor, tile_scale) for x in (rect.x - margin, rect.x + rect.width + margin)
+                        for y in (rect.y - margin, rect.y + rect.height + margin)])
+    visible = np.flatnonzero(np.all(high >= corners.min(axis=0), axis=1) & np.all(low <= corners.max(axis=0), axis=1))
+    if not len(visible):
+      return slice(0, 0)
+    # Keep everything between the first and last candidates: routes can leave and re-enter the view.
+    return slice(int(visible[0]) * ROUTE_CHUNK_SEGMENTS, min(len(points), (int(visible[-1]) + 1) * ROUTE_CHUNK_SEGMENTS + 1))
+
   def _draw_routes(self, rect: rl.Rectangle, camera: Camera, anchor: tuple[float, float], tile_scale: float) -> None:
     margin = 40.0
     if self._preview_active:
@@ -695,9 +716,14 @@ class NavMapView(Widget):
 
     if len(self._route_world) < 2 or time.monotonic() - self._route_received > ROUTE_STALE_SECONDS:
       return
-    sx, sy = self._project(self._route_world, camera, anchor, tile_scale)
-    last = len(sx) - 1
-    split = max(0, min(self._route_progress, last))
+    route_slice = slice(0, None)
+    # Short routes are cheaper to project directly than to search the bounds.
+    if ui_state.android_auto_car_view and len(self._route_world) >= 8192:
+      route_slice = self._route_slice(rect, camera, anchor, tile_scale, margin)
+    sx, sy = self._project(self._route_world[route_slice], camera, anchor, tile_scale)
+    last = len(self._route_world) - 1
+    split = max(0, min(self._route_progress, last)) - route_slice.start
+    last -= route_slice.start
     for start, end in _visible_runs(sx, sy, rect, margin):
       if start < split:
         _draw_polyline(sx, sy, start, min(end, split), ((9.0, ROUTE_TRAVELED),))

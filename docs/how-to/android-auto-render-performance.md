@@ -74,6 +74,44 @@ the installed UI or restarting projection.
 
 ## Remaining validation
 
+### AA map route culling
+
+The dedicated AA renderer now caches bounding boxes for groups of 128 route
+segments. For long active routes (at least 8,192 points), it projects and scans
+only the range that could intersect the map. Bounds are rebuilt when the route
+array changes; camera movement searches the same bounds. Both endpoints of each
+segment are included, and the range spans all candidate groups, preserving
+cross-screen segments and routes that leave and re-enter the view. Existing
+clipping, simplification, traveled-route styling and end caps remain in use.
+
+Short routes bypass this search because a desktop benchmark showed its overhead
+outweighing the savings. Native C3X/C4 maps and route previews use the original
+path. No tile-cache format, downloading, eviction or worker behavior changed:
+downloaded tiles already load and decode on background workers. This change
+addresses route CPU work that remains even with warm tiles, not download speed.
+
+In a synthetic warm-tile Mac GPU benchmark at a 537x720 split-map target with
+4x MSAA, median route-draw submission times over 300 measured redraws were:
+
+| Route points | Full-route processing | Trimmed processing |
+| --- | ---: | ---: |
+| 20,000 | 0.178 ms | 0.123 ms |
+| 100,000 | 0.470 ms | 0.129 ms |
+
+These are host microbenchmarks, not comma FPS measurements or savings established
+for the recorded drive. The first redraw also pays the one-time bounds build.
+100 targeted map/tile tests passed on the host, including 60 actual GPU comparisons
+with identical output bytes across headings, progress positions and route ends.
+The host run used an isolated UI-state stub because the checkout's messaging
+extensions target Linux; broader AA navigation tests still need a device run.
+
+AA output FPS, the map's existing 15 Hz redraw budget, anti-aliasing and safety
+checks are unchanged. This targets long-route frame-time spikes; it does not
+claim 30 Hz map animation. Raising map cadence requires a fresh device profile
+showing sufficient GPU headroom alongside driver monitoring.
+
+### On-device follow-up
+
 After deployment, compare matched onroad runs at the same configured FPS and
 resolution. Check produced and sent FPS, frame age, driverStateV2 and
 driverMonitoringState frequency/validity, and communication alerts. The target is
