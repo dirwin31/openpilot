@@ -129,11 +129,14 @@ In **Settings → Bluetooth → android auto**:
 - **use wired (usb) / use wireless** (while stopped) switches to projecting over a USB cable from the
   car to the comma's USB-C port, with no pairing or Wi-Fi. Experimental: not yet tested in a car.
 
-**Touch.** In the car layout, car-screen touches control the StarPilot UI, but
-only while offroad; onroad they are ignored by design. That includes a comma
-forced onroad with the **Onroad** switch in Settings → System, which the car
-screen can then not undo; set it back to **Auto** on the comma. Mirror view has
-no touch.
+**Touch.** In the car layout, offroad touches control the StarPilot UI. Onroad,
+the driving view and map ignore touches; the dedicated quick menu and the
+Home/Navigate screens it opens handle their own input and navigation speed
+restrictions. The driving view therefore omits the unused radial favorites menu
+and its corner arrow, avoiding per-frame layout, settings reads and drawing.
+C3X's own display keeps its cached corner hint and radial favorites; C4's
+separate favorites overlay is unchanged. Navigation destination favorites are
+unaffected. Mirror view has no touch and still shows the device's own UI.
 
 ## Configuration
 
@@ -196,6 +199,9 @@ reaches `render_profile_kb` it becomes `render_profile.1.txt` (replacing the old
 one) and a new file starts. Read the "on the stack" section: the innermost-function
 and line sections credit pure-Python work to the next raylib/GL call. It costs the
 renderer about 0.5 ms per frame; set `render_profile` to `false` to turn it off.
+When a sample catches a Params read, the report also lists the key name (never
+its value). These percentages are sampled waits, not counts of all reads. See
+[profile-guided optimizations and device measurements](android-auto-render-performance.md).
 `gpu_ms` is disabled during normal rendering (`gpu_timing: false`, `gpu_ms: 0`).
 For a diagnostic run only, set `AA_GPU_TIMING=1` in the renderer's environment to
 measure how long the GPU still had to go after the CPU finished one frame in 30.

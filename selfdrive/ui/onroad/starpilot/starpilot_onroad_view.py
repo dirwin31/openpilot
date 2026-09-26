@@ -58,7 +58,10 @@ class StarPilotOnroadView(AugmentedRoadView):
     self._avg_fps = 0.0
 
     self._pip_sidecam = self._child(PipSideCamera())
-    self._favorite_radial_menu = FavoriteRadialMenu(
+    # Android Auto routes onroad touches to its own quick menu, never this
+    # radial menu. Skip the component there, including layout/Params reads and
+    # corner texture creation. The comma's own big UI keeps cached favorites.
+    self._favorite_radial_menu = None if ui_state.android_auto_car_view else FavoriteRadialMenu(
       ui_state.ui_params,
       ui_state.params_memory,
       self._favorite_slot_options,
@@ -116,7 +119,7 @@ class StarPilotOnroadView(AugmentedRoadView):
     # from also activating a background on-road control.
     original_events = list(gui_app.mouse_events)
     self._favorite_input_consumed = False
-    if ui_state.started:
+    if ui_state.started and self._favorite_radial_menu is not None:
       anticipated_content_rect = rl.Rectangle(
         rect.x + border_width,
         rect.y + border_width,
@@ -139,7 +142,8 @@ class StarPilotOnroadView(AugmentedRoadView):
       super()._render(rect)
 
       if not ui_state.started:
-        self._favorite_radial_menu.collapse()
+        if self._favorite_radial_menu is not None:
+          self._favorite_radial_menu.collapse()
         return
 
       if self._draw_hud_controls:
@@ -162,7 +166,7 @@ class StarPilotOnroadView(AugmentedRoadView):
 
       # The picker is an app-drawer modal, so it intentionally draws above
       # PiP and other on-road overlays while active.
-      if self._draw_hud_controls and not self._full_alert_showing():
+      if self._favorite_radial_menu is not None and self._draw_hud_controls and not self._full_alert_showing():
         rl.begin_scissor_mode(
           int(round(self._content_rect.x)), int(round(self._content_rect.y)),
           int(round(self._content_rect.width)), int(round(self._content_rect.height)),
@@ -171,7 +175,7 @@ class StarPilotOnroadView(AugmentedRoadView):
           self._favorite_radial_menu.render(self._content_rect)
         finally:
           rl.end_scissor_mode()
-      else:
+      elif self._favorite_radial_menu is not None:
         self._favorite_radial_menu.collapse()
     finally:
       gui_app.mouse_events[:] = original_events
@@ -191,7 +195,7 @@ class StarPilotOnroadView(AugmentedRoadView):
 
   def _draw_border(self, rect: rl.Rectangle):
     border_width = self._get_border_width()
-    if self._draw_hud_controls and not self._full_alert_showing():
+    if self._favorite_radial_menu is not None and self._draw_hud_controls and not self._full_alert_showing():
       self._favorite_radial_menu.render_corner_hint(self._content_rect)
     rl.draw_rectangle_lines_ex(rect, border_width, rl.BLACK)
     border_rect = rl.Rectangle(rect.x + border_width, rect.y + border_width,
@@ -259,7 +263,7 @@ class StarPilotOnroadView(AugmentedRoadView):
     return alert_showing is not None and alert_showing.size == AlertSize.full
 
   def _handle_mouse_press(self, mouse_pos: MousePos):
-    if self._favorite_input_consumed or self._favorite_radial_menu.blocks_pointer(mouse_pos):
+    if self._favorite_input_consumed or (self._favorite_radial_menu is not None and self._favorite_radial_menu.blocks_pointer(mouse_pos)):
       return
 
     # Check if click maps to any of the layout widgets

@@ -109,9 +109,11 @@ class ModelRenderer(Widget):
       self._longitudinal_control = cp.openpilotLongitudinalControl
 
   def set_transform(self, transform: np.ndarray):
-    self._car_space_transform = transform.astype(np.float32)
-    self._transform_dirty = True
-    self._radar_transform_generation += 1
+    transform = np.asarray(transform, dtype=np.float32)
+    if not np.array_equal(transform, self._car_space_transform):
+      self._car_space_transform = transform.copy()
+      self._transform_dirty = True
+      self._radar_transform_generation += 1
 
   def _render(self, rect: rl.Rectangle):
     sm = ui_state.sm
@@ -852,8 +854,16 @@ class ModelRenderer(Widget):
       p0 = line[max_idx]
       p1 = line[max_idx + 1]
       x0, x1 = p0[0], p1[0]
-      interp_y = np.interp(max_distance, [x0, x1], [p0[1], p1[1]])
-      interp_z = np.interp(max_distance, [x0, x1], [p0[2], p1[2]])
+      # Two scalar endpoints: avoid constructing four temporary arrays and
+      # dispatching through numpy.interp for every lane/path edge.
+      t = (float(max_distance) - float(x0)) / (float(x1) - float(x0)) if x1 > x0 else None
+      if t is None:
+        interp_y = np.interp(max_distance, [x0, x1], [p0[1], p1[1]])
+        interp_z = np.interp(max_distance, [x0, x1], [p0[2], p1[2]])
+      else:
+        t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+        interp_y = float(p0[1]) + t * (float(p1[1]) - float(p0[1]))
+        interp_z = float(p0[2]) + t * (float(p1[2]) - float(p0[2]))
       interp_point = np.array([max_distance, interp_y, interp_z], dtype=points.dtype)
       points = np.concatenate((points, interp_point[None, :]), axis=0)
 

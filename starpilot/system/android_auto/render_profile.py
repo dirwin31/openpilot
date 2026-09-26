@@ -55,6 +55,7 @@ class RenderSampler:
     self.self_counts: Counter = Counter()
     self.total_counts: Counter = Counter()
     self.line_counts: Counter = Counter()
+    self.param_samples: Counter = Counter()
 
   def start(self) -> None:
     self._worker.start()
@@ -83,7 +84,16 @@ class RenderSampler:
       self.line_counts[f"{Path(code.co_filename).name}:{frame.f_lineno} {code.co_name}"] += 1
       self.self_counts[self._name(code)] += 1
       seen = set()
+      param_seen = False
       while frame is not None:
+        code = frame.f_code
+        # Attribute sampled waits to keys without wrapping every Params call.
+        # Only key names are captured; values (including credentials) never are.
+        if not param_seen and code.co_name in ("get", "get_bool") and code.co_filename.endswith("/common/params.py"):
+          key = frame.f_locals.get("key")
+          if isinstance(key, str):
+            self.param_samples[f"{code.co_name}({key})"] += 1
+            param_seen = True
         name = self._name(frame.f_code)
         if name not in seen:
           seen.add(name)
@@ -116,6 +126,9 @@ class RenderSampler:
         # Frames on every sample (the render loop and interpreter startup) say nothing.
         shown = [(name, count) for name, count in counts.most_common() if count < busy or counts is not self.total_counts]
         lines += [f"{100 * count / busy:6.1f}%  {name}" for name, count in shown[:top]]
+      if self.param_samples:
+        lines.append("-- Params keys sampled on the render thread (% of busy samples, not read counts)")
+        lines += [f"{100 * count / busy:6.1f}%  {name}" for name, count in self.param_samples.most_common(TOP)]
     return "\n".join(lines) + "\n\n"
 
   def flush(self) -> None:

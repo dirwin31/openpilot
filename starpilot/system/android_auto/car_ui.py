@@ -264,7 +264,7 @@ class MapPane:
     rl.clear_background(rl.Color(0, 0, 0, 255))
     rl.rl_push_matrix()
     rl.rl_scalef(scale_x, scale_y, 1.0)
-    nav_map.render(rl.Rectangle(0, 0, rect.width, rect.height))
+    nav_map.render_prepared(rl.Rectangle(0, 0, rect.width, rect.height))
     rl.rl_pop_matrix()
     rl.end_texture_mode()
     if self._msaa is not None:
