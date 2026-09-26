@@ -160,7 +160,62 @@ headroom still need a matched device comparison. GPS jumps, stale fixes and cach
 coverage limits can still cause a hold; this is not a promise of eliminating every
 possible stutter.
 
-### On-device follow-up
+### Optional C4 native-screen sleep
+
+The Galaxy's AA Layout panel now offers `sleep_device_screen`, off by default.
+It reuses the native screen timeout and tap-to-wake path, suspending drawing
+without stopping UI state updates, watchdog servicing, driver monitoring or
+AA's separate car renderer. Critical alerts hold the native display awake.
+Native Live UI viewers still keep drawing active; C3X and mirror mode are unchanged.
+
+The supervisor records the source timestamp only after sending a real car-view
+frame. The native UI checks that heartbeat and focused demand from shared-memory
+header bytes, without copying frame pixels or polling a control socket. Startup,
+lost focus, or a sent frame at least one second old cannot keep the screen asleep.
+Session initialization clears the heartbeat. This uses existing settings storage
+and unused frame-header space, with no Params/schema build or new background worker.
+
+Read-only copies of route `000000bc--59fdef8bba` qlogs give this native-UI baseline:
+
+| Segment | Native UI CPU (% of one core) | Median uiDebug draw wall time |
+| --- | ---: | ---: |
+| 8 | 40.65% | 44.00 ms |
+| 20 | 42.13% | 44.73 ms |
+| 27 | 40.76% | 40.63 ms |
+
+CPU values are differences between two `procLog` samples approximately 30 seconds
+apart, for `selfdrive.ui.ui`, not the AA renderer. They include work retained while
+asleep, so 40–42% of one core is a ceiling, not a savings claim. `uiDebug` measures
+wall time, not isolated GPU time. Native-render tests verify zero drawing/texture
+passes over 60 sleeping loop iterations while the loop continues yielding.
+
+An isolated C4 policy benchmark, with display-power calls mocked and temporary
+settings/frame files, measured 36.661 µs CPU/tick disabled and 62.001 µs enabled
+(median of five 2,000-tick batches). The added 25.340 µs is about 0.15% of one core
+at 60 ticks/sec. This measures policy overhead, not GPU savings. Device-side tests
+used temporary source overlays; the installed UI, settings and source logs were
+not changed. An actual connected awake/asleep comparison is still required to
+quantify net CPU/GPU savings and driver-monitoring/AA FPS improvements.
+
+Validation: 92 Python tests passed on the device using the temporary overlay,
+including sleep/wake policy, frame freshness/focus, mirror exclusion and settings
+API coverage. Six UI-panel tests and Ruff checks also passed.
+
+After the owner confirmed the comma was safely parked/on a bench, an isolated
+536x240 EGL test rendered its native onroad HUD/sidebar/driver graphics using
+segment 20 messages. Across three 60-frame batches, median CPU time was
+10.23–11.06 ms/frame and GPU-completed wall time was 14.77–15.64 ms/frame.
+The qlog omits modelV2, so path rendering was excluded; camera capture/upload,
+side-camera preview, scanout and AA transmission were also excluded. These are
+component costs avoided while sleeping, not a matched whole-system savings or
+isolated GPU-time measurement. No physical display-power calls were made.
+
+`aa-dhu` can provide the connected bench comparison after deployment. The normal
+launcher runs installed code and rotates AA logs; preserve existing logs or use
+a separate temporary log directory before testing. DHU does not reproduce the
+car's wireless link or driving workload.
+
+### Connected comparison
 
 After deployment, compare matched onroad runs at the same configured FPS and
 resolution. Check produced and sent FPS, frame age, driverStateV2 and

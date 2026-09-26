@@ -15,6 +15,9 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.starpilot.common.lateral_only_experimental import lateral_only_experimental_available
 from openpilot.starpilot.common.car_params_capability import capability_car_params_bytes
 from openpilot.system.hardware import HARDWARE, PC
+from openpilot.starpilot.system.android_auto.car_screen import CarScreenSettings
+from openpilot.starpilot.system.android_auto.frame_source import FrameProducer
+from openpilot.starpilot.system.android_auto.view import CAR_FRAME_PATH
 from openpilot.starpilot.common.screen_settings import (
   alert_wake_key, brightness_preferences, calculate_screen_brightness, enabled_wake_keys, standby_button_press_time,
   screen_off_toggle_counter,
@@ -341,6 +344,9 @@ class Device:
     self._prev_timed_out = False
     self._awake: bool = True
     self._render_awake: bool = True
+    self._aa_screen_sleep = False
+    self._aa_screen_settings = CarScreenSettings()
+    self._aa_car_frames = FrameProducer(CAR_FRAME_PATH) if HARDWARE.get_device_type() == "mici" else None
     self._stream_hold_since: float = 0.0
     self._stream_hold_used: float = 0.0
     self._params = ui_state.ui_params
@@ -498,6 +504,15 @@ class Device:
     )
 
   def _update_wakefulness(self):
+    # Dedicated AA car view renders independently. Never sleep for mirror mode,
+    # startup, lost focus or a stalled connection; stale heartbeats fail awake.
+    aa_sleep = bool(self._aa_car_frames is not None and not ui_state.android_auto_car_view and ui_state.started and
+                    gui_app.android_auto_enabled and self._aa_screen_settings.poll()["sleep_device_screen"] and
+                    self._aa_car_frames.recently_sent())
+    if aa_sleep != self._aa_screen_sleep:
+      self._aa_screen_sleep = aa_sleep
+      self._reset_interactive_timeout()
+
     # Handle interactive timeout
     ignition_state_changed = ui_state.ignition != self._ignition
     self._ignition = ui_state.ignition
@@ -519,16 +534,18 @@ class Device:
     road_changed = ui_state.started != self._screen_off_started
     self._screen_off_started = ui_state.started
     touched = any(ev.left_down for ev in gui_app.mouse_events)
+    critical_alert = "StandbyWakeCriticalAlert" in self._active_standby_alerts()
     was_screen_off = self._screen_off
     if not ui_state.started or road_changed or ignition_state_changed:
       self._screen_off = False
     elif presses > 0:
       if presses % 2:
         self._screen_off = not self._screen_off
-    elif touched or wake_for_onroad_event or "StandbyWakeCriticalAlert" in self._active_standby_alerts():
+    elif touched or wake_for_onroad_event or critical_alert:
       self._screen_off = False
 
-    if ignition_state_changed or touched or button_pressed or wake_for_onroad_event or presses > 0 or (was_screen_off and not self._screen_off):
+    if (ignition_state_changed or touched or button_pressed or wake_for_onroad_event or presses > 0 or
+        (was_screen_off and not self._screen_off) or (aa_sleep and critical_alert)):
       self._reset_interactive_timeout()
 
     interaction_timeout = time.monotonic() > self._interaction_time
@@ -537,7 +554,7 @@ class Device:
         callback()
     self._prev_timed_out = interaction_timeout
 
-    standby_active = ui_state.started and self._standby_mode
+    standby_active = ui_state.started and (self._standby_mode or aa_sleep)
     keep_display_awake = not interaction_timeout or PC
     keep_display_awake |= ui_state.ignition and not standby_active
     self._set_awake(keep_display_awake and not self._screen_off)

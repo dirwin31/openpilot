@@ -103,6 +103,15 @@ export const AndroidAutoCarScreenPanel = {
           </div>
         </div>
 
+        <label class="gx-row" style="gap:10px; cursor:pointer;">
+          <div class="gx-row__info">
+            <span class="gx-row__label">Sleep C4 Screen During Android Auto</span>
+            <span class="gx-row__desc">Turn off the comma four display and pause its drawing after the screen timeout while the car view is streaming. AA rendering is unchanged. Tap the comma to wake it; connection loss or a critical alert wakes it automatically. Mirror mode is unchanged. A Live UI viewer keeps native rendering active.</span>
+          </div>
+          <input type="checkbox" :checked="settings.sleep_device_screen" :disabled="saving"
+            @change="update({ sleep_device_screen: $event.target.checked })" style="accent-color:var(--primary); width:20px; height:20px; flex:none;" />
+        </label>
+
         <label class="gx-row" style="gap:10px; cursor:pointer;" :style="showsDriving ? '' : 'opacity:.5;'">
           <div class="gx-row__info">
             <span class="gx-row__label">Show Road Camera</span>

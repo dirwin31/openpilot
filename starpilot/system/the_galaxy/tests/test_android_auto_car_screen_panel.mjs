@@ -90,3 +90,17 @@ test("blind-spot controls convert the displayed unit back to metres per second",
   assert.match(panel.template, /Show Blind Spot Monitors/)
   assert.match(panel.template, /Blind Spot Minimum Speed/)
 })
+
+test("C4 screen sleep uses the existing car-screen settings API", async () => {
+  const state = instance()
+  state.settings = { sleep_device_screen: false, camera: true }
+  api.setCarScreen = async (change) => {
+    assert.deepEqual(change, { sleep_device_screen: true })
+    return { settings: { ...state.settings, ...change } }
+  }
+  await state.update({ sleep_device_screen: true })
+  assert.equal(state.settings.sleep_device_screen, true)
+  assert.equal(state.settings.camera, true)
+  assert.match(panel.template, /Sleep C4 Screen During Android Auto/)
+  assert.match(panel.template, /Tap the comma to wake/)
+})

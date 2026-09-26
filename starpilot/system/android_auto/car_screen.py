@@ -26,6 +26,7 @@ DEFAULTS = {
   "camera": True,
   "blind_spot_monitors": True,
   "blind_spot_min_speed_ms": 0.0,
+  "sleep_device_screen": False,
 }
 RELOAD_SECONDS = 1.0
 # Set by tools/android_auto/dhu_device.py for a Desktop Head Unit session; the car view
@@ -44,6 +45,8 @@ def normalize(raw: object) -> dict:
       settings["camera"] = raw["camera"]
     if isinstance(raw.get("blind_spot_monitors"), bool):
       settings["blind_spot_monitors"] = raw["blind_spot_monitors"]
+    if isinstance(raw.get("sleep_device_screen"), bool):
+      settings["sleep_device_screen"] = raw["sleep_device_screen"]
     minimum_speed = raw.get("blind_spot_min_speed_ms")
     if isinstance(minimum_speed, (int, float)) and not isinstance(minimum_speed, bool) and math.isfinite(minimum_speed):
       if 0.0 <= minimum_speed <= MAX_BLIND_SPOT_SPEED_MS:

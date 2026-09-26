@@ -49,6 +49,9 @@ _DEMAND_OFFSET = 40
 _FORMAT_OFFSET = 68
 _SEQ = struct.Struct("<Q")
 _DEMAND = struct.Struct("<Q")
+# Optional consumer heartbeat in unused header space; older consumers leave it zero.
+_SENT_OFFSET = _HEADER.size
+_SENT = struct.Struct("<Q")
 
 
 def frame_bytes(width: int, height: int, pixel_format: int) -> int:
@@ -113,6 +116,7 @@ class FrameConsumer:
     seq = _SEQ.unpack_from(self.mm, _SEQ_OFFSET)[0] if self.mm[:4] == struct.pack("<I", MAGIC) else 0
     _HEADER.pack_into(self.mm, 0, MAGIC, VERSION, seq & ~1, 0, 0, 0, 0, demand_until_ns,
                       r.width, r.height, r.margin_w, r.margin_h, r.flags, 0, r.interval_us, 0)
+    _SENT.pack_into(self.mm, _SENT_OFFSET, 0)
 
   def configure(self, request: FrameRequest) -> None:
     if not (0 < request.width <= MAX_WIDTH and 0 < request.height <= MAX_HEIGHT) or request.width % 2 or request.height % 2:
@@ -127,6 +131,10 @@ class FrameConsumer:
 
   def release_demand(self) -> None:
     _DEMAND.pack_into(self.mm, _DEMAND_OFFSET, 0)
+
+  def mark_sent(self, captured_ns: int) -> None:
+    """Record a real frame accepted by the projection connection, not just produced."""
+    _SENT.pack_into(self.mm, _SENT_OFFSET, captured_ns)
 
   def latest(self) -> Frame | None:
     """Return a frame newer than the last one returned, or None."""
@@ -230,6 +238,14 @@ class FrameProducer:
 
   def demand_active(self, now: float | None = None) -> bool:
     return self.pending_request(now) is not None
+
+  def recently_sent(self, now: float | None = None) -> bool:
+    """Cheap screen-sleep gate: focused demand and a frame sent within one second."""
+    now = time.monotonic() if now is None else now
+    if not self.demand_active(now):
+      return False
+    sent = _SENT.unpack_from(self.mm, _SENT_OFFSET)[0]
+    return sent > 0 and 0 <= int(now * 1e9) - sent < 1_000_000_000
 
   def due(self, request: FrameRequest, now_ns: int) -> bool:
     return self.capture_delay(request, now_ns) == 0.0
