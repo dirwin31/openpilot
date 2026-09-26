@@ -139,6 +139,33 @@ def test_gps_falls_back_to_last_known_position(view):
   assert view._car_world(51.0) == world_xy(36.3, -115.3)
 
 
+def test_android_auto_motion_does_not_reset_to_delayed_gps_reads(view, monkeypatch):
+  monkeypatch.setattr(nav_map.ui_state, "android_auto_car_view", True)
+  latitude, longitude, speed = 36.3, -115.3, 20.0
+  start_x, _ = world_xy(latitude, longitude)
+  units_per_second = speed / nav_map.meters_per_world_unit(latitude)
+  positions = []
+  for frame in range(60):
+    now = 100.0 + frame / 30
+    if frame % 6 == 0:  # 5 Hz polling of a 4 Hz producer
+      published = 100.0 + math.floor((now - 100.0) * 4 + 1e-6) / 4
+      lon = longitude + units_per_second * (published - 100.0) * 360 / nav_map.TILE_SIZE
+      view.memory.values["LastGPSPosition"] = gps_state(latitude, lon, bearing=90, speed=speed, updated=published)
+      view._poll_gps(now)
+    positions.append(view._car_world(now)[0])
+    assert math.isclose(positions[-1], start_x + units_per_second * (now - 100.0), abs_tol=1e-10)
+  assert np.allclose(np.diff(positions), units_per_second / 30, rtol=1e-6)
+
+
+@pytest.mark.parametrize("android_auto,updated,expected", [(False, 100., 100.2), (True, 100., 100.),
+                                                           (True, 0., 100.2), (True, 101., 100.2)])
+def test_gps_time_reference_is_aa_only_with_fallback(view, monkeypatch, android_auto, updated, expected):
+  monkeypatch.setattr(nav_map.ui_state, "android_auto_car_view", android_auto)
+  view.memory.values["LastGPSPosition"] = gps_state(36.3, -115.3, updated=updated)
+  view._poll_gps(100.2)
+  assert view._gps.received == expected
+
+
 def test_stale_fix_is_not_fresh(view):
   view.memory.values["LastGPSPosition"] = gps_state(36.3, -115.3, speed=10.0, updated=10.0)
   view._poll_gps(10.0 + nav_map.GPS_STALE_SECONDS + 1.0)

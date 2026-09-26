@@ -37,6 +37,7 @@ MIN_LOGICAL_WIDTH = 1600
 STARTUP_DEMAND_WAIT = 15.0
 NAV_SPLIT_MIN_WIDTH = 1700  # logical width; narrower car screens keep the full driving view
 NAV_SPLIT_FRACTION = 0.42
+MAP_BORDER = 32  # physical pixels for motion between cached map redraws
 HOME_ONROAD_TIMEOUT = 45.0  # back to the drive after this long untouched on the home screen
 STATE_REFRESH = 5.0
 MAP_ONLY_BORDER = 14.0
@@ -219,18 +220,19 @@ def car_layout(settings: dict, started: bool, on_home: bool, width: int, height:
 
 
 class MapPane:
-  """The navigation map, cached in its own texture and redrawn only when it changes.
-
-  Most car frames then cost one textured quad for the map instead of its tiles,
-  route, markers and text.
-  """
+  """Redraw the world at 15 Hz; move its cached image on every car frame."""
 
   def __init__(self):
     self._map = None
     self._shown = False
     self._texture = None
+    self._overlay = None
+    self._overlay_key = None
     self._msaa = None
     self._texture_valid = False
+    self._cached_camera = None
+    self._camera = None
+    self._geometry = None
     self.redraws = 0
 
   def set_shown(self, shown: bool) -> None:
@@ -246,45 +248,121 @@ class MapPane:
     return self._map
 
   def prepare(self, rect, scale_x: float, scale_y: float, now: float) -> None:
-    """Before the frame: redraw into the texture only when something changed."""
+    """Advance motion every frame without increasing the expensive redraw rate."""
     import pyray as rl
+    from openpilot.selfdrive.ui.onroad.starpilot.nav_map import Camera
     nav_map = self._ensure_map()
-    width, height = max(1, round(rect.width * scale_x)), max(1, round(rect.height * scale_y))
+    geometry = rect.width, rect.height, scale_x, scale_y
+    if geometry != self._geometry:
+      self._texture_valid = False
+      self._overlay_key = None
+      self._geometry = geometry
+    self._scale = scale_x, scale_y
+    width, height = max(1, round(rect.width * scale_x)) + 2 * MAP_BORDER, max(1, round(rect.height * scale_y)) + 2 * MAP_BORDER
     if self._texture is None or (self._texture.texture.width, self._texture.texture.height) != (width, height):
       self._unload_texture()
       from openpilot.system.ui.lib.msaa import MsaaTarget
       self._texture = rl.load_render_texture(width, height)
+      self._overlay = rl.load_render_texture(width, height)
       rl.set_texture_filter(self._texture.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
+      rl.set_texture_filter(self._overlay.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
       self._msaa = MsaaTarget.create(width, height)
       self._texture_valid = False
     nav_map.update()
-    if self._texture_valid and not nav_map.needs_redraw(now):
-      return
-    rl.begin_texture_mode(self._msaa.render_texture if self._msaa is not None else self._texture)
-    rl.clear_background(rl.Color(0, 0, 0, 255))
+    local = rl.Rectangle(0, 0, rect.width, rect.height)
+    self._anchor = nav_map._advance_camera(local, now)
+    self._camera = Camera(**vars(nav_map._camera))
+    self._tile_scale = nav_map._tile_scale()
+    px, py = MAP_BORDER / scale_x, MAP_BORDER / scale_y
+    if not self._texture_valid or nav_map.needs_redraw(now):
+      padded = rl.Rectangle(-px, -py, rect.width + 2 * px, rect.height + 2 * py)
+      self._render_layer(self._texture, lambda: nav_map._draw_world(padded, self._camera, self._anchor, self._tile_scale))
+      self._cached_camera = self._camera
+      self._cached_anchor = self._anchor
+      self._texture_valid = True
+      nav_map._record_draw(now)
+      nav_map._dirty = False
+      self.redraws += 1
+    elif not self._covers_view(local):
+      # Hold for at most the next scheduled redraw; never expose an edge or
+      # turn a GPS jump into unbounded extra GPU renders.
+      self._camera, self._anchor = self._cached_camera, self._cached_anchor
+
+    # Guidance changes with messages; the one-second tick also refreshes ETA,
+    # token/offline status and expiry without baking text into the moving world.
+    overlay_key = (nav_map._overlay_state, nav_map._center_message(), nav_map._nav_active(now), int(now))
+    if overlay_key != self._overlay_key:
+      self._render_layer(self._overlay, lambda: nav_map._draw_overlays(local, now), transparent=True)
+      self._overlay_key = overlay_key
+
+  def _covers_view(self, rect) -> bool:
+    px, py = MAP_BORDER / self._scale[0], MAP_BORDER / self._scale[1]
+    for x in (0, rect.width):
+      for y in (0, rect.height):
+        world = self._camera.to_world(x, y, self._anchor, self._tile_scale)
+        sx, sy = self._cached_camera.to_screen(*world, self._cached_anchor, self._tile_scale)
+        if not (-px + 1 <= sx <= rect.width + px - 1 and -py + 1 <= sy <= rect.height + py - 1):
+          return False
+    return True
+
+  def _render_layer(self, target, draw, transparent=False) -> None:
+    import pyray as rl
+    from openpilot.selfdrive.ui.onroad.starpilot.nav_map import MAP_BACKGROUND
+    rl.begin_texture_mode(self._msaa.render_texture if self._msaa is not None else target)
+    rl.clear_background(rl.BLANK if transparent else MAP_BACKGROUND)
+    # Keep the world opaque and overlays premultiplied; ordinary blending would
+    # square translucent alpha before these textures are composited again.
+    rl.rl_set_blend_factors_separate(rl.RL_SRC_ALPHA, rl.RL_ONE_MINUS_SRC_ALPHA, rl.RL_ONE, rl.RL_ONE_MINUS_SRC_ALPHA,
+                                    rl.RL_FUNC_ADD, rl.RL_FUNC_ADD)
+    rl.begin_blend_mode(rl.BlendMode.BLEND_CUSTOM_SEPARATE)
     rl.rl_push_matrix()
-    rl.rl_scalef(scale_x, scale_y, 1.0)
-    nav_map.render_prepared(rl.Rectangle(0, 0, rect.width, rect.height))
+    rl.rl_translatef(MAP_BORDER, MAP_BORDER, 0)
+    rl.rl_scalef(*self._scale, 1.0)
+    draw()
     rl.rl_pop_matrix()
+    rl.end_blend_mode()
     rl.end_texture_mode()
     if self._msaa is not None:
-      self._msaa.resolve(self._texture)
-    self._texture_valid = True
-    self.redraws += 1
+      self._msaa.resolve(target)
 
   def draw(self, rect) -> None:
     import pyray as rl
     if self._texture is None or not self._texture_valid:
       return
     texture = self._texture.texture
-    # Render textures are stored bottom-up; a negative source height flips them back.
-    rl.draw_texture_pro(texture, rl.Rectangle(0, 0, texture.width, -texture.height), rect, rl.Vector2(0, 0), 0.0, rl.WHITE)
+    sx, sy = self._scale
+    origin = rl.Vector2(0, 0)
+    source = rl.Rectangle(0, 0, texture.width, -texture.height)
+    padded = rl.Rectangle(-MAP_BORDER / sx, -MAP_BORDER / sy, texture.width / sx, texture.height / sy)
+    center = self._camera.to_screen(self._cached_camera.x, self._cached_camera.y, self._anchor, self._tile_scale)
+    zoom = 2 ** (self._camera.zoom - self._cached_camera.zoom)
+    rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
+    rl.rl_push_matrix()
+    rl.rl_translatef(rect.x, rect.y, 0)
+    rl.rl_push_matrix()
+    rl.rl_translatef(*center, 0)
+    rl.rl_rotatef(self._cached_camera.bearing - self._camera.bearing, 0, 0, 1)
+    rl.rl_scalef(zoom, zoom, 1)
+    rl.rl_translatef(-self._cached_anchor[0], -self._cached_anchor[1], 0)
+    rl.draw_texture_pro(texture, source, padded, origin, 0, rl.WHITE)
+    rl.rl_pop_matrix()
+    self._map._draw_cached_car(self._camera, self._anchor)
+    rl.begin_blend_mode(rl.BlendMode.BLEND_ALPHA_PREMULTIPLY)
+    rl.draw_texture_pro(self._overlay.texture, source, padded, origin, 0, rl.WHITE)
+    rl.end_blend_mode()
+    rl.rl_pop_matrix()
+    rl.end_scissor_mode()
 
   def _unload_texture(self) -> None:
     import pyray as rl
     if self._texture is not None:
       rl.unload_render_texture(self._texture)
       self._texture = None
+    if self._overlay is not None:
+      rl.unload_render_texture(self._overlay)
+      self._overlay = None
+    self._overlay_key = None
+    self._texture_valid = False
     if self._msaa is not None:
       self._msaa.unload()
       self._msaa = None

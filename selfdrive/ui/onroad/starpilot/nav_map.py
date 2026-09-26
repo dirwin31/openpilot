@@ -519,7 +519,10 @@ class NavMapView(Widget):
     speed = max(0.0, float(state.get("speed", 0.0) or 0.0))
     updated = float(state.get("updatedAtMonotonic", 0.0) or 0.0)
     fresh = fresh and bool(state.get("hasFix", True)) and (updated <= 0.0 or now - updated < GPS_STALE_SECONDS)
-    self._gps = GpsFix(latitude, longitude, bearing if math.isfinite(bearing) else 0.0, speed, now, fresh)
+    # AA polls at 5 Hz while positions are published at 4 Hz. Starting dead
+    # reckoning at read time instead of publish time introduces periodic backsteps.
+    received = updated if ui_state.android_auto_car_view and 0.0 < updated <= now else now
+    self._gps = GpsFix(latitude, longitude, bearing if math.isfinite(bearing) else 0.0, speed, received, fresh)
     self._update_route_progress()
 
   def _car_world(self, now: float) -> tuple[float, float] | None:
@@ -612,14 +615,18 @@ class NavMapView(Widget):
 
   # ── drawing ───────────────────────────────────────────────────────────────
 
-  def _render(self, rect: rl.Rectangle):
-    now = time.monotonic()
+  def _advance_camera(self, rect: rl.Rectangle, now: float):
     dt = max(0.0, min(0.5, now - self._last_frame))
     self._last_frame = now
-    self._record_draw(now)
-    self._dirty = False
     target, anchor, follow = self._target_camera(rect, now)
     self._step_camera(target, dt, follow)
+    return anchor
+
+  def _render(self, rect: rl.Rectangle):
+    now = time.monotonic()
+    anchor = self._advance_camera(rect, now)
+    self._record_draw(now)
+    self._dirty = False
     camera = self._camera
     tile_scale = self._tile_scale()
 
@@ -628,14 +635,21 @@ class NavMapView(Widget):
       rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
     try:
       if self._gps is not None or self._preview_active:
-        self._draw_tiles(rect, camera, anchor, tile_scale)
-        self._draw_routes(rect, camera, anchor, tile_scale)
-        self._draw_destination(camera, anchor, tile_scale)
+        self._draw_world(rect, camera, anchor, tile_scale)
         self._draw_car(camera, anchor, tile_scale, now)
     finally:
       if self._clip:
         rl.end_scissor_mode()
 
+    self._draw_overlays(rect, now)
+
+  def _draw_world(self, rect, camera, anchor, tile_scale):
+    if self._gps is not None or self._preview_active:
+      self._draw_tiles(rect, camera, anchor, tile_scale)
+      self._draw_routes(rect, camera, anchor, tile_scale)
+      self._draw_destination(camera, anchor, tile_scale)
+
+  def _draw_overlays(self, rect: rl.Rectangle, now: float):
     center_message = self._center_message()
     if center_message is not None:
       self._draw_center_message(rect, *center_message)
@@ -755,6 +769,10 @@ class NavMapView(Widget):
     x, y = camera.to_screen(car[0], car[1], anchor, tile_scale)
     fresh = self._gps is not None and self._gps.fresh
     heading = math.radians((self._display_bearing if fresh else 0.0) - camera.bearing)
+    self._draw_car_shape(x, y, heading, fresh)
+
+  @staticmethod
+  def _draw_car_shape(x: float, y: float, heading: float, fresh: bool) -> None:
     center = rl.Vector2(x, y)
     rl.draw_circle_v(center, 34.0, rl.Color(64, 150, 255, 50 if fresh else 25))
     if not fresh:
@@ -771,6 +789,26 @@ class NavMapView(Widget):
     for shape, color in ((outline, CAR_FILL), (inner, CAR_ACCENT)):
       _triangle(shape[0], shape[1], shape[2], color)
       _triangle(shape[0], shape[2], shape[3], color)
+
+  def _draw_cached_car(self, camera: Camera, anchor: tuple[float, float]) -> None:
+    """AA's follow view keeps the marker anchored, even when the map cache is held."""
+    if self._gps is None:
+      return
+    fresh = self._gps.fresh
+    heading = (self._display_bearing if fresh else 0.0) - camera.bearing
+    texture = gui_app.cached_render_texture(f"aa_map_car:{fresh}", 72, 72,
+                                           lambda: self._draw_car_shape(36, 36, 0, fresh), supersample=2)
+    if texture is None:
+      rl.rl_set_blend_factors_separate(rl.RL_SRC_ALPHA, rl.RL_ONE_MINUS_SRC_ALPHA, rl.RL_ONE, rl.RL_ONE_MINUS_SRC_ALPHA,
+                                      rl.RL_FUNC_ADD, rl.RL_FUNC_ADD)
+      rl.begin_blend_mode(rl.BlendMode.BLEND_CUSTOM_SEPARATE)
+      self._draw_car_shape(*anchor, math.radians(heading), fresh)
+      rl.end_blend_mode()
+      return
+    rl.begin_blend_mode(rl.BlendMode.BLEND_ALPHA_PREMULTIPLY)
+    rl.draw_texture_pro(texture, rl.Rectangle(0, 0, texture.width, -texture.height),
+                        rl.Rectangle(*anchor, 72, 72), rl.Vector2(36, 36), heading, rl.WHITE)
+    rl.end_blend_mode()
 
   # ── overlays ──────────────────────────────────────────────────────────────
 

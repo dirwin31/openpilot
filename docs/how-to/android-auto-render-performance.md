@@ -90,7 +90,7 @@ path. No tile-cache format, downloading, eviction or worker behavior changed:
 downloaded tiles already load and decode on background workers. This change
 addresses route CPU work that remains even with warm tiles, not download speed.
 
-In a synthetic warm-tile Mac GPU benchmark at a 537x720 split-map target with
+In a synthetic route-drawing Mac GPU benchmark at a 537x720 split-map target with
 4x MSAA, median route-draw submission times over 300 measured redraws were:
 
 | Route points | Full-route processing | Trimmed processing |
@@ -105,10 +105,60 @@ with identical output bytes across headings, progress positions and route ends.
 The host run used an isolated UI-state stub because the checkout's messaging
 extensions target Linux; broader AA navigation tests still need a device run.
 
-AA output FPS, the map's existing 15 Hz redraw budget, anti-aliasing and safety
-checks are unchanged. This targets long-route frame-time spikes; it does not
-claim 30 Hz map animation. Raising map cadence requires a fresh device profile
-showing sufficient GPU headroom alongside driver monitoring.
+The route-culling change alone leaves AA output FPS, the map's 15 Hz redraw
+budget, anti-aliasing and safety checks unchanged. It targets long-route
+frame-time spikes, not animation cadence.
+
+### Smooth AA map motion
+
+The AA map now moves its cached world image on every car frame, while retaining
+the existing average 15 Hz schedule for drawing tiles, routes and destinations.
+Camera position, heading and zoom advance at the car-frame cadence. A 32-physical-
+pixel border provides room for the intermediate transform; all four viewport
+corners must remain inside that cache. Otherwise the previous view is held until
+the next scheduled redraw, rather than exposing gaps or increasing GPU redraws.
+The map is clipped to its pane, including in scaled left/right split layouts.
+
+Guidance/status graphics use a separate premultiplied texture, refreshed on
+message/state changes and once a second for time-dependent text. It shares the
+world's MSAA target, rather than allocating a second multisampled target. The
+car marker stays anchored and uses two small supersampled sprites (fresh/stale),
+rotated each frame. Resizing invalidates both layers. Native displays still use
+the original direct rendering path; tile storage and safety checks are unchanged.
+
+AA dead reckoning also uses the position's published monotonic timestamp instead
+of the later UI-read time. The 4 Hz publisher and 5 Hz polling previously caused
+periodic position resets even at constant speed. Missing/future timestamps fall
+back to read time. This display-only change adds no GPU work and leaves native
+maps' time reference unchanged.
+
+There is a real cost: the border adds approximately 22% to a 537x720 map target's
+area, and the overlay needs one extra render texture. RGBA color storage alone
+increases by about 2.1 MiB for that size, before depth/MSAA allocations. Extra
+composition and camera math are not free. In a synthetic Mac warm-tile benchmark
+with a 2,000-point route, 4x MSAA, one guidance update per second, and 30 car
+frames/second, two runs per variant measured these mean per-frame times:
+
+| Map preparation + composition | Previous cache | Moving cache |
+| --- | ---: | ---: |
+| Renderer-thread CPU | 0.243–0.248 ms | 0.324–0.330 ms |
+| Wall time including GPU completion | 0.841–0.862 ms | 1.101–1.104 ms |
+
+Each run discarded 60 warm-up frames and measured 600 frames. Both variants
+redrew the world 330 times over 660 simulated car frames. The completion wait
+was benchmark-only; no production synchronization was added. These numbers are
+not comma measurements, isolated GPU timings, or whole-UI FPS results.
+
+157 targeted host tests passed, including real GPU checks for intermediate motion,
+rotation/zoom, edge coverage, scaled split clipping, alpha, marker orientation,
+resizing, cache teardown, stationary idling and the unchanged redraw budget.
+A simulated 4 Hz publisher/5 Hz reader verifies continuous constant-speed motion.
+The run used an isolated UI-state stub for Linux-only messaging dependencies.
+The device reported onroad, so no device rendering benchmark or deployment was
+performed. Actual AA frame delivery, thermal/memory pressure and driver-monitoring
+headroom still need a matched device comparison. GPS jumps, stale fixes and cache
+coverage limits can still cause a hold; this is not a promise of eliminating every
+possible stutter.
 
 ### On-device follow-up
 
