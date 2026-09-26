@@ -400,12 +400,14 @@ class Tici(HardwareBase):
       affine_irq(6, n)
 
   def get_gpu_usage_percent(self):
+    """Return Qualcomm GPU utilization, or -1 when the sysfs sample is unavailable."""
     try:
       with open('/sys/class/kgsl/kgsl-3d0/gpubusy') as f:
         used, total = f.read().strip().split()
-      return 100.0 * int(used) / int(total)
+      used, total = int(used), int(total)
+      return 100.0 * used / total if total > 0 else -1
     except Exception:
-      return 0
+      return -1
 
   def initialize_hardware(self):
     if self.amplifier is not None:

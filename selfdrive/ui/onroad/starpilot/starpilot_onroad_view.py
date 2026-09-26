@@ -330,7 +330,7 @@ class StarPilotOnroadView(AugmentedRoadView):
     # Gather device stats
     device_state = ui_state.sm["deviceState"] if ui_state.sm.valid.get("deviceState", False) else None
     cpu_val = 0
-    gpu_val = 0
+    gpu_val = -1
     temp_val = 0
     mem_val = 0
     mem_gb = 0.0
@@ -357,7 +357,7 @@ class StarPilotOnroadView(AugmentedRoadView):
     if show_cpu:
       parts.append(f"CPU: {cpu_val}%")
     if show_gpu:
-      parts.append(f"GPU: {gpu_val}%")
+      parts.append(f"GPU: {gpu_val}%" if gpu_val >= 0 else "GPU: N/A")
     if show_temp:
       parts.append(f"TEMP: {temp_val}°C")
     if show_memory:

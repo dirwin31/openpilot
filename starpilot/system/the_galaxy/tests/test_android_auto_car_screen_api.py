@@ -19,6 +19,7 @@ def test_defaults_then_partial_updates_are_saved_for_car_ui(monkeypatch, tmp_pat
   response = client.get("/api/android_auto/car_screen")
   assert response.status_code == 200 and response.headers["Cache-Control"].startswith("no-store")
   assert response.get_json()["settings"] == car_screen.DEFAULTS
+  assert {metric["value"] for metric in response.get_json()["status_metrics"]} == set(car_screen.STATUS_METRICS)
 
   assert client.post("/api/android_auto/car_screen", json={"map_side": "left"}).get_json()["settings"]["map_side"] == "left"
   blind_spot = client.post("/api/android_auto/car_screen", json={"blind_spot_monitors": False, "blind_spot_min_speed_ms": 8.0}).get_json()["settings"]
@@ -31,6 +32,8 @@ def test_defaults_then_partial_updates_are_saved_for_car_ui(monkeypatch, tmp_pat
   sleeping = client.post("/api/android_auto/car_screen", json={"sleep_device_screen": True}).get_json()["settings"]
   assert sleeping == {**saved, "sleep_device_screen": True}
   assert car_screen.load(path) == sleeping
+  slots = ["cpu", "cpu", "memory", "temperature", "friction", "steer_delay"]
+  assert client.post("/api/android_auto/car_screen", json={"status_slots": slots}).get_json()["settings"]["status_slots"] == slots
 
 
 def test_invalid_values_are_rejected_without_saving(monkeypatch, tmp_path):
@@ -40,6 +43,8 @@ def test_invalid_values_are_rejected_without_saving(monkeypatch, tmp_path):
   assert client.post("/api/android_auto/car_screen", json={"blind_spot_monitors": "off"}).status_code == 400
   assert client.post("/api/android_auto/car_screen", json={"blind_spot_min_speed_ms": -1}).status_code == 400
   assert client.post("/api/android_auto/car_screen", json={"sleep_device_screen": "true"}).status_code == 400
+  assert client.post("/api/android_auto/car_screen", json={"status_slots": ["cpu"] * 5}).status_code == 400
+  assert client.post("/api/android_auto/car_screen", json={"status_slots": ["cpu"] * 5 + ["unknown"]}).status_code == 400
   assert client.post("/api/android_auto/car_screen", data="nope", content_type="application/json").status_code == 400
   assert not path.exists()
 
@@ -50,8 +55,9 @@ def test_car_screen_settings_live_under_vehicle_toggle():
   assert "AndroidAutoCarScreenPanel" in settings and "activeSection.name === 'Vehicle' && values.AndroidAutoEnabled" in settings
   assert 'title="Android Auto"' in settings and 'p.key === "AndroidAutoEnabled"' in settings
   assert 'v-else-if="error"' in panel and "attempt < 3" in panel and "@click=\"load\"" in panel
-  for value in ('"split"', '"driving"', '"map"', "map_side", "camera", "blind_spot_monitors", "blind_spot_min_speed_ms"):
+  for value in ('"split"', '"driving"', '"map"', "map_side", "camera", "blind_spot_monitors", "blind_spot_min_speed_ms", "status_slots"):
     assert value in panel
+  assert panel.count("<GalaxySelect") == 1 and "v-for=\"(metric, index) in settings.status_slots\"" in panel
   assert "fetch(" not in panel
 
 

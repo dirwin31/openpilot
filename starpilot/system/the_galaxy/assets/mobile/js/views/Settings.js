@@ -13,7 +13,7 @@ import { GalaxySection } from "../components/GalaxySection.js"
 import { DevModeBanner } from "../components/DevModeBanner.js"
 import { LanguageSelector } from "../components/LanguageSelector.js"
 import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
-import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-3"
+import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-4"
 import { languageState, setLanguage, t } from "../i18n.js"
 
 const LEGACY_PERSONALITY_KEYS = new Set([

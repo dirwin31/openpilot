@@ -14,13 +14,20 @@ def test_settings_default_validate_and_round_trip(tmp_path):
   assert car_screen.load(path) == car_screen.DEFAULTS
   saved = car_screen.save({"onroad_view": "map", "map_side": "left", "camera": False,
                            "blind_spot_monitors": False, "blind_spot_min_speed_ms": 8.0, "bogus": 1}, path)
-  assert saved == {"onroad_view": "map", "map_side": "left", "camera": False,
-                   "blind_spot_monitors": False, "blind_spot_min_speed_ms": 8.0, "sleep_device_screen": False}
+  assert saved == {**car_screen.DEFAULTS, "onroad_view": "map", "map_side": "left", "camera": False,
+                   "blind_spot_monitors": False, "blind_spot_min_speed_ms": 8.0}
   assert car_screen.load(path) == saved
   assert car_screen.normalize({"onroad_view": "sideways", "camera": "yes", "blind_spot_monitors": "yes",
                                "blind_spot_min_speed_ms": -1}) == car_screen.DEFAULTS
   path.write_text("{not json")
   assert car_screen.load(path) == car_screen.DEFAULTS
+
+
+def test_default_status_slots_are_not_shared_between_settings(tmp_path):
+  first = car_screen.load(tmp_path / "missing.json")
+  first["status_slots"][0] = "cpu"
+  assert car_screen.load(tmp_path / "missing.json")["status_slots"] == car_screen.DEFAULTS["status_slots"]
+  assert car_screen.DEFAULTS["status_slots"][0] == "steer_delay"
 
 
 def test_device_screen_sleep_is_opt_in_and_strictly_boolean(tmp_path):
