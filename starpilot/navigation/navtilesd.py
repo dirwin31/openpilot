@@ -228,6 +228,20 @@ class Navtilesd:
     self._active_keys = []
     self.area_service.prefetch([])
 
+  def _update_save_viewed(self) -> None:
+    """Pin tiles already on disk when save-as-you-drive is switched on.
+
+    The setting handler leaves a one-shot request; here we queue every tile in the
+    temporary cache so navtilesd promotes it into pinned storage and it turns green.
+    """
+    if not self.maps.promote_requested():
+      return
+    self.maps.clear_promote_request()
+    if not self.maps.save_viewed_cache():
+      return
+    marked = self.maps.mark_cached_tiles()
+    cloudlog.info(f"navtilesd: queued {marked} cached tiles to save as you drive")
+
   def _update_auto_saved(self) -> None:
     """Promote tiles viewed while driving into the same pinned store as saved areas."""
     if self._offline_bytes is None:
@@ -367,6 +381,7 @@ class Navtilesd:
     self._update_device()
     self._update_route(now)
     self._update_areas(now, wall)
+    self._update_save_viewed()
     self._update_auto_saved()
     self._write_status(now, wall)
 

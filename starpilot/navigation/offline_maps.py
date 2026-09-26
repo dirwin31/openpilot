@@ -14,6 +14,7 @@ State is plain JSON files beside the tiles, each written atomically by one side:
   offline/auto_saved/...       markers protecting tiles saved while driving
   offline/auto_saved_pending/  tiles waiting to be promoted from regular cache
   offline/settings.json        save-as-you-drive preference (UI writes, map reads)
+  offline/promote_viewed       one-shot request to pin tiles already in the regular cache
   offline/status.json          download progress (navtilesd writes)
   offline/preview_route.json   the route being previewed in the UI (UI writes)
 """
@@ -260,6 +261,7 @@ class OfflineMaps:
     self.status_path = self.root / "status.json"
     self.preview_path = self.root / "preview_route.json"
     self.settings_path = self.root / "settings.json"
+    self.promote_path = self.root / "promote_viewed"
     self.auto_saved_dir = self.root / "auto_saved"
     self.auto_saved_pending_dir = self.root / "auto_saved_pending"
 
@@ -336,6 +338,57 @@ class OfflineMaps:
 
   def set_save_viewed_cache(self, enabled: bool) -> None:
     _write_json(self.settings_path, {"save_viewed_cache": bool(enabled)})
+    if enabled:
+      # Tiles already in the temporary cache should turn green right away, not only
+      # ones viewed after this point. navtilesd picks up the request and promotes them.
+      self.request_promote_cached()
+    else:
+      self.clear_promote_request()
+
+  def request_promote_cached(self) -> None:
+    try:
+      self.promote_path.parent.mkdir(parents=True, exist_ok=True)
+      self.promote_path.touch()
+    except OSError:
+      pass
+
+  def promote_requested(self) -> bool:
+    return self.promote_path.is_file()
+
+  def clear_promote_request(self) -> None:
+    try:
+      self.promote_path.unlink()
+    except OSError:
+      pass
+
+  def cached_regular_tiles(self) -> list[TileKey]:
+    """Tiles present in the temporary route cache."""
+    root = TileCache(self.base, DEFAULT_STYLE).root
+    keys = []
+    try:
+      for path in root.glob("*/*/*.png"):
+        try:
+          keys.append(TileKey(int(path.parent.parent.name), int(path.parent.name), int(path.stem)))
+        except ValueError:
+          continue
+    except OSError:
+      pass
+    return keys
+
+  def mark_cached_tiles(self) -> int:
+    """Queue every tile already in the temporary cache for promotion into pinned storage.
+
+    Called when save-as-you-drive is switched on so tiles on disk turn green without
+    waiting to be viewed again. Already-pinned or already-marked tiles are left alone.
+    """
+    pinned = TileCache(self.root, DEFAULT_STYLE)
+    marked = 0
+    for key in self.cached_regular_tiles():
+      if pinned.contains(key) or self.is_auto_saved(key):
+        continue
+      if self.mark_auto_saved(key):
+        marked += 1
+    return marked
 
   def auto_saved_marker(self, key: TileKey) -> Path:
     return self.auto_saved_dir / str(key.z) / str(key.x) / f"{key.y}.saved"
