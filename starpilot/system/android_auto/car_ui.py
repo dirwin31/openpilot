@@ -41,12 +41,12 @@ HOME_ONROAD_TIMEOUT = 45.0  # back to the drive after this long untouched on the
 STATE_REFRESH = 5.0
 MAP_ONLY_BORDER = 14.0
 STATS_INTERVAL = 10.0
-GPU_SAMPLE_EVERY = 30  # frames: wait for the GPU on one frame in 30 to measure gpu_ms
+GPU_SAMPLE_EVERY = 30  # only with AA_GPU_TIMING=1; glFinish perturbs normal rendering
 
 # Per-frame averages in render_stats. Wall-clock milliseconds except cpu_ms, the
 # renderer thread's own CPU time: frame_ms well above cpu_ms means it was waiting
 # (for a CPU core, it runs at nice 10, or for the GPU driver), not working.
-# gpu_ms, measured on every GPU_SAMPLE_EVERY-th frame only, is how long the GPU
+# gpu_ms, when explicitly enabled on every GPU_SAMPLE_EVERY-th frame, is how long the GPU
 # still had to go after the CPU finished that frame.
 STAT_KEYS = ("update_ms", "map_ms", "layout_ms", "map_draw_ms", "menu_ms", "compose_ms", "cache_ms", "convert_ms",
              "gpu_ms", "readback_ms", "readback_wait_ms", "publish_ms", "frame_ms", "cpu_ms")
@@ -586,25 +586,28 @@ def run(frames_path: str, touch_path: str) -> int:
   map_status: MapOnlyStatus | None = None
 
   content = rl.load_render_texture(visible_w, visible_h)
-  from openpilot.system.ui.lib.msaa import MsaaTarget, install_watertight_shapes
-  msaa = MsaaTarget.create(visible_w, visible_h)
-  if msaa is not None:
-    install_watertight_shapes()
-  output = rl.load_render_texture(request.width, request.height)
+  # The second UI shares the GPU with driver monitoring. Single-sample rendering
+  # avoids a full-size multisampled color/depth target and its resolve every frame.
   converter = None
   if request.flags & FLAG_NV12:
     from openpilot.starpilot.system.android_auto import gpu_nv12
     try:
-      converter = gpu_nv12.Nv12Converter(request.width, request.height)
+      converter = gpu_nv12.Nv12Converter(request.width, request.height,
+                                         margin_w=request.margin_w, margin_h=request.margin_h, compose=True)
     except Exception as error:
       print(json.dumps({"event": "nv12_unavailable", "error": str(error)[:200]}), flush=True)
   pixel_format = FORMAT_NV12 if converter is not None else FORMAT_RGBA
+  # NV12 folds margins and the vertical flip into conversion. Only the RGBA
+  # fallback needs a separate composition target.
+  output = rl.load_render_texture(request.width, request.height) if converter is None else None
   readback = FrameReadback(frame_bytes(request.width, request.height, pixel_format),
                            asynchronous=bool(request.flags & FLAG_ASYNC_READBACK))
-  rgba_regions = [(output.id, request.width, request.height, 0)]
+  rgba_regions = [(output.id, request.width, request.height, 0)] if output is not None else []
+  gpu_timing = os.getenv("AA_GPU_TIMING") == "1"
   print(json.dumps({"event": "pipeline", "format": "nv12" if converter is not None else "rgba",
                     "readback": "async" if readback.asynchronous else "sync",
-                    "msaa": msaa.samples if msaa is not None else 0, "fast_structs": len(fast_structs)}), flush=True)
+                    "msaa": 0, "fused_compose": converter is not None, "gpu_timing": gpu_timing,
+                    "fast_structs": len(fast_structs)}), flush=True)
   touch = TouchInput(MouseEvent, MousePos, logical_w, logical_h)
   # A few widgets (list buttons, StarPilot sliders) poll raylib's pointer directly;
   # without a window it would stay at 0,0, so report the car touch position instead.
@@ -696,7 +699,7 @@ def run(frames_path: str, touch_path: str) -> int:
 
       mark = time.monotonic()
       map_draw = 0.0
-      rl.begin_texture_mode(msaa.render_texture if msaa is not None else content)
+      rl.begin_texture_mode(content)
       rl.clear_background(rl.Color(6, 6, 15, 255))
       rl.rl_push_matrix()
       rl.rl_scalef(scale_x, scale_y, 1.0)
@@ -733,25 +736,22 @@ def run(frames_path: str, touch_path: str) -> int:
       stats.add("menu_ms", mark - menu_began)
       rl.rl_pop_matrix()
       rl.end_texture_mode()
-      if msaa is not None:
-        msaa.resolve(content)
-
-      # Centre inside the car's margins; drawing with a positive source height
-      # flips on the GPU so the readback is top-down for the encoder.
-      rl.begin_texture_mode(output)
-      rl.clear_background(rl.Color(6, 6, 15, 255))
-      rl.draw_texture_pro(content.texture, rl.Rectangle(0, 0, visible_w, visible_h),
-                          rl.Rectangle(request.margin_w // 2, request.margin_h // 2, visible_w, visible_h),
-                          rl.Vector2(0, 0), 0.0, rl.WHITE)
-      rl.end_texture_mode()
+      if output is not None:
+        # RGBA fallback: centre inside the car's margins and flip to top-down.
+        rl.begin_texture_mode(output)
+        rl.clear_background(rl.Color(6, 6, 15, 255))
+        rl.draw_texture_pro(content.texture, rl.Rectangle(0, 0, visible_w, visible_h),
+                            rl.Rectangle(request.margin_w // 2, request.margin_h // 2, visible_w, visible_h),
+                            rl.Vector2(0, 0), 0.0, rl.WHITE)
+        rl.end_texture_mode()
       stats.add("compose_ms", time.monotonic() - mark)
       mark = time.monotonic()
       gui_app._populate_render_texture_cache()
       stats.add("cache_ms", time.monotonic() - mark)
       mark = time.monotonic()
-      regions = converter.convert(output.texture) if converter is not None else rgba_regions
+      regions = converter.convert(content.texture) if converter is not None else rgba_regions
       stats.add("convert_ms", time.monotonic() - mark)
-      if frame_count % GPU_SAMPLE_EVERY == 0:
+      if gpu_timing and frame_count % GPU_SAMPLE_EVERY == 0:
         mark = time.monotonic()
         readback.gpu_finish()
         stats.add("gpu_ms", time.monotonic() - mark, sampled=True)
@@ -765,7 +765,7 @@ def run(frames_path: str, touch_path: str) -> int:
       done = time.monotonic()
       stats.add("frame_ms", done - frame_began)
       stats.add("cpu_ms", time.thread_time() - cpu_began)
-      report = stats.frame_done(done)
+      report = stats.frame_done(done, gpu_timing=gpu_timing)
       if report is not None:
         print(json.dumps(report), flush=True)
         if sampler is not None:
@@ -780,10 +780,9 @@ def run(frames_path: str, touch_path: str) -> int:
     readback.close()
     if converter is not None:
       converter.close()
-    if msaa is not None:
-      msaa.unload()
     rl.unload_render_texture(content)
-    rl.unload_render_texture(output)
+    if output is not None:
+      rl.unload_render_texture(output)
     context.close()
 
 
