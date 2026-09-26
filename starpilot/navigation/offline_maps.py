@@ -63,6 +63,7 @@ AREA_MAX_RADIUS_KM = 150.0
 # The native on-device picker remains button-based; The Galaxy supports every
 # radius in this range and derives detail with ``area_zoom_for_radius``.
 AREA_PRESETS = ((10.0, 16), (30.0, 15), (60.0, 14), (150.0, 13))
+AREA_ZOOM_CHOICES = (14, 15, 16)  # detail The Galaxy lets the user pick instead of the radius default
 
 
 def _now() -> float:

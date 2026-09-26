@@ -139,6 +139,7 @@ export const AndroidAutoOfflinePanel = {
       areaPoint: null,
       areaRadiusKm: 10,
       areaRadiusInitialized: false,
+      areaZoom: null,
       areaEstimate: null,
       areaLoading: false,
       areaError: "",
@@ -199,6 +200,7 @@ export const AndroidAutoOfflinePanel = {
     selectedRoute() { return this.routes[this.routeIndex] || null },
     areaRadiusMin() { return Number(this.summary?.areaRadius?.min_km) || 1 },
     areaRadiusMax() { return Number(this.summary?.areaRadius?.max_km) || 150 },
+    areaZooms() { return this.summary?.areaZooms || [14, 15, 16] },
   },
   watch: {
     items() { this.drawSaved() },
@@ -370,6 +372,14 @@ export const AndroidAutoOfflinePanel = {
       const value = Number(event?.target?.value)
       this.areaRadiusKm = Math.min(this.areaRadiusMax, Math.max(this.areaRadiusMin, Number.isFinite(value) ? value : 10))
       this.drawAreaSelection()
+      this.scheduleAreaEstimate()
+    },
+    setAreaZoom(event) {
+      const value = Number(event?.target?.value)
+      this.areaZoom = this.areaZooms.includes(value) ? value : null
+      this.scheduleAreaEstimate()
+    },
+    scheduleAreaEstimate() {
       if (!this.areaPoint) return
       clearTimeout(this.areaTimer)
       this.areaRequest += 1
@@ -388,6 +398,7 @@ export const AndroidAutoOfflinePanel = {
       try {
         const payload = await api.estimateAutoOffline({
           latitude: this.areaPoint.latitude, longitude: this.areaPoint.longitude, radius_km: this.areaRadiusKm,
+          max_zoom: this.areaZoom,
         })
         if (request !== this.areaRequest) return
         if (!payload?.area) throw new Error("No area estimate returned. Try again.")
@@ -408,7 +419,7 @@ export const AndroidAutoOfflinePanel = {
       try {
         await api.addAutoOfflineArea({
           name: this.areaName(), latitude: this.areaPoint.latitude, longitude: this.areaPoint.longitude,
-          radius_km: this.areaRadiusKm,
+          radius_km: this.areaRadiusKm, max_zoom: this.areaZoom,
         })
         showSnackbar(`Saving ${radiusLabel(this.areaRadiusKm, this.metric)} around ${this.areaName()} for offline use.`)
         this.areaRequest += 1
@@ -584,6 +595,53 @@ export const AndroidAutoOfflinePanel = {
 
       <section class="gx-card" style="margin:0;">
         <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
+          <i class="bi bi-bounding-box-circles" style="font-size:1.15rem;"></i>
+          <span class="gx-section__title" style="font-size:var(--fs-base);">Save an Area</span>
+        </div>
+        <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:8px;">
+          <p style="margin:0; color:var(--text-muted); font-size:var(--fs-xs);">
+            Download a coverage radius around a point. Smaller radii include full street-level turns and residential roads, while larger radii cover broader highway networks within device storage.
+          </p>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!position" @click="useCurrentLocation"><i class="bi bi-crosshair"></i> Current Location</button>
+            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!mapReady" @click="pickOnMap = !pickOnMap">
+              <i class="bi bi-pin-map"></i> {{ pickOnMap ? 'Cancel' : 'Pick on Map' }}
+            </button>
+            <PlaceSearch :token="token" :position="position" placeholder="Or search a city or place" @select="chooseAreaPoint($event)" />
+          </div>
+          <template v-if="areaPoint">
+            <div class="gx-row__label" style="margin-top:4px;">Around {{ areaName() }}</div>
+            <label style="display:grid; gap:5px;">
+              <span class="gx-row__label">Radius: {{ radiusLabel(areaRadiusKm, metric) }}</span>
+              <input type="range" :min="areaRadiusMin" :max="areaRadiusMax" step="1" :value="areaRadiusKm" @input="setAreaRadius" aria-label="Offline area radius" style="width:100%; accent-color:var(--primary);" />
+              <span class="gx-row__desc">The yellow circle on the map is the area that will be downloaded.</span>
+            </label>
+            <label style="display:grid; gap:5px;">
+              <span class="gx-row__label">Most detailed zoom</span>
+              <select class="gx-field" :value="areaZoom ?? ''" @change="setAreaZoom" aria-label="Most detailed zoom to download">
+                <option value="">Auto (based on radius)</option>
+                <option v-for="zoom in areaZooms" :key="zoom" :value="zoom">Zoom {{ zoom }}{{ ({14: ' · Road', 15: ' · City', 16: ' · Street'})[zoom] || '' }}</option>
+              </select>
+              <span class="gx-row__desc">Higher zoom shows more streets but needs many more tiles for the same radius.</span>
+            </label>
+            <div v-if="areaLoading" class="gx-row__desc" role="status">Sizing up the area...</div>
+            <GxNotice v-if="areaError" tone="danger" :text="areaError" style="margin:0;" />
+            <button v-if="areaError" type="button" class="gx-btn gx-btn--tonal" @click="estimateArea">Retry sizing</button>
+            <div v-if="areaEstimate" class="gx-row" style="border-top:none; min-height:0; padding:8px 0; flex-wrap:wrap; gap:8px;">
+              <div class="gx-row__info">
+                <span class="gx-row__label" style="font-weight:var(--fw-bold);">{{ radiusLabel(areaEstimate.radius_km, metric) }} radius · {{ areaEstimate.detail }} (zoom {{ areaEstimate.max_zoom }})</span>
+                <div style="font-size:var(--fs-xs); color:var(--text-muted); margin-top:2px;">
+                  {{ areaEstimate.fits ? 'Est. ' + formatBytes(areaEstimate.bytes) + ' · ' + areaEstimate.tiles.toLocaleString() + ' tiles' : 'Too large for available offline storage' }}
+                </div>
+              </div>
+              <button type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px; align-self:center;" :disabled="!areaEstimate.fits || !!busy" @click="saveArea">{{ busy === 'area' ? 'Adding to downloads...' : 'Download' }}</button>
+            </div>
+          </template>
+        </div>
+      </section>
+
+      <section class="gx-card" style="margin:0;">
+        <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
           <i class="bi bi-signpost-split" style="font-size:1.15rem;"></i>
           <span class="gx-section__title" style="font-size:var(--fs-base);">Make a Route Available Offline</span>
         </div>
@@ -631,12 +689,16 @@ export const AndroidAutoOfflinePanel = {
 
       <section v-if="token" class="gx-card" style="margin:0; overflow:hidden;">
         <div style="padding:10px; display:grid; gap:6px;">
-          <label><input type="checkbox" v-model="coverageEnabled" /> Show downloaded tiles</label>
-          <label v-if="coverageEnabled">Tile detail:
-            <select v-model.number="coverageZoom" class="gx-field" aria-label="Downloaded tile zoom level">
-              <option v-for="zoom in 19" :key="zoom - 1" :value="zoom - 1">Zoom {{ zoom - 1 }}{{ ({13: ' · Regional', 14: ' · Road', 15: ' · City', 16: ' · Street'})[zoom - 1] || '' }}</option>
-            </select>
-          </label>
+          <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <label v-if="coverageEnabled">Tile detail:
+              <select v-model.number="coverageZoom" class="gx-field" aria-label="Downloaded tile zoom level">
+                <option v-for="zoom in 19" :key="zoom - 1" :value="zoom - 1">Zoom {{ zoom - 1 }}{{ ({13: ' · Regional', 14: ' · Road', 15: ' · City', 16: ' · Street'})[zoom - 1] || '' }}</option>
+              </select>
+            </label>
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+              <input type="checkbox" v-model="coverageEnabled" /> Show downloaded tiles
+            </label>
+          </div>
           <div v-if="coverageEnabled" class="gx-row__desc">
             <span style="color:#34c778;">■ Saved offline</span> · <span style="color:#4096ff;">■ Temporary cache</span> · Purple outlines: requested areas.
             Coverage is for the selected zoom only; the background map is online.
@@ -649,45 +711,6 @@ export const AndroidAutoOfflinePanel = {
         </div>
         <div ref="map" style="height:280px; border-radius:var(--radius-md); overflow:hidden;"></div>
         <div v-if="pickOnMap" class="gx-note" style="margin:6px var(--sp-3);">Tap the map where the area should be centred.</div>
-      </section>
-
-      <section class="gx-card" style="margin:0;">
-        <div class="gx-section__header" style="min-height:42px; padding:8px var(--sp-3);">
-          <i class="bi bi-bounding-box-circles" style="font-size:1.15rem;"></i>
-          <span class="gx-section__title" style="font-size:var(--fs-base);">Save an Area</span>
-        </div>
-        <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:8px;">
-          <p style="margin:0; color:var(--text-muted); font-size:var(--fs-xs);">
-            Download a coverage radius around a point. Smaller radii include full street-level turns and residential roads, while larger radii cover broader highway networks within device storage.
-          </p>
-          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!position" @click="useCurrentLocation"><i class="bi bi-crosshair"></i> Current Location</button>
-            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!mapReady" @click="pickOnMap = !pickOnMap">
-              <i class="bi bi-pin-map"></i> {{ pickOnMap ? 'Cancel' : 'Pick on Map' }}
-            </button>
-            <PlaceSearch :token="token" :position="position" placeholder="Or search a city or place" @select="chooseAreaPoint($event)" />
-          </div>
-          <template v-if="areaPoint">
-            <div class="gx-row__label" style="margin-top:4px;">Around {{ areaName() }}</div>
-            <label style="display:grid; gap:5px;">
-              <span class="gx-row__label">Radius: {{ radiusLabel(areaRadiusKm, metric) }}</span>
-              <input type="range" :min="areaRadiusMin" :max="areaRadiusMax" step="1" :value="areaRadiusKm" @input="setAreaRadius" aria-label="Offline area radius" style="width:100%; accent-color:var(--primary);" />
-              <span class="gx-row__desc">The yellow circle on the map is the area that will be downloaded.</span>
-            </label>
-            <div v-if="areaLoading" class="gx-row__desc" role="status">Sizing up the area...</div>
-            <GxNotice v-if="areaError" tone="danger" :text="areaError" style="margin:0;" />
-            <button v-if="areaError" type="button" class="gx-btn gx-btn--tonal" @click="estimateArea">Retry sizing</button>
-            <div v-if="areaEstimate" class="gx-row" style="border-top:none; min-height:0; padding:8px 0; flex-wrap:wrap; gap:8px;">
-              <div class="gx-row__info">
-                <span class="gx-row__label" style="font-weight:var(--fw-bold);">{{ radiusLabel(areaEstimate.radius_km, metric) }} radius · {{ areaEstimate.detail }}</span>
-                <div style="font-size:var(--fs-xs); color:var(--text-muted); margin-top:2px;">
-                  {{ areaEstimate.fits ? 'Est. ' + formatBytes(areaEstimate.bytes) + ' · ' + areaEstimate.tiles.toLocaleString() + ' tiles' : 'Too large for available offline storage' }}
-                </div>
-              </div>
-              <button type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px; align-self:center;" :disabled="!areaEstimate.fits || !!busy" @click="saveArea">{{ busy === 'area' ? 'Adding to downloads...' : 'Download' }}</button>
-            </div>
-          </template>
-        </div>
       </section>
 
       <section class="gx-card" style="margin:0;">

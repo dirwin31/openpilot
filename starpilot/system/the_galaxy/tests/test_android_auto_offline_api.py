@@ -41,6 +41,21 @@ def test_area_estimate_then_save(monkeypatch, tmp_path):
   assert item["state"] == "queued" and item["id"] == area.id
 
 
+def test_area_zoom_can_be_chosen(monkeypatch, tmp_path):
+  client, maps = _client(monkeypatch, tmp_path)
+  assert client.get("/api/android_auto/offline").get_json()["areaZooms"] == [14, 15, 16]
+  auto = client.post("/api/android_auto/offline/estimate", json={"latitude": 36.1, "longitude": -115.2, "radius_km": 5, "max_zoom": None}).get_json()["area"]
+  chosen = client.post("/api/android_auto/offline/estimate", json={"latitude": 36.1, "longitude": -115.2, "radius_km": 5, "max_zoom": 14}).get_json()["area"]
+  assert (auto["max_zoom"], chosen["max_zoom"], chosen["detail"]) == (16, 14, "Road detail")
+  assert chosen["tiles"] < auto["tiles"]
+
+  assert client.post("/api/android_auto/offline/areas", json={"latitude": 36.1, "longitude": -115.2, "radius_km": 40, "max_zoom": 16}).status_code == 201
+  [area] = maps.areas()
+  assert (area.radius_km, area.max_zoom) == (40.0, 16)
+  for bad in (13, 17, "street"):
+    assert client.post("/api/android_auto/offline/estimate", json={"latitude": 36.1, "longitude": -115.2, "radius_km": 5, "max_zoom": bad}).status_code == 400
+
+
 def test_area_rejects_out_of_range_sizes_and_bad_points(monkeypatch, tmp_path):
   client, maps = _client(monkeypatch, tmp_path)
   assert client.post("/api/android_auto/offline/areas", json={"latitude": 36.1, "longitude": -115.2, "radius_km": 500, "max_zoom": 18}).status_code == 400
