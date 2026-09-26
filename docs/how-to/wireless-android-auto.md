@@ -170,15 +170,21 @@ Everything is under `/data/android_auto/logs/` on the comma:
 
 `render_stats` reports produced FPS and average per-frame wall times in
 milliseconds: `update_ms` (UI state and touch routing), `map_ms` (map tiles),
-`layout_ms` (drawing the layout), `map_draw_ms`, `menu_ms`, `compose_ms` (anti-aliasing
-resolve and placing the picture in the car's frame), `cache_ms`, `convert_ms` (GPU
-NV12 pass), `readback_ms`, `readback_wait_ms` (waiting for the GPU to finish the
+`layout_ms` (drawing the layout), `map_draw_ms`, `menu_ms`, `compose_ms` (ending the
+UI pass and, for RGBA fallback, placing the picture in the car's frame), `cache_ms`,
+`convert_ms` (GPU NV12 passes, including padding and flipping), `readback_ms`, `readback_wait_ms` (waiting for the GPU to finish the
 frame), `publish_ms` (copying it to android_autod), and `frame_ms` for the whole
 frame. `draw_ms` is the sum of the drawing sections, comparable with older logs.
 `cpu_ms` is the renderer's own CPU time: `frame_ms` well above `cpu_ms` means it was
 waiting for a CPU core (it runs at nice 10) or the GPU driver rather than working.
 The `pipeline` line at startup says whether frames are NV12 or RGBA and read back
-asynchronously. Compare these with the session's sent `fps`, `encode_ms`,
+asynchronously. The car renderer uses single-sample rendering (`msaa: 0`) to reduce
+GPU and memory traffic shared with driver monitoring. This makes polygon edges
+less smooth but preserves the negotiated resolution and configured frame rate.
+With NV12, `fused_compose: true` means margins and the vertical flip are handled
+inside conversion; there is no second full-size RGBA target or composition pass.
+RGBA fallback retains that pass for encoder compatibility.
+Compare these with the session's sent `fps`, `encode_ms`,
 `frame_age_p95_ms`, and receiver `pending` count to distinguish rendering delays
 from encoding or delivery delays.
 
@@ -190,8 +196,10 @@ reaches `render_profile_kb` it becomes `render_profile.1.txt` (replacing the old
 one) and a new file starts. Read the "on the stack" section: the innermost-function
 and line sections credit pure-Python work to the next raylib/GL call. It costs the
 renderer about 0.5 ms per frame; set `render_profile` to `false` to turn it off.
-`gpu_ms` in `render_stats` is measured on one frame in 30: how long the GPU still
-had to go after the CPU finished that frame.
+`gpu_ms` is disabled during normal rendering (`gpu_timing: false`, `gpu_ms: 0`).
+For a diagnostic run only, set `AA_GPU_TIMING=1` in the renderer's environment to
+measure how long the GPU still had to go after the CPU finished one frame in 30.
+This uses a blocking `glFinish`, so it changes the workload being measured.
 
 Without a car, `tools/android_auto/car_view_probe.py` renders the car layout on the
 comma and reports its frame rate and encode time (`--rgba --sync-readback
@@ -200,6 +208,22 @@ checks the GPU NV12 conversion against the CPU one. The Bluetooth
 panel shows sent FPS over five seconds, including startup time in that window.
 While the car shows its own screen, frame production pauses and the renderer stays
 loaded until the session ends.
+
+For the fused conversion's pixel regression checks (no car or settings changes):
+
+```bash
+AA_GL_TEST=1 python -m pytest -q -o addopts= --confcutdir=starpilot/system/android_auto/tests starpilot/system/android_auto/tests/test_gpu_nv12.py
+```
+
+These tests compare real GPU output with the original RGBA composition followed
+by CPU NV12 conversion, including odd margins, chroma at the padding boundary,
+and both readback modes. They support the comma's EGL context and macOS CGL.
+Pixel correctness on a desktop does not establish comma performance: after
+installing a renderer change, compare sent FPS and frame age with the same car
+settings, and check that `driverStateV2` and `driverMonitoringState` sustain 20 Hz
+under the same onroad workload. Do not relax the communication checks to make a
+slow model appear healthy. The model's `gpuExecutionTime` is elapsed wall time
+around its warp/inference/readback, not a hardware-only GPU measurement.
 
 Readable timeline of the latest session, without the hands-free chatter:
 
