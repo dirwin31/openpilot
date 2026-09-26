@@ -119,6 +119,14 @@ const PlaceSearch = {
   `,
 }
 
+// The zooms the car map actually draws; lower ones are only coarse fill-in tiles saved alongside them.
+const COVERAGE_ZOOMS = [
+  { zoom: 13, label: "Regional" },
+  { zoom: 14, label: "Road" },
+  { zoom: 15, label: "City" },
+  { zoom: 16, label: "Street" },
+]
+
 export const AndroidAutoOfflinePanel = {
   name: "AndroidAutoOfflinePanel",
   components: { GxNotice, PlaceSearch },
@@ -201,6 +209,7 @@ export const AndroidAutoOfflinePanel = {
     areaRadiusMin() { return Number(this.summary?.areaRadius?.min_km) || 1 },
     areaRadiusMax() { return Number(this.summary?.areaRadius?.max_km) || 150 },
     areaZooms() { return this.summary?.areaZooms || [14, 15, 16] },
+    coverageZooms() { return COVERAGE_ZOOMS },
   },
   watch: {
     items() { this.drawSaved() },
@@ -373,6 +382,10 @@ export const AndroidAutoOfflinePanel = {
       this.areaRadiusKm = Math.min(this.areaRadiusMax, Math.max(this.areaRadiusMin, Number.isFinite(value) ? value : 10))
       this.drawAreaSelection()
       this.scheduleAreaEstimate()
+    },
+    setCoverageZoom(event) {
+      const value = Number(event?.target?.value)
+      if (COVERAGE_ZOOMS.some((level) => level.zoom === value)) this.coverageZoom = value
     },
     setAreaZoom(event) {
       const value = Number(event?.target?.value)
@@ -618,11 +631,11 @@ export const AndroidAutoOfflinePanel = {
             </label>
             <label style="display:grid; gap:5px;">
               <span class="gx-row__label">Most detailed zoom</span>
-              <select class="gx-field" :value="areaZoom ?? ''" @change="setAreaZoom" aria-label="Most detailed zoom to download">
+              <GalaxySelect class="gx-field gx-field--full" :value="areaZoom ?? ''" @change="setAreaZoom" aria-label="Most detailed zoom to download">
                 <option value="">Auto (based on radius)</option>
-                <option v-for="zoom in areaZooms" :key="zoom" :value="zoom">Zoom {{ zoom }}{{ ({14: ' · Road', 15: ' · City', 16: ' · Street'})[zoom] || '' }}</option>
-              </select>
-              <span class="gx-row__desc">Higher zoom shows more streets but needs many more tiles for the same radius.</span>
+                <option v-for="zoom in areaZooms" :key="zoom" :value="zoom">{{ ({14: 'Road', 15: 'City', 16: 'Street'})[zoom] || 'Zoom ' + zoom }} (zoom {{ zoom }})</option>
+              </GalaxySelect>
+              <span class="gx-row__desc">Higher zoom shows more streets but needs many more tiles for the same radius. Lower-detail zooms are downloaded with it too, so the map keeps working when zoomed out, and only this level adds much storage.</span>
             </label>
             <div v-if="areaLoading" class="gx-row__desc" role="status">Sizing up the area...</div>
             <GxNotice v-if="areaError" tone="danger" :text="areaError" style="margin:0;" />
@@ -639,21 +652,28 @@ export const AndroidAutoOfflinePanel = {
           </template>
           <template v-if="token">
             <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; border-top:1px solid var(--glass-border, rgba(127,127,127,.15)); padding-top:10px;">
-              <label v-if="coverageEnabled">Tile detail:
-                <select v-model.number="coverageZoom" class="gx-field" aria-label="Downloaded tile zoom level">
-                  <option v-for="zoom in 19" :key="zoom - 1" :value="zoom - 1">Zoom {{ zoom - 1 }}{{ ({13: ' · Regional', 14: ' · Road', 15: ' · City', 16: ' · Street'})[zoom - 1] || '' }}</option>
-                </select>
-              </label>
+              <!-- The checkbox leads and nothing here is added or removed when it toggles, so the
+                   row, the lines below and the map keep their places. -->
               <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
                 <input type="checkbox" v-model="coverageEnabled" /> Show downloaded tiles
               </label>
+              <label style="display:flex; align-items:center; gap:8px;" :style="coverageEnabled ? '' : 'opacity:.5;'">
+                <span class="gx-row__label">Tile detail</span>
+                <GalaxySelect class="gx-field" style="min-width:170px;" :value="coverageZoom" :disabled="!coverageEnabled" @change="setCoverageZoom" aria-label="Downloaded tile detail level">
+                  <option v-for="level in coverageZooms" :key="level.zoom" :value="level.zoom">{{ level.label }} (zoom {{ level.zoom }})</option>
+                </GalaxySelect>
+              </label>
             </div>
-            <div v-if="coverageEnabled" class="gx-row__desc">
-              <span style="color:#34c778;">■ Saved offline</span> · <span style="color:#4096ff;">■ Temporary cache</span> · Purple outlines: requested areas.
-              Coverage is for the selected zoom only; the background map is online.
+            <div class="gx-row__desc" style="min-height:2.7em;">
+              <template v-if="coverageEnabled">
+                <span style="color:#34c778;">■ Saved offline</span> · <span style="color:#4096ff;">■ Temporary cache</span> · Purple outlines: requested areas.
+                Coverage is for the selected zoom only; the background map is online.
+              </template>
+              <template v-else>Turn on to see which map tiles are saved on the comma, at the chosen detail level.</template>
             </div>
-            <div v-if="coverageEnabled" class="gx-row__desc" role="status">
-              <template v-if="coverageError">{{ coverageError }}</template>
+            <div class="gx-row__desc" role="status" :style="coverageEnabled ? '' : 'visibility:hidden;'">
+              <template v-if="!coverageEnabled">&nbsp;</template>
+              <template v-else-if="coverageError">{{ coverageError }}</template>
               <template v-else-if="coverage">{{ coverage.tiles.length.toLocaleString() }} downloaded tiles in view at zoom {{ coverage.zoom }}. {{ coverage.truncated ? 'Display limit reached; zoom the map in to see all tiles.' : '' }}</template>
               <template v-else>Checking downloaded tiles...</template>
             </div>
@@ -716,32 +736,25 @@ export const AndroidAutoOfflinePanel = {
           <span class="gx-section__title" style="font-size:var(--fs-base);">Downloads &amp; Saved Maps</span>
           <span class="gx-section__count">{{ items.length }}</span>
         </div>
-        <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:6px;">
-          <div v-if="!items.length" class="gx-empty" style="margin:0; padding:var(--sp-3);">Nothing saved yet. Save an area around home or make a trip's route available offline.</div>
-          <div v-for="item in items" :key="item.id" class="gx-card" style="margin:0; padding:8px 10px; background:rgba(255, 255, 255, 0.02); border:1px solid var(--glass-border, rgba(127,127,127,.15)); border-radius:var(--radius-md);">
-            <div style="display:flex; gap:8px; align-items:flex-start;">
-              <i class="bi" :class="item.kind === 'route' ? 'bi-signpost-split' : 'bi-bounding-box-circles'" style="color:var(--primary); margin-top:2px; font-size:1.1rem;"></i>
-              <div style="flex:1; min-width:0;">
-                <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap;">
-                  <button type="button" style="border:none; background:transparent; color:inherit; padding:0; cursor:pointer; text-align:left; font:inherit;" @click="focus(item)">
-                    <span class="gx-row__label" style="font-weight:var(--fw-bold); font-size:var(--fs-sm); overflow-wrap:anywhere;">{{ item.name }}</span>
-                  </button>
-                  <div style="display:flex; gap:6px; flex-wrap:wrap; margin-left:auto;">
-                    <button v-if="status(item).canDownloadNow" type="button" class="gx-btn gx-btn--tonal" style="min-height:28px; padding:0 8px; font-size:var(--fs-xs);" :disabled="busy === item.id" @click="act(item, 'download_now')"
-                      title="Use the comma's current connection even though it's metered">Download Now</button>
-                    <button v-if="status(item).canUpdate" type="button" class="gx-btn gx-btn--text" style="min-height:28px; padding:0 6px; font-size:var(--fs-xs);" :disabled="busy === item.id" @click="act(item, 'update')">Update</button>
-                    <button v-if="status(item).canDelete" type="button" class="gx-btn gx-btn--text" style="min-height:28px; padding:0 6px; font-size:var(--fs-xs); color:var(--error);" :disabled="busy === item.id" @click="remove(item)">Delete</button>
-                  </div>
-                </div>
-                <div class="gx-row__desc" style="margin-top:2px; font-size:var(--fs-xs);">{{ describe(item) }}</div>
-                <div class="gx-row__desc" style="margin-top:2px; font-size:var(--fs-xs);" :style="status(item).tone === 'danger' ? 'color:var(--error);' : ''">{{ status(item).text }}</div>
-                <div v-if="status(item).progress !== null" role="progressbar" :aria-label="item.name + ' download'" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="Math.floor(status(item).progress * 100)" style="height:4px; border-radius:2px; background:var(--glass-border, rgba(127,127,127,.2)); overflow:hidden; margin-top:4px;">
-                  <div :style="'width:' + Math.round(status(item).progress * 100) + '%;height:100%;background:var(--primary);transition:width .3s;'"></div>
-                </div>
-              </div>
-            </div>
+        <div v-if="!items.length" class="gx-empty" style="margin:0; padding:var(--sp-3);">Nothing saved yet. Save an area around home or make a trip's route available offline.</div>
+        <article v-for="item in items" :key="item.id" class="gx-row gx-offline-row" @click="focus(item)">
+          <div class="gx-row__info">
+            <span class="gx-row__label">
+              <i class="bi" :class="item.kind === 'route' ? 'bi-signpost-split' : 'bi-bounding-box-circles'" style="color:var(--primary);"></i>
+              {{ item.name }}
+            </span>
+            <span class="gx-row__desc gx-offline-row__details">{{ describe(item) }}</span>
+            <span class="gx-row__desc gx-offline-row__status" :class="{ 'gx-offline-row__status--danger': status(item).tone === 'danger' }">{{ status(item).text }}</span>
+            <span v-if="status(item).progress !== null" class="gx-offline-row__progress" role="progressbar" :aria-label="item.name + ' download'" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="Math.floor(status(item).progress * 100)">
+              <span :style="'width:' + Math.round(status(item).progress * 100) + '%;'"></span>
+            </span>
           </div>
-        </div>
+          <div class="gx-row__actions">
+            <button v-if="status(item).canDownloadNow" type="button" class="gx-btn gx-btn--tonal gx-btn--icon" title="Download now using the comma's current connection" :disabled="busy === item.id" @click.stop="act(item, 'download_now')"><i class="bi bi-cloud-arrow-down-fill"></i></button>
+            <button v-if="status(item).canUpdate" type="button" class="gx-btn gx-btn--tonal gx-btn--icon" title="Update" :disabled="busy === item.id" @click.stop="act(item, 'update')"><i class="bi bi-arrow-clockwise"></i></button>
+            <button v-if="status(item).canDelete" type="button" class="gx-btn gx-btn--danger gx-btn--icon" title="Delete" :disabled="busy === item.id" @click.stop="remove(item)"><i class="bi bi-trash"></i></button>
+          </div>
+        </article>
       </section>
     </div>
   `,
