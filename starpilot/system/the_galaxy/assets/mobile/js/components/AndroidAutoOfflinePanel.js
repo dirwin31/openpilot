@@ -49,11 +49,13 @@ const PlaceSearch = {
     position: { type: Object, default: null },
     placeholder: { type: String, default: "Search a place or address" },
     selected: { type: Object, default: null },
+    disabled: { type: Boolean, default: false },
   },
   emits: ["select", "clear"],
   data() { return { query: "", suggestions: [], searching: false, request: 0, timer: null, sessionToken: newSessionToken() } },
   watch: {
     selected: { immediate: true, handler(place) { if (place) this.query = place.name || "" } },
+    disabled(value) { if (value) this.suggestions = [] },
   },
   beforeUnmount() { clearTimeout(this.timer) },
   methods: {
@@ -63,6 +65,7 @@ const PlaceSearch = {
       return context
     },
     onInput(event) {
+      if (this.disabled) return
       this.query = String(event?.target?.value ?? this.query)
       if (this.selected) this.$emit("clear")
       clearTimeout(this.timer)
@@ -105,7 +108,7 @@ const PlaceSearch = {
   },
   template: `
     <div style="position:relative; flex:1; min-width:200px;">
-      <input class="gx-field" style="width:100%;" type="search" :value="query" :placeholder="placeholder" :disabled="!token" @input="onInput" />
+      <input class="gx-field" style="width:100%;" type="search" :value="query" :placeholder="placeholder" :disabled="!token || disabled" @input="onInput" />
       <div v-if="suggestions.length" class="gx-card" style="position:absolute; left:0; right:0; top:100%; z-index:5; margin-top:4px; max-height:260px; overflow:auto;">
         <button v-for="place in suggestions" :key="place.mapbox_id || place.name" type="button" class="gx-row"
           style="width:100%; border:none; background:transparent; color:inherit; cursor:pointer; text-align:left;" @click="choose(place)">
@@ -184,6 +187,11 @@ export const AndroidAutoOfflinePanel = {
     token() { return String(this.summary?.mapboxPublic || "").trim() },
     position() { return this.summary?.position || null },
     items() { return this.summary?.items || [] },
+    // A download is already queued or running: block starting another so they run one at a time.
+    downloadActive() {
+      if (!this.summary?.service_running) return false
+      return this.items.some((item) => ["queued", "downloading"].includes(item.state))
+    },
     notice() { return serviceNotice(this.summary) },
     storageLabel() {
       if (!this.summary) return "Checking..."
@@ -427,7 +435,7 @@ export const AndroidAutoOfflinePanel = {
       return point?.name || (point ? `${point.latitude.toFixed(3)}, ${point.longitude.toFixed(3)}` : "")
     },
     async saveArea() {
-      if (!this.areaPoint || !this.areaEstimate || this.busy) return
+      if (!this.areaPoint || !this.areaEstimate || this.busy || this.downloadActive) return
       this.busy = "area"
       try {
         await api.addAutoOfflineArea({
@@ -516,7 +524,7 @@ export const AndroidAutoOfflinePanel = {
     },
     async saveRoute() {
       const route = this.selectedRoute
-      if (!route || this.busy) return
+      if (!route || this.busy || this.downloadActive) return
       this.busy = "route"
       try {
         await api.addAutoOfflineRoute({
@@ -619,11 +627,11 @@ export const AndroidAutoOfflinePanel = {
             Choose a centre, then set the radius. Smaller radii include full street detail; larger ones cover highways.
           </p>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!position" @click="useCurrentLocation"><i class="bi bi-crosshair"></i> Current Location</button>
-            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!mapReady" @click="pickOnMap = !pickOnMap">
+            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!position || downloadActive" @click="useCurrentLocation"><i class="bi bi-crosshair"></i> Current Location</button>
+            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!mapReady || downloadActive" @click="pickOnMap = !pickOnMap">
               <i class="bi bi-pin-map"></i> {{ pickOnMap ? 'Cancel' : 'Pick on Map' }}
             </button>
-            <PlaceSearch :token="token" :position="position" placeholder="Or search a city or place" @select="chooseAreaPoint($event)" />
+            <PlaceSearch :token="token" :position="position" :disabled="downloadActive" placeholder="Or search a city or place" @select="chooseAreaPoint($event)" />
           </div>
 
           <div v-if="token" style="position:relative;">
@@ -647,10 +655,12 @@ export const AndroidAutoOfflinePanel = {
             </div>
             <div class="gx-row__desc" style="min-height:2.7em;">
               <template v-if="coverageEnabled">
-                <span style="color:#34c778;">■ Saved offline</span> · <span style="color:#4096ff;">■ Temporary cache</span>
-                <template v-if="coverageError">{{ coverageError }}</template>
-                <template v-else-if="coverage">{{ coverage.tiles.length.toLocaleString() }} saved tiles in view at zoom {{ coverage.zoom }}.{{ coverage.truncated ? ' Zoom in to see them all.' : '' }}</template>
-                <template v-else>Checking downloaded tiles...</template>
+                <span style="display:block;"><span style="color:#34c778;">■ Saved offline</span> · <span style="color:#4096ff;">■ Temporary cache</span></span>
+                <span style="display:block;">
+                  <template v-if="coverageError">{{ coverageError }}</template>
+                  <template v-else-if="coverage">{{ coverage.tiles.length.toLocaleString() }} saved tiles in view at zoom {{ coverage.zoom }}.{{ coverage.truncated ? ' Zoom in to see them all.' : '' }}</template>
+                  <template v-else>Checking downloaded tiles...</template>
+                </span>
               </template>
               <template v-else>Turn on to see which map tiles are saved on the comma, at the chosen detail level.</template>
             </div>
@@ -663,11 +673,11 @@ export const AndroidAutoOfflinePanel = {
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:8px 16px; align-items:end;">
               <label style="display:grid; gap:5px;">
                 <span class="gx-row__desc" style="margin:0;">Radius: <strong style="color:var(--text);">{{ radiusLabel(areaRadiusKm, metric) }}</strong></span>
-                <input type="range" :min="areaRadiusMin" :max="areaRadiusMax" step="1" :value="areaRadiusKm" @input="setAreaRadius" aria-label="Offline area radius" style="width:100%; accent-color:var(--primary);" />
+                <input type="range" :min="areaRadiusMin" :max="areaRadiusMax" step="1" :value="areaRadiusKm" :disabled="downloadActive" @input="setAreaRadius" aria-label="Offline area radius" style="width:100%; accent-color:var(--primary);" />
               </label>
               <label style="display:grid; gap:5px;" title="Higher zoom shows more streets but needs many more tiles. Lower zooms are saved with it, so the map still works zoomed out.">
                 <span class="gx-row__desc" style="margin:0;">Most detailed zoom</span>
-                <GalaxySelect class="gx-field gx-field--full" :value="areaZoom ?? ''" @change="setAreaZoom" aria-label="Most detailed zoom to download">
+                <GalaxySelect class="gx-field gx-field--full" :value="areaZoom ?? ''" :disabled="downloadActive" @change="setAreaZoom" aria-label="Most detailed zoom to download">
                   <option value="">Auto (based on radius)</option>
                   <option v-for="zoom in areaZooms" :key="zoom" :value="zoom">{{ ({14: 'Road', 15: 'City', 16: 'Street'})[zoom] || 'Zoom ' + zoom }} (zoom {{ zoom }})</option>
                 </GalaxySelect>
@@ -678,12 +688,15 @@ export const AndroidAutoOfflinePanel = {
                 <template v-if="!areaPoint">Choose a centre to size the download. The yellow circle on the map shows the area.</template>
                 <template v-else-if="areaError">{{ areaError }}</template>
                 <template v-else-if="areaLoading || !areaEstimate">Sizing up the area...</template>
-                <template v-else-if="areaEstimate.fits"><strong style="color:var(--text);">{{ areaEstimate.detail }} (zoom {{ areaEstimate.max_zoom }})</strong> · about {{ formatBytes(areaEstimate.bytes) }} · {{ areaEstimate.tiles.toLocaleString() }} tiles</template>
+                <template v-else-if="areaEstimate.fits">
+                  <span style="display:block;"><strong style="color:var(--text);">{{ areaEstimate.detail }} (zoom {{ areaEstimate.max_zoom }})</strong></span>
+                  <span style="display:block;">About {{ formatBytes(areaEstimate.bytes) }} · {{ areaEstimate.tiles.toLocaleString() }} tiles</span>
+                </template>
                 <template v-else>Too large for the offline storage left. Try a smaller radius or zoom.</template>
               </span>
               <button v-if="areaError" type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px;" @click="estimateArea">Retry</button>
               <button v-else type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px;"
-                :disabled="!areaPoint || !areaEstimate || !areaEstimate.fits || !!busy" @click="saveArea">{{ busy === 'area' ? 'Adding...' : 'Download' }}</button>
+                :disabled="!areaPoint || !areaEstimate || !areaEstimate.fits || !!busy || downloadActive" @click="saveArea">{{ busy === 'area' ? 'Adding...' : 'Download' }}</button>
             </div>
           </div>
         </div>
@@ -697,17 +710,17 @@ export const AndroidAutoOfflinePanel = {
         <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:8px;">
           <div style="display:flex; align-items:center; gap:8px;">
             <span style="min-width:42px; font-size:var(--fs-sm); font-weight:var(--fw-medium); color:var(--text-muted);">From</span>
-            <PlaceSearch :token="token" :position="position" :selected="routeFrom"
+            <PlaceSearch :token="token" :position="position" :selected="routeFrom" :disabled="downloadActive"
               :placeholder="position ? 'Current location' : 'Search where you start'"
               @select="routeFrom = $event; clearRoutes()" @clear="routeFrom = null; clearRoutes()" />
           </div>
           <div style="display:flex; align-items:center; gap:8px;">
             <span style="min-width:42px; font-size:var(--fs-sm); font-weight:var(--fw-medium); color:var(--text-muted);">To</span>
-            <PlaceSearch :token="token" :position="position" :selected="routeTo" placeholder="Search your destination"
+            <PlaceSearch :token="token" :position="position" :selected="routeTo" :disabled="downloadActive" placeholder="Search your destination"
               @select="routeTo = $event; clearRoutes()" @clear="routeTo = null; clearRoutes()" />
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:2px;">
-            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 14px;" :disabled="!routeTo || findingRoute || !token" @click="findRoutes">
+            <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 14px;" :disabled="!routeTo || findingRoute || !token || downloadActive" @click="findRoutes">
               <i class="bi bi-search"></i> {{ findingRoute ? 'Finding routes...' : 'Find Routes' }}
             </button>
           </div>
@@ -721,11 +734,13 @@ export const AndroidAutoOfflinePanel = {
             </label>
             <div style="display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:4px 0;">
               <span class="gx-row__desc" style="margin:0; flex:1;">
-                <template v-if="routeEstimate">About {{ formatBytes(routeEstimate.bytes) }} · {{ routeEstimate.tiles.toLocaleString() }} tiles,
-                  with street detail at every turn and the destination.</template>
+                <template v-if="routeEstimate">
+                  <span style="display:block;">About {{ formatBytes(routeEstimate.bytes) }} · {{ routeEstimate.tiles.toLocaleString() }} tiles</span>
+                  <span style="display:block;">With street detail at every turn and the destination.</span>
+                </template>
                 <template v-else-if="!routeError">Sizing the route...</template>
               </span>
-              <button type="button" class="gx-btn" style="min-height:36px; padding:0 14px;" :disabled="!routeEstimate || !routeEstimate.fits || busy === 'route'" @click="saveRoute">
+              <button type="button" class="gx-btn" style="min-height:36px; padding:0 14px;" :disabled="!routeEstimate || !routeEstimate.fits || busy === 'route' || downloadActive" @click="saveRoute">
                 <i class="bi bi-download"></i> {{ busy === 'route' ? 'Saving...' : 'Make Available Offline' }}
               </button>
             </div>
@@ -756,8 +771,8 @@ export const AndroidAutoOfflinePanel = {
             </span>
           </div>
           <div class="gx-row__actions">
-            <button v-if="status(item).canDownloadNow" type="button" class="gx-btn gx-btn--tonal gx-btn--icon" title="Download now using the comma's current connection" :disabled="busy === item.id" @click.stop="act(item, 'download_now')"><i class="bi bi-cloud-arrow-down-fill"></i></button>
-            <button v-if="status(item).canUpdate" type="button" class="gx-btn gx-btn--tonal gx-btn--icon" title="Update" :disabled="busy === item.id" @click.stop="act(item, 'update')"><i class="bi bi-arrow-clockwise"></i></button>
+            <button v-if="status(item).canDownloadNow" type="button" class="gx-btn gx-btn--tonal gx-btn--icon" title="Download now using the comma's current connection" :disabled="busy === item.id || downloadActive" @click.stop="act(item, 'download_now')"><i class="bi bi-cloud-arrow-down-fill"></i></button>
+            <button v-if="status(item).canUpdate" type="button" class="gx-btn gx-btn--tonal gx-btn--icon" title="Update" :disabled="busy === item.id || downloadActive" @click.stop="act(item, 'update')"><i class="bi bi-arrow-clockwise"></i></button>
             <button v-if="status(item).canDelete" type="button" class="gx-btn gx-btn--danger gx-btn--icon" title="Delete" :disabled="busy === item.id" @click.stop="remove(item)"><i class="bi bi-trash"></i></button>
           </div>
         </article>
