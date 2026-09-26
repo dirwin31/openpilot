@@ -10,7 +10,8 @@ from openpilot.system.ui.lib.bluetooth_manager import BluetoothManager
 from openpilot.system.ui.widgets.scroller import NavScroller
 
 
-PAIR_CAR_HELP = "On the car, open Bluetooth / phone settings and add a new device. Then tap the car in this list and confirm the code on the car."
+PAIR_CAR_HELP = ("On the car, open Bluetooth / phone settings and add a new device. Then tap the car in this list and confirm the code on the car. " +
+                 "A car with wireless Android Auto becomes your android auto car automatically.")
 
 
 class BluetoothDeviceButton(BigButton):
@@ -269,7 +270,11 @@ class BluetoothLayoutMici(NavScroller):
         return "stopped / error"
       if status.get("connection") == "wired":
         return "off / wired (usb)"
-      return f"off / {status.get('receiver_name')}" if status.get("receiver_name") else "choose your car"
+      if not status.get("receiver_name"):
+        return "choose your car"
+      if status.get("auto_connect"):
+        return "paused until next drive" if status.get("auto_paused") else f"auto / {status.get('receiver_name')}"
+      return f"off / {status.get('receiver_name')}"
     if state == "backoff":
       return f"retrying in {status.get('retry_in', 0):.0f}s"
     return str(status.get("label", state))
@@ -285,6 +290,7 @@ class BluetoothLayoutMici(NavScroller):
       options.append("stop" if status.get("running") else "start")
     if not wired:
       options.append("choose car")
+      options.append("turn off auto-connect" if status.get("auto_connect", True) else "turn on auto-connect")
     options.append("mirror comma screen" if status.get("configured_view", "car") == "car" else "use car layout")
     if not status.get("running"):
       options.append("use wireless" if wired else "use wired (usb)")
@@ -306,6 +312,10 @@ class BluetoothLayoutMici(NavScroller):
         self._android_auto.set_view("mirror")
       elif action == "use car layout":
         self._android_auto.set_view("car")
+      elif action == "turn off auto-connect":
+        self._android_auto.set_auto_connect(False)
+      elif action == "turn on auto-connect":
+        self._android_auto.set_auto_connect(True)
       elif action == "use wired (usb)":
         self._android_auto.set_connection("wired")
       elif action == "use wireless":
