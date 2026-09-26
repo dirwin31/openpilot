@@ -42,6 +42,44 @@ def test_renderer_can_initialize_without_focus_and_resume_demand(tmp_path):
     consumer.close()
 
 
+def test_screen_sleep_requires_focused_recently_sent_frames(tmp_path, monkeypatch):
+  from openpilot.starpilot.system.android_auto import frame_source
+  clock = [100.0]
+  monkeypatch.setattr(frame_source.time, "monotonic_ns", lambda: int(clock[0] * 1e9))
+  path = str(tmp_path / "car_frames")
+  consumer, reader = FrameConsumer(path), FrameProducer(path)
+  request = FrameRequest(4, 2, 0, 0, 33333)
+  try:
+    consumer.configure(request)
+    consumer.demand()
+    assert not reader.recently_sent(clock[0]), "startup/demand alone is not proof of projection"
+    assert reader.pending_request(clock[0]) == request
+    reader.publish(request, bytes(32), 100_000_000_000)
+    assert not reader.recently_sent(clock[0]), "rendered but unsent frames must not turn off the screen"
+    consumer.mark_sent(100_000_000_000)
+    assert reader.recently_sent(clock[0])
+    consumer.release_demand()
+    assert not reader.recently_sent(clock[0]), "focus loss wakes immediately"
+    consumer.demand()
+    clock[0] = 101.0
+    consumer.demand()
+    assert not reader.recently_sent(clock[0]), "fresh demand cannot hide a stalled renderer or encoder"
+    consumer.mark_sent(102_000_000_000)
+    assert not reader.recently_sent(clock[0]), "future timestamps fail awake"
+    consumer.mark_sent(101_000_000_000)
+    assert reader.recently_sent(clock[0])
+    consumer.configure(request)
+    consumer.demand()
+    assert not reader.recently_sent(clock[0]), "a new session cannot inherit a previous heartbeat"
+    consumer.mark_sent(101_000_000_000)
+    consumer.close()
+    assert not reader.recently_sent(clock[0]), "disconnect/fallback releases demand"
+  finally:
+    reader.close()
+    if not consumer.mm.closed:
+      consumer.close()
+
+
 class FakeGL:
   """Enough GLES for FrameReadback: framebuffer reads into memory or a pixel-pack buffer."""
 
@@ -270,7 +308,8 @@ def test_render_sampler_thread_samples_the_render_thread(tmp_path):
 
 
 @pytest.mark.parametrize("scenario", ["ready", "idle", "blocked", "unfocused", "input_burst"])
-def test_stream_waits_only_when_needed_and_preserves_flow_control(monkeypatch, scenario):
+@pytest.mark.parametrize("source_view", ["car", "mirror", "synthetic"])
+def test_stream_waits_only_when_needed_and_preserves_flow_control(monkeypatch, scenario, source_view):
   clock = [100.0]
   monkeypatch.setattr(supervisor.time, "monotonic", lambda: clock[0])
   monkeypatch.setattr(supervisor.time, "sleep", lambda _: pytest.fail("stream must wait on input, not sleep"))
@@ -316,7 +355,9 @@ def test_stream_waits_only_when_needed_and_preserves_flow_control(monkeypatch, s
 
   class Source:
     frames = 0
-    label = "car"
+    label = source_view
+    view = source_view
+    source = SimpleNamespace(mark_sent=lambda captured_ns: sent_headers.append(captured_ns))
 
     def demand(self, seconds):
       demands.append(True)
@@ -341,6 +382,7 @@ def test_stream_waits_only_when_needed_and_preserves_flow_control(monkeypatch, s
     return b"h264", keyframe
 
   sup = supervisor.Supervisor.__new__(supervisor.Supervisor)
+  sent_headers = []
   sup._stop = stop
   sup._status = {"state": "streaming"}
   sup._stage = lambda _: None
@@ -349,6 +391,7 @@ def test_stream_waits_only_when_needed_and_preserves_flow_control(monkeypatch, s
   sup._stream(session, SimpleNamespace(encode_rgba=encode, last_encode_ms=35), Source(),
               SimpleNamespace(still_connected=lambda: True), 1 / 30)
   assert len(sent) == 3
+  assert len(sent_headers) == (3 if source_view == "car" else 0)
   assert sent[1] - sent[0] == pytest.approx(0.035)
   assert sent[2] - sent[1] == pytest.approx(0.035)
   if scenario == "ready":

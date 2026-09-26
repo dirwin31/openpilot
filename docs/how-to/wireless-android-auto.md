@@ -138,6 +138,16 @@ C3X's own display keeps its cached corner hint and radial favorites; C4's
 separate favorites overlay is unchanged. Navigation destination favorites are
 unaffected. Mirror view has no touch and still shows the device's own UI.
 
+**C4 screen sleep.** In The Galaxy → Toggles → Vehicle → Android Auto Layout,
+enable **Sleep C4 Screen During Android Auto** (off by default). Onroad, the
+comma four display and native drawing sleep after the existing screen timeout
+while fresh car-view frames are being sent. AA's camera, path, HUD and map settings
+are unchanged. Tap the comma once to wake it for another timeout period. Lost
+focus, stale video, disconnect/fallback, disabling the toggle, and critical alerts
+wake it automatically. C3X and mirror mode are unchanged. A native Live UI viewer
+keeps native drawing active even with the physical panel off. The setting lives
+in `car_screen.json`; it can be configured without a connected car.
+
 ## Configuration
 
 `/data/android_auto/config.json`, written when you choose a car. Edit with the

@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from openpilot.selfdrive.ui import ui_state as ui_state_module
 
 
@@ -40,6 +42,7 @@ def make_device(monkeypatch, **overrides):
     ignition=False,
     light_sensor=-1.0,
     sm={},
+    android_auto_car_view=False,
   )
   monkeypatch.setattr(ui_state_module, "ui_state", state)
   monkeypatch.setattr(ui_state_module.gui_app, "big_ui", lambda: False)
@@ -175,3 +178,109 @@ def test_standby_wakes_for_visible_alert(monkeypatch):
 
   assert device._interaction_time == now + 10
   assert device._calculate_brightness() == 45
+
+
+@pytest.fixture
+def aa_sleep_device(monkeypatch):
+  clock, streaming, setting = [100.0], [True], [True]
+  power, rendering = [], []
+  monkeypatch.setattr(ui_state_module.time, "monotonic", lambda: clock[0])
+  monkeypatch.setattr(ui_state_module, "PC", False)
+  monkeypatch.setattr(ui_state_module.HARDWARE, "get_device_type", lambda: "mici")
+  monkeypatch.setattr(ui_state_module.HARDWARE, "set_display_power", power.append)
+  monkeypatch.setattr(ui_state_module.gui_app, "set_should_render", rendering.append)
+  monkeypatch.setattr(ui_state_module.gui_app, "ui_stream_wants_frames", lambda: False)
+  monkeypatch.setattr(ui_state_module.gui_app, "_aa_enabled", True)
+  device, state = make_device(monkeypatch)
+  state.started = state.ignition = device._ignition = device._screen_off_started = True
+  device._aa_car_frames = SimpleNamespace(recently_sent=lambda: streaming[0])
+  device._aa_screen_settings = SimpleNamespace(poll=lambda: {"sleep_device_screen": setting[0]})
+  device._update_wakefulness()
+  assert device.awake and device._interaction_time == 110.0
+  clock[0] = 111.0
+  return SimpleNamespace(device=device, state=state, clock=clock, streaming=streaming, setting=setting, power=power, rendering=rendering)
+
+
+def test_aa_screen_sleeps_after_timeout_and_tap_wakes(aa_sleep_device, monkeypatch):
+  s = aa_sleep_device
+  s.device._update_wakefulness()
+  assert not s.device.awake and s.power == [False] and s.rendering == [False]
+  assert s.device._calculate_brightness() == 0
+  monkeypatch.setattr(ui_state_module.gui_app, "_mouse_events", [SimpleNamespace(left_down=True)])
+  s.device._update_wakefulness()
+  assert s.device.awake and s.power == [False, True] and s.rendering == [False, True]
+  assert s.device._interaction_time == 121.0
+  monkeypatch.setattr(ui_state_module.gui_app, "_mouse_events", [])
+  s.clock[0] = 122.0
+  s.device._update_wakefulness()
+  assert not s.device.awake
+
+
+@pytest.mark.parametrize("reason", ["stale_or_unfocused", "toggle_off", "aa_disabled", "offroad", "car_renderer", "not_c4"])
+def test_aa_sleep_fails_awake(aa_sleep_device, monkeypatch, reason):
+  s = aa_sleep_device
+  s.device._update_wakefulness()
+  assert not s.device.awake
+  if reason == "stale_or_unfocused":
+    s.streaming[0] = False
+  elif reason == "toggle_off":
+    s.setting[0] = False
+  elif reason == "aa_disabled":
+    monkeypatch.setattr(ui_state_module.gui_app, "_aa_enabled", False)
+  elif reason == "offroad":
+    s.state.started = s.state.ignition = False
+  elif reason == "car_renderer":
+    s.state.android_auto_car_view = True
+  elif reason == "not_c4":
+    s.device._aa_car_frames = None
+  s.device._update_wakefulness()
+  assert s.device.awake and s.device._render_awake
+  assert s.power == [False, True] and s.rendering == [False, True]
+
+
+def test_critical_alert_keeps_aa_sleeping_screen_awake(aa_sleep_device):
+  s = aa_sleep_device
+  s.device._update_wakefulness()
+  s.device._active_standby_alerts = lambda: {"StandbyWakeCriticalAlert"}
+  for now in (112.0, 125.0, 140.0):
+    s.clock[0] = now
+    s.device._update_wakefulness()
+    assert s.device.awake and s.device._interaction_time == now + 10
+  s.device._active_standby_alerts = lambda: set()
+  s.clock[0] = 151.0
+  s.device._update_wakefulness()
+  assert not s.device.awake
+
+
+def test_native_live_ui_keeps_rendering_with_aa_screen_asleep(aa_sleep_device, monkeypatch):
+  s = aa_sleep_device
+  monkeypatch.setattr(ui_state_module.gui_app, "ui_stream_wants_frames", lambda: True)
+  s.device._update_wakefulness()
+  assert not s.device.awake and s.device._render_awake
+  assert s.power == [False] and s.rendering == []
+
+
+def test_sleeping_render_loop_skips_gpu_work_but_keeps_yielding(monkeypatch):
+  from openpilot.system.ui.lib import application
+  app = application.gui_app
+  progress = []
+  monkeypatch.setattr(application, "PC", False)
+  monkeypatch.setattr(application.rl, "window_should_close", lambda: False)
+  monkeypatch.setattr(application.rl, "begin_drawing", lambda: pytest.fail("sleeping UI drew a frame"))
+  monkeypatch.setattr(application.rl, "begin_texture_mode", lambda *args: pytest.fail("sleeping UI rendered a texture"))
+  monkeypatch.setattr(application.time, "sleep", lambda _: None)
+  monkeypatch.setattr(app, "_should_render", False)
+  monkeypatch.setattr(app, "_profile_render_frames", 0)
+  monkeypatch.setattr(app, "_window_close_requested", False)
+  monkeypatch.setattr(app, "_ui_stream_pending", False)
+  monkeypatch.setattr(app, "_ui_stream", None)
+  monkeypatch.setattr(app, "_apply_render_mode", lambda: None)
+  monkeypatch.setattr(app, "_mark_progress", progress.append)
+  monkeypatch.setattr(app, "_service_ui_stream", lambda capture: progress.append(("stream", capture)))
+  loop = app.render()
+  try:
+    assert [next(loop) for _ in range(60)] == [False] * 60
+    assert progress.count("gui_app.skip_render") == 60
+    assert progress.count(("stream", False)) == 60
+  finally:
+    loop.close()

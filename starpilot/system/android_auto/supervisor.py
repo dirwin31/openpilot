@@ -731,6 +731,8 @@ class Supervisor:
             encode = encoder.encode_nv12 if frame.pixel_format == FORMAT_NV12 else encoder.encode_rgba
             data, keyframe = encode(frame.data, keyframe=session.needs_keyframe)
             session.send_frame(data, frame.captured_ns // 1000, keyframe=keyframe)
+            if source.view == "car":
+              source.source.mark_sent(frame.captured_ns)
             sent_at = time.monotonic()
             ages.append(sent_at - frame.captured_ns / 1e9)
             sent_times.append(sent_at)
