@@ -147,3 +147,20 @@ def test_both_offline_downloaders_share_the_offline_maps_tab():
   assert "AndroidAutoOfflinePanel, GalaxySection" in navigation, "offline parent sections must render as Galaxy cards"
   assert 'title="Offline Maps for Android Auto"' in maps_tab
   assert 'title="Speed Limit &amp; Curve Data"' in maps_tab
+
+
+def test_offline_panel_dropdowns_are_galaxy_styled_and_list_only_drawn_zooms():
+  panel = (JS_ROOT / "components" / "AndroidAutoOfflinePanel.js").read_text()
+  assert "<select" not in panel, "use GalaxySelect so the dropdowns match the rest of The Galaxy"
+  assert panel.count("<GalaxySelect") == 2
+  zooms = panel[panel.index("const COVERAGE_ZOOMS"):panel.index("]", panel.index("const COVERAGE_ZOOMS"))]
+  assert [label for label in ("Regional", "Road", "City", "Street") if label in zooms] == ["Regional", "Road", "City", "Street"]
+  assert "zoom in 19" not in panel
+
+
+def test_show_downloaded_tiles_toggle_does_not_move_the_layout():
+  panel = (JS_ROOT / "components" / "AndroidAutoOfflinePanel.js").read_text()
+  row = panel[panel.index('v-model="coverageEnabled"') - 400:panel.index("Downloaded tile detail level")]
+  assert row.index('v-model="coverageEnabled"') < row.index("Tile detail"), "the checkbox leads the row"
+  assert 'v-if="coverageEnabled"' not in panel.split('v-model="coverageEnabled"')[1].split('ref="map"')[0].replace(
+    '<template v-if="coverageEnabled">', ""), "nothing between the checkbox and the map appears or disappears"
