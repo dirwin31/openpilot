@@ -31,7 +31,8 @@ class FakeSM(dict):
 def sidebar(monkeypatch):
   monkeypatch.setattr(module.gui_app, "font", lambda *args, **kwargs: None)
   monkeypatch.setattr(module.ui_state, "ui_params", FakeParams(), raising=False)
-  device_state = SimpleNamespace(cpuUsagePercent=[20, 40], gpuUsagePercent=63, maxTempC=71.4)
+  device_state = SimpleNamespace(cpuUsagePercent=[20, 40], gpuUsagePercent=63, maxTempC=71.4,
+                                 memoryUsagePercent=48, freeSpacePercent=72.9)
   monkeypatch.setattr(module.ui_state, "sm", FakeSM(device_state), raising=False)
   monkeypatch.setattr(module.ui_state, "started_frame", 0, raising=False)
   monkeypatch.setattr(module.ui_state, "starpilot_toggles", {}, raising=False)
@@ -43,9 +44,16 @@ def test_device_screen_keeps_the_auto_tune_values(sidebar):
   assert [sidebar._metrics[i][0] for i in (5, 6, 7)] == ["LAT ACCEL", "STEER RATIO", "STEER STIFF"]
 
 
-def test_car_screen_shows_cpu_gpu_and_temp_in_their_place(sidebar):
-  sidebar.device_load_in_place_of_tuning = True
+def test_car_screen_uses_its_six_status_slots(sidebar):
+  sidebar.metric_override = [3, 4, 18, 19, 20, 21]
   sidebar.update()
-  assert sidebar._active_ids == [5, 6, 7]
-  assert [sidebar._metrics[i] for i in (5, 6, 7)] == [("CPU", "30%"), ("GPU", "63%"), ("TEMP", "71°C")]
-  assert not any(i in sidebar._metric_colors for i in (5, 6, 7)), "device load isn't colored like an auto-tune value"
+  assert sidebar._active_ids == [3, 4, 18, 19, 20, 21]
+  assert [sidebar._metrics[i] for i in (18, 19, 20, 21, 22)] == [
+    ("CPU", "30%"), ("GPU", "63%"), ("TEMP", "71°C"), ("MEMORY", "48%"), ("STORAGE", "72% FREE")]
+
+
+def test_unavailable_gpu_sample_is_not_reported_as_zero(sidebar):
+  module.ui_state.sm["deviceState"].gpuUsagePercent = -1
+  sidebar.metric_override = [19] * 6
+  sidebar.update()
+  assert sidebar._metrics[19] == ("GPU", "N/A")

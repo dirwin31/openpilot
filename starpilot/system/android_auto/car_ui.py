@@ -655,9 +655,8 @@ def run(frames_path: str, touch_path: str) -> int:
   ui_state.prime_state.start = lambda: None  # no second comma API poller
   ui_state.ui_params.start()
   from openpilot.selfdrive.ui.layouts.main import MainLayout
-  from openpilot.starpilot.system.android_auto.car_screen import CarScreenSettings, blind_spot_monitors_visible
+  from openpilot.starpilot.system.android_auto.car_screen import STATUS_METRICS, CarScreenSettings, blind_spot_monitors_visible
   main_layout = MainLayout()
-  main_layout._dev_sidebar.device_load_in_place_of_tuning = True
   map_pane = MapPane()
   car_settings = CarScreenSettings()
   controls = OnroadControls(main_layout)
@@ -759,6 +758,7 @@ def run(frames_path: str, touch_path: str) -> int:
       controls.update(started, speed_ms)
       layout_events, menu_events = controls.route(receiver.drain(), touch, started, viewport)
       settings = car_settings.poll()
+      main_layout._dev_sidebar.metric_override = [STATUS_METRICS[slot][0] for slot in settings["status_slots"]]
       main_rect, map_rect = car_layout(settings, started, controls.full_screen(started), logical_w, logical_h)
       ui_state.nav_map_beside_road = main_rect is not None and map_rect is not None
       ui_state.car_camera_off = started and not settings["camera"]

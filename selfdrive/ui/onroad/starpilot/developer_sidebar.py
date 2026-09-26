@@ -90,9 +90,7 @@ class DeveloperSidebar:
     self.max_torque = 0
     self.torque_timer_start = 0.0
 
-    # The Android Auto car screen shows device load where the auto-tune values
-    # (lateral acceleration, steer ratio, stiffness) would be.
-    self.device_load_in_place_of_tuning = False
+    self.metric_override: list[int] | None = None
 
     self._visible = False
     self._metric_color = rl.WHITE
@@ -194,18 +192,20 @@ class DeveloperSidebar:
     # ---- PC REPLAY FALLBACK (remove the next line when replay gets toggle bridge) ----
     # self._visible = ui_state.starpilot_toggles.get("developer_sidebar", False)
     # ---- replace the line below with the one above ---->
-    self._visible = self._params.get_bool("DeveloperSidebar") or ui_state.starpilot_toggles.get("developer_sidebar", False)
+    self._visible = self.metric_override is not None or self._params.get_bool("DeveloperSidebar") or ui_state.starpilot_toggles.get("developer_sidebar", False)
     if not self._visible:
       return
 
     if ui_state.sm.frame < ui_state.started_frame + 2:
       self.reset_variables()
 
-    assignments = []
-    for i, val in enumerate(self._cached_metrics):
-      if val == 0:
-        val = ui_state.starpilot_toggles.get(f"developer_sidebar_metric{i + 1}", 0)
-      assignments.append(val)
+    assignments = self.metric_override
+    if assignments is None:
+      assignments = []
+      for i, val in enumerate(self._cached_metrics):
+        if val == 0:
+          val = ui_state.starpilot_toggles.get(f"developer_sidebar_metric{i + 1}", 0)
+        assignments.append(val)
 
     color_str = ui_state.starpilot_toggles.get("sidebar_color1", "#FFFFFFFF")
     self._metric_color = parse_hex_color(color_str)
@@ -369,17 +369,18 @@ class DeveloperSidebar:
       14: ("ACCEL JERK", f"{accel_jerk}"),
       15: ("DANGER JERK", f"{danger_jerk}"),
       16: ("SPEED JERK", f"{speed_jerk}"),
-      17: (model_name, "")
+      17: (model_name, ""),
     }
-    if self.device_load_in_place_of_tuning:
-      # hardwared publishes CPU per core; the driving screen's stats line shows their average, so match it.
-      cpu_list = list(device_state.cpuUsagePercent) if device_state else []
-      cpu_pct = int(sum(cpu_list) / len(cpu_list)) if cpu_list else 0
-      gpu_pct = int(device_state.gpuUsagePercent) if device_state else 0
-      temp_c = int(device_state.maxTempC) if device_state else 0
-      self._metrics.update({5: ("CPU", f"{cpu_pct}%"), 6: ("GPU", f"{gpu_pct}%"), 7: ("TEMP", f"{temp_c}°C")})
-      for metric_id in (5, 6, 7):
-        self._metric_colors.pop(metric_id, None)
+    cpu_list = list(device_state.cpuUsagePercent) if device_state else []
+    cpu_pct = int(sum(cpu_list) / len(cpu_list)) if cpu_list else 0
+    gpu_pct = int(device_state.gpuUsagePercent) if device_state else -1
+    self._metrics.update({
+      18: ("CPU", f"{cpu_pct}%"),
+      19: ("GPU", f"{gpu_pct}%" if gpu_pct >= 0 else "N/A"),
+      20: ("TEMP", f"{int(device_state.maxTempC) if device_state else 0}°C"),
+      21: ("MEMORY", f"{int(device_state.memoryUsagePercent) if device_state else 0}%"),
+      22: ("STORAGE", f"{int(device_state.freeSpacePercent) if device_state else 0}% FREE"),
+    })
 
   def render(self, sidebar_rect: rl.Rectangle):
     if not self._visible:

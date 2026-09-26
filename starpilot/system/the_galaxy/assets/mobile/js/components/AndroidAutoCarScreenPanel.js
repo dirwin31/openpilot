@@ -12,7 +12,7 @@ export const AndroidAutoCarScreenPanel = {
     isMetric: { type: Boolean, default: false },
   },
   data() {
-    return { settings: null, loading: false, error: "", saving: false, views: VIEWS }
+    return { settings: null, statusMetrics: [], loading: false, error: "", saving: false, views: VIEWS }
   },
   created() { this.load() },
   computed: {
@@ -33,7 +33,9 @@ export const AndroidAutoCarScreenPanel = {
         // request can beat the toggle's PUT to the device and receive a transient 403.
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
-            this.settings = (await api.getCarScreen()).settings
+            const response = await api.getCarScreen()
+            this.settings = response.settings
+            this.statusMetrics = response.status_metrics
             return
           } catch (e) {
             if (attempt === 2) throw e
@@ -69,6 +71,11 @@ export const AndroidAutoCarScreenPanel = {
         this.update({ blind_spot_min_speed_ms: Math.min(maximum, Math.max(0, value)) / this.speedFactor })
       }
     },
+    updateStatusSlot(index, event) {
+      const status_slots = [...this.settings.status_slots]
+      status_slots[index] = event.target.value
+      this.update({ status_slots })
+    },
   },
   template: `
     <div style="padding: var(--sp-3); display:grid; gap:10px;">
@@ -100,6 +107,20 @@ export const AndroidAutoCarScreenPanel = {
             <button v-for="side in ['left', 'right']" :key="side" type="button" class="gx-btn"
               :class="settings.map_side === side ? '' : 'gx-btn--tonal'" :disabled="!isSplit || saving"
               @click="update({ map_side: side })">{{ side === 'left' ? 'Left' : 'Right' }}</button>
+          </div>
+        </div>
+
+        <div class="gx-row" style="display:block; border-top:1px solid var(--glass-border, rgba(127,127,127,.2));">
+          <div class="gx-row__label">Status Column</div>
+          <div class="gx-row__desc">Choose the six stats shown on the right side of the driving view. The same stat can fill more than one slot.</div>
+          <div style="display:grid; gap:8px; margin-top:10px;">
+            <label v-for="(metric, index) in settings.status_slots" :key="index" class="gx-row" style="border:none; gap:10px;">
+              <span class="gx-row__label">Slot {{ index + 1 }}</span>
+              <GalaxySelect class="gx-field" style="min-width:220px;" :value="metric" :disabled="saving"
+                :aria-label="'Status slot ' + (index + 1)" @change="updateStatusSlot(index, $event)">
+                <option v-for="option in statusMetrics" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </GalaxySelect>
+            </label>
           </div>
         </div>
 

@@ -5614,7 +5614,8 @@ def setup(app):
   # second, so changes apply live while the car is connected, or next time otherwise.
   @app.route("/api/android_auto/car_screen", methods=["GET"])
   def android_auto_car_screen():
-    return jsonify({"settings": aa_car_screen.load(), "defaults": aa_car_screen.DEFAULTS}), 200
+    metrics = [{"value": value, "label": details[1]} for value, details in aa_car_screen.STATUS_METRICS.items()]
+    return jsonify({"settings": aa_car_screen.load(), "defaults": aa_car_screen.DEFAULTS, "status_metrics": metrics}), 200
 
   @app.route("/api/android_auto/car_screen", methods=["POST"])
   def android_auto_car_screen_save():

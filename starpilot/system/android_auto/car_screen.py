@@ -20,6 +20,30 @@ CAR_SCREEN_PATH = DATA_DIR / "car_screen.json"
 ONROAD_VIEWS = ("split", "driving", "map")  # map + driving view, driving view only, map only
 MAP_SIDES = ("right", "left")
 MAX_BLIND_SPOT_SPEED_MS = 60.0
+STATUS_METRICS = {
+  "acceleration": (1, "Current Acceleration"),
+  "max_acceleration": (2, "Maximum Acceleration"),
+  "steer_delay": (3, "Steering Delay"),
+  "friction": (4, "Friction"),
+  "lateral_acceleration": (5, "Lateral Acceleration"),
+  "steer_ratio": (6, "Steer Ratio"),
+  "stiffness": (7, "Stiffness Factor"),
+  "lateral_engagement": (8, "Lateral Engagement %"),
+  "longitudinal_engagement": (9, "Longitudinal Engagement %"),
+  "steering_angle": (10, "Steering Angle"),
+  "torque": (11, "Torque Used"),
+  "actuator_acceleration": (12, "Actuator Acceleration"),
+  "danger_factor": (13, "MPC Danger Factor"),
+  "acceleration_jerk": (14, "Acceleration Jerk"),
+  "danger_jerk": (15, "Danger Jerk"),
+  "speed_jerk": (16, "Speed Jerk"),
+  "model": (17, "Model Name"),
+  "cpu": (18, "CPU Usage"),
+  "gpu": (19, "GPU Usage"),
+  "temperature": (20, "Temperature"),
+  "memory": (21, "Memory Usage"),
+  "storage": (22, "Free Storage"),
+}
 DEFAULTS = {
   "onroad_view": "split",
   "map_side": "right",
@@ -27,6 +51,7 @@ DEFAULTS = {
   "blind_spot_monitors": True,
   "blind_spot_min_speed_ms": 0.0,
   "sleep_device_screen": False,
+  "status_slots": ["steer_delay", "friction", "cpu", "gpu", "temperature", "memory"],
 }
 RELOAD_SECONDS = 1.0
 # Set by tools/android_auto/dhu_device.py for a Desktop Head Unit session; the car view
@@ -34,8 +59,13 @@ RELOAD_SECONDS = 1.0
 DHU_ENV = "STARPILOT_ANDROID_AUTO_DHU"
 
 
+def default_settings() -> dict:
+  """Return settings whose mutable values are independent of ``DEFAULTS``."""
+  return {**DEFAULTS, "status_slots": list(DEFAULTS["status_slots"])}
+
+
 def normalize(raw: object) -> dict:
-  settings = dict(DEFAULTS)
+  settings = default_settings()
   if isinstance(raw, dict):
     if raw.get("onroad_view") in ONROAD_VIEWS:
       settings["onroad_view"] = raw["onroad_view"]
@@ -47,6 +77,9 @@ def normalize(raw: object) -> dict:
       settings["blind_spot_monitors"] = raw["blind_spot_monitors"]
     if isinstance(raw.get("sleep_device_screen"), bool):
       settings["sleep_device_screen"] = raw["sleep_device_screen"]
+    status_slots = raw.get("status_slots")
+    if isinstance(status_slots, list) and len(status_slots) == 6 and all(isinstance(slot, str) and slot in STATUS_METRICS for slot in status_slots):
+      settings["status_slots"] = list(status_slots)
     minimum_speed = raw.get("blind_spot_min_speed_ms")
     if isinstance(minimum_speed, (int, float)) and not isinstance(minimum_speed, bool) and math.isfinite(minimum_speed):
       if 0.0 <= minimum_speed <= MAX_BLIND_SPOT_SPEED_MS:
@@ -66,7 +99,7 @@ def load(path: Path | None = None) -> dict:
   try:
     return normalize(json.loads((path or CAR_SCREEN_PATH).read_text()))
   except (OSError, ValueError):
-    return dict(DEFAULTS)
+    return default_settings()
 
 
 def save(settings: dict, path: Path | None = None) -> dict:
@@ -95,7 +128,7 @@ class CarScreenSettings:
     self._clock = clock
     self._checked = -RELOAD_SECONDS
     self._stamp: tuple | None = None
-    self.current = dict(DEFAULTS)
+    self.current = default_settings()
 
   def poll(self) -> dict:
     now = self._clock()
@@ -109,5 +142,5 @@ class CarScreenSettings:
       stamp = None
     if stamp != self._stamp:
       self._stamp = stamp
-      self.current = load(self.path) if stamp is not None else dict(DEFAULTS)
+      self.current = load(self.path) if stamp is not None else default_settings()
     return self.current
