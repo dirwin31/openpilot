@@ -70,7 +70,12 @@ def test_viewed_cache_setting_persists(monkeypatch, tmp_path):
   response = client.post("/api/android_auto/offline/settings", json={"save_viewed_cache": True})
   assert response.status_code == 200 and response.get_json()["save_viewed_cache"] is True
   assert maps.save_viewed_cache() is True
+  assert maps.promote_requested(), "enabling asks navtilesd to pin tiles already cached"
   assert client.get("/api/android_auto/offline").get_json()["save_viewed_cache"] is True
+
+  assert client.post("/api/android_auto/offline/settings", json={"save_viewed_cache": False}).status_code == 200
+  assert maps.save_viewed_cache() is False
+  assert not maps.promote_requested(), "disabling withdraws the request"
 
 
 def test_route_estimate_then_make_available_offline(monkeypatch, tmp_path):
