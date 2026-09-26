@@ -385,11 +385,11 @@ export const MapsPanel = {
           <span class="gx-section__title">Regions &amp; Schedule</span>
         </div>
         <div style="padding: var(--sp-2) var(--sp-3); display:grid; gap:6px;">
-          <div class="gx-row" style="border-top:none; flex-wrap:wrap;">
+          <div class="gx-row" style="border-top:none; min-height:0; padding:4px 0; flex-wrap:wrap;">
             <span class="gx-row__label">Search</span>
             <input class="gx-field" style="flex:1; min-width:180px;" type="search" v-model="search" placeholder="Filter by name or code" />
           </div>
-          <div class="gx-row" style="border-top:none; flex-wrap:wrap;">
+          <div class="gx-row" style="border-top:none; min-height:0; padding:4px 0; flex-wrap:wrap;">
             <span class="gx-row__label">Auto Update</span>
             <GalaxySelect class="gx-field" style="flex:1; min-width:160px;" :value="scheduleDraft" @change="scheduleDraft = $event.target.value">
               <option v-for="opt in scheduleOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
@@ -398,7 +398,7 @@ export const MapsPanel = {
               {{ savingSchedule ? 'Applying...' : 'Apply' }}
             </button>
           </div>
-          <div class="gx-row" style="border-top:none; flex-wrap:wrap;">
+          <div class="gx-row" style="border-top:none; min-height:0; padding:4px 0; flex-wrap:wrap;">
             <span class="gx-row__label">Selected Regions</span>
             <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; flex:1;">
               <template v-if="selectedDraft.length">

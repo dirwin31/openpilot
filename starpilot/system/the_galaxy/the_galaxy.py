@@ -174,6 +174,7 @@ from openpilot.starpilot.navigation.destination_store import normalize_destinati
 from openpilot.starpilot.navigation.offline_maps import (
   AREA_MAX_RADIUS_KM,
   AREA_MIN_RADIUS_KM,
+  AREA_ZOOM_CHOICES,
   OFFLINE_MAX_BYTES,
   AVERAGE_TILE_BYTES as OFFLINE_TILE_BYTES,
   OfflineMaps,
@@ -5637,7 +5638,12 @@ def setup(app):
   def _offline_radius(payload):
     try:
       radius = float(payload.get("radius_km"))
-      return radius, area_zoom_for_radius(radius)
+      zoom = area_zoom_for_radius(radius)
+      if payload.get("max_zoom") is not None:
+        zoom = int(payload["max_zoom"])
+        if zoom not in AREA_ZOOM_CHOICES:
+          return None
+      return radius, zoom
     except (TypeError, ValueError):
       return None
 
@@ -5649,6 +5655,7 @@ def setup(app):
       "mapboxPublic": params.get("MapboxPublicKey", encoding="utf8") or "",
       "isMetric": params.get_bool("IsMetric"),
       "areaRadius": {"min_km": AREA_MIN_RADIUS_KM, "max_km": AREA_MAX_RADIUS_KM, "default_km": 10.0},
+      "areaZooms": list(AREA_ZOOM_CHOICES),
     }), 200
 
   @app.route("/api/android_auto/offline/settings", methods=["POST"])
