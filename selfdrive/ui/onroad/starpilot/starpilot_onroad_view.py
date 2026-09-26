@@ -13,7 +13,10 @@ from openpilot.selfdrive.ui.onroad.starpilot.widgets import (
   SteeringWheelWidget, StoppedTimerWidget, ModelSourceWidget
 )
 from openpilot.selfdrive.ui.onroad.starpilot.stopping_point import render_stopping_point
-from openpilot.selfdrive.ui.onroad.starpilot.pause_indicators import render_lateral_paused, render_longitudinal_paused
+from openpilot.selfdrive.ui.onroad.starpilot.pause_indicators import (
+  android_auto_lateral_pause_rect, render_android_auto_lateral_paused,
+  render_lateral_paused, render_longitudinal_paused,
+)
 from openpilot.selfdrive.ui.onroad.starpilot.pulse_glide import get_pulse_glide_border_color, render_pulse_glide
 from openpilot.selfdrive.ui.onroad.starpilot.pip_sidecam import PipSideCamera
 from openpilot.selfdrive.ui.onroad.starpilot.favorite_radial_menu import FavoriteRadialMenu
@@ -379,21 +382,25 @@ class StarPilotOnroadView(AugmentedRoadView):
     if alert_showing is not None:
       return
 
-    dm = self.driver_state_renderer
-    # Ensure DM position has been initialized/calculated
-    if not dm or dm.position_x == 0.0:
-      return
-
     # Check pause/CEM states
     starpilot_car_state = ui_state.sm["starpilotCarState"] if ui_state.sm.valid.get("starpilotCarState", False) else None
     plan = ui_state.sm["starpilotPlan"] if ui_state.sm.valid.get("starpilotPlan", False) else None
     lateral_paused = starpilot_car_state.pauseLateral if starpilot_car_state else False
     longitudinal_paused = (starpilot_car_state.pauseLongitudinal or starpilot_car_state.forceCoast) if starpilot_car_state else False
 
+    if lateral_paused and ui_state.android_auto_car_view:
+      pause_rect = android_auto_lateral_pause_rect(self._content_rect, gui_app.width)
+      render_android_auto_lateral_paused(pause_rect, self._font_bold)
+
+    dm = self.driver_state_renderer
+    # Ensure DM position has been initialized/calculated
+    if not dm or dm.position_x == 0.0:
+      return
+
     # Build the list of active left-side (DM-adjacent) badges in order of priority:
     # 1. Lateral Paused, 2. Longitudinal Paused
     active_badges = []
-    if lateral_paused:
+    if lateral_paused and not ui_state.android_auto_car_view:
       active_badges.append("lateral_paused")
     if longitudinal_paused:
       active_badges.append("longitudinal_paused")

@@ -86,6 +86,8 @@ def _load_starpilot_onroad_view(monkeypatch):
   )
   stub_module(
     "openpilot.selfdrive.ui.onroad.starpilot.pause_indicators",
+    android_auto_lateral_pause_rect=lambda rect, _display_width: rect,
+    render_android_auto_lateral_paused=lambda *_args: None,
     render_lateral_paused=lambda *_args: None,
     render_longitudinal_paused=lambda *_args: None,
   )
