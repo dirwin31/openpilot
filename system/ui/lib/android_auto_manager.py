@@ -85,6 +85,9 @@ class AndroidAutoManager:
   def set_connection(self, connection: str) -> None:
     self._run(self._client.set_connection, connection)
 
+  def set_auto_connect(self, enabled: bool) -> None:
+    self._run(self._client.set_auto_connect, enabled)
+
   def select_receiver(self, address: str, name: str) -> None:
     self._run(self._client.select_receiver, address, name)
 

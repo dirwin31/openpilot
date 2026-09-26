@@ -433,6 +433,12 @@ class FakeBluez:
   def __init__(self, log):
     self.acquired = 0
     self.released = 0
+    self.class_restored = 0
+    self.hfp_registrations = 0
+    self.trusted = []
+    self.adapter_ready = True
+    self.connected = True
+    self.paired_devices = [("AA:BB:CC:DD:EE:01", "Civic", True)]
 
   def acquire(self):
     self.acquired += 1
@@ -440,14 +446,26 @@ class FakeBluez:
   def release(self):
     self.released += 1
 
+  def restore_class(self):
+    self.class_restored += 1
+
+  def register_hfp(self):
+    self.hfp_registrations += 1
+
+  def set_trusted(self, address):
+    self.trusted.append(address)
+
   def close(self):
     pass
 
   def device(self, address):
-    return {"address": address, "paired": True, "connected": True, "name": "Civic"}
+    return {"address": address, "paired": True, "connected": self.connected, "name": "Civic", "android_auto": True}
 
   def devices(self):
-    return [self.device("AA:BB:CC:DD:EE:01")]
+    return [{**self.device(address), "name": name, "android_auto": aa} for address, name, aa in self.paired_devices]
+
+  def snapshot(self, address):
+    return self.adapter_ready, self.device(address)
 
   def connect_device(self, address):
     pass

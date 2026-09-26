@@ -1,14 +1,18 @@
 """BlueZ integration for the phone role: HFP gateway profile, phone Class of Device, device queries.
 
 Pairing, the pairing agent and radio power stay with ``bluetooth_managerd``;
-this module only adds what a phone has and a comma does not, for the lifetime of
-an Android Auto session, and removes it afterwards:
+this module only adds what a phone has and a comma does not, and removes it
+afterwards:
 
 * an HFP Audio Gateway profile (skipped when another service, such as
-  bluez-alsa, already provides one),
-* a temporary smartphone Class of Device (0x00020c major/minor), restored on
-  release. aa-proxy-rs uses the same temporary identity for head units that
-  classify paired devices by class.
+  bluez-alsa, already provides one). It never auto-connects to other devices and
+  answers only the devices ``accepts`` allows (the chosen car, or anything while
+  pairing). While auto-connect is on it stays registered so the car can reach
+  the comma the way it reaches a phone when it powers on.
+* a temporary smartphone Class of Device (0x00020c major/minor), set only while
+  pairing or connecting to the car and restored as soon as the car has handed
+  over its Wi-Fi. aa-proxy-rs uses the same temporary identity for head units
+  that classify paired devices by class.
 """
 
 from __future__ import annotations
@@ -16,6 +20,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
 from jeepney import DBusAddress, MatchRule, new_error, new_method_call, new_method_return
@@ -33,9 +39,16 @@ ADAPTER_IFACE = "org.bluez.Adapter1"
 DEVICE_IFACE = "org.bluez.Device1"
 OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
 HFP_AG_UUID = "0000111f-0000-1000-8000-00805f9b34fb"
+HFP_HF_UUID = "0000111e-0000-1000-8000-00805f9b34fb"  # the car's side; BlueZ's ConnectProfile names the remote role
 HFP_PROFILE_PATH = "/link/firestar/starpilot/android_auto/hfp_ag"
+HFP_RETRY_SECONDS = 30.0
 PHONE_MAJOR_CLASS = 2   # Phone
 PHONE_MINOR_CLASS = 3   # Smartphone (minor field value; 0x00020c as a full CoD)
+
+
+def address_from_path(path: str) -> str:
+  """``/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF`` -> ``AA:BB:CC:DD:EE:FF``."""
+  return path.rsplit("/", 1)[-1].removeprefix("dev_").replace("_", ":").upper()
 
 
 def unwrap(value: Any) -> Any:
@@ -57,6 +70,11 @@ class BluezPhone:
     self._profile_registered = False
     self._original_class: int | None = None
     self._class_changed = False
+    self._bluez_owner = ""
+    self._hfp_existing = False
+    self._hfp_retry_at = 0.0
+    self.accepts: Callable[[str], bool] = lambda address: True  # which devices may open the HFP link
+    self.on_connection: Callable[[str], None] = lambda address: None
     self._filter = self.router.filter(MatchRule(type="method_call", path=HFP_PROFILE_PATH), bufsize=16)
     self._queue = self._filter.__enter__()
     self._thread = threading.Thread(target=self._profile_loop, name="aa_hfp_profile", daemon=True)
@@ -99,34 +117,81 @@ class BluezPhone:
     address = address.upper()
     return next((info for info in self.devices() if info["address"] == address), None)
 
+  def snapshot(self, address: str) -> tuple[bool, dict | None]:
+    """One BlueZ query: (adapter present and powered, the device at ``address`` or None)."""
+    self._check_bluez_restart()
+    ready, device = False, None
+    for path, interfaces in self.managed_objects().items():
+      if ADAPTER_IFACE in interfaces:
+        ready = ready or bool(interfaces[ADAPTER_IFACE].get("Powered"))
+      if DEVICE_IFACE in interfaces:
+        info = self._device_info(path, interfaces[DEVICE_IFACE])
+        if info["address"] == address.upper():
+          device = info
+    return ready, device
+
+  def _check_bluez_restart(self) -> None:
+    """A restarted bluetoothd forgets registered profiles; register again afterwards."""
+    address = DBusAddress("/org/freedesktop/DBus", bus_name="org.freedesktop.DBus", interface="org.freedesktop.DBus")
+    with self._lock:
+      reply = self.router.send_and_get_reply(new_method_call(address, "GetNameOwner", "s", (BLUEZ,)), timeout=5.0)
+    if reply.header.message_type == MessageType.error:
+      raise RuntimeError("BlueZ is not running")
+    owner = str(reply.body[0])
+    if self._bluez_owner and owner != self._bluez_owner:
+      self._profile_registered = self._hfp_existing = False
+      self._hfp_retry_at = 0.0
+      self.log("bluez_restarted")
+    self._bluez_owner = owner
+
   def connect_device(self, address: str, timeout: float = 20.0) -> None:
     info = self.device(address)
     if info is None:
       raise RuntimeError(f"{address} is not known to Bluetooth; pair the car first")
-    if not info["connected"]:
+    if info["connected"]:
+      return
+    if self._profile_registered and HFP_HF_UUID in info["uuids"]:
+      # Only the hands-free link, like a phone: Device.Connect would also bring
+      # up every other auto-connect profile BlueZ has for the car (e.g. audio).
       try:
-        self._call(info["path"], DEVICE_IFACE, "Connect", timeout=timeout)
+        self._call(info["path"], DEVICE_IFACE, "ConnectProfile", "s", (HFP_HF_UUID,), timeout=timeout)
+        return
       except RuntimeError as error:
-        # Connect fails when no auto-connect profile matches, but the ACL link a
-        # raw SDP/RFCOMM socket needs is created on demand anyway.
-        self.log("device_connect_warning", error=str(error))
+        self.log("device_connect_warning", error=str(error), profile="hfp")
+    try:
+      self._call(info["path"], DEVICE_IFACE, "Connect", timeout=timeout)
+    except RuntimeError as error:
+      # Connect fails when no auto-connect profile matches, but the ACL link a
+      # raw SDP/RFCOMM socket needs is created on demand anyway.
+      self.log("device_connect_warning", error=str(error))
 
   # ---------------------------------------------------------- phone identity
 
-  def acquire(self) -> None:
-    self._stop.clear()
-    self._register_hfp()
-    self._set_phone_class()
+  def acquire(self, phone_class: bool = True) -> None:
+    self.register_hfp()
+    if phone_class:
+      self.set_phone_class()
 
   def release(self) -> None:
-    self._stop.set()
+    self.unregister_hfp()
+    self.restore_class()
+
+  def register_hfp(self) -> None:
+    self._stop.clear()
+    self._register_hfp()
+
+  def unregister_hfp(self) -> None:
+    self._stop.set()  # also closes open HFP links
     if self._profile_registered:
       try:
         self._call("/org/bluez", PROFILE_MANAGER_IFACE, "UnregisterProfile", "o", (HFP_PROFILE_PATH,))
       except RuntimeError as error:
         self.log("hfp_unregister_failed", error=str(error))
       self._profile_registered = False
-    self._restore_class()
+
+  @property
+  def hfp_registered(self) -> bool:
+    return self._profile_registered
 
   def close(self) -> None:
     self.release()
@@ -139,18 +204,22 @@ class BluezPhone:
     self._thread.join(timeout=1.0)
 
   def _register_hfp(self) -> None:
-    if self._profile_registered:
+    if self._profile_registered or self._hfp_existing or time.monotonic() < self._hfp_retry_at:
       return
+    # AutoConnect stays off: BlueZ would otherwise open this link to every
+    # device with a hands-free role (headsets, other gadgets) when it connects.
     options = {"Name": ("s", "StarPilot Hands-Free Gateway"), "RequireAuthentication": ("b", True),
-               "RequireAuthorization": ("b", False), "AutoConnect": ("b", True)}
+               "RequireAuthorization": ("b", False), "AutoConnect": ("b", False)}
     try:
       self._call("/org/bluez", PROFILE_MANAGER_IFACE, "RegisterProfile", "osa{sv}", (HFP_PROFILE_PATH, HFP_AG_UUID, options))
       self._profile_registered = True
       self.log("hfp_registered")
     except RuntimeError as error:
       if "AlreadyExists" in str(error) or "already" in str(error).lower():
+        self._hfp_existing = True
         self.log("hfp_existing_provider", detail=str(error))
       else:
+        self._hfp_retry_at = time.monotonic() + HFP_RETRY_SECONDS
         self.log("hfp_register_failed", error=str(error))
 
   def _profile_loop(self) -> None:
@@ -163,9 +232,15 @@ class BluezPhone:
         if member == "NewConnection":
           device_path, descriptor = str(message.body[0]), message.body[1]
           sock = descriptor.to_socket()
+          address = address_from_path(device_path)
+          if not self.accepts(address):
+            sock.close()
+            self.log("hfp_refused", device=device_path.rsplit("/", 1)[-1])
+            raise RuntimeError("StarPilot answers hands-free only for the chosen car")
           threading.Thread(target=hfp.serve, args=(sock, self._stop, self.log, device_path.rsplit("/", 1)[-1]),
                            name="aa_hfp_conn", daemon=True).start()
           self.log("hfp_connected", device=device_path.rsplit("/", 1)[-1])
+          self.on_connection(address)
         self.router.send(new_method_return(message))
       except Exception as error:
         try:
@@ -173,7 +248,7 @@ class BluezPhone:
         except Exception:
           pass
 
-  def _set_phone_class(self) -> None:
+  def set_phone_class(self) -> None:
     if self._class_changed:
       return
     try:
@@ -187,7 +262,7 @@ class BluezPhone:
       self._original_class, self._class_changed = original, True
       self.log("phone_class_set", original=f"{original:#08x}")
 
-  def _restore_class(self) -> None:
+  def restore_class(self) -> None:
     if not self._class_changed:
       return
     original = self._original_class or 0

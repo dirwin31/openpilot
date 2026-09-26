@@ -1,7 +1,8 @@
 """android_autod: local control socket for wireless Android Auto projection.
 
-Runs only when Android Auto and Bluetooth are enabled and stays idle (no radio, network, encoder
-or capture work) until the user presses Start. Commands are one JSON line per
+Runs only when Android Auto and Bluetooth are enabled. Projection starts when the user presses
+Start, or on its own when auto-connect is on and the chosen car is on (see auto_connect.py);
+until then nothing but a Bluetooth status check and the car's hands-free gateway runs. Commands are one JSON line per
 connection on ``ANDROID_AUTO_SOCKET_PATH``, mirroring bluetooth_managerd.
 
   python -m openpilot.starpilot.system.android_auto.daemon            # service
@@ -46,9 +47,11 @@ def handle(supervisor: Supervisor, request: dict[str, Any]) -> dict[str, Any]:
   if command == "status":
     return {"status": supervisor.status()}
   if command == "start":
-    supervisor.start()
+    supervisor.user_start()
   elif command == "stop":
-    supervisor.stop()
+    supervisor.user_stop()
+  elif command == "set_auto_connect":
+    supervisor.set_auto_connect(bool(request.get("enabled", True)))
   elif command == "select_receiver":
     supervisor.select_receiver(str(request.get("address", "")), str(request.get("name", "")))
   elif command == "set_view":

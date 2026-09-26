@@ -1,6 +1,7 @@
 """Android Auto session supervisor: owns every stage, deadline, retry and cleanup.
 
-One explicitly started session runs in one worker thread:
+One session, started by the user or by auto-connect (see auto_connect.py), runs
+in one worker thread:
 
   idle -> connecting_bluetooth -> discovering -> rfcomm -> wifi_start -> wifi_info
        -> joining_wifi -> connecting_tcp -> authenticating -> negotiating -> streaming
@@ -23,8 +24,10 @@ import time
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from openpilot.starpilot.system.android_auto import identity as identity_store
+from openpilot.starpilot.system.android_auto.auto_connect import AutoConnectPolicy
 from openpilot.starpilot.system.android_auto.bootstrap import NAMES, BootstrapError, WirelessBootstrap
 from openpilot.starpilot.system.android_auto.frame_source import DEFAULT_PATH as DEFAULT_FRAME_PATH, FrameRequest
 from openpilot.starpilot.system.android_auto.touch import DEFAULT_TOUCH_SOCKET
@@ -40,6 +43,7 @@ UNAVAILABLE_AFTER = 1.0      # focused but no fresh UI frame for this long -> "u
 SDP_SETTLE = (1.5, 2.2, 3.0)
 TCP_ATTEMPTS = 6
 MAX_LOG_FILES = 20
+CAR_LINK_HOLD = 10.0         # a hands-free connection from the car counts as "car present" this long
 
 STATE_LABELS = {
   "idle": "off", "connecting_bluetooth": "connecting to car", "discovering": "finding android auto",
@@ -49,6 +53,14 @@ STATE_LABELS = {
   "backoff": "retrying", "stopping": "stopping", "error": "error",
   "waiting_for_usb": "plug into the car's usb", "usb_accessory": "starting usb",
 }
+
+
+def _is_onroad() -> bool:
+  try:
+    from openpilot.common.params import Params
+    return Params().get_bool("IsOnroad")
+  except Exception:
+    return False
 
 
 class Cancelled(Exception):
@@ -117,8 +129,9 @@ class EventLog:
 class Supervisor:
   def __init__(self, bluez_factory=None, lease_factory=None, bluetooth_client=None, frame_path: str | None = None,
                synthetic: bool = False, car_frame_path: str = CAR_FRAME_PATH, touch_path: str = DEFAULT_TOUCH_SOCKET,
-               renderer_command: list[str] | None = None):
+               renderer_command: list[str] | None = None, onroad=_is_onroad):
     self._synthetic = synthetic
+    self._onroad = onroad
     self._car_frame_path, self._touch_path, self._renderer_command = car_frame_path, touch_path, renderer_command
     self._bluez_factory = bluez_factory
     self._lease_factory = lease_factory
@@ -129,8 +142,11 @@ class Supervisor:
     self._thread: threading.Thread | None = None
     self._generation = 0
     self._sockets: set[socket.socket] = set()
-    self._bluez = None
+    self._bluez: Any = None
     self._pairing_until = 0.0
+    self._pairing_known: set[str] | None = None  # Android Auto cars already paired when the pairing window opened
+    self._car_seen_at = -CAR_LINK_HOLD
+    self.auto = AutoConnectPolicy()
     self.log = EventLog()
     self.config = identity_store.load_config()
     self._status: dict = {"state": "idle", "detail": "", "error": "", "last_stage": "", "attempt": 0,
@@ -160,13 +176,30 @@ class Supervisor:
     status["receiver_name"] = self.config["receiver_name"]
     status["configured_view"] = self.config["view"]
     status["connection"] = self.config["connection"]
-    status["pairing_ready"] = time.monotonic() < self._pairing_until
+    status["pairing_ready"] = self._pairing_active()
+    status["auto_connect"] = bool(self.config["auto_connect"])
+    status["auto_paused"] = self.auto.suppressed
     status["recent"] = list(self.log.recent)[-8:]
     return status
 
   # ---------------------------------------------------------------- commands
 
-  def start(self) -> None:
+  def user_start(self) -> None:
+    self.auto.manual_start()
+    self.start()
+
+  def user_stop(self) -> None:
+    """Stop pressed: also holds auto-connect off until the next drive."""
+    self.auto.manual_stop(self._session_alive())
+    self.stop()
+
+  def set_auto_connect(self, enabled: bool) -> None:
+    with self._lock:
+      self.config["auto_connect"] = bool(enabled)
+      identity_store.save_config(self.config)
+    self.log("auto_connect_selected", enabled=bool(enabled))
+
+  def start(self, trigger: str = "manual") -> None:
     with self._lock:
       if self._thread is not None and self._thread.is_alive():
         if self._stop.is_set():
@@ -179,7 +212,7 @@ class Supervisor:
       self._generation += 1
       self._set(state="connecting_bluetooth", detail="", error="", attempt=0, retry_in=0.0, running=True,
                 identity=identity_store.expiry_warning(identity))
-      self._thread = threading.Thread(target=self._run, args=(self._generation,), name="android_auto_session", daemon=True)
+      self._thread = threading.Thread(target=self._run, args=(self._generation, trigger), name="android_auto_session", daemon=True)
       self._thread.start()
 
   def stop(self, timeout: float = 8.0, graceful: float = 3.0) -> None:
@@ -208,6 +241,10 @@ class Supervisor:
       self.config.update(receiver_address=address, receiver_name=name or address)
       identity_store.save_config(self.config)
     self._unselect_car_audio(address)
+    try:
+      self._phone().set_trusted(address)  # the car's own connections are accepted onroad, like a phone's
+    except Exception as error:
+      self.log("trust_failed", error=str(error))
 
   def set_view(self, view: str) -> None:
     """Choose what the car shows; applies from the next projection session."""
@@ -232,9 +269,12 @@ class Supervisor:
   def prepare_pairing(self, seconds: float = 180.0) -> None:
     """Present as a phone (HFP gateway, smartphone class) while the car pairs."""
     bluez = self._phone()
+    known = {device["address"] for device in bluez.devices() if device["paired"] and device.get("android_auto")}
     if self.config.get("phone_class", True):
       bluez.acquire()
-    self._pairing_until = time.monotonic() + seconds
+    with self._lock:
+      self._pairing_known = known
+      self._pairing_until = time.monotonic() + seconds
     self.log("pairing_window", seconds=seconds)
 
   def devices(self) -> list[dict]:
@@ -245,12 +285,71 @@ class Supervisor:
     return [{key: device[key] for key in ("address", "name", "paired", "connected", "android_auto")}
             for device in devices if device["paired"]]
 
-  def maintain(self) -> None:
-    """Periodic housekeeping from the daemon thread: end an unused pairing window."""
-    if self._pairing_until and time.monotonic() >= self._pairing_until:
-      self._pairing_until = 0.0
-      if self._bluez is not None and not (self._thread is not None and self._thread.is_alive()):
-        self._bluez.release()
+  def maintain(self, now: float | None = None) -> None:
+    """Periodic housekeeping from the daemon thread: pairing window, auto-connect."""
+    now = time.monotonic() if now is None else now
+    if self._pairing_until:
+      if self._pairing_active():
+        self._select_new_car()
+      else:
+        with self._lock:
+          self._pairing_until, self._pairing_known = 0.0, None
+        if not self._session_alive():
+          self._release_phone()
+    self._auto_connect(now)
+
+  def _auto_connect(self, now: float) -> None:
+    config = self.config
+    address = config["receiver_address"]
+    if not (config["auto_connect"] and config["connection"] == "wireless" and address):
+      if self._bluez is not None and not self._session_alive() and not self._pairing_active():
+        self._release_phone()  # drop a standby gateway left from before auto-connect was turned off
+      return
+    running = self._session_alive()
+    try:
+      bluez = self._phone()
+      adapter_ready, device = bluez.snapshot(address)
+      if adapter_ready and config.get("phone_class", True):
+        bluez.register_hfp()  # standby: lets the car reach the comma when it powers on
+    except Exception:
+      adapter_ready, device = False, None  # Bluetooth still starting (or restarting)
+    car_link = bool(device and device["connected"]) or now - self._car_seen_at < CAR_LINK_HOLD
+    onroad = self._onroad()
+    action = self.auto.decide(now, enabled=True, onroad=onroad, car_link=car_link,
+                              ready=adapter_ready and bool(device and device["paired"]), running=running)
+    if action == "start":
+      trigger = "onroad" if onroad else "car_connected"
+      try:
+        self.start(trigger=trigger)
+      except Exception as error:
+        self.auto.start_refused(now)
+        self._set(error=f"auto-connect: {error}"[:300])
+        self.log("auto_connect_refused", error=str(error))
+    elif action == "stop":
+      self.log("auto_connect_stop", reason="car gone")
+      self.stop()
+
+  def _select_new_car(self) -> None:
+    """A car that paired during the pairing window and offers Android Auto becomes the chosen car."""
+    if self._session_alive():
+      return
+    try:
+      devices = self._phone().devices()
+    except Exception:
+      return
+    with self._lock:
+      known = self._pairing_known
+      if known is None:
+        return
+      new = [device for device in devices if device["paired"] and device.get("android_auto") and device["address"] not in known]
+      if not new:
+        return
+      known.add(new[0]["address"])
+    try:
+      self.select_receiver(new[0]["address"], new[0]["name"])
+      self.log("car_selected_after_pairing", car=new[0]["name"])
+    except (RuntimeError, ValueError) as error:
+      self.log("car_select_failed", error=str(error))
 
   def close(self) -> None:
     self.stop()
@@ -264,13 +363,58 @@ class Supervisor:
   # ----------------------------------------------------------------- helpers
 
   def _phone(self):
-    if self._bluez is None:
-      if self._bluez_factory is None:
-        from openpilot.starpilot.system.android_auto.bluez_phone import BluezPhone
-        self._bluez = BluezPhone(self.log)
+    with self._lock:
+      if self._bluez is None:
+        if self._bluez_factory is None:
+          from openpilot.starpilot.system.android_auto.bluez_phone import BluezPhone
+          bluez = BluezPhone(self.log)
+        else:
+          bluez = self._bluez_factory(self.log)
+        bluez.accepts = self._hfp_accepts
+        bluez.on_connection = self._hfp_connected
+        self._bluez = bluez
+      return self._bluez
+
+  def _pairing_active(self) -> bool:
+    return time.monotonic() < self._pairing_until
+
+  def _session_alive(self) -> bool:
+    thread = self._thread
+    return thread is not None and thread.is_alive()
+
+  def _hfp_accepts(self, address: str) -> bool:
+    receiver = self.config["receiver_address"]
+    return self._pairing_active() or not receiver or address.upper() == receiver.upper()
+
+  def _hfp_connected(self, address: str) -> None:
+    if address.upper() == self.config["receiver_address"].upper():
+      self._car_seen_at = time.monotonic()
+
+  def _release_phone(self) -> None:
+    """Stop looking like a phone; keep only the standby gateway auto-connect needs."""
+    bluez = self._bluez
+    if bluez is None:
+      return
+    config = self.config
+    standby = config["auto_connect"] and config["connection"] == "wireless" and bool(config["receiver_address"]) \
+              and config.get("phone_class", True)
+    if standby or self._pairing_active():
+      bluez.restore_class()
+    else:
+      bluez.release()
+
+  def _remember_channel(self, address: str, channel: int | None) -> None:
+    with self._lock:
+      cache = dict(self.config["rfcomm_cache"])
+      if channel is None:
+        if cache.pop(address, None) is None:
+          return
+      elif cache.get(address) == channel:
+        return
       else:
-        self._bluez = self._bluez_factory(self.log)
-    return self._bluez
+        cache[address] = channel
+      self.config["rfcomm_cache"] = cache
+      identity_store.save_config(self.config)
 
   def _lease(self):
     if self._lease_factory is None:
@@ -317,10 +461,10 @@ class Supervisor:
 
   # ---------------------------------------------------------------- session
 
-  def _run(self, generation: int) -> None:
+  def _run(self, generation: int, trigger: str = "manual") -> None:
     self.log.open()
     wired = self.config["connection"] == "wired"
-    self.log("session_start", receiver="usb" if wired else self.config["receiver_name"], generation=generation)
+    self.log("session_start", receiver="usb" if wired else self.config["receiver_name"], generation=generation, trigger=trigger)
     lease = NoLease() if wired else self._lease()
     attempt = 0
     try:
@@ -366,11 +510,10 @@ class Supervisor:
         lease.release(restore=True)
       except Exception as error:
         self.log("wifi_release_failed", error=str(error))
-      if self._bluez is not None:
-        try:
-          self._bluez.release()
-        except Exception as error:
-          self.log("bluetooth_release_failed", error=str(error))
+      try:
+        self._release_phone()
+      except Exception as error:
+        self.log("bluetooth_release_failed", error=str(error))
       self.log("session_stop")
       self.log.close()
       self._set(state="idle", detail="", running=False, retry_in=0.0, mode=None)
@@ -402,39 +545,53 @@ class Supervisor:
     bluez.connect_device(address)
     self._wait(1.0)
 
-    from openpilot.starpilot.system.android_auto import bt_sockets, sdp
+    from openpilot.starpilot.system.android_auto import bt_sockets
     channel = int(config.get("rfcomm_channel") or 0)
+    source = "config"
+    if not channel:
+      channel, source = config["rfcomm_cache"].get(address, 0), "cache"
     self._stage("discovering")
     if not channel:
-      last_error: Exception | None = None
-      for settle in SDP_SETTLE:
-        self._check_cancel()
-        try:
-          with self._track(bt_sockets.connect_l2cap(address, sdp.SDP_PSM)) as sdp_sock:
-            self._wait(settle)
-            channel = sdp.query_channel(sdp_sock)
-          break
-        except (OSError, sdp.SdpError) as error:
-          last_error = error
-          self.log("sdp_retry", error=str(error), settle=settle)
-          self._wait(0.35)
-      if not channel:
-        raise RuntimeError(f"Could not find the car's Android Auto service: {last_error}")
-    self.log("rfcomm_channel", channel=channel, source="config" if config.get("rfcomm_channel") else "sdp")
+      channel, source = self._discover_channel(address), "sdp"
+    self.log("rfcomm_channel", channel=channel, source=source)
 
-    self._stage("rfcomm", f"channel {channel}")
-    rfcomm = self._track(bt_sockets.connect_rfcomm(address, channel))
-    boot = WirelessBootstrap(rfcomm, self._bootstrap_log, device_serial=config["device_name"],
-                             version_status=int(config.get("version_status", 0)))
-    self._set(state="wifi_start")
-    result = boot.run(lambda credentials: lease.acquire(credentials, cancelled=self._stop.is_set), cancelled=self._stop.is_set)
+    try:
+      self._stage("rfcomm", f"channel {channel}")
+      rfcomm = self._track(bt_sockets.connect_rfcomm(address, channel))
+      boot = WirelessBootstrap(rfcomm, self._bootstrap_log, device_serial=config["device_name"],
+                               version_status=int(config.get("version_status", 0)))
+      self._set(state="wifi_start")
+      result = boot.run(lambda credentials: lease.acquire(credentials, cancelled=self._stop.is_set), cancelled=self._stop.is_set)
+    except Exception:
+      if source == "cache" and not self._stop.is_set() and self._status["last_stage"] in ("rfcomm", "wifi_start"):
+        self._remember_channel(address, None)  # the car never answered there; ask it over SDP next time
+        self.log("rfcomm_cache_dropped", channel=channel)
+      raise
+    if source == "sdp":
+      self._remember_channel(address, channel)
     self._set(head_unit=result.head_unit)
+    bluez.restore_class()  # the car has accepted the comma; stop looking like a phone to everything else
     keepalive_stop = threading.Event()
     threading.Thread(target=boot.keepalive, args=(keepalive_stop,), name="aa_rfcomm_keepalive", daemon=True).start()
     try:
       self._project(result, lease, ident)
     finally:
       keepalive_stop.set()
+
+  def _discover_channel(self, address: str) -> int:
+    from openpilot.starpilot.system.android_auto import bt_sockets, sdp
+    last_error: Exception | None = None
+    for settle in SDP_SETTLE:
+      self._check_cancel()
+      try:
+        with self._track(bt_sockets.connect_l2cap(address, sdp.SDP_PSM)) as sdp_sock:
+          self._wait(settle)
+          return sdp.query_channel(sdp_sock)
+      except (OSError, sdp.SdpError) as error:
+        last_error = error
+        self.log("sdp_retry", error=str(error), settle=settle)
+        self._wait(0.35)
+    raise RuntimeError(f"Could not find the car's Android Auto service: {last_error}")
 
   def _attempt_usb(self) -> None:
     """Wired: wait for the car's accessory handshake on USB, then project over the cable."""

@@ -83,20 +83,46 @@ onroad. Force it offroad while parked:
 1. Car on, parked. On the comma: **Settings → System**, set to **Offroad**.
 2. **Settings → Bluetooth → android auto → pair a new car.**
 3. On the car: Bluetooth / phone settings → add a new device. Pick the comma in the comma's list and confirm the code on both screens.
-4. **android auto → choose car**, and pick the car. It is marked "(android auto)" if it advertises wireless Android Auto.
 
-## 3. Start projection
+A car that advertises wireless Android Auto and pairs during this window becomes
+the Android Auto car automatically. Otherwise use **android auto → choose car**;
+cars marked "(android auto)" advertise wireless Android Auto. Choosing a car also
+marks it trusted, so the car's own connections are accepted while onroad.
 
-**Settings → Bluetooth → android auto → start.**
+Pairing is needed once per car. Set **Settings → System** back to **Auto** afterwards.
+
+## 3. Projection starts on its own
+
+With **auto-connect** on (the default), there is nothing to press. Projection
+starts when the car is on:
+
+- the comma goes onroad (ignition), or
+- the car connects to the comma over Bluetooth, as it does with a phone when it
+  powers on. The comma keeps a hands-free gateway registered for this, and it
+  answers only the chosen car.
+
+Bluetooth must be up first; auto-connect waits for the adapter instead of
+spending retries while the radio starts after boot. It ends the session once the
+car has been gone (offroad and no Bluetooth link) for 60 s, which also puts the
+comma's previous Wi-Fi back.
 
 The comma connects over Bluetooth, the car sends its Wi-Fi hotspot details, the
 comma joins that hotspot (it leaves any other Wi-Fi; cellular stays up), and
 projection starts over TCP. The status line reads
-`projecting / car layout / <fps> fps` once video is flowing. Getting there
-usually takes 30–60 s. The service retries on its own with backoff until you
-press **stop**.
+`projecting / car layout / <fps> fps` once video is flowing. The service retries
+on its own with backoff while the car is present.
 
-In the same menu:
+The comma presents itself as a phone (smartphone Class of Device) only while
+pairing and while connecting; it switches back as soon as the car has sent its
+Wi-Fi details, so controllers and other Bluetooth devices see a normal comma
+during the drive.
+
+**stop** ends projection and holds auto-connect off until the next drive (the
+next time the comma goes onroad). **start** starts it by hand at any time.
+
+In **Settings → Bluetooth → android auto**:
+
+- **turn off auto-connect / turn on auto-connect** switches automatic starting. With it off, use **start**; the status reads `off / <car>` instead of `auto / <car>`.
 
 - **mirror comma screen / use car layout** switches what the car shows, from the next session.
 - **show last error** shows why the last attempt failed.
@@ -122,8 +148,10 @@ service idle; changes apply from the next session.
 | `fps` | `0` | `0` = automatic (30 hardware, 15 software); otherwise a cap, 5–30 |
 | `bitrate_kbps` | `6000` | 1000–12000 |
 | `verify_head_unit` | `true` | verify the car's certificate against `root-cert.pem` |
+| `auto_connect` | `true` | start projection when the chosen car is on; stop once it has been gone for 60 s |
 | `rfcomm_channel` | `0` | `0` = discover over SDP; set only to work around a broken SDP record |
-| `phone_class` | `true` | present as a phone (HFP gateway, smartphone Class of Device) while pairing/projecting |
+| `rfcomm_cache` | `{}` | channel learned over SDP per car, used next time to skip discovery; dropped when the car does not answer on it |
+| `phone_class` | `true` | present as a phone while pairing/connecting (smartphone Class of Device) and keep the car's hands-free gateway |
 | `wifi_interface` | `"wlan0"` | interface used to join the car's hotspot |
 | `device_name` | `"StarPilot"` | name shown to the car |
 
@@ -158,7 +186,10 @@ Events worth knowing:
 
 | Event | Meaning |
 |---|---|
+| `session_start` | `trigger`: `manual`, `onroad` or `car_connected` |
 | `stage` | progress: `connecting_bluetooth` → `discovering` → `rfcomm` → `wifi_start` → `connecting_tcp` → `authenticating` → `negotiating` → `streaming` |
+| `rfcomm_channel` | channel used and its `source`: `sdp`, `cache` or `config` |
+| `auto_connect_stop` | auto-connect ended the session because the car was gone |
 | `bootstrap_version` | car make/model/head unit and its wireless protocol version |
 | `bootstrap_credentials` / `wifi_joined` | car hotspot SSID and the comma's address on it (the key is never logged) |
 | `version` | projection protocol the car asked for and the comma's reply (e.g. `4.1` → `6.1`) |
@@ -188,6 +219,7 @@ ssh comma@<comma-ip> 'pkill -TERM -f "^starpilot.system.android_auto.daemon$"'
 | Symptom | Cause / fix |
 |---|---|
 | **pair a new car** missing, **scan for devices** does nothing | The comma is onroad. Use the **Offroad** switch (step 2). |
+| Projection does not start by itself | Status `paused until next drive`: **stop** was pressed; it resumes next drive, or press **start**. Status `stopped / error` with `auto-connect: …`: see **show last error** (often the identity). Otherwise check that auto-connect is on and a car is chosen. |
 | Car-screen touches do nothing | The comma is onroad (maybe forced **Onroad**). Set Settings → System to **Auto**. |
 | `Android Auto identity missing` / `expired` / `is unusable` | Install or renew it in The Galaxy → Vehicle Controls → Android Auto Identity (step 1). |
 | The Galaxy says *does not contain the Android Auto identity* | The file is not the Android Auto app (often a mirror's store installer). Download the app itself. |
