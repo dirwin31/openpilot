@@ -164,6 +164,43 @@ def test_route_progress_tracks_the_nearest_point(view):
   assert view._route_progress == 30
 
 
+def test_route_slice_caches_bounds_and_rebuilds_for_a_new_route(view):
+  rect, camera, anchor = nav_map.rl.Rectangle(0, 0, 100, 100), nav_map.Camera(zoom=0), (0, 0)
+  view._route_world = np.column_stack((np.arange(-10000, 10000), np.full(20000, 50)))
+  selected = view._route_slice(rect, camera, anchor, 1.0, 40)
+  assert selected.stop - selected.start < 400
+  assert selected.start <= 9960 and selected.stop > 10140
+  bounds = view._route_bounds
+  camera.x = 1000
+  moved = view._route_slice(rect, camera, anchor, 1.0, 40)
+  assert moved.start > selected.start
+  assert view._route_bounds is bounds
+  view._route_world = view._route_world + 30000
+  assert view._route_slice(rect, camera, anchor, 1.0, 40) == slice(0, 0)
+  assert view._route_bounds is not bounds
+
+
+@pytest.mark.parametrize("bearing", [0, 37, 90, 180, 245])
+def test_route_slice_keeps_crossing_segments_and_reentry(view, bearing):
+  rect, camera, anchor = nav_map.rl.Rectangle(20, 30, 100, 100), nav_map.Camera(zoom=5.5, bearing=bearing), (70, 80)
+  # Cross the viewport at a chunk boundary, leave it, then return much later.
+  screen = np.full((700, 2), -5000.0)
+  screen[128:500] = (5000, 5000)
+  view._route_world = np.array([camera.to_world(x, y, anchor, 1.5) for x, y in screen])
+  selected = view._route_slice(rect, camera, anchor, 1.5, 40)
+  assert selected.start <= 127 and selected.stop > 500
+
+
+@pytest.mark.parametrize("android_auto,points", [(False, 10000), (True, 2000)])
+def test_native_map_and_short_routes_do_not_build_route_bounds(view, monkeypatch, android_auto, points):
+  monkeypatch.setattr(nav_map.ui_state, "android_auto_car_view", android_auto)
+  view._route_world = np.column_stack((np.arange(points), np.arange(points)))
+  view._route_received = nav_map.time.monotonic()
+  monkeypatch.setattr(nav_map, "_draw_polyline", lambda *args, **kwargs: None)
+  view._draw_routes(nav_map.rl.Rectangle(0, 0, 100, 100), nav_map.Camera(zoom=0), (0, 0), 1.0)
+  assert view._route_bounds is None
+
+
 @pytest.mark.parametrize("fps", [15, 30])
 def test_cached_map_keeps_redraw_budget_with_preparation_delay(view, fps):
   view._animating = True
