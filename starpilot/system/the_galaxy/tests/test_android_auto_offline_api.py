@@ -158,9 +158,20 @@ def test_offline_panel_dropdowns_are_galaxy_styled_and_list_only_drawn_zooms():
   assert "zoom in 19" not in panel
 
 
+def _save_area_section(panel):
+  return panel[panel.index("Save an Area"):panel.index("Save a Specific Route")]
+
+
 def test_show_downloaded_tiles_toggle_does_not_move_the_layout():
-  panel = (JS_ROOT / "components" / "AndroidAutoOfflinePanel.js").read_text()
-  row = panel[panel.index('v-model="coverageEnabled"') - 400:panel.index("Downloaded tile detail level")]
+  section = _save_area_section((JS_ROOT / "components" / "AndroidAutoOfflinePanel.js").read_text())
+  row = section[section.index('v-model="coverageEnabled"') - 200:section.index("Downloaded tile detail level")]
   assert row.index('v-model="coverageEnabled"') < row.index("Tile detail"), "the checkbox leads the row"
-  assert 'v-if="coverageEnabled"' not in panel.split('v-model="coverageEnabled"')[1].split('ref="map"')[0].replace(
-    '<template v-if="coverageEnabled">', ""), "nothing between the checkbox and the map appears or disappears"
+  assert 'v-if="coverageEnabled" class=' not in section and '<div v-if="coverageEnabled"' not in section
+
+
+def test_area_picker_keeps_the_map_in_place():
+  section = _save_area_section((JS_ROOT / "components" / "AndroidAutoOfflinePanel.js").read_text())
+  assert section.index("Pick on Map") < section.index('ref="map"') < section.index("Most detailed zoom"), \
+    "the map sits right under the place buttons, above the area options"
+  assert 'v-if="areaPoint"' not in section, "choosing a centre changes values, it doesn't insert controls"
+  assert "Tap the map where the area should be centred." in section and "position:absolute" in section
