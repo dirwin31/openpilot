@@ -16,6 +16,17 @@ import time
 
 RENDER_NODE = "/dev/dri/renderD128"
 EGL_OPENGL_ES_API = 0x30A0
+EGL_CONTEXT_CLIENT_VERSION = 0x3098
+EGL_NONE = 0x3038
+# The Qualcomm driver honours EGL_IMG_context_priority without advertising it:
+# LOW maps to KGSL priority 12, the level launch_env.sh gives modeld and
+# dmonitoringmodeld. The default (MEDIUM, KGSL 8) sits on a higher ringbuffer
+# and preempts both models, which is fine for the comma's own UI but not for a
+# second 30 fps renderer: it pushes driver monitoring past its frame budget and
+# selfdrived raises commIssueAvgFreq ("TAKE CONTROL IMMEDIATELY").
+EGL_CONTEXT_PRIORITY_LEVEL_IMG = 0x3100
+EGL_CONTEXT_PRIORITY_LOW_IMG = 0x3103
+EGL_BAD_ATTRIBUTE = 0x3004
 
 
 GL_FRAMEBUFFER = 0x8D40
@@ -183,7 +194,10 @@ class HeadlessContext:
     self._check(self.egl.eglChooseConfig(self.display, attrs, C.byref(config), 1, C.byref(count)) and count.value, "config")
     self.surface = self.egl.eglCreatePbufferSurface(self.display, config, (C.c_int * 5)(0x3057, width, 0x3056, height, 0x3038))
     self._check(self.surface, "pbuffer")
-    self.context = self.egl.eglCreateContext(self.display, config, None, (C.c_int * 3)(0x3098, 3, 0x3038))
+    self.context = self.egl.eglCreateContext(self.display, config, None, (C.c_int * 5)(
+      EGL_CONTEXT_CLIENT_VERSION, 3, EGL_CONTEXT_PRIORITY_LEVEL_IMG, EGL_CONTEXT_PRIORITY_LOW_IMG, EGL_NONE))
+    if not self.context and self.egl.eglGetError() == EGL_BAD_ATTRIBUTE:
+      self.context = self.egl.eglCreateContext(self.display, config, None, (C.c_int * 3)(EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE))
     self._check(self.context, "context")
     self._check(self.egl.eglMakeCurrent(self.display, self.surface, self.surface, self.context), "make current")
 

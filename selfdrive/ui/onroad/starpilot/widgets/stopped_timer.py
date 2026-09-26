@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from collections.abc import Callable
 
@@ -21,9 +23,8 @@ class StoppedTimerWidget(Widget):
   LEFT_CONTROLS_RESERVE = 290  # MAX / LIMIT column; the narrow car-view pane has no room to centre over it
   CAR_LABEL_FONT = 88
   CAR_TIMER_FONT = 72
-  CAR_CARD_PADDING_X = 38
-  CAR_CARD_PADDING_Y = 28
-  CAR_CARD_TOP = 70
+  CAR_HORIZONTAL_MARGIN = 38
+  CAR_TEXT_TOP = 98
   CAR_LINE_GAP = 8
 
   def __init__(self, in_reverse: Callable[[], bool] | None = None):
@@ -153,7 +154,7 @@ class StoppedTimerWidget(Widget):
   def _render_car_timer(self, rect: rl.Rectangle, label_text: str, timer_text: str) -> None:
     """Replace the Android Auto speed readout with a compact stopped timer."""
     full_width = measure_text_cached(self._font_bold, label_text, self.CAR_LABEL_FONT).x
-    available = max(1.0, rect.width - 2 * (self.LEFT_CONTROLS_RESERVE + self.CAR_CARD_PADDING_X))
+    available = max(1.0, rect.width - 2 * (self.LEFT_CONTROLS_RESERVE + self.CAR_HORIZONTAL_MARGIN))
     scale = min(1.0, available / full_width) if full_width > 0 else 1.0
     scale = max(0.6, scale)
     label_font = max(1, int(self.CAR_LABEL_FONT * scale))
@@ -161,28 +162,22 @@ class StoppedTimerWidget(Widget):
     label_size = measure_text_cached(self._font_bold, label_text, label_font)
     timer_size = measure_text_cached(self._font_normal, timer_text, timer_font)
 
-    card_width = min(rect.width - 32, max(label_size.x, timer_size.x) + 2 * self.CAR_CARD_PADDING_X)
-    card_height = label_size.y + timer_size.y + self.CAR_LINE_GAP + 2 * self.CAR_CARD_PADDING_Y
-    card = rl.Rectangle(
-      rect.x + (rect.width - card_width) / 2,
-      rect.y + self.CAR_CARD_TOP,
-      card_width,
-      card_height,
-    )
-
     duration_color = self._duration_color()
-    shadow = rl.Rectangle(card.x + 8, card.y + 10, card.width, card.height)
-    rl.draw_rectangle_rounded(shadow, 0.18, 12, rl.Color(0, 0, 0, 145))
-    rl.draw_rectangle_rounded(card, 0.18, 12, rl.Color(8, 11, 18, 238))
-    rl.draw_rectangle_rounded_lines_ex(card, 0.18, 12, 3, duration_color)
-
-    center_x = card.x + card.width / 2
-    label_y = card.y + self.CAR_CARD_PADDING_Y
+    center_x = rect.x + rect.width / 2
+    label_y = rect.y + self.CAR_TEXT_TOP
     timer_y = label_y + label_size.y + self.CAR_LINE_GAP
-    rl.draw_text_ex(self._font_bold, label_text,
-                    rl.Vector2(center_x - label_size.x / 2, label_y), label_font, 0, duration_color)
-    rl.draw_text_ex(self._font_normal, timer_text,
-                    rl.Vector2(center_x - timer_size.x / 2, timer_y), timer_font, 0, rl.WHITE)
+    self._draw_car_text(self._font_bold, label_text,
+                        rl.Vector2(center_x - label_size.x / 2, label_y), label_font, duration_color)
+    self._draw_car_text(self._font_normal, timer_text,
+                        rl.Vector2(center_x - timer_size.x / 2, timer_y), timer_font, rl.WHITE)
+
+  @staticmethod
+  def _draw_car_text(font: rl.Font, text: str, pos: rl.Vector2, font_size: int, color: rl.Color) -> None:
+    """Draw a soft dark drop shadow without an opaque panel behind the car HUD."""
+    for offset_x, offset_y, alpha in ((5, 6, 70), (3, 4, 125), (1, 2, 190)):
+      rl.draw_text_ex(font, text, rl.Vector2(pos.x + offset_x, pos.y + offset_y),
+                      font_size, 0, rl.Color(0, 0, 0, alpha))
+    rl.draw_text_ex(font, text, pos, font_size, 0, color)
 
   def _duration_color(self) -> rl.Color:
     duration = self._duration

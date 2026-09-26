@@ -154,16 +154,19 @@ def test_android_auto_timer_replaces_speed_in_full_and_split_camera_panes(monkey
   for rect in (stopped_timer.rl.Rectangle(0, 0, 1920, 1080), stopped_timer.rl.Rectangle(806, 0, 1114, 1080)):
     widget = stopped_timer.StoppedTimerWidget()
     widget._duration = 61
-    cards, draws = [], []
+    backgrounds, outlines, draws = [], [], []
     monkeypatch.setattr(stopped_timer.rl, "draw_rectangle_rounded",
-                        lambda card, *_args, cards=cards: cards.append(card))
+                        lambda *args, backgrounds=backgrounds: backgrounds.append(args))
+    monkeypatch.setattr(stopped_timer.rl, "draw_rectangle_rounded_lines_ex",
+                        lambda *args, outlines=outlines: outlines.append(args))
     monkeypatch.setattr(stopped_timer.rl, "draw_text_ex", lambda *args, draws=draws: draws.append(args))
     widget._render(rect)
 
-    card = cards[1]  # shadow first, opaque card second
-    assert abs(card.x + card.width / 2 - (rect.x + rect.width / 2)) < 1
-    assert card.y == rect.y + stopped_timer.StoppedTimerWidget.CAR_CARD_TOP
-    assert card.y + card.height < rect.y + rect.height / 2
-    assert (draws[0][1], draws[1][1]) == ("Stopped", "01:01")
-    assert abs(draws[0][2].x + len("Stopped") * draws[0][3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1
-    assert abs(draws[1][2].x + len("01:01") * draws[1][3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1
+    assert backgrounds == []
+    assert outlines == []
+    assert len(draws) == 8  # three shadow layers and the foreground for each line
+    label, timer = draws[3], draws[7]
+    assert (label[1], timer[1]) == ("Stopped", "01:01")
+    assert label[2].y == rect.y + stopped_timer.StoppedTimerWidget.CAR_TEXT_TOP
+    assert abs(label[2].x + len("Stopped") * label[3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1
+    assert abs(timer[2].x + len("01:01") * timer[3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1
