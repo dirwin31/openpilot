@@ -55,6 +55,7 @@ class FavoriteRadialMenu:
   CORNER_HINT_OUTER_RADIUS = 62.0
   CORNER_HINT_RING_RADIUS = 42.0
   CORNER_HINT_EDGE_MARGIN = 6.0
+  CORNER_HINT_SIZE = 150.0  # the decoration fills this square (scaled) at the corner
   _ELLIPSIS = "..."
 
   _PURPLE = (161, 112, 255)
@@ -719,12 +720,32 @@ class FavoriteRadialMenu:
     return rl.Color(r, g, b, alpha)
 
   def _draw_corner_hint(self) -> None:
+    """Draw the corner decoration from a cached texture: it only changes with size and press state.
+
+    Building it is ~190 gradient triangles and ~100 Vector2 per frame; the first
+    frame of each appearance (before the cache fills) is drawn directly.
+    """
+    from openpilot.system.ui.lib.application import gui_app
     scale = self._scale_for(self._rect)
     x0 = self._rect.x
     y0 = self._rect.y + self._rect.height
     is_pressed = self._corner_press is not None
+    size = math.ceil(self.CORNER_HINT_SIZE * scale)
+    texture = gui_app.cached_render_texture(
+      f"favorite_corner_hint:{scale:.4f}:{int(is_pressed)}", size, size,
+      lambda: self._draw_corner_hint_shape(0.0, float(size), scale, is_pressed), supersample=2,
+    )
+    if texture is None:
+      self._draw_corner_hint_shape(x0, y0, scale, is_pressed)
+      return
+    rl.begin_blend_mode(rl.BlendMode.BLEND_ALPHA_PREMULTIPLY)
+    rl.draw_texture_pro(texture, rl.Rectangle(0, 0, texture.width, -texture.height),
+                        rl.Rectangle(x0, y0 - size, size, size), rl.Vector2(0, 0), 0.0, rl.WHITE)
+    rl.end_blend_mode()
 
-    size = 150.0 * scale
+  def _draw_corner_hint_shape(self, x0: float, y0: float, scale: float, is_pressed: bool) -> None:
+    """The corner decoration with its bottom-left corner at (x0, y0)."""
+    size = self.CORNER_HINT_SIZE * scale
     steps = 48
 
     # 1. Precompute edge vertices to minimize per-frame allocations
@@ -757,8 +778,8 @@ class FavoriteRadialMenu:
           rl.draw_triangle(v_tb, v_ra, v_rb, col)
 
     # 3. Ultra-Polished Frosted-Glass Vector Arrow (Nestled deep in purple corner)
-    center = self.corner_center(self._rect)
-    cx, cy = center.x, center.y
+    inset = (self.CORNER_HINT_RING_RADIUS + self.CORNER_HINT_EDGE_MARGIN) * scale  # as corner_center()
+    cx, cy = x0 + inset, y0 - inset
 
     tip = rl.Vector2(cx + 15.0 * scale, cy - 15.0 * scale)
     tail = rl.Vector2(cx - 15.0 * scale, cy + 15.0 * scale)

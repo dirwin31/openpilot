@@ -617,6 +617,8 @@ def run(frames_path: str, touch_path: str) -> int:
   if config["render_profile"]:
     from openpilot.starpilot.system.android_auto.render_profile import RenderSampler
     sampler = RenderSampler(identity_store.LOG_DIR / "render_profile.txt", max_bytes=config["render_profile_kb"] * 1024)
+    from openpilot.common.params import Params
+    sampler.count_param_reads(Params)
     sampler.start()
   frame_count = 0
   in_flight = {"captured_ns": 0}
@@ -667,6 +669,7 @@ def run(frames_path: str, touch_path: str) -> int:
 
       if sampler is not None:
         sampler.rendering = True
+        sampler.frames += 1
       frame_count += 1
       frame_began, cpu_began = now_ns / 1e9, time.thread_time()
       viewport = rl.Rectangle(0, 0, logical_w, logical_h)

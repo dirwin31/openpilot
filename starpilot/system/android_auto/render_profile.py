@@ -17,6 +17,11 @@ does in every raylib/GL call, so pure-Python work is credited to the next such
 call in the innermost-frame sections. The "on the stack" section is accurate
 per function and is the one to read for which part of the layout costs time.
 At 25 samples a second it costs the renderer about 0.5 ms per frame.
+
+``count_param_reads`` also counts, by key, the Params reads that reach the
+disk from the render thread (direct reads and UIParamCache misses; the cache's
+background refreshes run on its own thread and are not counted), reported as
+reads per rendered frame.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ INTERVAL = 0.04    # 25 samples a second
 WINDOW = 60.0
 TOP = 25
 TOP_LINES = 15
+TOP_PARAMS = 15
 
 
 class RenderSampler:
@@ -43,6 +49,7 @@ class RenderSampler:
     self.rendering = False                  # set by the render loop around each frame
     self.onroad = False
     self.summary: dict | None = None        # latest render_stats
+    self.frames = 0                         # rendered frames this window, counted by the render loop
     self._names: dict = {}
     self._lock = threading.Lock()
     self._stop = threading.Event()
@@ -55,6 +62,8 @@ class RenderSampler:
     self.self_counts: Counter = Counter()
     self.total_counts: Counter = Counter()
     self.line_counts: Counter = Counter()
+    self.param_reads: Counter = Counter()
+    self.frames = 0
 
   def start(self) -> None:
     self._worker.start()
@@ -90,6 +99,34 @@ class RenderSampler:
           self.total_counts[name] += 1
         frame = frame.f_back
 
+  def count_param_reads(self, params_class) -> None:
+    """Wrap ``params_class`` reads to count the ones made on the render thread."""
+    sampler = self
+
+    def counting(read, method):
+      def wrapper(instance, key, *args, **kwargs):
+        if threading.get_ident() == sampler.thread_id:
+          memory = "memory " if "/dev/shm" in str(getattr(instance, "_profile_path", "") or sampler._path(instance)) else ""
+          sampler.param_reads[f"{memory}{method}({key})"] += 1
+        return read(instance, key, *args, **kwargs)
+      wrapper.__name__ = read.__name__
+      return wrapper
+
+    for method in ("get", "get_bool"):
+      setattr(params_class, method, counting(getattr(params_class, method), method))
+
+  @staticmethod
+  def _path(instance) -> str:
+    try:
+      path = instance.get_param_path()
+    except Exception:
+      path = ""
+    try:
+      instance._profile_path = path
+    except AttributeError:
+      pass
+    return path
+
   def _run(self) -> None:
     while not self._stop.wait(self.interval):
       frame = sys._current_frames().get(self.thread_id)
@@ -116,6 +153,10 @@ class RenderSampler:
         # Frames on every sample (the render loop and interpreter startup) say nothing.
         shown = [(name, count) for name, count in counts.most_common() if count < busy or counts is not self.total_counts]
         lines += [f"{100 * count / busy:6.1f}%  {name}" for name, count in shown[:top]]
+      if self.param_reads and self.frames:
+        total = sum(self.param_reads.values())
+        lines.append(f"-- Params reads from disk on the render thread: {total / self.frames:.1f} per frame")
+        lines += [f"{count / self.frames:7.2f}/frame  {name}" for name, count in self.param_reads.most_common(TOP_PARAMS)]
     return "\n".join(lines) + "\n\n"
 
   def flush(self) -> None:

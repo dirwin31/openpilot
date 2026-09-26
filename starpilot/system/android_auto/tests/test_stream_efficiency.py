@@ -359,3 +359,36 @@ def test_fast_struct_constructors_match_pyray_and_skip_pointer_structs(monkeypat
     fast, slow = getattr(rl, name)(*args), originals[name](*args)
     assert bytes(rl.ffi.buffer(rl.ffi.addressof(fast))) == bytes(rl.ffi.buffer(rl.ffi.addressof(slow)))
   assert car_ui.use_fast_struct_constructors(rl) == []  # already fast: nothing left to replace
+
+
+def test_render_sampler_counts_params_reads_per_frame_on_the_render_thread(tmp_path):
+  class FakeParams:
+    def __init__(self, path):
+      self.path = path
+
+    def get_param_path(self):
+      return self.path
+
+    def get(self, key, block=False, encoding=None):
+      return b"1"
+
+    def get_bool(self, key, block=False):
+      return True
+
+  sampler = RenderSampler(tmp_path / "render_profile.txt")
+  sampler.count_param_reads(FakeParams)
+  params, memory = FakeParams("/data/params/d"), FakeParams("/dev/shm/params/d")
+  sampler.rendering = True
+  for _ in range(4):
+    sampler.frames += 1
+    params.get_bool("ModelUI")
+    params.get("PathWidth", encoding="utf-8")
+    memory.get("NavInstructionState")
+  hot_render_function(sampler)
+  worker = threading.Thread(target=lambda: params.get_bool("FromAnotherThread"))
+  worker.start()
+  worker.join()
+  text = sampler.report()
+  assert "Params reads from disk on the render thread: 3.0 per frame" in text
+  assert "1.00/frame  get_bool(ModelUI)" in text and "1.00/frame  memory get(NavInstructionState)" in text
+  assert "FromAnotherThread" not in text
