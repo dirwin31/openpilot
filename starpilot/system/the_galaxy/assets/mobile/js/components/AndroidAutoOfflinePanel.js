@@ -612,8 +612,11 @@ export const AndroidAutoOfflinePanel = {
           <span class="gx-section__title" style="font-size:var(--fs-base);">Save an Area</span>
         </div>
         <div style="padding:var(--sp-2) var(--sp-3) var(--sp-3); display:grid; gap:8px;">
+          <!-- Layout stays put: the map sits right under the place buttons and never moves, and the
+               area options below it are always present, so choosing a point or dragging the radius
+               only changes values and the circle on the map. -->
           <p style="margin:0; color:var(--text-muted); font-size:var(--fs-xs);">
-            Download a coverage radius around a point. Smaller radii include full street-level turns and residential roads, while larger radii cover broader highway networks within device storage.
+            Choose a centre, then set the radius. Smaller radii include full street detail; larger ones cover highways.
           </p>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             <button type="button" class="gx-btn gx-btn--tonal" style="min-height:36px; padding:0 12px;" :disabled="!position" @click="useCurrentLocation"><i class="bi bi-crosshair"></i> Current Location</button>
@@ -622,38 +625,16 @@ export const AndroidAutoOfflinePanel = {
             </button>
             <PlaceSearch :token="token" :position="position" placeholder="Or search a city or place" @select="chooseAreaPoint($event)" />
           </div>
-          <template v-if="areaPoint">
-            <div class="gx-row__label" style="margin-top:4px;">Around {{ areaName() }}</div>
-            <label style="display:grid; gap:5px;">
-              <span class="gx-row__label">Radius: {{ radiusLabel(areaRadiusKm, metric) }}</span>
-              <input type="range" :min="areaRadiusMin" :max="areaRadiusMax" step="1" :value="areaRadiusKm" @input="setAreaRadius" aria-label="Offline area radius" style="width:100%; accent-color:var(--primary);" />
-              <span class="gx-row__desc">The yellow circle on the map is the area that will be downloaded.</span>
-            </label>
-            <label style="display:grid; gap:5px;">
-              <span class="gx-row__label">Most detailed zoom</span>
-              <GalaxySelect class="gx-field gx-field--full" :value="areaZoom ?? ''" @change="setAreaZoom" aria-label="Most detailed zoom to download">
-                <option value="">Auto (based on radius)</option>
-                <option v-for="zoom in areaZooms" :key="zoom" :value="zoom">{{ ({14: 'Road', 15: 'City', 16: 'Street'})[zoom] || 'Zoom ' + zoom }} (zoom {{ zoom }})</option>
-              </GalaxySelect>
-              <span class="gx-row__desc">Higher zoom shows more streets but needs many more tiles for the same radius. Lower-detail zooms are downloaded with it too, so the map keeps working when zoomed out, and only this level adds much storage.</span>
-            </label>
-            <div v-if="areaLoading" class="gx-row__desc" role="status">Sizing up the area...</div>
-            <GxNotice v-if="areaError" tone="danger" :text="areaError" style="margin:0;" />
-            <button v-if="areaError" type="button" class="gx-btn gx-btn--tonal" @click="estimateArea">Retry sizing</button>
-            <div v-if="areaEstimate" class="gx-row" style="border-top:none; min-height:0; padding:8px 0; flex-wrap:wrap; gap:8px;">
-              <div class="gx-row__info">
-                <span class="gx-row__label" style="font-weight:var(--fw-bold);">{{ radiusLabel(areaEstimate.radius_km, metric) }} radius · {{ areaEstimate.detail }} (zoom {{ areaEstimate.max_zoom }})</span>
-                <div style="font-size:var(--fs-xs); color:var(--text-muted); margin-top:2px;">
-                  {{ areaEstimate.fits ? 'Est. ' + formatBytes(areaEstimate.bytes) + ' · ' + areaEstimate.tiles.toLocaleString() + ' tiles' : 'Too large for available offline storage' }}
-                </div>
-              </div>
-              <button type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px; align-self:center;" :disabled="!areaEstimate.fits || !!busy" @click="saveArea">{{ busy === 'area' ? 'Adding to downloads...' : 'Download' }}</button>
+
+          <div v-if="token" style="position:relative;">
+            <div ref="map" style="height:280px; border-radius:var(--radius-md); overflow:hidden;"></div>
+            <div v-if="pickOnMap" class="gx-note" style="position:absolute; top:8px; left:8px; right:8px; margin:0; pointer-events:none; text-align:center;">
+              Tap the map where the area should be centred.
             </div>
-          </template>
+          </div>
+
           <template v-if="token">
-            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; border-top:1px solid var(--glass-border, rgba(127,127,127,.15)); padding-top:10px;">
-              <!-- The checkbox leads and nothing here is added or removed when it toggles, so the
-                   row, the lines below and the map keep their places. -->
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
               <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
                 <input type="checkbox" v-model="coverageEnabled" /> Show downloaded tiles
               </label>
@@ -666,21 +647,46 @@ export const AndroidAutoOfflinePanel = {
             </div>
             <div class="gx-row__desc" style="min-height:2.7em;">
               <template v-if="coverageEnabled">
-                <span style="color:#34c778;">■ Saved offline</span> · <span style="color:#4096ff;">■ Temporary cache</span> · Purple outlines: requested areas.
-                Coverage is for the selected zoom only; the background map is online.
+                <span style="color:#34c778;">■ Saved offline</span> · <span style="color:#4096ff;">■ Temporary cache</span>
+                <template v-if="coverageError">{{ coverageError }}</template>
+                <template v-else-if="coverage">{{ coverage.tiles.length.toLocaleString() }} saved tiles in view at zoom {{ coverage.zoom }}.{{ coverage.truncated ? ' Zoom in to see them all.' : '' }}</template>
+                <template v-else>Checking downloaded tiles...</template>
               </template>
               <template v-else>Turn on to see which map tiles are saved on the comma, at the chosen detail level.</template>
             </div>
-            <div class="gx-row__desc" role="status" :style="coverageEnabled ? '' : 'visibility:hidden;'">
-              <template v-if="!coverageEnabled">&nbsp;</template>
-              <template v-else-if="coverageError">{{ coverageError }}</template>
-              <template v-else-if="coverage">{{ coverage.tiles.length.toLocaleString() }} downloaded tiles in view at zoom {{ coverage.zoom }}. {{ coverage.truncated ? 'Display limit reached; zoom the map in to see all tiles.' : '' }}</template>
-              <template v-else>Checking downloaded tiles...</template>
-            </div>
           </template>
+
+          <div style="display:grid; gap:8px; border-top:1px solid var(--glass-border, rgba(127,127,127,.15)); padding-top:10px;">
+            <div class="gx-row__label" :style="areaPoint ? '' : 'color:var(--text-muted);'">
+              {{ areaPoint ? 'Around ' + areaName() : 'No centre chosen yet' }}
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:8px 16px; align-items:end;">
+              <label style="display:grid; gap:5px;">
+                <span class="gx-row__desc" style="margin:0;">Radius: <strong style="color:var(--text);">{{ radiusLabel(areaRadiusKm, metric) }}</strong></span>
+                <input type="range" :min="areaRadiusMin" :max="areaRadiusMax" step="1" :value="areaRadiusKm" @input="setAreaRadius" aria-label="Offline area radius" style="width:100%; accent-color:var(--primary);" />
+              </label>
+              <label style="display:grid; gap:5px;" title="Higher zoom shows more streets but needs many more tiles. Lower zooms are saved with it, so the map still works zoomed out.">
+                <span class="gx-row__desc" style="margin:0;">Most detailed zoom</span>
+                <GalaxySelect class="gx-field gx-field--full" :value="areaZoom ?? ''" @change="setAreaZoom" aria-label="Most detailed zoom to download">
+                  <option value="">Auto (based on radius)</option>
+                  <option v-for="zoom in areaZooms" :key="zoom" :value="zoom">{{ ({14: 'Road', 15: 'City', 16: 'Street'})[zoom] || 'Zoom ' + zoom }} (zoom {{ zoom }})</option>
+                </GalaxySelect>
+              </label>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; min-height:40px;">
+              <span class="gx-row__desc" role="status" style="margin:0; flex:1;" :style="areaError ? 'color:var(--error);' : ''">
+                <template v-if="!areaPoint">Choose a centre to size the download. The yellow circle on the map shows the area.</template>
+                <template v-else-if="areaError">{{ areaError }}</template>
+                <template v-else-if="areaLoading || !areaEstimate">Sizing up the area...</template>
+                <template v-else-if="areaEstimate.fits"><strong style="color:var(--text);">{{ areaEstimate.detail }} (zoom {{ areaEstimate.max_zoom }})</strong> · about {{ formatBytes(areaEstimate.bytes) }} · {{ areaEstimate.tiles.toLocaleString() }} tiles</template>
+                <template v-else>Too large for the offline storage left. Try a smaller radius or zoom.</template>
+              </span>
+              <button v-if="areaError" type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px;" @click="estimateArea">Retry</button>
+              <button v-else type="button" class="gx-btn gx-btn--tonal" style="min-height:34px; padding:0 12px;"
+                :disabled="!areaPoint || !areaEstimate || !areaEstimate.fits || !!busy" @click="saveArea">{{ busy === 'area' ? 'Adding...' : 'Download' }}</button>
+            </div>
+          </div>
         </div>
-        <div v-if="token" ref="map" style="height:280px; border-radius:var(--radius-md); overflow:hidden;"></div>
-        <div v-if="pickOnMap" class="gx-note" style="margin:6px var(--sp-3);">Tap the map where the area should be centred.</div>
       </section>
 
       <section class="gx-card" style="margin:0;">
