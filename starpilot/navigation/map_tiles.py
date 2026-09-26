@@ -187,6 +187,13 @@ class TileCache:
         pass
     return data, max(0.0, time.time() - stat.st_mtime)  # noqa: TID251 - file mtimes are wall-clock
 
+  def age(self, key: TileKey) -> float | None:
+    """Seconds since a cached tile was written, or None when it isn't cached."""
+    try:
+      return max(0.0, time.time() - self.path(key).stat().st_mtime)  # noqa: TID251 - file mtimes are wall-clock
+    except OSError:
+      return self.pinned.age(key) if self.pinned is not None else None
+
   def contains(self, key: TileKey) -> bool:
     return self.path(key).is_file() or (self.pinned is not None and self.pinned.contains(key))
 
@@ -339,7 +346,8 @@ class TileService:
   def prefetch(self, keys: Sequence[TileKey], refresh: bool = False) -> None:
     """Background download plan, e.g. the route corridor. Replaces the previous plan.
 
-    ``refresh`` downloads every tile again, even ones already cached.
+    ``refresh`` also downloads cached tiles, except ones written within
+    ``REFRESH_AGE_SECONDS``, which are still fresh.
     """
     with self._cond:
       self._prefetch = list(keys)
@@ -391,7 +399,11 @@ class TileService:
       self._prefetch_index += 1
       if key in self._inflight or now < self._missing.get(key, 0.0) or key in self.not_found:
         continue
-      if not self._prefetch_refresh and self.cache.contains(key):
+      if self._prefetch_refresh:
+        age = self.cache.age(key)
+        if age is not None and age < REFRESH_AGE_SECONDS:
+          continue
+      elif self.cache.contains(key):
         continue
       self._last_prefetch = now
       return key, False

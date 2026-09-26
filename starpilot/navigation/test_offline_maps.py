@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import time
 from types import SimpleNamespace
 
@@ -7,7 +8,7 @@ import pytest
 from cereal import log
 
 from openpilot.starpilot.navigation import navtilesd as navtilesd_module
-from openpilot.starpilot.navigation.map_tiles import TILE_SIZE, TileKey, world_xy
+from openpilot.starpilot.navigation.map_tiles import REFRESH_AGE_SECONDS, TILE_SIZE, TileKey, world_xy
 from openpilot.starpilot.navigation.offline_maps import (
   DETAIL_ZOOM,
   ROUTE_ZOOMS,
@@ -281,7 +282,7 @@ def test_full_disk_is_reported_instead_of_retrying(tmp_path, fast):
   assert run_until(daemon, lambda: daemon.maps.status().get("areas", {}).get(area.id, {}).get("state") == "no_space")
 
 
-def test_update_downloads_every_tile_again(tmp_path, fast):
+def test_update_skips_fresh_tiles_and_refreshes_stale_ones(tmp_path, fast):
   daemon, session = make_daemon(tmp_path)
   area = daemon.maps.add_area("Home", 36.1, -115.2, 1.0, 10)
   assert run_until(daemon, lambda: daemon.maps.status().get("areas", {}).get(area.id, {}).get("state") == "complete")
@@ -291,7 +292,38 @@ def test_update_downloads_every_tile_again(tmp_path, fast):
   time.sleep(0.01)
   daemon.maps.request_update(area.id)
   assert run_until(daemon, lambda: daemon.maps.status()["areas"][area.id]["completed_at"] > completed_at)
-  assert len(session.urls) == 2 * first_pass
+  assert len(session.urls) == first_pass, "tiles downloaded within 30 days are not fetched again"
+
+  stale = time.time() - REFRESH_AGE_SECONDS - 60  # noqa: TID251 - file mtimes are wall-clock
+  for key in area.tiles():
+    os.utime(daemon.area_cache.path(key), (stale, stale))
+  completed_at = daemon.maps.status()["areas"][area.id]["completed_at"]
+  time.sleep(0.01)
+  daemon.maps.request_update(area.id)
+  assert run_until(daemon, lambda: daemon.maps.status()["areas"][area.id]["completed_at"] > completed_at)
+  assert len(session.urls) == 2 * first_pass, "stale tiles are refreshed"
+
+
+def test_enabling_save_as_you_drive_promotes_cached_tiles(tmp_path, fast):
+  daemon, _ = make_daemon(tmp_path)
+  keys = [TileKey(15, 5889, 12869), TileKey(15, 5890, 12869)]
+  for key in keys:
+    assert daemon.route_cache.write(key, PNG)
+
+  daemon.maps.set_save_viewed_cache(True)
+  assert run_until(daemon, lambda: all(daemon.area_cache.contains(key) for key in keys))
+  assert all(daemon.maps.is_auto_saved(key) for key in keys)
+  assert daemon.maps.pending_auto_saved() == []
+  assert not daemon.maps.promote_requested()
+
+
+def test_promote_cached_tiles_skips_already_pinned(tmp_path):
+  maps = OfflineMaps(tmp_path)
+  key = TileKey(2, 1, 1)
+  put(maps.root, 2, 1, 1)
+  put(maps.base, 2, 1, 1)
+  assert maps.mark_cached_tiles() == 0
+  assert maps.pending_auto_saved() == []
 
 
 def test_saved_route_downloads_its_route_tiles(tmp_path, fast):
