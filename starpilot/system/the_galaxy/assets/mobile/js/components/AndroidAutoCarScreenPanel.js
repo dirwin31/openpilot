@@ -1,9 +1,9 @@
 import { api, showSnackbar } from "../api.js"
 
 const VIEWS = [
-  { value: "split", label: "Map + Driving", desc: "The driving view and the navigation map side by side." },
-  { value: "driving", label: "Driving View", desc: "The StarPilot driving view fills the car screen." },
-  { value: "map", label: "Map Only", desc: "The map fills the screen, with the status border, your speed and alerts on top." },
+  { value: "split", label: "Split", desc: "The driving view and the navigation map side by side." },
+  { value: "driving", label: "Driving", desc: "The StarPilot driving view fills the car screen." },
+  { value: "map", label: "Map", desc: "The map fills the screen, with the status border, your speed and alerts on top." },
 ]
 
 const MAP_ORIENTATIONS = [
@@ -24,6 +24,7 @@ export const AndroidAutoCarScreenPanel = {
     showsDriving() { return this.settings && this.settings.onroad_view !== "map" },
     showsMap() { return this.settings && this.settings.onroad_view !== "driving" },
     isSplit() { return this.settings && this.settings.onroad_view === "split" },
+    selectedView() { return this.views.find(view => view.value === this.settings?.onroad_view) || this.views[0] },
     blindSpotEnabled() { return this.settings?.blind_spot_monitors !== false },
     speedFactor() { return this.isMetric ? 3.6 : 2.2369362921 },
     speedUnit() { return this.isMetric ? "km/h" : "mph" },
@@ -99,13 +100,11 @@ export const AndroidAutoCarScreenPanel = {
       </div>
       <template v-else-if="settings">
         <template v-if="tab === 'layout'">
-          <div class="gx-row__label">While Driving</div>
-          <div class="gx-car-display__layouts">
-            <label v-for="view in views" :key="view.value" class="gx-car-display__layout" :class="{ 'is-selected': settings.onroad_view === view.value }">
-              <input type="radio" name="car-screen-view" :checked="settings.onroad_view === view.value" :disabled="saving" @change="update({ onroad_view: view.value })" />
-              <span class="gx-car-display__preview" :class="'gx-car-display__preview--' + view.value" aria-hidden="true"><span></span><span></span></span>
-              <span class="gx-row__label">{{ view.label }}</span><span class="gx-row__desc">{{ view.desc }}</span>
-            </label>
+          <div class="gx-row">
+            <div class="gx-row__info"><span class="gx-row__label">Driving Layout</span><span class="gx-row__desc">{{ selectedView.desc }}</span></div>
+            <div class="gx-car-display__tabs"><button v-for="view in views" :key="view.value" type="button" class="gx-btn"
+              :class="settings.onroad_view === view.value ? '' : 'gx-btn--tonal'" :aria-pressed="settings.onroad_view === view.value" :disabled="saving"
+              @click="update({ onroad_view: view.value })">{{ view.label }}</button></div>
           </div>
           <div v-if="isSplit" class="gx-row">
             <div class="gx-row__info"><span class="gx-row__label">Map Side</span><span class="gx-row__desc">Which half of the car display shows the map.</span></div>

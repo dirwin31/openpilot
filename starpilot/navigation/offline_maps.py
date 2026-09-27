@@ -71,7 +71,7 @@ AREA_ZOOM_CHOICES = (14, 15, 16)  # detail The Galaxy lets the user pick instead
 
 # Map colors. "auto" keeps both styles and shows light between sunrise and sunset.
 MAP_THEMES = ("light", "dark", "auto")
-DEFAULT_MAP_THEME = "dark"
+DEFAULT_MAP_THEME = "auto"
 THEME_STYLES = {"light": (LIGHT_STYLE,), "dark": (DARK_STYLE,), "auto": (LIGHT_STYLE, DARK_STYLE)}
 SUNSET_ELEVATION = -0.833  # degrees: the sun's upper edge on the horizon, refraction included
 FALLBACK_DAY_HOURS = (7, 19)  # local clock hours for light maps before the device has ever had a location

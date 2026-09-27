@@ -492,7 +492,7 @@ export const AndroidAutoOfflinePanel = {
     async setMapTheme(event) {
       if (!this.summary || this.cacheSettingBusy) return
       const theme = String(event?.target?.value || "")
-      const previous = this.summary.map_theme || "dark"
+      const previous = this.summary.map_theme || "auto"
       if (!MAP_THEME_COLORS[theme] || theme === previous) return
       const dropped = MAP_THEME_COLORS[previous].filter((color) => !MAP_THEME_COLORS[theme].includes(color))
       let discardDropped = false
@@ -652,7 +652,7 @@ export const AndroidAutoOfflinePanel = {
             <span class="gx-row__label">Map Colors</span>
             <span class="gx-row__desc">No traffic is shown: saved maps would show the traffic from the day they were downloaded. Light & dark switches at sunrise and sunset where the car is, and keeps both downloaded. A new color downloads your saved areas again on Wi-Fi.</span>
           </div>
-          <GalaxySelect class="gx-field" style="flex:none; min-width:170px;" :value="summary?.map_theme || 'dark'" :disabled="!summary || cacheSettingBusy" @change="setMapTheme" aria-label="Map colors">
+          <GalaxySelect class="gx-field" style="flex:none; min-width:170px;" :value="summary?.map_theme || 'auto'" :disabled="!summary || cacheSettingBusy" @change="setMapTheme" aria-label="Map colors">
             <option v-for="option in mapThemeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
           </GalaxySelect>
         </div>

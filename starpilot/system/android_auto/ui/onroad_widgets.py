@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
 import pyray as rl
@@ -20,10 +21,12 @@ from openpilot.selfdrive.ui.onroad.alert_renderer import (
 from openpilot.selfdrive.ui.onroad.hud_renderer import COLORS, CRUISE_DISABLED_CHAR, FONT_SIZES, HudRenderer
 from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import NavigationCardRenderer
 from openpilot.selfdrive.ui.onroad.starpilot.pip_sidecam import PipSideCamera
+from openpilot.selfdrive.ui.onroad.starpilot import slc_speed_limit as slc
 from openpilot.selfdrive.ui.onroad.starpilot.slc_speed_limit import render_speed_limit_at
-from openpilot.selfdrive.ui.onroad.starpilot.widget_style import draw_control_card
+from openpilot.selfdrive.ui.onroad.starpilot.widget_style import CONTROL_BORDER, draw_control_card
 from openpilot.selfdrive.ui.onroad.starpilot.widgets import SetSpeedWidget, SpeedLimitWidget, StoppedTimerWidget
 from openpilot.selfdrive.ui.ui_state import UIStatus, ui_state
+from openpilot.system.ui.lib.application import FONT_SCALE, font_fallback
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import draw_text_with_shadow, measure_text_cached
 
@@ -49,8 +52,63 @@ TORQUE_BAR_GAP = 24
 EXP_BUTTON_SIZE = 160
 EXP_ICON_SIZE = 120
 RIGHT_COLUMN_ANCHOR = 130  # column centre, from the camera pane's right edge (the comma uses 146)
-SET_SPEED_LABEL_TOP = 8    # "MAX" sits at the card's top edge, like the speed-limit card's source label
-SET_SPEED_VALUE_FONT = 100
+# MAX and LIMIT cards are laid out by glyph ink, not line boxes: a line box carries ~19%
+# empty space above digits, which left a gap under the label and the value off centre.
+CARD_INK_MARGIN = 16        # card edge to the label's ink; the value's space ends as far from the bottom
+CARD_VALUE_INSET = 10       # the value's ink keeps this clear of the card's sides
+SET_SPEED_VALUE_FONT = 120  # the value fills the space under the label
+LIMIT_OFFSET_VALUE_FONT = 100  # leaves room for the offset chip
+LIMIT_CHIP_LIFT = 6         # the offset chip's bottom margin matches the label's top one
+
+
+_ink_cache: dict[tuple, rl.Rectangle] = {}
+
+
+def text_ink(font: rl.Font | None, text: str, font_size: float) -> rl.Rectangle:
+  """The painted part of ``text`` drawn at (0, 0) and ``font_size``: glyph boxes, without the
+  line box's empty space or the first and last glyphs' side bearings."""
+  if font is None or not font.glyphCount:
+    size = measure_text_cached(font, text, font_size)
+    return rl.Rectangle(0, 0, size.x, size.y)
+  font = font_fallback(font)  # what draw_text_ex will draw with
+  key = (font.texture.id, text, font_size)
+  ink = _ink_cache.get(key)
+  if ink is None:
+    scale = font_size * FONT_SCALE / font.baseSize
+    pen, left, top, right, bottom = 0.0, math.inf, math.inf, -math.inf, -math.inf
+    for char in text:
+      index = rl.get_glyph_index(font, ord(char))
+      glyph, box = font.glyphs[index], font.recs[index]
+      if box.width > 0 and box.height > 0:
+        left, right = min(left, pen + glyph.offsetX * scale), max(right, pen + (glyph.offsetX + box.width) * scale)
+        top, bottom = min(top, glyph.offsetY * scale), max(bottom, (glyph.offsetY + box.height) * scale)
+      pen += (glyph.advanceX or box.width) * scale
+    ink = rl.Rectangle(left, top, right - left, bottom - top) if right > left else rl.Rectangle(0, 0, 0, 0)
+    if len(_ink_cache) > 256:
+      _ink_cache.clear()
+    _ink_cache[key] = ink
+  return ink
+
+
+def fit_font_size(font: rl.Font | None, text: str, font_size: int, width: float) -> int:
+  """``font_size``, shrunk until the text's ink fits ``width`` (three digits in km/h)."""
+  ink_width = text_ink(font, text, font_size).width
+  return font_size if ink_width <= width else max(1, int(font_size * width / ink_width))
+
+
+def draw_ink(font: rl.Font | None, text: str, font_size: float, center_x: float, ink_top: float, color: rl.Color) -> float:
+  """Draw ``text`` with its ink centred on ``center_x`` and starting at ``ink_top``; return the ink's bottom."""
+  ink = text_ink(font, text, font_size)
+  rl.draw_text_ex(font, text, rl.Vector2(center_x - ink.x - ink.width / 2, ink_top - ink.y), font_size, 0, color)
+  return ink_top + ink.height
+
+
+def draw_card_value(font: rl.Font | None, text: str, font_size: int, rect: rl.Rectangle, top: float, bottom: float,
+                    color: rl.Color) -> None:
+  """A card's value, as large as fits, centred between ``top`` and ``bottom`` by its ink."""
+  font_size = fit_font_size(font, text, font_size, rect.width - 2 * CARD_VALUE_INSET)
+  ink = text_ink(font, text, font_size)
+  draw_ink(font, text, font_size, rect.x + rect.width / 2, top + (bottom - top - ink.height) / 2, color)
 
 
 def lateral_pause_rect(camera_rect: rl.Rectangle, display_width: float) -> rl.Rectangle:
@@ -190,8 +248,8 @@ class CarPipSideCamera(PipSideCamera):
 class CarStoppedTimerWidget(StoppedTimerWidget):
   """A compact "Stopped" label and mm:ss timer in place of the speed readout.
 
-  Centred in the space between the MAX / LIMIT column and the steering-wheel
-  column, which is narrower on the car, rather than on the whole pane.
+  Centred on the pane, where the speed it replaces sits, and sized to stay clear of
+  the wider of the MAX / LIMIT column and the steering-wheel column.
   """
 
   LEFT_CONTROLS_RESERVE = 290  # MAX / LIMIT column
@@ -206,9 +264,8 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
     duration = self._duration
     label_text, timer_text = "Stopped", f"{duration // 60:02d}:{duration % 60:02d}"
     full_width = measure_text_cached(self._font_bold, label_text, self.LABEL_FONT).x
-    left = rect.x + self.LEFT_CONTROLS_RESERVE + self.HORIZONTAL_MARGIN
-    right = rect.x + rect.width - self.RIGHT_CONTROLS_RESERVE - self.HORIZONTAL_MARGIN
-    available = max(1.0, right - left)
+    reserve = max(self.LEFT_CONTROLS_RESERVE, self.RIGHT_CONTROLS_RESERVE) + self.HORIZONTAL_MARGIN
+    available = max(1.0, rect.width - 2 * reserve)
     scale = min(1.0, available / full_width) if full_width > 0 else 1.0
     scale = max(0.6, scale)
     label_font = max(1, int(self.LABEL_FONT * scale))
@@ -217,7 +274,7 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
     timer_size = measure_text_cached(self._font_normal, timer_text, timer_font)
 
     duration_color = self._duration_color()
-    center_x = (left + right) / 2 if right > left else rect.x + rect.width / 2
+    center_x = rect.x + rect.width / 2
     label_y = rect.y + self.TEXT_TOP
     timer_y = label_y + label_size.y + self.LINE_GAP
     self._draw_text(self._font_bold, label_text, rl.Vector2(center_x - label_size.x / 2, label_y), label_font, duration_color)
@@ -241,7 +298,7 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
 
 class CarSetSpeedWidget(SetSpeedWidget):
   """MAX laid out like the speed-limit card below it: the label tight to the top edge,
-  the value large in the space left under it."""
+  the value large and centred in the space left under it."""
 
   def _render(self, rect: rl.Rectangle) -> None:
     draw_control_card(rect)
@@ -254,31 +311,45 @@ class CarSetSpeedWidget(SetSpeedWidget):
       elif ui_state.status in (UIStatus.DISENGAGED, UIStatus.OVERRIDE):
         max_color = COLORS.DISENGAGED
 
-    label = tr("MAX")
-    label_size = measure_text_cached(self._font_semi_bold, label, FONT_SIZES.max_speed)
-    label_y = rect.y + SET_SPEED_LABEL_TOP
-    rl.draw_text_ex(self._font_semi_bold, label, rl.Vector2(rect.x + (rect.width - label_size.x) / 2, label_y),
-                    FONT_SIZES.max_speed, 0, max_color)
-
+    label_bottom = draw_ink(self._font_semi_bold, tr("MAX"), FONT_SIZES.max_speed, rect.x + rect.width / 2,
+                            rect.y + CARD_INK_MARGIN, max_color)
     value = CRUISE_DISABLED_CHAR if not hud.is_cruise_set else str(round(hud.set_speed))
-    font_size = SET_SPEED_VALUE_FONT
-    value_size = measure_text_cached(self._font_bold, value, font_size)
-    if value_size.x > rect.width - 16:  # three digits in km/h
-      font_size = max(1, int(font_size * (rect.width - 16) / value_size.x))
-      value_size = measure_text_cached(self._font_bold, value, font_size)
-    top = label_y + label_size.y
-    value_y = top + (rect.y + rect.height - top - value_size.y) / 2
-    rl.draw_text_ex(self._font_bold, value, rl.Vector2(rect.x + (rect.width - value_size.x) / 2, value_y),
-                    font_size, 0, value_color)
+    draw_card_value(self._font_bold, value, SET_SPEED_VALUE_FONT, rect, label_bottom, rect.y + rect.height - CARD_INK_MARGIN,
+                    value_color)
 
 
 class CarSpeedLimitWidget(SpeedLimitWidget):
+  """The US card shares MAX's layout, so the two stacked cards line up; the pending
+  sign and the round Vienna sign are the comma's."""
+
   def _render(self, rect: rl.Rectangle) -> None:
-    if self._slc_state is None:
+    state = self._slc_state
+    if state is None:
       return
     # Beside the map the per-source list is noise; the sign alone is enough.
     expanded = ui_state.ui_params.get_bool("SpeedLimitSources") and not ui_state.nav_map_beside_road
-    self._sign_rect = render_speed_limit_at(self._slc_state, rect, expanded)
+    if state["use_vienna"] or (state["speed_limit_changed"] and state["unconfirmed_valid"]):
+      self._sign_rect = render_speed_limit_at(state, rect, expanded)
+      return
+    self._draw_card(state, rect)
+    if expanded:
+      slc._draw_sources_bubble(state, rect)
+    self._sign_rect = rect
+
+  @staticmethod
+  def _draw_card(state: dict, rect: rl.Rectangle) -> None:
+    border = slc._speed_limit_pulse_color(CONTROL_BORDER, CONTROL_BORDER.a)
+    text_color = slc._speed_limit_pulse_color(rl.Color(255, 255, 255, 255), 255)
+    draw_control_card(rect, border=border)
+    label_color = slc._source_label_color(255, is_overridden=state["slc_overridden_speed"] != 0)
+    label_bottom = draw_ink(slc._get_semi_bold(), slc._active_source_label(state), slc.FONT_SOURCE, rect.x + rect.width / 2,
+                            rect.y + CARD_INK_MARGIN, label_color)
+    bottom, font_size = rect.y + rect.height - CARD_INK_MARGIN, SET_SPEED_VALUE_FONT
+    if state["show_offset"]:
+      chip_area = rl.Rectangle(rect.x, rect.y, rect.width, rect.height - LIMIT_CHIP_LIFT)
+      slc._draw_offset_chip(chip_area, state["offset_str"], text_color)
+      bottom, font_size = rect.y + rect.height - LIMIT_CHIP_LIFT - slc.OFFSET_CHIP_BOTTOM - slc.OFFSET_CHIP_HEIGHT, LIMIT_OFFSET_VALUE_FONT
+    draw_card_value(slc._get_bold(), state["speed_limit_str"], font_size, rect, label_bottom, bottom, text_color)
 
 
 class CarNavigationCardRenderer(NavigationCardRenderer):

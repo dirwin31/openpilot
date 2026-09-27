@@ -24,7 +24,7 @@ def scene(gpu, monkeypatch):  # noqa: F811
   monkeypatch.setattr(view, "_draw_cached_car", lambda *args: None)
   draws = []
 
-  def world(rect, camera, anchor, scale):
+  def world(rect, camera, anchor, scale, now=None):
     for x in range(-1000, 1000, 40):
       # Draw in world coordinates, including heading and zoom.
       corners = [rl.Vector2(*camera.to_screen(wx, wy, anchor, scale)) for wx, wy in

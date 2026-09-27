@@ -205,6 +205,54 @@ def test_android_auto_map_shows_active_navigation_waiting_for_gps(view):
   assert view._center_message() is None
 
 
+class _FakeNavSM(dict):
+  def __init__(self):
+    super().__init__()
+    self.updated = {"navRoute": False, "navInstruction": False, "starpilotModelV2": False}
+    self.valid = {"navRoute": True, "navInstruction": False}
+
+  def update(self, _timeout):
+    pass
+
+  def send_route(self, points):
+    self["navRoute"] = SimpleNamespace(coordinates=[SimpleNamespace(latitude=lat, longitude=lon) for lat, lon in points])
+    self.valid["navRoute"] = bool(points)
+    self.updated["navRoute"] = True
+
+
+def test_ending_a_route_clears_the_line_before_navigationd_does(view, monkeypatch):
+  monkeypatch.setattr(nav_map.ui_state, "started", False)
+  sm = view._sm = _FakeNavSM()
+  view._tiles = SimpleNamespace(upload=lambda: 0, service=SimpleNamespace(offline=False))
+  destination = json.dumps({"name": "Home", "latitude": 36.4, "longitude": -115.2})
+  points = [(36.3, -115.3 + i * 0.001) for i in range(50)]
+
+  def frame():
+    view._last_gps_poll = -math.inf
+    view._update_state()
+    sm.updated["navRoute"] = False
+
+  view.persistent.values["NavDestination"] = destination
+  sm.send_route(points)
+  frame()
+  assert view._route_live(nav_map.time.monotonic())
+
+  view.persistent.values.pop("NavDestination")  # End route: navigationd has not ticked yet
+  frame()
+  assert not view._route_live(nav_map.time.monotonic())
+  sm.send_route(points)  # its 5 s republish, sent before it saw the route end
+  frame()
+  assert not view._route_live(nav_map.time.monotonic()), "a stale republish must not bring the line back"
+  sm.send_route([])  # navigationd drops the route
+  frame()
+
+  view.persistent.values["NavDestination"] = destination  # the same trip again
+  frame()
+  sm.send_route(points)
+  frame()
+  assert view._route_live(nav_map.time.monotonic())
+
+
 def test_route_progress_tracks_the_nearest_point(view):
   points = [(36.3, -115.3 + i * 0.001) for i in range(50)]
   view._route_world = nav_map._route_world(points)
@@ -366,6 +414,60 @@ def test_route_splits_under_the_car_between_vertices(view, monkeypatch):
   traveled = [xs for color, xs in drawn if color == nav_map.ROUTE_TRAVELED]
   ahead = [xs for color, xs in drawn if color == nav_map.ROUTE_FILL]
   assert math.isclose(traveled[0][-1], 0.0, abs_tol=1e-6) and math.isclose(ahead[0][0], 0.0, abs_tol=1e-6)
+
+
+def test_tile_textures_hold_what_the_map_shows(monkeypatch):
+  from openpilot.starpilot.navigation.map_tiles import TileKey
+  unloaded = []
+  monkeypatch.setattr(nav_map.rl, "load_texture_from_image", lambda image: image)
+  for name in ("unload_image", "set_texture_filter", "set_texture_wrap"):
+    monkeypatch.setattr(nav_map.rl, name, lambda *args: None)
+  monkeypatch.setattr(nav_map.rl, "unload_texture", unloaded.append)
+  tiles = nav_map.TileTextures.__new__(nav_map.TileTextures)
+  tiles._textures, tiles._wanted, tiles._style_read = nav_map.OrderedDict(), 0, math.inf
+  pending = [(TileKey(16, x, 0), f"tile{x}") for x in range(40)]
+  tiles.service = SimpleNamespace(poll=lambda limit: [pending.pop(0) for _ in range(min(limit, len(pending)))],
+                                  forget=lambda key: None, want=lambda keys: None)
+  tiles._check_style = lambda: False
+
+  tiles.want([TileKey(16, x, 0) for x in range(6)])
+  while pending:
+    tiles.upload()
+  assert len(tiles._textures) == nav_map.MIN_TEXTURES and len(unloaded) == 40 - nav_map.MIN_TEXTURES
+  tiles.want([TileKey(16, x, 0) for x in range(12)])
+  pending[:] = [(TileKey(17, x, 0), f"tile{x}") for x in range(40)]
+  while pending:
+    tiles.upload()
+  assert len(tiles._textures) == 24, "twice the tiles on screen: this zoom level and the last"
+  tiles.want([TileKey(16, x, 0) for x in range(30)])
+  pending[:] = [(TileKey(18, x, 0), f"tile{x}") for x in range(60)]
+  while pending:
+    tiles.upload()
+  assert len(tiles._textures) == nav_map.MAX_TEXTURES
+
+
+def test_marker_sits_on_the_route_line_near_it(view, monkeypatch):
+  monkeypatch.setattr(nav_map.ui_state, "android_auto_car_view", False)
+  points = [(36.3, -115.3 + i * 0.011) for i in range(4)]  # due east
+  view._route_world = nav_map._route_world(points)
+  view._route_received = 10.0
+  car_lon = -115.3 + 0.011 * 1.3
+  meters_per_degree = 111_320.0
+
+  def shown(meters_north: float) -> tuple[float, float]:
+    view._gps = None  # a fresh placement, not a correction eased in from the last one
+    view.memory.values["LastGPSPosition"] = gps_state(36.3 + meters_north / meters_per_degree, car_lon, bearing=90, speed=0.0, updated=10.0)
+    view._poll_gps(10.0)
+    return view._shown_car(10.0)
+
+  on_line = world_xy(36.3, car_lon)
+  assert math.isclose(shown(6.0)[1], on_line[1], rel_tol=0, abs_tol=1e-12), "a lane off: drawn on the line"
+  raw = world_xy(36.3 + 60.0 / meters_per_degree, car_lon)
+  assert shown(60.0) == raw, "well off the route: drawn where it is"
+  partway = shown(25.0)[1]
+  assert on_line[1] > partway > world_xy(36.3 + 25.0 / meters_per_degree, car_lon)[1], "the pull fades, no jump"
+  view._route_received = 10.0 - nav_map.ROUTE_STALE_SECONDS - 1.0
+  assert shown(6.0) == view._car_world(10.0), "no live route: nothing to snap to"
 
 
 class _FakeSV(SimpleNamespace):

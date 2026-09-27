@@ -51,7 +51,7 @@ createApp({components:{AndroidAutoCarScreenPanel,Settings},template:fullSettings
         const control=row.querySelector('.gx-switch,.gx-car-display__tabs')?.getBoundingClientRect()
         return !info || !control || info.right<=control.left+1 || info.bottom<=control.top+1 || control.bottom<=info.top+1
       })),true,`text/control overlap at ${width}`)
-      await page.getByLabel('Map Only',{exact:false}).check()
+      await page.getByRole('button',{name:'Map',exact:true}).click()
       await page.waitForFunction(()=>window.saved.onroad_view==='map')
       assert.equal(await page.getByText('Show Road Camera',{exact:true}).count(),0)
       assert.equal(await page.getByText('Map Side',{exact:true}).count(),0)
