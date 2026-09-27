@@ -3229,6 +3229,14 @@ class ParentToggle:
 class AetherSettingsView(PanelManagerView):
   """Reusable list-panel manager for toggle/value/action settings pages."""
 
+  def render(self, rect: rl.Rectangle | None = None):
+    # Rows are sized with settings_style.px(); inside a zoomed StarPilot page, undo the zoom.
+    from openpilot.starpilot.system.android_auto.ui import settings_style
+    level = settings_style.zoom_level()
+    if rect is not None and abs(level - 1.0) > 1e-6:
+      return settings_style.render_zoomed(self, rect, 1.0 / level)
+    return super().render(rect)
+
   TAB_HEIGHT = 98
   TAB_GAP = 14
   TAB_BOTTOM_GAP = 26
@@ -4779,40 +4787,43 @@ class AetherSliderDialog(Widget):
 
   def _render(self, rect: rl.Rectangle):
     from openpilot.starpilot.system.android_auto.ui import settings_style as style
+    px = style.px
     rl.draw_rectangle_rec(rect, rl.Color(0, 0, 0, 180))
-    width = min(1000, rect.width - 32)
-    height = min(550, rect.height - 32)
+    width = min(px(1000), rect.width - px(32))
+    height = min(px(550), rect.height - px(32))
     box = rl.Rectangle(rect.x + (rect.width - width) / 2, rect.y + (rect.height - height) / 2, width, height)
     rl.draw_rectangle_rounded(box, .08, 16, style.BG)
-    pad = 24
-    style.text(rl.Rectangle(box.x + pad, box.y + 16, width - pad * 2, 48), self.title, 30, bold=True)
-    style.text(rl.Rectangle(box.x + pad, box.y + 76, width - pad * 2, 66), self.formatted_value(), 48, style.ACCENT, True)
-    footer_y = box.y + height - 76
-    button_w = (width - pad * 2 - 16) / 2
-    self._cancel_rect = rl.Rectangle(box.x + pad, footer_y, button_w, 56)
-    self._ok_rect = rl.Rectangle(box.x + pad + button_w + 16, footer_y, button_w, 56)
+    pad, button_h, knob = px(24), px(56), px(56)
+    style.text(rl.Rectangle(box.x + pad, box.y + px(16), width - pad * 2, px(48)), self.title, px(30), bold=True)
+    style.text(rl.Rectangle(box.x + pad, box.y + px(76), width - pad * 2, px(66)), self.formatted_value(), px(48), style.ACCENT, True)
+    footer_y = box.y + height - button_h - px(20)
+    button_w = (width - pad * 2 - px(16)) / 2
+    self._cancel_rect = rl.Rectangle(box.x + pad, footer_y, button_w, button_h)
+    self._ok_rect = rl.Rectangle(box.x + pad + button_w + px(16), footer_y, button_w, button_h)
     style.button(self._cancel_rect, tr("Cancel"), self._is_pressed_cancel)
     style.button(self._ok_rect, tr("Save"), True)
-    slider_y = footer_y - 78
-    self._minus_rect = rl.Rectangle(box.x + pad, slider_y - 28, 56, 56)
-    self._plus_rect = rl.Rectangle(box.x + width - pad - 56, slider_y - 28, 56, 56)
-    style.button(self._minus_rect, "-", self._pressed_zone == "minus", 28)
-    style.button(self._plus_rect, "+", self._pressed_zone == "plus", 28)
-    self._track_rect = rl.Rectangle(self._minus_rect.x + 76, slider_y - 5, width - pad * 2 - 152, 10)
+    slider_y = footer_y - px(78)
+    self._minus_rect = rl.Rectangle(box.x + pad, slider_y - knob / 2, knob, knob)
+    self._plus_rect = rl.Rectangle(box.x + width - pad - knob, slider_y - knob / 2, knob, knob)
+    style.button(self._minus_rect, "-", self._pressed_zone == "minus", px(28))
+    style.button(self._plus_rect, "+", self._pressed_zone == "plus", px(28))
+    track_h = px(10)
+    self._track_rect = rl.Rectangle(self._minus_rect.x + knob + px(20), slider_y - track_h / 2, width - pad * 2 - 2 * (knob + px(20)), track_h)
     rl.draw_rectangle_rounded(self._track_rect, 1, 12, style.BORDER)
     fraction = self._value_fraction(self._current_val)
-    rl.draw_rectangle_rounded(rl.Rectangle(self._track_rect.x, self._track_rect.y, self._track_rect.width * fraction, 10), 1, 12, style.ACCENT)
-    rl.draw_circle_v(rl.Vector2(self._track_rect.x + self._track_rect.width * fraction, slider_y), 14, style.TEXT)
+    rl.draw_rectangle_rounded(rl.Rectangle(self._track_rect.x, self._track_rect.y, self._track_rect.width * fraction, track_h), 1, 12, style.ACCENT)
+    rl.draw_circle_v(rl.Vector2(self._track_rect.x + self._track_rect.width * fraction, slider_y), px(14), style.TEXT)
     self._preset_rects.clear()
     # Presets use a separate band, and only appear when it fits above the slider.
-    if self._presets and slider_y - (box.y + 150) >= 62:
-      gap = 8
+    chips_y, chip_h = box.y + px(158), px(48)
+    if self._presets and slider_y - knob / 2 - px(8) >= chips_y + chip_h:
+      gap = px(8)
       chip_w = (width - pad * 2 - gap * (len(self._presets) - 1)) / len(self._presets)
       for index, value in enumerate(self._presets):
-        chip = rl.Rectangle(box.x + pad + index * (chip_w + gap), box.y + 158, chip_w, 48)
+        chip = rl.Rectangle(box.x + pad + index * (chip_w + gap), chips_y, chip_w, chip_h)
         self._preset_rects.append((value, chip))
         label = format_adjustor_value(value, step=self.step, unit=self._unit, labels=self._labels)
-        style.button(chip, label, abs(self._current_val - value) <= .5 * self.step, 22)
+        style.button(chip, label, abs(self._current_val - value) <= .5 * self.step, px(22))
     return DialogResult.NO_ACTION
 
 

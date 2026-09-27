@@ -39,23 +39,26 @@ class SettingsDialog(Widget):
       self._set_result(DialogResult.CONFIRM if key == 'confirm' else DialogResult.CANCEL)
 
   def _render(self, rect):
+    px = style.px
     rl.draw_rectangle_rec(rect, rl.Color(0, 0, 0, 180))
-    width, height = min(1100, rect.width - 24), rect.height - 24
-    box = rl.Rectangle(rect.x + (rect.width - width) / 2, rect.y + 12, width, height)
+    margin, pad, button_h = px(12), px(24), px(56)
+    width, height = min(px(1100), rect.width - 2 * margin), rect.height - 2 * margin
+    box = rl.Rectangle(rect.x + (rect.width - width) / 2, rect.y + margin, width, height)
     rl.draw_rectangle_rounded(box, .04, 16, style.BG)
-    style.text(rl.Rectangle(box.x + 24, box.y + 12, box.width - 48, 52), self.title, 30, bold=True)
-    body = rl.Rectangle(box.x + 8, box.y + 76, box.width - 16, max(1, box.height - 160))
+    style.text(rl.Rectangle(box.x + pad, box.y + margin, box.width - 2 * pad, px(52)), self.title, px(30), bold=True)
+    body_top = px(76)
+    footer_y = box.y + box.height - button_h - px(16)
+    body = rl.Rectangle(box.x + px(8), box.y + body_top, box.width - px(16), max(1, footer_y - px(8) - box.y - body_top))
     self._view.set_parent_rect(body)
     self._view.render(body)
-    gap = 12
-    button_width = (box.width - 48 - gap) / 2 if self._cancel_text else box.width - 48
+    gap = px(12)
+    button_width = (box.width - 2 * pad - gap) / 2 if self._cancel_text else box.width - 2 * pad
     self._targets.clear()
-    y = box.y + box.height - 72
     if self._cancel_text:
-      cancel = rl.Rectangle(box.x + 24, y, button_width, 56)
+      cancel = rl.Rectangle(box.x + pad, footer_y, button_width, button_h)
       style.button(cancel, self._cancel_text)
       self._targets['cancel'] = cancel
-    confirm = rl.Rectangle(box.x + box.width - 24 - button_width, y, button_width, 56)
+    confirm = rl.Rectangle(box.x + box.width - pad - button_width, footer_y, button_width, button_h)
     style.button(confirm, self._confirm_text, self._can_confirm(), enabled=self._can_confirm())
     if self._can_confirm():
       self._targets['confirm'] = confirm

@@ -5,7 +5,7 @@ import pytest
 
 from openpilot.starpilot.system.android_auto.ui import offline_maps as page_module
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.navigation import SearchResult
-from openpilot.starpilot.navigation.offline_maps import AREA_PRESETS, OfflineMaps
+from openpilot.starpilot.navigation.offline_maps import OfflineMaps
 
 
 class FakeParams:
@@ -76,14 +76,41 @@ def test_around_me_needs_gps(page):
 def test_save_an_area_around_me(page):
   page.params.values["LastGPSPosition"] = GPS
   page.activate("add:here")
-  assert kinds(page)[2] == "estimating"
-  wait_for(page, lambda: page.chooser["estimates"] is not None)
-  assert page.chooser["name"] == "Las Vegas"
-  assert kinds(page).count("preset") == len(AREA_PRESETS)
-  page.activate("preset:0")
+  assert page.chooser["radius_km"] > 0 and page.chooser["zoom"] is None
+  wait_for(page, lambda: page.chooser["estimate"] is not None and page.chooser["name"] == "Las Vegas")
+  assert page.estimate_text()[1]
+  page.activate("area_save")
   assert page.chooser is None
-  assert [area.name for area in page.areas] == ["Las Vegas"]
-  assert "area" in kinds(page) and "empty" not in kinds(page)
+  area = page.areas[0]
+  assert area.name == "Las Vegas" and area.max_zoom == page_module.area_zoom_for_radius(area.radius_km)
+
+
+def test_area_editor_moves_the_pin_and_sets_radius_and_detail(page, monkeypatch):
+  monkeypatch.setattr(page_module.ui_state, "is_metric", True, raising=False)
+  page.open_chooser(36.1, -115.2, "Here")
+  page.step_radius(1)
+  assert page.chooser["radius_km"] == 15.0
+  page.activate("area_radius:-1")
+  page.activate("area_radius:-1")
+  assert page.chooser["radius_km"] == 5.0
+  page.activate("area_level:14")
+  assert page.area_zoom() == 14
+  page.move_pin(36.2, -115.3)
+  assert (page.chooser["latitude"], page.chooser["radius_km"], page.chooser["zoom"]) == (36.2, 5.0, 14)
+  wait_for(page, lambda: page.chooser["estimate"] is not None)
+  page.activate("area_level:auto")
+  assert page.chooser["estimate"] is None and page.area_zoom() == 16
+  wait_for(page, lambda: page.chooser["estimate"] is not None)
+  page.activate("area_save")
+  assert (page.areas[0].radius_km, page.areas[0].max_zoom) == (5.0, 16)
+
+
+def test_map_taps_convert_back_to_the_same_place():
+  from openpilot.starpilot.navigation.map_tiles import world_xy
+  from openpilot.starpilot.system.android_auto.ui.offline_area_editor import lat_lon, radius_label, radius_steps
+  latitude, longitude = lat_lon(*world_xy(36.1, -115.2))
+  assert abs(latitude - 36.1) < 1e-9 and abs(longitude + 115.2) < 1e-9
+  assert radius_label(radius_steps(False)[3], False) == "5 mi" and radius_label(10.0, True) == "10 km"
 
 
 def test_destination_button_and_current_route(page):
