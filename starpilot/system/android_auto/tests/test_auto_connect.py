@@ -1,5 +1,7 @@
 import json
 import socket
+import subprocess
+import sys
 import threading
 import time
 
@@ -126,6 +128,38 @@ def test_supervisor_auto_start_on_car_connection_and_user_stop_hold(identity, tm
   sup.user_stop()
   sup.maintain(time.monotonic())
   assert starts == ["car_connected"] and sup.status()["auto_paused"]
+
+
+def test_supervisor_auto_start_holds_during_dhu_session(identity, tmp_path, monkeypatch):
+  from openpilot.starpilot.system.android_auto import identity as identity_store
+  monkeypatch.setattr(identity_store, "DATA_DIR", tmp_path / "aa")
+  onroad = {"value": False}
+  sup, starts, _ = auto_supervisor(identity, tmp_path, monkeypatch, onroad)
+  sup._phone().connected = False
+  # A live process with dhu_device on its command line, as tools/android_auto/dhu_device.py has.
+  dhu = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "dhu_device"])
+  try:
+    (tmp_path / "aa" / "dhu-5288.pid").write_text(f"{dhu.pid}\n")
+    sup.maintain(0)
+    onroad["value"] = True
+    sup.maintain(2)
+    assert starts == []                                          # going onroad under the DHU starts nothing
+  finally:
+    dhu.kill()
+    dhu.wait()
+  sup.maintain(4)
+  assert starts == ["onroad"]                                    # a stale pid file does not hold it
+
+
+@pytest.mark.parametrize("content", ["", "not a pid", "999999999"])
+def test_supervisor_auto_start_ignores_unusable_dhu_pid_file(identity, tmp_path, monkeypatch, content):
+  from openpilot.starpilot.system.android_auto import identity as identity_store
+  monkeypatch.setattr(identity_store, "DATA_DIR", tmp_path / "aa")
+  onroad = {"value": True}
+  sup, starts, _ = auto_supervisor(identity, tmp_path, monkeypatch, onroad)
+  (tmp_path / "aa" / "dhu-5288.pid").write_text(content)
+  sup.maintain(0)
+  assert starts == ["onroad"]
 
 
 def test_supervisor_auto_connect_off(identity, tmp_path, monkeypatch):

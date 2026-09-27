@@ -170,6 +170,12 @@ clears both force params. Under the DHU (`STARPILOT_ANDROID_AUTO_DHU=1`), `vehic
 returns true and `navigation_speed()` returns 0, so neither Go offroad nor the Navigate speed
 lock needs a `carState`.
 
+The rising edge of `IsOnroad` also fires the daemon's auto-connect. With a car selected,
+it starts paging that car over Bluetooth. On the comma's shared radio this degrades Wi-Fi
+enough to push DHU acks past `ACK_TIMEOUT`, and the session drops. `dhu_device.py`
+therefore holds `/data/android_auto/dhu-<port>.pid` while it runs. `Supervisor._auto_connect()`
+suppresses starts while that PID is a live `dhu_device` process (`dhu_session_active()`).
+
 ## Protocol check without a comma
 
 `tools/android_auto/dhu_test.py` runs the phone side on your computer with a test

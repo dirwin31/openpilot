@@ -48,6 +48,7 @@ MAX_LOG_FILES = 20
 ENCODER_RECOVERIES = 3       # hardware encoder reopens allowed per window before the session is torn down
 ENCODER_RECOVERY_WINDOW = 10.0
 CAR_LINK_HOLD = 10.0         # a hands-free connection from the car counts as "car present" this long
+DHU_PID_GLOB = "dhu-*.pid"   # under DATA_DIR, one per running tools/android_auto/dhu_device.py
 
 STATE_LABELS = {
   "idle": "off", "connecting_bluetooth": "connecting to car", "discovering": "finding android auto",
@@ -65,6 +66,32 @@ def _is_onroad() -> bool:
     return Params().get_bool("IsOnroad")
   except Exception:
     return False
+
+
+def dhu_session_active() -> bool:
+  """Whether tools/android_auto/dhu_device.py is projecting to a Desktop Head Unit on this comma.
+
+  Auto-connect holds off meanwhile: going onroad would start paging the (absent) car over
+  Bluetooth, which starves the comma's Wi-Fi and times out the DHU's video acknowledgements.
+  A SIGKILLed tool leaves its pid file behind, so only a live dhu_device process counts.
+  Fails open: anything unreadable or unexpected means no hold, so a car always auto-connects.
+  """
+  try:
+    paths = list(identity_store.DATA_DIR.glob(DHU_PID_GLOB))
+  except Exception:
+    return False
+  for path in paths:
+    try:
+      pid = int(path.read_text())
+      if Path("/proc/self").exists():
+        if b"dhu_device" in Path(f"/proc/{pid}/cmdline").read_bytes():
+          return True
+      else:
+        os.kill(pid, 0)  # no procfs (macOS tests): a live pid is enough
+        return True
+    except Exception:
+      continue
+  return False
 
 
 class Cancelled(Exception):
@@ -330,6 +357,8 @@ class Supervisor:
     onroad = self._onroad()
     action = self.auto.decide(now, enabled=True, onroad=onroad, car_link=car_link,
                               ready=adapter_ready and bool(device and device["paired"]), running=running)
+    if action == "start" and dhu_session_active():
+      return
     if action == "start":
       trigger = "onroad" if onroad else "car_connected"
       try:
