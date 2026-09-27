@@ -62,15 +62,20 @@ class AugmentedRoadView(CameraView):
     self._draw_road_overlays = True
     self._draw_hud_controls = True
     self._draw_driver_state = True
-    self._draw_alerts = True
 
     self.model_renderer = ModelRenderer()
-    self._hud_renderer = HudRenderer()
-    self.alert_renderer = AlertRenderer()
+    self._hud_renderer = self._create_hud_renderer()
+    self.alert_renderer = self._create_alert_renderer()
     self.driver_state_renderer = DriverStateRenderer()
 
     # debug
     self._pm = messaging.PubMaster(['uiDebug'])
+
+  def _create_hud_renderer(self):
+    return HudRenderer()
+
+  def _create_alert_renderer(self):
+    return AlertRenderer()
 
   def _render(self, rect):
     # Only render when system is started to avoid invalid data access
@@ -122,8 +127,7 @@ class AugmentedRoadView(CameraView):
       self._hud_renderer.render(self._content_rect)
     if self._draw_driver_state:
       self.driver_state_renderer.render(self._content_rect)
-    if self._draw_alerts:
-      self.alert_renderer.render(self._content_rect)
+    self.alert_renderer.render(self._content_rect)
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
@@ -198,8 +202,6 @@ class AugmentedRoadView(CameraView):
 
   @staticmethod
   def _camera_view() -> int:
-    if getattr(ui_state, "car_camera_off", False):
-      return CAMERA_VIEW_NONE
     params = ui_state.ui_params
     camera_view = params.get_int("CameraView", return_default=True, default=CAMERA_VIEW_STANDARD)
     if camera_view not in (CAMERA_VIEW_AUTO, CAMERA_VIEW_DRIVER, CAMERA_VIEW_STANDARD, CAMERA_VIEW_WIDE, CAMERA_VIEW_NONE):

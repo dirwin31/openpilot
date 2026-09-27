@@ -9,7 +9,6 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, M
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.scroll_panel2 import GuiScrollPanel2
 from openpilot.system.ui.lib.text_measure import measure_text_cached
-from openpilot.system.ui.lib.vector_icon import Pen, draw_strokes, draw_vector_icon
 from openpilot.system.ui.widgets import Widget, DialogResult
 from openpilot.system.ui.widgets.label import gui_label
 
@@ -1821,14 +1820,15 @@ def draw_chevron_icon(rect: rl.Rectangle, color: rl.Color, *, thickness: float =
     right_x = center_x + size * 0.6
     top_y = center_y - size
     bottom_y = center_y + size
-    points = [(right_x, top_y), (left_x, center_y), (right_x, bottom_y)]
+    rl.draw_line_ex(rl.Vector2(right_x, top_y), rl.Vector2(left_x, center_y), thickness, color)
+    rl.draw_line_ex(rl.Vector2(right_x, bottom_y), rl.Vector2(left_x, center_y), thickness, color)
   else:
     left_x = center_x - size * 0.6
     right_x = center_x + size * 0.35
     top_y = center_y - size
     bottom_y = center_y + size
-    points = [(left_x, top_y), (right_x, center_y), (left_x, bottom_y)]
-  draw_strokes([(points, thickness)], color, "chevron")
+    rl.draw_line_ex(rl.Vector2(left_x, top_y), rl.Vector2(right_x, center_y), thickness, color)
+    rl.draw_line_ex(rl.Vector2(left_x, bottom_y), rl.Vector2(right_x, center_y), thickness, color)
 
 
 def draw_breadcrumb_chevron(rect: rl.Rectangle, color: rl.Color, *, thickness: float = 3.0):
@@ -1841,7 +1841,8 @@ def draw_breadcrumb_chevron(rect: rl.Rectangle, color: rl.Color, *, thickness: f
   right_x = center_x + w * 0.45
   top_y = center_y - h / 2
   bottom_y = center_y + h / 2
-  draw_strokes([([(left_x, top_y), (right_x, center_y), (left_x, bottom_y)], thickness)], color, "breadcrumb-chevron")
+  rl.draw_line_ex(rl.Vector2(left_x, top_y), rl.Vector2(right_x, center_y), thickness, color)
+  rl.draw_line_ex(rl.Vector2(left_x, bottom_y), rl.Vector2(right_x, center_y), thickness, color)
 
 
 TAB_HEIGHT = 98
@@ -3059,23 +3060,15 @@ def draw_overflow_dots(center: rl.Vector2, color: rl.Color):
 
 
 
-def _draw_heart_glyph(p: Pen) -> None:
-  # Two lobes plus the polygon between their outer tangents and the tip.
-  lobe_r, lobe_y, tip = 8.0, 12.0, (16.0, 29.0)
-  hull = [tip]
-  for lobe_x, side in ((9.0, -1.0), (23.0, 1.0)):
-    p.dot(lobe_x, lobe_y, lobe_r)
-    dx, dy = lobe_x - tip[0], lobe_y - tip[1]
-    dist = math.hypot(dx, dy)
-    ang = math.atan2(dy, dx) + side * math.asin(lobe_r / dist)
-    reach = math.sqrt(dist * dist - lobe_r * lobe_r)
-    hull.append((tip[0] + reach * math.cos(ang), tip[1] + reach * math.sin(ang)))
-  p.fill([hull[0], hull[1], (9.0, lobe_y), (23.0, lobe_y), hull[2]])
-
-
 def draw_heart_icon(center: rl.Vector2, color: rl.Color):
-  draw_vector_icon("heart", center.x - 16.0, center.y - 17.0, 1.0, color,
-                   lambda x, y, s, c: _draw_heart_glyph(Pen(x, y, s, c)), canvas=32.0)
+  rl.draw_circle(int(center.x - 5), int(center.y - 3), 10, color)
+  rl.draw_circle(int(center.x + 5), int(center.y - 3), 10, color)
+  rl.draw_triangle(
+    rl.Vector2(center.x + 13, center.y + 1),
+    rl.Vector2(center.x - 13, center.y + 1),
+    rl.Vector2(center.x, center.y + 13),
+    color,
+  )
 
 
 def draw_download_icon(center: rl.Vector2, color: rl.Color):
@@ -3085,11 +3078,10 @@ def draw_download_icon(center: rl.Vector2, color: rl.Color):
   right_head = rl.Vector2(center.x + 11, center.y - 2)
   tray_left = rl.Vector2(center.x - 14, center.y + 18)
   tray_right = rl.Vector2(center.x + 14, center.y + 18)
-  draw_strokes([
-    ([(shaft_top.x, shaft_top.y), (shaft_bottom.x, shaft_bottom.y)], 6),
-    ([(left_head.x, left_head.y), (shaft_bottom.x, shaft_bottom.y), (right_head.x, right_head.y)], 6),
-    ([(tray_left.x, tray_left.y), (tray_right.x, tray_right.y)], 6),
-  ], color, "download")
+  rl.draw_line_ex(shaft_top, shaft_bottom, 6, color)
+  rl.draw_line_ex(left_head, shaft_bottom, 6, color)
+  rl.draw_line_ex(right_head, shaft_bottom, 6, color)
+  rl.draw_line_ex(tray_left, tray_right, 6, color)
 
 
 class AetherButton(Widget):
@@ -3978,7 +3970,7 @@ class AetherTile(Widget):
     nodes, _ = self._constellation_data
     draw_constellation_nodes(nodes, [], face, accent, glow, scale=1.0)
 
-  def _render_hud_background(self, rect: rl.Rectangle, accent: rl.Color, glow: float = 1.0, *, bg_color: rl.Color | None = None, draw_constellation: bool = False, const_connected: bool = True) -> tuple[rl.Rectangle, rl.Color]:
+  def _render_hud_background(self, rect: rl.Rectangle, accent: rl.Color, glow: float = 1.0, *, bg_color: rl.Color | None = None, const_connected: bool = True) -> tuple[rl.Rectangle, rl.Color]:
     sq = self._squish
     snapped = snap_rect(rect)
     sw = snapped.width * sq
@@ -3986,11 +3978,10 @@ class AetherTile(Widget):
     ox = snapped.x + (snapped.width - sw) / 2
     oy = snapped.y + (snapped.height - sh) / 2
     face, accent = draw_hud_background(rl.Rectangle(ox, oy, sw, sh), accent, glow, bg_color=bg_color)
-    if draw_constellation:
-      if const_connected:
-        self._draw_constellation(face, accent, glow)
-      else:
-        self._draw_constellation_disconnected(face, accent, glow)
+    if const_connected:
+      self._draw_constellation(face, accent, glow)
+    else:
+      self._draw_constellation_disconnected(face, accent, glow)
     return face, accent
 
   def _render(self, rect: rl.Rectangle):

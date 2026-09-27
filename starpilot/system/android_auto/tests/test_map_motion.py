@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from openpilot.selfdrive.ui.onroad.starpilot import nav_map
+from openpilot.starpilot.system.android_auto.ui import nav_map
 from openpilot.starpilot.system.android_auto.car_ui import MAP_BORDER, MapPane
 from openpilot.starpilot.system.android_auto.tests.test_gpu_nv12 import gpu as gpu, read_frame
 

@@ -917,7 +917,6 @@ def test_android_auto_disable_releases_projection_and_preserves_live_ui(monkeypa
   main_texture = app._render_texture = object()
   capture_texture = app._aa_texture = object()
   app._aa_owns_render_texture = True
-  app._msaa = None
   stream = SimpleNamespace(image_demand_active=lambda: True)
   app._ui_stream = stream if live_ui else None
   unloaded = []

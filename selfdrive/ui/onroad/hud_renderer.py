@@ -76,11 +76,14 @@ class HudRenderer(Widget):
     self._font_medium: rl.Font = gui_app.font(FontWeight.MEDIUM)
 
     self._exp_button: ExpButton = ExpButton(UI_CONFIG.button_size, UI_CONFIG.wheel_icon_size)
-    self._navigation_card = NavigationCardRenderer()
+    self._navigation_card = self._create_navigation_card()
 
     self.draw_set_speed = True
     self.draw_current_speed = True
     self.draw_exp_button = True
+
+  def _create_navigation_card(self):
+    return NavigationCardRenderer()
 
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
@@ -135,8 +138,7 @@ class HudRenderer(Widget):
     if self.draw_current_speed and not ui_state.starpilot_toggles.get("hide_speed", False):
       self._draw_current_speed(rect)
 
-    if not getattr(ui_state, "nav_map_beside_road", False):  # the map beside it shows the same turn, larger
-      self._navigation_card.render(rect)
+    self._navigation_card.render(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size

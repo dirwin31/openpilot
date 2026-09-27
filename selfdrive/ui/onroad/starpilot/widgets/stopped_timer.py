@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import time
 from collections.abc import Callable
 
@@ -16,16 +14,6 @@ from openpilot.system.ui.widgets import Widget
 
 class StoppedTimerWidget(Widget):
   SHOW_AFTER_SECONDS = 60
-  MINUTE_FONT = 176
-  SECOND_FONT = 66
-  BESIDE_MAP_SCALE = 0.5   # the car view's driving pane is narrower with the map beside it
-  MAX_WIDTH_FRACTION = 0.8
-  LEFT_CONTROLS_RESERVE = 290  # MAX / LIMIT column; the narrow car-view pane has no room to centre over it
-  CAR_LABEL_FONT = 88
-  CAR_TIMER_FONT = 72
-  CAR_HORIZONTAL_MARGIN = 38
-  CAR_TEXT_TOP = 98
-  CAR_LINE_GAP = 8
 
   def __init__(self, in_reverse: Callable[[], bool] | None = None):
     super().__init__()
@@ -98,94 +86,39 @@ class StoppedTimerWidget(Widget):
       f"{seconds} second{'s' if seconds != 1 else ''}",
     )
 
-  @staticmethod
-  def _format_car_duration(duration: int) -> tuple[str, str]:
-    return "Stopped", f"{duration // 60:02d}:{duration % 60:02d}"
-
-  def _scale(self, minute_text: str, width: float) -> float:
-    scale = self.BESIDE_MAP_SCALE if getattr(ui_state, "nav_map_beside_road", False) else 1.0
-    full_width = measure_text_cached(self._font_bold, minute_text, self.MINUTE_FONT).x
-    if full_width > 0:
-      scale = min(scale, self.MAX_WIDTH_FRACTION * width / full_width)
-    return max(0.3, scale)
-
   def _render(self, rect: rl.Rectangle) -> None:
     duration = self._duration
-
-    if getattr(ui_state, "android_auto_car_view", False):
-      self._render_car_timer(rect, *self._format_car_duration(duration))
-      return
-
     minute_text, second_text = self._format_duration_text(duration)
-    left = rect.x
-    width = rect.width
-    if getattr(ui_state, "nav_map_beside_road", False):
-      left += self.LEFT_CONTROLS_RESERVE
-      width = max(1.0, width - self.LEFT_CONTROLS_RESERVE)
-    scale = self._scale(minute_text, width)
-    minute_font = int(self.MINUTE_FONT * scale)  # round down so a fitted size never overflows
-    second_font = int(self.SECOND_FONT * scale)
-    minute_size = measure_text_cached(self._font_bold, minute_text, minute_font)
-    second_size = measure_text_cached(self._font_normal, second_text, second_font)
-    # Full size keeps the original layout; smaller sizes stay centred where the speed would be.
-    minute_bottom = rect.y + (210 if scale >= 1.0 else 180 + minute_size.y / 2)
-    second_bottom = minute_bottom + 80 * scale
 
-    duration_color = self._duration_color()
+    minute_size = measure_text_cached(self._font_bold, minute_text, 176)
+    second_size = measure_text_cached(self._font_normal, second_text, 66)
 
-    center_x = left + width / 2
+    if duration < 150:
+      transition = (duration - 60) / 90.0
+      duration_color = self._blend_colors(ENGAGED_COLOR, EXPERIMENTAL_COLOR, transition)
+    elif duration < 300:
+      transition = (duration - 150) / 150.0
+      duration_color = self._blend_colors(EXPERIMENTAL_COLOR, TRAFFIC_COLOR, transition)
+    else:
+      duration_color = TRAFFIC_COLOR
+
+    center_x = rect.x + rect.width / 2
     rl.draw_text_ex(
       self._font_bold,
       minute_text,
-      rl.Vector2(center_x - minute_size.x / 2, minute_bottom - minute_size.y),
-      minute_font,
+      rl.Vector2(center_x - minute_size.x / 2, rect.y + 210 - minute_size.y),
+      176,
       0,
       duration_color,
     )
     rl.draw_text_ex(
       self._font_normal,
       second_text,
-      rl.Vector2(center_x - second_size.x / 2, second_bottom - second_size.y),
-      second_font,
+      rl.Vector2(center_x - second_size.x / 2, rect.y + 290 - second_size.y),
+      66,
       0,
       rl.Color(255, 255, 255, 255),
     )
-
-  def _render_car_timer(self, rect: rl.Rectangle, label_text: str, timer_text: str) -> None:
-    """Replace the Android Auto speed readout with a compact stopped timer."""
-    full_width = measure_text_cached(self._font_bold, label_text, self.CAR_LABEL_FONT).x
-    available = max(1.0, rect.width - 2 * (self.LEFT_CONTROLS_RESERVE + self.CAR_HORIZONTAL_MARGIN))
-    scale = min(1.0, available / full_width) if full_width > 0 else 1.0
-    scale = max(0.6, scale)
-    label_font = max(1, int(self.CAR_LABEL_FONT * scale))
-    timer_font = max(1, int(self.CAR_TIMER_FONT * scale))
-    label_size = measure_text_cached(self._font_bold, label_text, label_font)
-    timer_size = measure_text_cached(self._font_normal, timer_text, timer_font)
-
-    duration_color = self._duration_color()
-    center_x = rect.x + rect.width / 2
-    label_y = rect.y + self.CAR_TEXT_TOP
-    timer_y = label_y + label_size.y + self.CAR_LINE_GAP
-    self._draw_car_text(self._font_bold, label_text,
-                        rl.Vector2(center_x - label_size.x / 2, label_y), label_font, duration_color)
-    self._draw_car_text(self._font_normal, timer_text,
-                        rl.Vector2(center_x - timer_size.x / 2, timer_y), timer_font, rl.WHITE)
-
-  @staticmethod
-  def _draw_car_text(font: rl.Font, text: str, pos: rl.Vector2, font_size: int, color: rl.Color) -> None:
-    """Draw a soft dark drop shadow without an opaque panel behind the car HUD."""
-    for offset_x, offset_y, alpha in ((5, 6, 70), (3, 4, 125), (1, 2, 190)):
-      rl.draw_text_ex(font, text, rl.Vector2(pos.x + offset_x, pos.y + offset_y),
-                      font_size, 0, rl.Color(0, 0, 0, alpha))
-    rl.draw_text_ex(font, text, pos, font_size, 0, color)
-
-  def _duration_color(self) -> rl.Color:
-    duration = self._duration
-    if duration < 150:
-      return self._blend_colors(ENGAGED_COLOR, EXPERIMENTAL_COLOR, (duration - 60) / 90.0)
-    if duration < 300:
-      return self._blend_colors(EXPERIMENTAL_COLOR, TRAFFIC_COLOR, (duration - 150) / 150.0)
-    return TRAFFIC_COLOR
 
   @staticmethod
   def _blend_colors(start: rl.Color, end: rl.Color, transition: float) -> rl.Color:

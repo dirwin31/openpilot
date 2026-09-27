@@ -1,17 +1,15 @@
 import pyray as rl
-from dataclasses import dataclass
-from enum import IntEnum
 from collections.abc import Callable
 from openpilot.selfdrive.ui.layouts.settings.developer import DeveloperLayout
 from openpilot.selfdrive.ui.layouts.settings.device import DeviceLayout
 from openpilot.selfdrive.ui.layouts.settings.starpilot.main_panel import StarPilotLayout
 from openpilot.selfdrive.ui.layouts.settings.software import SoftwareLayout
 from openpilot.selfdrive.ui.layouts.settings.toggles import TogglesLayout
+from openpilot.selfdrive.ui.layouts.settings.types import PanelInfo, PanelType
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from openpilot.system.ui.lib.bluetooth_manager import BluetoothManager
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
-from openpilot.system.ui.lib.vector_icon import draw_strokes
 from openpilot.system.ui.lib.wifi_manager import WifiManager
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.bluetooth import BluetoothManagerUI
@@ -19,44 +17,22 @@ from openpilot.system.ui.widgets.network import NetworkUI
 
 # Constants
 COLLAPSED_WIDTH = 0
-EXPANDED_WIDTH = 480
+EXPANDED_WIDTH = 500
 SWIPE_THRESHOLD = 80
-CLOSE_BTN_SIZE = 100
-CLOSE_ICON_SIZE = 52
+CLOSE_BTN_SIZE = 200
+CLOSE_ICON_SIZE = 70
+NAV_BTN_HEIGHT = 110
 PANEL_MARGIN = 10
 
-# Colors (Galaxy palette)
-SIDEBAR_COLOR = rl.Color(10, 10, 22, 255)
-ACCENT_LINE_COLOR = rl.Color(139, 92, 246, 75)
-PANEL_COLOR = rl.Color(14, 14, 26, 255)
-PANEL_BORDER = rl.Color(30, 30, 62, 255)
-CLOSE_BTN_COLOR = rl.Color(20, 20, 38, 255)
-CLOSE_BTN_PRESSED = rl.Color(139, 108, 197, 90)
-CLOSE_BTN_BORDER = rl.Color(48, 48, 82, 255)
-TEXT_NORMAL = rl.Color(150, 150, 180, 255)
+# Colors
+SIDEBAR_COLOR = rl.BLACK
+ACCENT_LINE_COLOR = rl.Color(139, 92, 246, 55)
+PANEL_COLOR = rl.BLACK
+CLOSE_BTN_COLOR = rl.Color(41, 41, 41, 255)
+CLOSE_BTN_PRESSED = rl.Color(59, 59, 59, 255)
+TEXT_NORMAL = rl.Color(128, 128, 128, 255)
 TEXT_SELECTED = rl.WHITE
-ACTIVE_PILL_BG = rl.Color(139, 92, 246, 45)
-ACTIVE_PILL_BORDER = rl.Color(139, 92, 246, 130)
-ACTIVE_PILL_BAR = rl.Color(139, 92, 246, 255)
-HOVER_PILL_BG = rl.Color(255, 255, 255, 12)
 DARK_CORE_COLOR = rl.Color(12, 10, 18, 190)
-
-
-class PanelType(IntEnum):
-  STARPILOT = 0
-  DEVICE = 1
-  NETWORK = 2
-  BLUETOOTH = 3
-  TOGGLES = 4
-  SOFTWARE = 5
-  DEVELOPER = 6
-
-
-@dataclass
-class PanelInfo:
-  name: str
-  instance: Widget
-  button_rect: rl.Rectangle = rl.Rectangle(0, 0, 0, 0)
 
 
 class SettingsLayout(Widget):
@@ -132,7 +108,7 @@ class SettingsLayout(Widget):
 
     original_events = list(gui_app.mouse_events)
     if not self._sidebar_expanded:
-      tab_zone = rl.Rectangle(rect.x, rect.y + int(rect.height * 0.5) - 70, 40, 140)
+      tab_zone = rl.Rectangle(rect.x, rect.y + 581 - 70, 40, 140)
       gui_app.mouse_events[:] = [e for e in original_events if not rl.check_collision_point_rec(e.pos, tab_zone)]
 
     self._draw_current_panel(panel_rect)
@@ -150,10 +126,12 @@ class SettingsLayout(Widget):
       p1 = rl.Vector2(cx + half, cy - size)
       p2 = rl.Vector2(cx - half, cy)
       p3 = rl.Vector2(cx + half, cy + size)
-    points = [(p1.x, p1.y), (p2.x, p2.y), (p3.x, p3.y)]
     if bloom:
-      draw_strokes([(points, 7.0)], rl.Color(color.r, color.g, color.b, 35), "settings-chevron-bloom")
-    draw_strokes([(points, 2.8)], color, "settings-chevron")
+      bloom_col = rl.Color(color.r, color.g, color.b, 35)
+      rl.draw_line_ex(p1, p2, 7.0, bloom_col)
+      rl.draw_line_ex(p2, p3, 7.0, bloom_col)
+    rl.draw_line_ex(p1, p2, 2.8, color)
+    rl.draw_line_ex(p2, p3, 2.8, color)
 
   def _draw_sidebar(self, rect: rl.Rectangle):
     rl.draw_rectangle_rec(rect, SIDEBAR_COLOR)
@@ -162,8 +140,8 @@ class SettingsLayout(Widget):
     line_rect = rl.Rectangle(rect.x, rect.y, 2, rect.height)
     rl.draw_rectangle_rec(line_rect, ACCENT_LINE_COLOR)
 
-    # Unified Protruding Edge Tab (centered dynamically at screen midpoint)
-    tab_cy = int(rect.y + rect.height * 0.5)
+    # Unified Protruding Edge Tab (Expand/Collapse toggle)
+    tab_cy = int(rect.y + 581)
     tab_h = 140
     tab_w = 70
     tab_x = rect.x - 30  # Leaves exactly 40px protruding onto the screen
@@ -202,22 +180,18 @@ class SettingsLayout(Widget):
     if self._sidebar_expanded:
       # ── EXPANDED ──
 
-      # Back/Close button - prominent touch target with sleek border
-      back_btn_rect = rl.Rectangle(rect.x + (rect.width - CLOSE_BTN_SIZE) / 2, rect.y + 40, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE)
+      # Back/Close button - hierarchical navigation
+      back_btn_rect = rl.Rectangle(rect.x + (rect.width - CLOSE_BTN_SIZE) / 2, rect.y + 60, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE)
       pressed = gui_app.last_mouse_event.left_down and rl.check_collision_point_rec(gui_app.last_mouse_event.pos, back_btn_rect)
       close_color = CLOSE_BTN_PRESSED if pressed else CLOSE_BTN_COLOR
-      close_border = ACCENT_LINE_COLOR if pressed else CLOSE_BTN_BORDER
-      rl.draw_rectangle_rounded(back_btn_rect, 0.4, 16, close_color)
-      rl.draw_rectangle_rounded_lines_ex(back_btn_rect, 0.4, 16, 1.5, close_border)
+      rl.draw_rectangle_rounded(back_btn_rect, 1.0, 20, close_color)
 
-      icon_color = rl.Color(255, 255, 255, 255) if not pressed else rl.Color(220, 220, 240, 255)
-      icon_w = min(float(self._close_icon.width), CLOSE_ICON_SIZE)
-      icon_h = min(float(self._close_icon.height), CLOSE_ICON_SIZE)
+      icon_color = rl.Color(255, 255, 255, 255) if not pressed else rl.Color(220, 220, 220, 255)
       icon_dest = rl.Rectangle(
-        back_btn_rect.x + (back_btn_rect.width - icon_w) / 2,
-        back_btn_rect.y + (back_btn_rect.height - icon_h) / 2,
-        icon_w,
-        icon_h,
+        back_btn_rect.x + (back_btn_rect.width - self._close_icon.width) / 2,
+        back_btn_rect.y + (back_btn_rect.height - self._close_icon.height) / 2,
+        self._close_icon.width,
+        self._close_icon.height,
       )
       rl.draw_texture_pro(
         self._close_icon,
@@ -231,52 +205,27 @@ class SettingsLayout(Widget):
       # Store back button rect for click detection
       self._back_btn_rect = back_btn_rect
 
-      # Navigation buttons - dynamically distributed with capsule pills
-      nav_start_y = back_btn_rect.y + back_btn_rect.height + 35
-      bottom_margin = 30
-      available_h = rect.height - (nav_start_y - rect.y) - bottom_margin
-      num_panels = len(self._panels)
-      item_gap = 12
-      nav_btn_height = max(64, min(86, int((available_h - (num_panels - 1) * item_gap) / num_panels)))
-      button_x = rect.x + 25
-      button_w = rect.width - 50
-      font_size = min(46, max(36, int(nav_btn_height * 0.54)))
-
-      y = nav_start_y
+      # Navigation buttons
+      y = rect.y + 300
       for panel_type, panel_info in self._panels.items():
-        button_rect = rl.Rectangle(button_x, y, button_w, nav_btn_height)
+        button_rect = rl.Rectangle(rect.x + 50, y, rect.width - 150, NAV_BTN_HEIGHT)
+
+        # Button styling
         is_selected = panel_type == self._current_panel
-        is_btn_pressed = gui_app.last_mouse_event.left_down and rl.check_collision_point_rec(gui_app.last_mouse_event.pos, button_rect)
-
-        # Galaxy Capsule / Pill Card
-        if is_selected:
-          rl.draw_rectangle_rounded(button_rect, 0.35, 12, ACTIVE_PILL_BG)
-          rl.draw_rectangle_rounded_lines_ex(button_rect, 0.35, 12, 1.5, ACTIVE_PILL_BORDER)
-
-          # Glowing left indicator bar
-          bar_h = button_rect.height - 24
-          bar_rect = rl.Rectangle(button_rect.x + 8, button_rect.y + 12, 5, bar_h)
-          rl.draw_rectangle_rounded(bar_rect, 1.0, 4, ACTIVE_PILL_BAR)
-        elif is_btn_pressed:
-          rl.draw_rectangle_rounded(button_rect, 0.35, 12, HOVER_PILL_BG)
-
-        # Text styling
         text_color = TEXT_SELECTED if is_selected else TEXT_NORMAL
+        # Draw button text (right-aligned)
         panel_name = tr(panel_info.name)
-        text_size = measure_text_cached(self._font_medium, panel_name, font_size)
-        text_x = button_rect.x + (34 if is_selected else 22)
-        text_y = button_rect.y + (button_rect.height - text_size.y) / 2
-        rl.draw_text_ex(self._font_medium, panel_name, rl.Vector2(round(text_x), round(text_y)), font_size, 0, text_color)
+        text_size = measure_text_cached(self._font_medium, panel_name, 65)
+        text_pos = rl.Vector2(button_rect.x + button_rect.width - text_size.x, button_rect.y + (button_rect.height - text_size.y) / 2)
+        rl.draw_text_ex(self._font_medium, panel_name, rl.Vector2(round(text_pos.x), round(text_pos.y)), 65, 0, text_color)
 
         # Store button rect for click detection
         panel_info.button_rect = button_rect
 
-        y += nav_btn_height + item_gap
+        y += NAV_BTN_HEIGHT
 
   def _draw_current_panel(self, rect: rl.Rectangle):
-    container_rect = rl.Rectangle(rect.x + 10, rect.y + 10, rect.width - 20, rect.height - 20)
-    rl.draw_rectangle_rounded(container_rect, 0.035, 20, PANEL_COLOR)
-    rl.draw_rectangle_rounded_lines_ex(container_rect, 0.035, 20, 1.5, PANEL_BORDER)
+    rl.draw_rectangle_rounded(rl.Rectangle(rect.x + 10, rect.y + 10, rect.width - 20, rect.height - 20), 0.04, 30, PANEL_COLOR)
     content_rect = rl.Rectangle(rect.x + PANEL_MARGIN, rect.y + 10, rect.width - (PANEL_MARGIN * 2), rect.height - 20)
     panel = self._panels[self._current_panel]
     if panel.instance:
@@ -286,7 +235,7 @@ class SettingsLayout(Widget):
     if not self._sidebar_expanded:
       # Only record swipe/tap start when touch is within the 10px left margin OR directly on the protruding tab
       gesture_zone = rl.Rectangle(self._rect.x, self._rect.y, 10, self._rect.height)
-      tab_zone = rl.Rectangle(self._rect.x, self._rect.y + int(self._rect.height * 0.5) - 70, 40, 140)
+      tab_zone = rl.Rectangle(self._rect.x, self._rect.y + 581 - 70, 40, 140)
       if rl.check_collision_point_rec(mouse_pos, gesture_zone) or rl.check_collision_point_rec(mouse_pos, tab_zone):
         self._swipe_start = mouse_pos
       else:

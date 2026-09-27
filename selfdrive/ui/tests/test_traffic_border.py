@@ -99,11 +99,9 @@ def test_traffic_border_v_asm_blindspot_is_red(monkeypatch):
   assert _rgba(right) == TRANSPARENT
 
 
-def test_android_auto_can_hide_blindspot_without_hiding_turn_signal(monkeypatch):
+def test_visibility_policy_can_hide_blindspot_without_hiding_turn_signal(monkeypatch):
   _setup(monkeypatch, car_state=_car_state(left_blinker=True, left_blindspot=True), time=0.1)
-  monkeypatch.setattr(ui_state, "android_auto_blind_spot_monitors_visible", False)
-
-  left, right = starpilot_border.get_traffic_border_colors()
+  left, right = starpilot_border.get_traffic_border_colors(blind_spot_visible=False)
 
   assert _rgba(left) == _rgba(CEM_OVERRIDE_COLOR)
   assert _rgba(right) == TRANSPARENT

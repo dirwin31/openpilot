@@ -19,7 +19,6 @@ from typing import NamedTuple
 from importlib.resources import as_file, files
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import HARDWARE, PC
-from openpilot.system.ui.lib.msaa import MsaaTarget, install_watertight_shapes
 from openpilot.system.ui.lib.multilang import multilang
 from openpilot.common.realtime import Ratekeeper
 
@@ -547,8 +546,6 @@ class GuiApplication:
 
     self._render_texture: rl.RenderTexture | None = None
     self._burn_in_shader: rl.Shader | None = None
-    self._msaa: MsaaTarget | None = None
-    self._msaa_unavailable = False
     self._white_luminance_shader: rl.Shader | None = None
     self._ffmpeg_proc: subprocess.Popen | None = None
     self._ffmpeg_queue: queue.Queue | None = None
@@ -942,20 +939,6 @@ class GuiApplication:
     self._textures[cache_key] = texture_obj
     return texture_obj
 
-  def _frame_target(self) -> rl.RenderTexture:
-    """Render target for this frame: a multisampled framebuffer that is
-    resolved into _render_texture, or _render_texture itself without MSAA."""
-    width, height = self._render_texture.texture.width, self._render_texture.texture.height
-    if self._msaa is not None and (self._msaa.width, self._msaa.height) != (width, height):
-      self._msaa.unload()
-      self._msaa = None
-    if self._msaa is None and not self._msaa_unavailable:
-      self._msaa = MsaaTarget.create(width, height)
-      self._msaa_unavailable = self._msaa is None
-      if self._msaa is not None:
-        install_watertight_shapes()
-    return self._msaa.render_texture if self._msaa is not None else self._render_texture
-
   def cached_render_texture(self, cache_key: str, width: int, height: int,
                             render: Callable[[], None], supersample: int = 1) -> object | None:
     """Return a cached texture, scheduling cache misses between frames.
@@ -1267,9 +1250,6 @@ class GuiApplication:
       # Only reclaim a main texture allocated for projection. Live UI can take
       # ownership while connected; its capture and rendering must keep working.
       if self._aa_owns_render_texture and self._ui_stream is None and not self._ui_stream_pending:
-        if self._msaa is not None:
-          self._msaa.unload()
-          self._msaa = None
         self._unload_render_texture(self._render_texture)
         self._render_texture = None
         self._aa_owns_render_texture = False
@@ -1631,9 +1611,6 @@ class GuiApplication:
 
     self._release_android_auto_texture()
 
-    if self._msaa is not None:
-      self._msaa.unload()
-      self._msaa = None
     if self._render_texture is not None:
       rl.unload_render_texture(self._render_texture)
       self._render_texture = None
@@ -1721,7 +1698,7 @@ class GuiApplication:
 
         if self._render_texture:
           self._mark_progress("gui_app.before_begin_texture_mode")
-          rl.begin_texture_mode(self._frame_target())
+          rl.begin_texture_mode(self._render_texture)
           self._mark_progress("gui_app.after_begin_texture_mode")
           self._mark_progress("gui_app.before_clear_background")
           rl.clear_background(rl.BLACK)
@@ -1773,8 +1750,6 @@ class GuiApplication:
         if self._render_texture:
           self._mark_progress("gui_app.end_texture_mode")
           rl.end_texture_mode()
-          if self._msaa is not None:
-            self._msaa.resolve(self._render_texture)
           self._mark_progress("gui_app.before_present_begin_drawing")
           rl.begin_drawing()
           self._mark_progress("gui_app.after_present_begin_drawing")

@@ -2,8 +2,6 @@ import importlib
 import sys
 from types import ModuleType, SimpleNamespace
 
-import pytest
-
 
 def _load_augmented_road_view(monkeypatch):
   def stub_module(name, **attributes):
@@ -58,11 +56,11 @@ def _load_starpilot_onroad_view(monkeypatch):
     "openpilot.selfdrive.ui.onroad.starpilot.starpilot_border",
     render_behind=lambda *_args: None,
     render_overlay=lambda *_args: None,
-    render_background_effects=lambda *_args: None,
+    render_background_effects=lambda *_args, **_kwargs: None,
   )
   stub_module(
     "openpilot.selfdrive.ui.onroad.starpilot.path",
-    render_adjacent_lanes=lambda *_args: None,
+    render_adjacent_lanes=lambda *_args, **_kwargs: None,
     render_path_edges=lambda *_args: None,
   )
   stub_module("openpilot.selfdrive.ui.ui_state", ui_state=SimpleNamespace())
@@ -86,8 +84,6 @@ def _load_starpilot_onroad_view(monkeypatch):
   )
   stub_module(
     "openpilot.selfdrive.ui.onroad.starpilot.pause_indicators",
-    android_auto_lateral_pause_rect=lambda rect, _display_width: rect,
-    render_android_auto_lateral_paused=lambda *_args: None,
     render_lateral_paused=lambda *_args: None,
     render_longitudinal_paused=lambda *_args: None,
   )
@@ -145,7 +141,6 @@ def test_extra_road_overlays_render_between_model_and_hud_and_alerts_last(monkey
   view.driver_state_renderer = Renderer("driver_state")
   view.alert_renderer = Renderer("alert")
   view._draw_driver_state = True
-  view._draw_alerts = True
   view._pm = SimpleNamespace(send=lambda *_args: events.append("publish"))
 
   monkeypatch.setattr(augmented_road_view.rl, "begin_scissor_mode", lambda *_args: events.append("scissor_begin"))
@@ -170,35 +165,6 @@ def test_extra_road_overlays_render_between_model_and_hud_and_alerts_last(monkey
     "border",
     "publish",
   ]
-
-
-def test_android_auto_side_camera_can_hide_lane_change_banners_and_lifts_other_alerts(monkeypatch):
-  starpilot_onroad_view = _load_starpilot_onroad_view(monkeypatch)
-  view = object.__new__(starpilot_onroad_view.StarPilotOnroadView)
-  view.alert_renderer = SimpleNamespace(hidden_alert_names=frozenset(), covers=None)
-  view._pip_sidecam = SimpleNamespace(showing=True, covers=lambda _area: True)
-  ui_state = starpilot_onroad_view.ui_state
-
-  ui_state.android_auto_car_view = True
-  assert view._layout_alerts_around_side_camera()
-  assert not view._draw_alerts
-  assert {"preLaneChangeLeft", "preLaneChangeRight", "laneChange", "laneChangeBlocked",
-          "laneChangeBlockedLoud"} == view.alert_renderer.hidden_alert_names
-  assert view.alert_renderer.covers is view._pip_sidecam.covers
-
-  view._pip_sidecam.showing = False
-  assert not view._layout_alerts_around_side_camera()
-  assert view._draw_alerts
-  assert view.alert_renderer.hidden_alert_names == frozenset()
-  assert view.alert_renderer.covers is None
-
-  # The comma's own screen keeps its alerts as they are, bubbles or not.
-  ui_state.android_auto_car_view = False
-  view._pip_sidecam.showing = True
-  assert not view._layout_alerts_around_side_camera()
-  assert view._draw_alerts
-  assert view.alert_renderer.hidden_alert_names == frozenset()
-  assert view.alert_renderer.covers is None
 
 
 def test_full_alert_detection_uses_the_alert_size(monkeypatch):
@@ -231,7 +197,7 @@ def test_starpilot_road_overlays_use_the_parent_scissor(monkeypatch):
   view._get_border_width = lambda: 0
 
   monkeypatch.setattr(starpilot_onroad_view, "render_path_edges", lambda *_args: events.append("path_edges"))
-  monkeypatch.setattr(starpilot_onroad_view, "render_adjacent_lanes", lambda *_args: events.append("adjacent_lanes"))
+  monkeypatch.setattr(starpilot_onroad_view, "render_adjacent_lanes", lambda *_args, **_kwargs: events.append("adjacent_lanes"))
   monkeypatch.setattr(starpilot_onroad_view, "render_stopping_point", lambda *_args: events.append("stopping_point"))
 
   def fail_scissor(*_args):
@@ -243,70 +209,3 @@ def test_starpilot_road_overlays_use_the_parent_scissor(monkeypatch):
   view._render_extra_road_overlays(object())
 
   assert events == ["path_edges", "adjacent_lanes", "stopping_point"]
-
-
-@pytest.mark.parametrize("android_auto", [False, True], ids=["device", "android_auto"])
-def test_radial_favorites_lifecycle_is_bypassed_only_for_android_auto(monkeypatch, mocker, android_auto):
-  Mock = mocker.Mock
-  module = _load_starpilot_onroad_view(monkeypatch)
-  rect = module.rl.Rectangle(0, 0, 1000, 600)
-  state = module.ui_state
-  state.android_auto_car_view = android_auto
-  state.started = True
-  state.ui_params, state.params_memory, state.sm = object(), object(), object()
-  state.live_params = object()
-  module.gui_app.mouse_events = [object()]
-  original_events = list(module.gui_app.mouse_events)
-
-  def base_init(view, *_args):
-    view._content_rect = rect
-    view._hud_renderer = SimpleNamespace(_exp_button=object())
-    view.driver_state_renderer = SimpleNamespace(is_rhd=False)
-    view.alert_renderer = Mock()
-    view._draw_hud_controls = True
-
-  monkeypatch.setattr(module.AugmentedRoadView, "__init__", base_init)
-  monkeypatch.setattr(module.AugmentedRoadView, "_child", lambda self, widget: widget, raising=False)
-  monkeypatch.setattr(module.AugmentedRoadView, "is_in_reverse", lambda self: False, raising=False)
-  monkeypatch.setattr(module.AugmentedRoadView, "_render",
-                      lambda self, area: self._draw_border(area) if state.started else None, raising=False)
-  parent_click = Mock()
-  monkeypatch.setattr(module.AugmentedRoadView, "_handle_mouse_press", parent_click, raising=False)
-  monkeypatch.setattr(module.PedalIconsWidget, "__init__", lambda self, *_args: None)
-  monkeypatch.setattr(module, "PipSideCamera", Mock())
-  monkeypatch.setattr(module, "WidgetLayoutManager", lambda *_args: Mock(zones={}))
-  menu = Mock()
-  menu.process_mouse_events.return_value = False
-  menu.blocks_pointer.return_value = True
-  factory = Mock(return_value=menu)
-  monkeypatch.setattr(module, "FavoriteRadialMenu", factory)
-  monkeypatch.setattr(module, "get_pulse_glide_border_color", lambda *_args: module.rl.BLACK)
-  for name in ("begin_scissor_mode", "end_scissor_mode", "draw_rectangle_lines_ex", "draw_rectangle_rounded_lines_ex"):
-    monkeypatch.setattr(module.rl, name, lambda *_args: None)
-
-  view = module.StarPilotOnroadView()
-  view._stopped_timer_widget.replaces_current_speed = False
-  view._get_border_width = lambda: 0
-  view._layout_alerts_around_side_camera = lambda: False
-  view._full_alert_showing = lambda: False
-  for name in ("_render_slc", "_render_overlays", "_render_road_name"):
-    monkeypatch.setattr(view, name, lambda: None)
-
-  view._render(rect)
-  view._handle_mouse_press(object())
-  view._draw_hud_controls = False
-  view._render(rect)
-  state.started = False
-  view._render(rect)
-  assert module.gui_app.mouse_events == original_events
-  if android_auto:
-    factory.assert_not_called()
-    assert view._favorite_radial_menu is None
-    parent_click.assert_called_once()
-  else:
-    factory.assert_called_once()
-    assert menu.process_mouse_events.call_count == 2
-    menu.render_corner_hint.assert_called_once_with(rect)
-    menu.render.assert_called_once_with(rect)
-    assert menu.collapse.call_count == 2
-    parent_click.assert_not_called()
