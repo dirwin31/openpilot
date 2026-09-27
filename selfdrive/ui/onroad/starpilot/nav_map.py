@@ -67,8 +67,11 @@ MAP_MAX_FPS = 15.0       # redraw cap when drawing into a cached texture
 MAP_IDLE_REDRAW = 1.0    # still redraw this often so the clock and badges stay current
 
 FOLLOW_SPEEDS = (0.0, 8.0, 15.0, 25.0, 35.0)
-FOLLOW_ZOOMS = (16.3, 16.0, 15.4, 14.8, 14.3)
-IDLE_ZOOM = 15.0
+FOLLOW_ZOOMS = (16.0, 15.8, 15.4, 14.9, 14.5)
+ZOOM_SPEED_TAU_UP = 4.0    # s; the speed that picks the zoom lags acceleration...
+ZOOM_SPEED_TAU_DOWN = 8.0  # ...and braking more, so a stop does not dive the map in
+ZOOM_HOLD = 0.3            # zoom levels the speed curve must drift before the map follows
+ZOOM_EASE = 1.2            # 1/s; follow-mode zoom glide, gentle enough to read through
 PREVIEW_MAX_ZOOM = 16.0
 FOLLOW_ANCHOR_Y = 0.70
 
@@ -229,7 +232,7 @@ def shared_tiles() -> TileTextures:
 class Camera:
   x: float = 0.0        # zoom-0 world position shown at the anchor
   y: float = 0.0
-  zoom: float = IDLE_ZOOM
+  zoom: float = FOLLOW_ZOOMS[0]
   bearing: float = 0.0  # this compass heading points up the screen
 
   def scale(self, tile_scale: float) -> float:
@@ -347,6 +350,9 @@ class NavMapView(Widget):
     self._last_gps_poll = -math.inf
     self._last_gps_raw = ""
     self._display_bearing = 0.0
+    self._zoom_speed: float | None = None
+    self._zoom_time = -math.inf
+    self._held_zoom: float | None = None
 
     self._route_world = np.zeros((0, 2))
     self._route_bounds: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
@@ -596,13 +602,28 @@ class NavMapView(Widget):
     gps = self._gps
     if gps is not None and gps.fresh and gps.speed > 1.5:
       self._display_bearing = gps.bearing
-    speed = gps.speed if gps is not None and gps.fresh else 0.0
-    zoom = float(np.interp(speed, FOLLOW_SPEEDS, FOLLOW_ZOOMS)) if self._nav_active(now) or speed > 0.5 else IDLE_ZOOM
+    zoom = self._follow_zoom(gps.speed if gps is not None and gps.fresh else None, now)
     # Raster-tile labels rotate with the map. North-up keeps them readable and
     # centers the car so every travel direction has equal look-ahead room.
     anchor = (center[0], rect.y + rect.height * FOLLOW_ANCHOR_Y) if self._heading_up else center
     bearing = self._display_bearing if self._heading_up else 0.0
     return Camera(car[0], car[1], zoom, bearing), anchor, True
+
+  def _follow_zoom(self, speed: float | None, now: float) -> float:
+    """Speed-based zoom, damped so ordinary speed changes do not pump the map in and out."""
+    dt = max(0.0, min(1.0, now - self._zoom_time))
+    self._zoom_time = now
+    if speed is not None:
+      if self._zoom_speed is None:
+        self._zoom_speed = speed
+      else:
+        tau = ZOOM_SPEED_TAU_UP if speed > self._zoom_speed else ZOOM_SPEED_TAU_DOWN
+        self._zoom_speed += (speed - self._zoom_speed) * (1.0 - math.exp(-dt / tau))
+    # Without a fresh fix, hold the current zoom rather than snapping to a default.
+    wanted = float(np.interp(self._zoom_speed or 0.0, FOLLOW_SPEEDS, FOLLOW_ZOOMS))
+    if self._held_zoom is None or abs(wanted - self._held_zoom) >= ZOOM_HOLD:
+      self._held_zoom = wanted
+    return self._held_zoom
 
   def _step_camera(self, target: Camera, dt: float, follow: bool) -> None:
     if not self._camera_ready:
@@ -622,7 +643,8 @@ class NavMapView(Widget):
       else:
         self._camera.x += (target.x - self._camera.x) * alpha
         self._camera.y += (target.y - self._camera.y) * alpha
-    self._camera.zoom += (target.zoom - self._camera.zoom) * alpha
+    zoom_alpha = 1.0 - math.exp(-dt * ZOOM_EASE) if follow else alpha
+    self._camera.zoom += (target.zoom - self._camera.zoom) * zoom_alpha
     self._camera.bearing = (self._camera.bearing + _angle_delta(target.bearing, self._camera.bearing) * alpha) % 360.0
 
   # ── drawing ───────────────────────────────────────────────────────────────
