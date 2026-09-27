@@ -2571,14 +2571,6 @@ button.gx-chip:hover {
 .gx-car-display .gx-row__info { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
 .gx-car-display .gx-switch { flex: 0 0 auto; }
 .gx-car-display__tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.gx-car-display__layouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; }
-.gx-car-display__layout { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--outline-variant); border-radius: 16px; cursor: pointer; min-width: 0; }
-.gx-car-display__layout.is-selected { border-color: var(--primary); background: var(--primary-container); }
-.gx-car-display__layout input { accent-color: var(--primary); }
-.gx-car-display__preview { display: flex; gap: 5px; height: 52px; padding: 6px; border: 1px solid var(--outline-variant); border-radius: 8px; }
-.gx-car-display__preview span { flex: 1; border-radius: 4px; background: var(--primary); opacity: .5; }
-.gx-car-display__preview span + span { opacity: .2; }
-.gx-car-display__preview--driving span + span, .gx-car-display__preview--map span:first-child { display: none; }
 .gx-car-display__heading { margin-top: 12px; }
 .gx-car-display__metric { flex: 1 1 200px; min-width: 0 !important; max-width: 100%; }
 .gx-car-display .gx-switch:focus-within { outline: 2px solid var(--primary); outline-offset: 4px; border-radius: 30px; }

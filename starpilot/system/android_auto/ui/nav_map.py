@@ -55,7 +55,8 @@ from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 
-MAX_TEXTURES = 40
+MAX_TEXTURES = 40  # 512x512 RGBA tiles, 1 MB each on the GPU
+MIN_TEXTURES = 16  # otherwise twice what the map shows: this zoom level and the last one, to fall back on
 UPLOADS_PER_FRAME = 2
 MAX_FALLBACK_LEVELS = 6
 GPS_POLL_SECONDS = 0.2
@@ -63,6 +64,8 @@ GPS_STALE_SECONDS = 3.0
 DEAD_RECKON_LIMIT = 1.6    # s; covers a late 1 Hz fix without running away when fixes stop
 CORRECTION_TAU = 0.35      # s; how quickly a new fix's disagreement with dead reckoning is eased out
 CORRECTION_MAX_METERS = 60.0  # larger disagreements snap: a GPS jump, not drift
+ROUTE_SNAP_METERS = 15.0          # GPS error and lane offset: the marker sits on the route line within this
+ROUTE_SNAP_RELEASE_METERS = 35.0  # the pull fades out by here, so leaving the route never jumps
 ACQUIRE_POLL_SECONDS = 1.0
 ACQUIRE_SATELLITE_WINDOW = 5.0  # s; a constellation report older than this no longer counts
 ACQUIRE_GOOD_SATELLITES = 6     # the progress bar is full here; a fix usually follows
@@ -153,6 +156,7 @@ class TileTextures:
     self._token_checked = -math.inf
     self._token_lock = threading.Lock()
     self._textures: OrderedDict[TileKey, rl.Texture] = OrderedDict()
+    self._wanted = 0
     self.offline_maps = OfflineMaps()
     self._save_viewed = False
     self._save_viewed_read = -math.inf
@@ -227,6 +231,10 @@ class TileTextures:
           self._token = ""
       return self._token
 
+  def want(self, keys: Sequence[TileKey]) -> None:
+    self._wanted = len(keys)
+    self.service.want(keys)
+
   def upload(self) -> int:
     """Upload decoded tiles; nonzero when the map changed (new tiles, or a new style)."""
     switched = self._check_style()
@@ -240,7 +248,9 @@ class TileTextures:
       if old is not None:
         rl.unload_texture(old)
       self._textures[key] = texture
-    while len(self._textures) > MAX_TEXTURES:
+    # A car-sized map shows a handful of tiles; holding 40 kept most of them on the GPU for nothing.
+    keep = min(MAX_TEXTURES, max(MIN_TEXTURES, 2 * self._wanted))
+    while len(self._textures) > keep:
       key, texture = self._textures.popitem(last=False)
       rl.unload_texture(texture)
       self.service.forget(key)
@@ -473,6 +483,7 @@ class NavMapView(Widget):
     self._route_world = np.zeros((0, 2))
     self._route_bounds: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
     self._route_key: tuple | None = None
+    self._ended_route_key: tuple | None = None  # a route ended here; navigationd may still resend it
     self._route_received = -math.inf
     self._route_progress = 0
     self._nav: dict | None = None
@@ -581,14 +592,18 @@ class NavMapView(Widget):
       points = [(c.latitude, c.longitude) for c in message.coordinates] if self._sm.valid["navRoute"] else []
       self._route_received = now
       key = (len(points), points[0], points[-1]) if points else None
-      if key != self._route_key:
-        self._route_key = key
-        self._route_world = _route_world(points)
-        self._route_progress = 0
+      if key is None or key != self._ended_route_key:
+        self._ended_route_key = None
+        if key != self._route_key:
+          self._route_key = key
+          self._route_world = _route_world(points)
+          self._route_progress = 0
 
     if self._sm.updated["navInstruction"]:
       message = self._sm["navInstruction"]
-      if self._sm.valid["navInstruction"]:
+      if self._ended_route_key is not None:
+        pass  # sent before navigationd saw the route end
+      elif self._sm.valid["navInstruction"]:
         all_maneuvers = list(message.allManeuvers)
         upcoming = all_maneuvers[1] if len(all_maneuvers) > 1 else None
         self._nav = {
@@ -616,9 +631,12 @@ class NavMapView(Widget):
     if now - self._last_gps_poll >= GPS_POLL_SECONDS:
       self._last_gps_poll = now
       self._poll_gps(now)
-      self._navigation_requested = parse_destination_json(
-        self._params.get("NavDestination", encoding="utf-8")
-      ) is not None
+      requested = parse_destination_json(self._params.get("NavDestination", encoding="utf-8")) is not None
+      if self._navigation_requested and not requested:
+        self._end_route()
+      elif requested and not self._navigation_requested:
+        self._ended_route_key = None  # a destination again: navigationd's route is current
+      self._navigation_requested = requested
 
     self._update_acquisition(now)
 
@@ -729,6 +747,42 @@ class NavMapView(Widget):
       y += self._correction[1] * fade
     return x, y
 
+  def _end_route(self) -> None:
+    """Drop the route as soon as its destination is removed.
+
+    Ending a route removes NavDestination at once, but navigationd runs at 1 Hz:
+    its empty navRoute lands up to a second later, and a republish of the old
+    route can land first, so waiting on it left the blue line up after the route ended.
+    """
+    if self._route_key is not None:
+      self._ended_route_key = self._route_key
+    self._route_key = None
+    self._route_world = np.zeros((0, 2))
+    self._route_progress = 0
+    self._nav = None
+    self._dirty = True
+
+  def _route_live(self, now: float) -> bool:
+    return len(self._route_world) >= 2 and now - self._route_received <= ROUTE_STALE_SECONDS
+
+  def _shown_car(self, now: float) -> tuple[float, float] | None:
+    """Where the marker and the follow camera sit: pulled onto the route line near it.
+
+    The raw fix is a lane or two off the route's centreline, which left the arrow
+    beside the blue line rather than on it.
+    """
+    car = self._car_world(now)
+    if car is None or self._preview_active or not self._route_live(now):
+      return car
+    at_car = self._route_split(now)
+    if at_car is None:
+      return car
+    point = at_car[1]
+    dx, dy = float(point[0]) - car[0], float(point[1]) - car[1]
+    meters = math.hypot(dx, dy) * meters_per_world_unit(self._gps.latitude)
+    pull = min(1.0, max(0.0, (ROUTE_SNAP_RELEASE_METERS - meters) / (ROUTE_SNAP_RELEASE_METERS - ROUTE_SNAP_METERS)))
+    return car[0] + dx * pull, car[1] + dy * pull
+
   def _route_split(self, now: float) -> tuple[int, np.ndarray] | None:
     """(segment index, world point): where the car sits on the route, between vertices.
 
@@ -776,7 +830,7 @@ class NavMapView(Widget):
     """(camera, anchor, snap). Preview fits the routes north-up; otherwise follow the car, heading-up or north-up."""
     tile_scale = self._tile_scale()
     center = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
-    car = self._car_world(now)
+    car = self._shown_car(now)
 
     if self._preview_active:
       pieces = [route for route in self._preview_routes if len(route)]
@@ -902,7 +956,7 @@ class NavMapView(Widget):
     center_world = camera.to_world(anchor[0], anchor[1], anchor, tile_scale)
     world_tile = TILE_SIZE / (1 << level)
     keys.sort(key=lambda k: ((k.x + 0.5) * world_tile - center_world[0]) ** 2 + ((k.y + 0.5) * world_tile - center_world[1]) ** 2)
-    self._tiles.service.want(keys)
+    self._tiles.want(keys)
 
     # Draw in tile-local coordinates relative to the camera so float32 never sees huge values.
     scale = (2.0 ** (camera.zoom - level)) * tile_scale
@@ -962,7 +1016,7 @@ class NavMapView(Widget):
           _draw_polyline(sx, sy, start, end, ((15.0, ROUTE_CASING), (9.0, ROUTE_FILL)), caps=(start == 0, end == last))
       return
 
-    if len(self._route_world) < 2 or now - self._route_received > ROUTE_STALE_SECONDS:
+    if not self._route_live(now):
       return
     route_slice = slice(0, None)
     # Short routes are cheaper to project directly than to search the bounds.
@@ -1008,7 +1062,7 @@ class NavMapView(Widget):
     rl.draw_circle_v(rl.Vector2(x, y), 5.0, rl.Color(255, 255, 255, 255))
 
   def _draw_car(self, camera: Camera, anchor: tuple[float, float], tile_scale: float, now: float) -> None:
-    car = self._car_world(now)
+    car = self._shown_car(now)
     if car is None:
       return
     x, y = camera.to_screen(car[0], car[1], anchor, tile_scale)

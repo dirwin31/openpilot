@@ -3,20 +3,33 @@
 The comma's developer sidebar with car additions: the car's status-slot
 setting chooses the metrics (and shows the sidebar) instead of the Developer
 Sidebar toggles, device metrics 18-22 (CPU, GPU, TEMP, MEMORY, STORAGE) exist
-for those slots, and a slot can show the StarPilot logo (23) or stay blank (-1),
-keeping its place in the column.
+for those slots, a slot can show the local time (24), and a slot can show the
+StarPilot logo (23, the boot screen's cut-out inside a metric card's outline) or
+stay blank (-1), keeping its place in the column.
 """
+
+import time
 
 import pyray as rl
 
-from openpilot.selfdrive.ui.onroad.starpilot.developer_sidebar import METRIC_HEIGHT, METRIC_MARGIN, METRIC_WIDTH, DeveloperSidebar
+from openpilot.selfdrive.ui.onroad.starpilot.developer_sidebar import (
+  _WHITE_DIM,
+  METRIC_HEIGHT,
+  METRIC_MARGIN,
+  METRIC_WIDTH,
+  DeveloperSidebar,
+)
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 
 LOGO_METRIC = 23
+CLOCK_METRIC = 24
+TIMEZONE_RELOAD_SECONDS = 60.0  # timed sets the zone from GPS after the UI has started
 BLANK_METRIC = -1
+# The boot screen's frog cut-out (supervisor.py's "Starting StarPilot" frame), relative to selfdrive/assets.
+LOGO_ASSET = "../../starpilot/system/the_galaxy/assets/images/main_logo.png"
 LOGO_HEIGHT = METRIC_HEIGHT - 16
-LOGO_SIZE = (round(LOGO_HEIGHT * 750 / 770), LOGO_HEIGHT)  # StarPilotLogo.png is 750x770
+LOGO_SIZE = (round(LOGO_HEIGHT * 977 / 1024), LOGO_HEIGHT)  # main_logo.png is 977x1024
 
 
 class _ShowSidebarParams:
@@ -42,6 +55,7 @@ class CarDeveloperSidebar(DeveloperSidebar):
     self._params = _ShowSidebarParams(self._params, self)
     self._slot_ids: list[int] = []  # every car slot in order, blanks included
     self._logo = None
+    self._timezone_read = -float("inf")
 
   def _refresh_cache(self):
     super()._refresh_cache()
@@ -65,7 +79,16 @@ class CarDeveloperSidebar(DeveloperSidebar):
       20: ("TEMP", f"{int(device_state.maxTempC) if device_state else 0}°C"),
       21: ("MEMORY", f"{int(device_state.memoryUsagePercent) if device_state else 0}%"),
       22: ("STORAGE", f"{int(device_state.freeSpacePercent) if device_state else 0}% FREE"),
+      CLOCK_METRIC: ("TIME", self._clock_text()),
     })
+
+  def _clock_text(self) -> str:
+    now = time.monotonic()
+    if now - self._timezone_read >= TIMEZONE_RELOAD_SECONDS:
+      self._timezone_read = now
+      time.tzset()
+    local = time.localtime()
+    return f"{local.tm_hour % 12 or 12}:{local.tm_min:02d} {'AM' if local.tm_hour < 12 else 'PM'}"
 
   def render(self, sidebar_rect: rl.Rectangle):
     slots = self._slot_ids
@@ -86,7 +109,8 @@ class CarDeveloperSidebar(DeveloperSidebar):
 
   def _draw_logo(self, sidebar_rect: rl.Rectangle, y: float) -> None:
     if self._logo is None:
-      self._logo = gui_app.texture("images/StarPilotLogo.png", *LOGO_SIZE)
-    card_x = sidebar_rect.x + sidebar_rect.width - METRIC_MARGIN - METRIC_WIDTH
+      self._logo = gui_app.texture(LOGO_ASSET, *LOGO_SIZE)
+    card_x = int(sidebar_rect.x + sidebar_rect.width) - METRIC_MARGIN - METRIC_WIDTH
+    rl.draw_rectangle_rounded_lines_ex(rl.Rectangle(card_x, y, METRIC_WIDTH, METRIC_HEIGHT), 0.3, 10, 2, _WHITE_DIM)
     x = card_x + (METRIC_WIDTH - self._logo.width) / 2
     rl.draw_texture_v(self._logo, rl.Vector2(round(x), round(y + (METRIC_HEIGHT - self._logo.height) / 2)), rl.WHITE)

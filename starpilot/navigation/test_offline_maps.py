@@ -178,7 +178,9 @@ def fast(monkeypatch):
 def make_daemon(tmp_path, params=None, sm=None, route_points=None):
   params = FakeParams(params or {"MapboxPublicKey": "pk", "MapboxSecretKey": "sk"})
   session = FakeSession()
-  daemon = navtilesd_module.Navtilesd(maps=OfflineMaps(tmp_path), sm=sm or FakeSM(), params=params,
+  maps = OfflineMaps(tmp_path)
+  maps.set_map_theme("dark")  # one style, so tile counts are per area; the default keeps both
+  daemon = navtilesd_module.Navtilesd(maps=maps, sm=sm or FakeSM(), params=params,
                                       route_engine=FakeRouteEngine(route_points or l_shaped_route(12, 0.002)), session=session)
   daemon.area_service.prefetch_interval = 0.0
   daemon.area_cache.min_free_bytes = daemon.route_cache.min_free_bytes = 0  # tmp_path may be on a small partition
@@ -372,7 +374,7 @@ def test_clean_route_points_validates_and_thins():
 def test_map_colors_pick_styles_and_keep_other_settings(tmp_path):
   from openpilot.starpilot.navigation.map_tiles import DARK_STYLE, LIGHT_STYLE
   maps = OfflineMaps(tmp_path, position=lambda: None)
-  assert maps.map_theme() == "dark" and maps.style == DARK_STYLE and maps.active_styles() == (DARK_STYLE,)
+  assert maps.map_theme() == "auto" and maps.active_styles() == (LIGHT_STYLE, DARK_STYLE), "both colors download by default"
   maps.set_save_viewed_cache(True)
   maps.set_map_theme("light")
   assert maps.style == LIGHT_STYLE and maps.save_viewed_cache() is True

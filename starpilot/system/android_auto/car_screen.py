@@ -46,6 +46,7 @@ STATUS_METRICS = {
   "memory": (21, "Memory Usage"),
   "storage": (22, "Free Storage"),
   "starpilot_logo": (23, "StarPilot Logo"),
+  "clock": (24, "Clock"),
   "blank": (-1, "Blank"),  # keeps its place in the column, draws nothing
 }
 STATUS_SLOT_COUNT = 7

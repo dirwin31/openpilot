@@ -182,7 +182,7 @@ def test_map_colors_setting(monkeypatch, tmp_path):
   from openpilot.starpilot.navigation.map_tiles import DARK_STYLE
   client, maps = _client(monkeypatch, tmp_path)
   summary = client.get("/api/android_auto/offline").get_json()
-  assert summary["map_theme"] == "dark" and summary["usage"]["tiles"] == 0 and summary["usage"]["free_tiles"] == 200_000
+  assert summary["map_theme"] == "auto" and summary["usage"]["tiles"] == 0 and summary["usage"]["free_tiles"] == 200_000
   assert client.post("/api/android_auto/offline/settings", json={"map_theme": "traffic"}).status_code == 400
   assert client.post("/api/android_auto/offline/settings", json={"map_theme": "light", "discard_dropped": "yes"}).status_code == 400
   assert client.post("/api/android_auto/offline/settings", json={}).status_code == 400
