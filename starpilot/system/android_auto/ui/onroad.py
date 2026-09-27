@@ -8,7 +8,9 @@ so each widget is initialized and registered once:
   * the side-camera bubbles cover the bottom alert band, so alerts are drawn after
     them and lane-change banners the bubbles make redundant are dropped
   * a larger labeled lateral-pause badge above the torque bar
-  * a compact "Stopped mm:ss" timer in place of the speed
+  * a compact "Stopped mm:ss" timer in place of the speed, with a smaller
+    steering-wheel button moved toward the edge to give it room
+  * MAX laid out like the speed-limit card (label at the top edge, large value)
   * with the map beside the road: no turn card (the map shows it larger) and the
     speed-limit sign without its per-source list
   * the camera can be turned off from the car's settings
@@ -29,9 +31,11 @@ from openpilot.starpilot.system.android_auto.ui.onroad_widgets import (
   CarAlertRenderer,
   CarHudRenderer,
   CarPipSideCamera,
+  CarSetSpeedWidget,
   CarSpeedLimitWidget,
   CarStoppedTimerWidget,
   NoFavoriteMenu,
+  RIGHT_COLUMN_ANCHOR,
   lateral_pause_rect,
   render_lateral_paused,
 )
@@ -39,6 +43,10 @@ from openpilot.system.ui.lib.application import gui_app
 
 
 class CarOnroadView(StarPilotOnroadView):
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self.layout_manager.right_anchor = RIGHT_COLUMN_ANCHOR
+
   def _create_hud_renderer(self):
     return CarHudRenderer()
 
@@ -50,6 +58,9 @@ class CarOnroadView(StarPilotOnroadView):
 
   def _create_favorite_menu(self):
     return NoFavoriteMenu()
+
+  def _create_set_speed_widget(self):
+    return CarSetSpeedWidget(self._hud_renderer)
 
   def _create_speed_limit_widget(self):
     return CarSpeedLimitWidget()

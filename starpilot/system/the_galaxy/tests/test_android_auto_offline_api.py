@@ -78,6 +78,7 @@ def test_viewed_cache_setting_persists(monkeypatch, tmp_path):
   assert not maps.promote_requested(), "disabling withdraws the request"
 
 
+
 def test_route_estimate_then_make_available_offline(monkeypatch, tmp_path):
   client, maps = _client(monkeypatch, tmp_path)
   estimate = client.post("/api/android_auto/offline/estimate", json={"points": ROUTE}).get_json()
@@ -152,7 +153,7 @@ def test_both_offline_downloaders_share_the_offline_maps_tab():
 def test_offline_panel_dropdowns_are_galaxy_styled_and_list_only_drawn_zooms():
   panel = (JS_ROOT / "components" / "AndroidAutoOfflinePanel.js").read_text()
   assert "<select" not in panel, "use GalaxySelect so the dropdowns match the rest of The Galaxy"
-  assert panel.count("<GalaxySelect") == 2
+  assert panel.count("<GalaxySelect") == 3  # detail level, area zoom, map colors
   zooms = panel[panel.index("const COVERAGE_ZOOMS"):panel.index("]", panel.index("const COVERAGE_ZOOMS"))]
   assert [label for label in ("Regional", "Road", "City", "Street") if label in zooms] == ["Regional", "Road", "City", "Street"]
   assert "zoom in 19" not in panel
@@ -175,3 +176,19 @@ def test_area_picker_keeps_the_map_in_place():
     "the map sits right under the place buttons, above the area options"
   assert 'v-if="areaPoint"' not in section, "choosing a centre changes values, it doesn't insert controls"
   assert "Tap the map where the area should be centred." in section and "position:absolute" in section
+
+
+def test_map_colors_setting(monkeypatch, tmp_path):
+  from openpilot.starpilot.navigation.map_tiles import DARK_STYLE
+  client, maps = _client(monkeypatch, tmp_path)
+  summary = client.get("/api/android_auto/offline").get_json()
+  assert summary["map_theme"] == "dark" and summary["usage"]["tiles"] == 0 and summary["usage"]["free_tiles"] == 200_000
+  assert client.post("/api/android_auto/offline/settings", json={"map_theme": "traffic"}).status_code == 400
+  assert client.post("/api/android_auto/offline/settings", json={"map_theme": "light", "discard_dropped": "yes"}).status_code == 400
+  assert client.post("/api/android_auto/offline/settings", json={}).status_code == 400
+  response = client.post("/api/android_auto/offline/settings", json={"map_theme": "light"})
+  assert response.status_code == 200 and response.get_json() == {"save_viewed_cache": False, "map_theme": "light"}
+  assert maps.map_theme() == "light" and maps.pending_discards() == [], "dropped maps are kept unless asked"
+  client.post("/api/android_auto/offline/settings", json={"map_theme": "auto"})
+  client.post("/api/android_auto/offline/settings", json={"map_theme": "light", "discard_dropped": True})
+  assert maps.pending_discards() == [DARK_STYLE]

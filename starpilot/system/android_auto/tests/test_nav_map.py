@@ -295,3 +295,124 @@ def test_follow_zoom_ignores_speed_wobble_and_stops(view):
     now += 0.2
     zoom = view._follow_zoom(35.0, now)
   assert abs(zoom - nav_map.FOLLOW_ZOOMS[-1]) < nav_map.ZOOM_HOLD
+
+
+def test_republished_one_hz_fix_keeps_gliding(view, monkeypatch):
+  """The planner rewrites a 1 Hz fix every 0.25 s with a new timestamp; the car must not step back."""
+  monkeypatch.setattr(nav_map.ui_state, "android_auto_car_view", True)
+  latitude, longitude, speed = 36.3, -115.3, 20.0
+  start_x, _ = world_xy(latitude, longitude)
+  units_per_second = speed / nav_map.meters_per_world_unit(latitude)
+  positions = []
+  for frame in range(90):
+    now = 100.0 + frame / 30
+    if frame % 6 == 0:  # 5 Hz polling
+      published = 100.0 + math.floor((now - 100.0) * 4 + 1e-6) / 4  # 4 Hz republish
+      fix_time = 100.0 + math.floor(now - 100.0 + 1e-6)              # 1 Hz fix
+      lon = longitude + units_per_second * (fix_time - 100.0) * 360 / nav_map.TILE_SIZE
+      view.memory.values["LastGPSPosition"] = gps_state(latitude, lon, bearing=90, speed=speed, updated=published)
+      view._poll_gps(now)
+    positions.append(view._car_world(now)[0])
+  steps = np.diff(positions)
+  assert np.all(steps > 0), "never steps back or stalls"
+  assert np.allclose(steps, units_per_second / 30, rtol=0.05)
+
+
+def test_new_fix_correction_is_eased_in(view, monkeypatch):
+  monkeypatch.setattr(nav_map.ui_state, "android_auto_car_view", True)
+  latitude, longitude, speed = 36.3, -115.3, 20.0
+  view.memory.values["LastGPSPosition"] = gps_state(latitude, longitude, bearing=90, speed=speed, updated=100.0)
+  view._poll_gps(100.0)
+  predicted = view._car_world(101.0)
+  # The next fix lands 5 m short of where dead reckoning had the car.
+  meters = speed - 5.0
+  lon = longitude + meters / nav_map.meters_per_world_unit(latitude) * 360 / nav_map.TILE_SIZE
+  view.memory.values["LastGPSPosition"] = gps_state(latitude, lon, bearing=90, speed=speed, updated=101.0)
+  view._poll_gps(101.0)
+  assert math.isclose(view._car_world(101.0)[0], predicted[0], rel_tol=0, abs_tol=1e-12), "no jump at the new fix"
+  gap = predicted[0] - world_xy(latitude, lon)[0]
+  settled = view._car_world(102.5)
+  target = world_xy(latitude, lon)[0] + 1.5 * speed / nav_map.meters_per_world_unit(latitude)
+  assert abs(settled[0] - target) < 0.02 * gap, "the new fix wins after a moment"
+
+
+def test_large_gps_jump_snaps(view, monkeypatch):
+  monkeypatch.setattr(nav_map.ui_state, "android_auto_car_view", True)
+  view.memory.values["LastGPSPosition"] = gps_state(36.3, -115.3, bearing=90, speed=20.0, updated=100.0)
+  view._poll_gps(100.0)
+  view.memory.values["LastGPSPosition"] = gps_state(36.31, -115.3, bearing=90, speed=20.0, updated=101.0)
+  view._poll_gps(101.0)
+  assert view._car_world(101.0) == world_xy(36.31, -115.3)
+
+
+def test_route_splits_under_the_car_between_vertices(view, monkeypatch):
+  monkeypatch.setattr(nav_map.ui_state, "android_auto_car_view", False)
+  # A long straight segment: vertices 1 km apart.
+  points = [(36.3, -115.3 + i * 0.011) for i in range(4)]
+  view._route_world = nav_map._route_world(points)
+  view._route_received = 10.0
+  car_lon = -115.3 + 0.011 * 1.3
+  view.memory.values["LastGPSPosition"] = gps_state(36.3, car_lon, bearing=90, speed=0.0, updated=10.0)
+  view._poll_gps(10.0)
+  segment, point = view._route_split(10.0)
+  assert segment == 1
+  assert math.isclose(point[0], world_xy(36.3, car_lon)[0], rel_tol=0, abs_tol=1e-9)
+
+  drawn = []
+  monkeypatch.setattr(nav_map, "_draw_polyline", lambda sx, sy, start, end, styles, caps=(False, False):
+                      drawn.append((styles[-1][1], sx[start:end + 1].copy())))
+  camera = nav_map.Camera(*world_xy(36.3, car_lon), 12.0, 0.0)
+  view._draw_routes(nav_map.rl.Rectangle(-2000, -2000, 4000, 4000), camera, (0.0, 0.0), 1.0, 10.0)
+  traveled = [xs for color, xs in drawn if color == nav_map.ROUTE_TRAVELED]
+  ahead = [xs for color, xs in drawn if color == nav_map.ROUTE_FILL]
+  assert math.isclose(traveled[0][-1], 0.0, abs_tol=1e-6) and math.isclose(ahead[0][0], 0.0, abs_tol=1e-6)
+
+
+class _FakeSV(SimpleNamespace):
+  pass
+
+
+class _FakeGnssSM(dict):
+  def __init__(self):
+    super().__init__()
+    self.updated = {"gpsLocationExternal": False, "qcomGnss": False}
+
+  def update(self, _timeout):
+    pass
+
+
+def _measurement(source, states):
+  report = SimpleNamespace(source=source, sv=[_FakeSV(observationState=state) for state in states])
+  return SimpleNamespace(which=lambda: "measurementReport", measurementReport=report)
+
+
+def test_gps_acquisition_counts_tracked_satellites_per_constellation():
+  sm = _FakeGnssSM()
+  acquisition = nav_map.GpsAcquisition(sm_factory=lambda: sm)
+  acquisition.update(10.0)
+  assert acquisition.satellites(10.0) is None and acquisition.since == 10.0
+  sm.updated["qcomGnss"] = True
+  sm["qcomGnss"] = _measurement(0, [5, 5, 4, 1, 0])  # GPS: three tracked
+  acquisition.update(11.0)
+  sm["qcomGnss"] = _measurement(1, [5, 2])           # GLONASS: one tracked
+  acquisition.update(12.0)
+  assert acquisition.satellites(12.0) == 4
+  assert acquisition.satellites(16.5) == 1, "a stale constellation report stops counting"
+  sm.updated = {"gpsLocationExternal": True, "qcomGnss": False}
+  sm["gpsLocationExternal"] = SimpleNamespace(satelliteCount=9)
+  acquisition.update(13.0)
+  assert acquisition.satellites(13.0) == 9, "u-blox reports its own count"
+
+
+def test_acquisition_progress_fills_with_satellites():
+  assert nav_map.acquisition_progress(None) == nav_map.acquisition_progress(0) > 0
+  assert nav_map.acquisition_progress(3) == 0.5
+  assert nav_map.acquisition_progress(12) == 1.0
+
+
+def test_finding_gps_shows_progress_onroad_only(view, monkeypatch):
+  monkeypatch.setattr(nav_map.ui_state, "started", True)
+  view._acquire_state = (3, 75)
+  assert view._center_message() == ("Finding GPS", "3 satellites locked  •  1:15", 0.5)
+  monkeypatch.setattr(nav_map.ui_state, "started", False)
+  assert view._center_message() == ("Waiting for GPS", "The map appears once the car has a location.")

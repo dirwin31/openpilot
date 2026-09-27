@@ -173,8 +173,12 @@ def test_stopped_timer_replaces_speed_in_full_and_split_camera_panes(monkeypatch
     label, timer = draws[3], draws[7]
     assert (label[1], timer[1]) == ("Stopped", "01:01")
     assert label[2].y == rect.y + CarStoppedTimerWidget.TEXT_TOP
-    assert abs(label[2].x + len("Stopped") * label[3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1
-    assert abs(timer[2].x + len("01:01") * timer[3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1
+    # Centred between the MAX / LIMIT column and the (narrower) steering-wheel column.
+    left = rect.x + CarStoppedTimerWidget.LEFT_CONTROLS_RESERVE + CarStoppedTimerWidget.HORIZONTAL_MARGIN
+    right = rect.x + rect.width - CarStoppedTimerWidget.RIGHT_CONTROLS_RESERVE - CarStoppedTimerWidget.HORIZONTAL_MARGIN
+    assert abs(label[2].x + len("Stopped") * label[3] * 0.55 / 2 - (left + right) / 2) < 1
+    assert abs(timer[2].x + len("01:01") * timer[3] * 0.55 / 2 - (left + right) / 2) < 1
+    assert label[2].x >= left - 1 and label[2].x + len("Stopped") * label[3] * 0.55 <= right + 1
 
 
 def test_lateral_pause_is_centered_above_torque_bar():
@@ -244,6 +248,39 @@ def test_empty_car_slot_is_not_a_toggle_fallback(status_sidebar):
   status_sidebar.metric_override = [0, 18]
   status_sidebar.update()
   assert status_sidebar._active_ids == [18]
+
+
+def test_logo_and_blank_slots_keep_their_places(status_sidebar, monkeypatch):
+  status_sidebar.metric_override = [18, car_sidebar.BLANK_METRIC, car_sidebar.LOGO_METRIC, 19]
+  status_sidebar.update()
+  draws = []
+  monkeypatch.setattr(status_sidebar, "_draw_metric", lambda rect, first, second, color, y: draws.append((first, y)))
+  monkeypatch.setattr(status_sidebar, "_draw_logo", lambda rect, y: draws.append(("logo", y)))
+  monkeypatch.setattr(car_sidebar.rl, "draw_rectangle_rec", lambda *args: None)
+  status_sidebar.render(rl.Rectangle(0, 0, 300, 1080))
+  assert [name for name, _ in draws] == ["CPU", "logo", "GPU"]
+  step = draws[1][1] - draws[0][1]
+  assert step > 2 * car_sidebar.METRIC_HEIGHT, "the blank slot keeps its space"
+  assert draws[2][1] - draws[1][1] == step / 2
+
+
+def test_car_max_card_puts_the_label_at_the_top_edge(monkeypatch):
+  monkeypatch.setattr(onroad_widgets, "measure_text_cached",
+                      lambda _font, text, size: SimpleNamespace(x=len(text) * size * 0.55, y=size * 0.8))
+  monkeypatch.setattr(onroad_widgets, "draw_control_card", lambda rect: None)
+  monkeypatch.setattr(onroad_widgets, "tr", lambda text: text)
+  draws = []
+  monkeypatch.setattr(onroad_widgets.rl, "draw_text_ex", lambda font, text, pos, size, spacing, color: draws.append((text, pos, size)))
+  widget = onroad_widgets.CarSetSpeedWidget.__new__(onroad_widgets.CarSetSpeedWidget)
+  widget._font_semi_bold = widget._font_bold = None
+  widget.hud_renderer = SimpleNamespace(is_cruise_set=True, set_speed=65.0)
+  rect = rl.Rectangle(58, 45, 176, 196)
+  widget._render(rect)
+  (label, label_pos, label_size), (value, value_pos, value_size) = draws
+  assert (label, value) == ("MAX", "65")
+  assert label_pos.y == rect.y + onroad_widgets.SET_SPEED_LABEL_TOP
+  top = label_pos.y + label_size * 0.8
+  assert abs((value_pos.y - top) - (rect.y + rect.height - value_pos.y - value_size * 0.8)) < 1e-6, "value centred below"
 
 
 def test_unavailable_gpu_sample_is_not_reported_as_zero(status_sidebar):

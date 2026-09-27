@@ -148,6 +148,15 @@ class FakeRouteEngine:
     return SimpleNamespace(geometry=[Coordinate(lat, lon) for lat, lon in self.points])
 
 
+def put(base, z, x, y, style=None):
+  """A tile on disk under ``base`` (the temporary cache, or the offline root) in ``style`` (default: dark)."""
+  from openpilot.starpilot.navigation.map_tiles import DEFAULT_STYLE, TileCache
+  path = TileCache(base, style or DEFAULT_STYLE).path(TileKey(z, x, y))
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_bytes(PNG)
+  return path
+
+
 def run_until(daemon, predicate, timeout=10.0):
   deadline = time.monotonic() + timeout
   while time.monotonic() < deadline:
@@ -358,3 +367,152 @@ def test_clean_route_points_validates_and_thins():
   long_route = [[36.0 + i * 1e-5, -115.0] for i in range(MAX_ROUTE_POINTS * 3)]
   thinned = clean_route_points(long_route)
   assert len(thinned) <= MAX_ROUTE_POINTS + 1 and thinned[-1] == tuple(long_route[-1])
+
+
+def test_map_colors_pick_styles_and_keep_other_settings(tmp_path):
+  from openpilot.starpilot.navigation.map_tiles import DARK_STYLE, LIGHT_STYLE
+  maps = OfflineMaps(tmp_path, position=lambda: None)
+  assert maps.map_theme() == "dark" and maps.style == DARK_STYLE and maps.active_styles() == (DARK_STYLE,)
+  maps.set_save_viewed_cache(True)
+  maps.set_map_theme("light")
+  assert maps.style == LIGHT_STYLE and maps.save_viewed_cache() is True
+  maps.set_save_viewed_cache(False)
+  assert maps.map_theme() == "light", "each setting keeps the other"
+  assert maps.summary()["map_theme"] == "light"
+  with pytest.raises(ValueError):
+    maps.set_map_theme("traffic")
+
+
+def test_dropped_styles_are_kept_unless_discarded(tmp_path):
+  from openpilot.starpilot.navigation.map_tiles import DARK_STYLE, LIGHT_STYLE
+  maps = OfflineMaps(tmp_path, position=lambda: None)
+  maps.set_map_theme("auto")
+  assert maps.dropped_styles("light") == [DARK_STYLE] and maps.dropped_styles("auto") == []
+  maps.set_map_theme("light")
+  assert maps.pending_discards() == [], "kept by default"
+  maps.set_map_theme("dark", discard_dropped=True)
+  assert maps.pending_discards() == [LIGHT_STYLE]
+  maps.set_map_theme("light")
+  assert maps.pending_discards() == [], "choosing it again before it was deleted cancels the delete"
+
+
+def test_automatic_colors_follow_the_sun():
+  from openpilot.starpilot.navigation.map_tiles import DARK_STYLE, LIGHT_STYLE
+  from openpilot.starpilot.navigation.offline_maps import sun_elevation, theme_style
+  las_vegas = (36.17, -115.14)
+  noon = 1790622000.0    # 2026-09-28 19:00 UTC, about local solar noon
+  midnight = 1790665200.0  # 2026-09-29 07:00 UTC
+  assert sun_elevation(*las_vegas, noon) > 45 and sun_elevation(*las_vegas, midnight) < -30
+  assert theme_style("auto", las_vegas, noon) == LIGHT_STYLE
+  assert theme_style("auto", las_vegas, midnight) == DARK_STYLE
+  assert theme_style("light", las_vegas, midnight) == LIGHT_STYLE and theme_style("dark", las_vegas, noon) == DARK_STYLE
+  # Sunset in Las Vegas on 2026-09-28 is about 18:32 local (01:32 UTC the next day).
+  assert theme_style("auto", las_vegas, 1790645520.0 - 600) == LIGHT_STYLE
+  assert theme_style("auto", las_vegas, 1790645520.0 + 600) == DARK_STYLE
+
+
+def test_light_and_dark_keeps_areas_in_both_styles(tmp_path, fast):
+  from openpilot.starpilot.navigation.map_tiles import DARK_STYLE, LIGHT_STYLE
+  daemon, session = make_daemon(tmp_path, sm=FakeSM(network=WIFI))
+  area = daemon.maps.add_area("Home", 36.1, -115.2, 1.0, 10)
+  assert run_until(daemon, lambda: daemon.maps.status().get("areas", {}).get(area.id, {}).get("state") == "complete")
+  assert all(DARK_STYLE in url for url in session.urls)
+
+  daemon.maps.set_map_theme("auto")
+  session.urls.clear()
+  daemon.step()
+  assert daemon.area_styles == (LIGHT_STYLE, DARK_STYLE)
+  assert daemon.maps.status()["areas"][area.id]["state"] != "complete", "the light copy still needs downloading"
+  assert run_until(daemon, lambda: daemon.maps.status().get("areas", {}).get(area.id, {}).get("state") == "complete")
+  assert session.urls and all(LIGHT_STYLE in url for url in session.urls), "the dark copy is kept, not fetched again"
+  for style in (LIGHT_STYLE, DARK_STYLE):
+    assert all(daemon.area_caches[style].contains(key) for key in area.tiles())
+  state = daemon.maps.status()["areas"][area.id]
+  assert state["done"] == state["total"] == 2 * len(area.tiles())
+
+
+def test_discarded_and_traffic_styles_are_deleted(tmp_path, fast):
+  from openpilot.starpilot.navigation.map_tiles import DARK_STYLE, LEGACY_STYLES, LIGHT_STYLE
+  daemon, _ = make_daemon(tmp_path, sm=FakeSM(network=WIFI))
+  legacy = daemon.maps.style_roots(LEGACY_STYLES[0])
+  put(daemon.maps.root, 2, 1, 1, LEGACY_STYLES[0])
+  put(daemon.maps.base, 2, 1, 1, LEGACY_STYLES[0])
+  area = daemon.maps.add_area("Home", 36.1, -115.2, 1.0, 10)
+  assert run_until(daemon, lambda: daemon.maps.status().get("areas", {}).get(area.id, {}).get("state") == "complete")
+  assert run_until(daemon, lambda: not legacy[0].exists() and not legacy[1].exists()), "tiles with old traffic baked in are removed"
+
+  daemon.maps.set_map_theme("light", discard_dropped=True)
+  dark = daemon.maps.style_roots(DARK_STYLE)[0]
+  assert dark.exists()
+  assert run_until(daemon, lambda: not dark.exists() and daemon.maps.pending_discards() == [])
+  assert run_until(daemon, lambda: daemon.maps.status().get("areas", {}).get(area.id, {}).get("state") == "complete")
+  assert all(daemon.area_caches[LIGHT_STYLE].contains(key) for key in area.tiles())
+
+
+def test_mapbox_usage_counts_across_processes_by_month(tmp_path):
+  from openpilot.starpilot.navigation import mapbox_usage
+  path = tmp_path / "usage.json"
+  wall = [1790622000.0]  # September 2026
+  first = mapbox_usage.MapboxUsage(path, clock=lambda: 0.0, wall=lambda: wall[0])
+  second = mapbox_usage.MapboxUsage(path, clock=lambda: 0.0, wall=lambda: wall[0])
+  first.add("tiles", nbytes=1000)
+  second.add("tiles", 2, nbytes=500)
+  second.add("directions")
+  assert mapbox_usage.read_usage(path, wall[0])["tiles"] == 0, "held in memory until a flush"
+  assert first.flush() and second.flush()
+  assert mapbox_usage.read_usage(path, wall[0]) == {"month": "2026-09", "tiles": 3, "tile_bytes": 1500, "directions": 1}
+  wall[0] += 5 * 86400  # October
+  assert mapbox_usage.read_usage(path, wall[0])["tiles"] == 0
+  first.add("tiles")
+  first.flush()
+  assert mapbox_usage.read_usage(path, wall[0])["tiles"] == 1
+
+
+def test_mapbox_usage_waits_for_the_clock(tmp_path):
+  from openpilot.starpilot.navigation import mapbox_usage
+  path = tmp_path / "usage.json"
+  wall = [0.0]
+  usage = mapbox_usage.MapboxUsage(path, clock=lambda: 0.0, wall=lambda: wall[0])
+  usage.add("tiles")
+  assert not usage.flush() and not path.exists()
+  wall[0] = 1790622000.0
+  usage.add("tiles")
+  assert usage.flush()
+  assert mapbox_usage.read_usage(path, wall[0])["tiles"] == 2, "counts from before the clock was set are kept"
+
+
+def test_tile_downloads_count_as_usage(tmp_path, fast):
+  daemon, session = make_daemon(tmp_path, sm=FakeSM(network=WIFI))
+  area = daemon.maps.add_area("Home", 36.1, -115.2, 1.0, 10)
+  assert run_until(daemon, lambda: daemon.maps.status().get("areas", {}).get(area.id, {}).get("state") == "complete")
+  assert daemon.usage.flush()
+  assert daemon.maps.usage()["tiles"] == len(session.urls) > 0
+
+
+def test_map_deletions_wait_for_offroad(tmp_path, fast):
+  from openpilot.starpilot.navigation.map_tiles import LEGACY_STYLES
+  sm = FakeSM(network=WIFI, started=True)
+  daemon, _ = make_daemon(tmp_path, sm=sm)
+  legacy = daemon.maps.style_roots(LEGACY_STYLES[0])
+  put(daemon.maps.root, 2, 1, 1, LEGACY_STYLES[0])
+  daemon.maps.set_map_theme("light", discard_dropped=False)
+  daemon.maps.set_map_theme("dark", discard_dropped=True)
+  for _ in range(5):
+    daemon.step()
+    time.sleep(0.02)
+  assert legacy[0].exists(), "nothing is deleted onroad"
+  assert daemon.maps.pending_discards() != [], "the delete is still queued"
+
+  sm.device.started = False
+  assert run_until(daemon, lambda: not legacy[0].exists() and daemon.maps.pending_discards() == [])
+
+
+def test_map_deletions_wait_until_the_device_state_is_known(tmp_path, fast):
+  from openpilot.starpilot.navigation.map_tiles import LEGACY_STYLES
+  sm = FakeSM(network=WIFI)
+  sm.seen["deviceState"] = False
+  daemon, _ = make_daemon(tmp_path, sm=sm)
+  put(daemon.maps.root, 2, 1, 1, LEGACY_STYLES[0])
+  for _ in range(3):
+    daemon.step()
+  assert daemon.maps.style_roots(LEGACY_STYLES[0])[0].exists()

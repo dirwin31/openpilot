@@ -33,7 +33,7 @@ def test_defaults_then_partial_updates_are_saved_for_car_ui(monkeypatch, tmp_pat
   sleeping = client.post("/api/android_auto/car_screen", json={"sleep_device_screen": True}).get_json()["settings"]
   assert sleeping == {**saved, "sleep_device_screen": True}
   assert car_screen.load(path) == sleeping
-  slots = ["cpu", "cpu", "memory", "temperature", "friction", "steer_delay"]
+  slots = ["cpu", "cpu", "memory", "temperature", "friction", "steer_delay", "blank"]
   assert client.post("/api/android_auto/car_screen", json={"status_slots": slots}).get_json()["settings"]["status_slots"] == slots
 
 
@@ -47,6 +47,8 @@ def test_invalid_values_are_rejected_without_saving(monkeypatch, tmp_path):
   assert client.post("/api/android_auto/car_screen", json={"sleep_device_screen": "true"}).status_code == 400
   assert client.post("/api/android_auto/car_screen", json={"status_slots": ["cpu"] * 5}).status_code == 400
   assert client.post("/api/android_auto/car_screen", json={"status_slots": ["cpu"] * 5 + ["unknown"]}).status_code == 400
+  assert client.post("/api/android_auto/car_screen", json={"status_slots": ["cpu"] * 6}).status_code == 400
+  assert client.post("/api/android_auto/car_screen", json={"status_slots": ["cpu"] * 6 + ["unknown"]}).status_code == 400
   assert client.post("/api/android_auto/car_screen", data="nope", content_type="application/json").status_code == 400
   assert not path.exists()
 

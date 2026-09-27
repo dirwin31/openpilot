@@ -8,6 +8,7 @@ import pyray as rl
 from cereal import log
 
 from openpilot.selfdrive.ui.lib.starpilot_status import ENGAGED_COLOR, EXPERIMENTAL_COLOR, TRAFFIC_COLOR
+from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.onroad.alert_renderer import (
   ALERT_PADDING,
   MID_FONT_SIZE_1,
@@ -16,12 +17,14 @@ from openpilot.selfdrive.ui.onroad.alert_renderer import (
   Alert,
   AlertRenderer,
 )
-from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
+from openpilot.selfdrive.ui.onroad.hud_renderer import COLORS, CRUISE_DISABLED_CHAR, FONT_SIZES, HudRenderer
 from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import NavigationCardRenderer
 from openpilot.selfdrive.ui.onroad.starpilot.pip_sidecam import PipSideCamera
 from openpilot.selfdrive.ui.onroad.starpilot.slc_speed_limit import render_speed_limit_at
-from openpilot.selfdrive.ui.onroad.starpilot.widgets import SpeedLimitWidget, StoppedTimerWidget
-from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.selfdrive.ui.onroad.starpilot.widget_style import draw_control_card
+from openpilot.selfdrive.ui.onroad.starpilot.widgets import SetSpeedWidget, SpeedLimitWidget, StoppedTimerWidget
+from openpilot.selfdrive.ui.ui_state import UIStatus, ui_state
+from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import draw_text_with_shadow, measure_text_cached
 
 AlertSize = log.SelfdriveState.AlertSize
@@ -40,6 +43,14 @@ LATERAL_PAUSE_WIDTH = 220
 LATERAL_PAUSE_HEIGHT = 96
 TORQUE_BAR_MAX_RISE = 82  # max offset + thickness in torque_bar.py
 TORQUE_BAR_GAP = 24
+
+# The steering-wheel (experimental mode) button and the column under it (pedals)
+# sit closer to the right edge than on the comma, leaving the stopped timer more room.
+EXP_BUTTON_SIZE = 160
+EXP_ICON_SIZE = 120
+RIGHT_COLUMN_ANCHOR = 130  # column centre, from the camera pane's right edge (the comma uses 146)
+SET_SPEED_LABEL_TOP = 8    # "MAX" sits at the card's top edge, like the speed-limit card's source label
+SET_SPEED_VALUE_FONT = 100
 
 
 def lateral_pause_rect(camera_rect: rl.Rectangle, display_width: float) -> rl.Rectangle:
@@ -177,20 +188,27 @@ class CarPipSideCamera(PipSideCamera):
 
 
 class CarStoppedTimerWidget(StoppedTimerWidget):
-  """A compact "Stopped" label and mm:ss timer in place of the speed readout."""
+  """A compact "Stopped" label and mm:ss timer in place of the speed readout.
+
+  Centred in the space between the MAX / LIMIT column and the steering-wheel
+  column, which is narrower on the car, rather than on the whole pane.
+  """
 
   LEFT_CONTROLS_RESERVE = 290  # MAX / LIMIT column
-  LABEL_FONT = 88
-  TIMER_FONT = 72
+  RIGHT_CONTROLS_RESERVE = RIGHT_COLUMN_ANCHOR + 90  # steering wheel and the 180-wide pedal icons below it
+  LABEL_FONT = 104
+  TIMER_FONT = 88
   HORIZONTAL_MARGIN = 38
-  TEXT_TOP = 98
+  TEXT_TOP = 92
   LINE_GAP = 8
 
   def _render(self, rect: rl.Rectangle) -> None:
     duration = self._duration
     label_text, timer_text = "Stopped", f"{duration // 60:02d}:{duration % 60:02d}"
     full_width = measure_text_cached(self._font_bold, label_text, self.LABEL_FONT).x
-    available = max(1.0, rect.width - 2 * (self.LEFT_CONTROLS_RESERVE + self.HORIZONTAL_MARGIN))
+    left = rect.x + self.LEFT_CONTROLS_RESERVE + self.HORIZONTAL_MARGIN
+    right = rect.x + rect.width - self.RIGHT_CONTROLS_RESERVE - self.HORIZONTAL_MARGIN
+    available = max(1.0, right - left)
     scale = min(1.0, available / full_width) if full_width > 0 else 1.0
     scale = max(0.6, scale)
     label_font = max(1, int(self.LABEL_FONT * scale))
@@ -199,7 +217,7 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
     timer_size = measure_text_cached(self._font_normal, timer_text, timer_font)
 
     duration_color = self._duration_color()
-    center_x = rect.x + rect.width / 2
+    center_x = (left + right) / 2 if right > left else rect.x + rect.width / 2
     label_y = rect.y + self.TEXT_TOP
     timer_y = label_y + label_size.y + self.LINE_GAP
     self._draw_text(self._font_bold, label_text, rl.Vector2(center_x - label_size.x / 2, label_y), label_font, duration_color)
@@ -221,6 +239,39 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
     return TRAFFIC_COLOR
 
 
+class CarSetSpeedWidget(SetSpeedWidget):
+  """MAX laid out like the speed-limit card below it: the label tight to the top edge,
+  the value large in the space left under it."""
+
+  def _render(self, rect: rl.Rectangle) -> None:
+    draw_control_card(rect)
+    hud = self.hud_renderer
+    max_color, value_color = COLORS.GREY, COLORS.DARK_GREY
+    if hud.is_cruise_set:
+      value_color = COLORS.WHITE
+      if ui_state.status == UIStatus.ENGAGED:
+        max_color = COLORS.ENGAGED
+      elif ui_state.status in (UIStatus.DISENGAGED, UIStatus.OVERRIDE):
+        max_color = COLORS.DISENGAGED
+
+    label = tr("MAX")
+    label_size = measure_text_cached(self._font_semi_bold, label, FONT_SIZES.max_speed)
+    label_y = rect.y + SET_SPEED_LABEL_TOP
+    rl.draw_text_ex(self._font_semi_bold, label, rl.Vector2(rect.x + (rect.width - label_size.x) / 2, label_y),
+                    FONT_SIZES.max_speed, 0, max_color)
+
+    value = CRUISE_DISABLED_CHAR if not hud.is_cruise_set else str(round(hud.set_speed))
+    font_size = SET_SPEED_VALUE_FONT
+    value_size = measure_text_cached(self._font_bold, value, font_size)
+    if value_size.x > rect.width - 16:  # three digits in km/h
+      font_size = max(1, int(font_size * (rect.width - 16) / value_size.x))
+      value_size = measure_text_cached(self._font_bold, value, font_size)
+    top = label_y + label_size.y
+    value_y = top + (rect.y + rect.height - top - value_size.y) / 2
+    rl.draw_text_ex(self._font_bold, value, rl.Vector2(rect.x + (rect.width - value_size.x) / 2, value_y),
+                    font_size, 0, value_color)
+
+
 class CarSpeedLimitWidget(SpeedLimitWidget):
   def _render(self, rect: rl.Rectangle) -> None:
     if self._slc_state is None:
@@ -238,6 +289,10 @@ class CarNavigationCardRenderer(NavigationCardRenderer):
 
 
 class CarHudRenderer(HudRenderer):
+  def __init__(self):
+    super().__init__()
+    self._exp_button = ExpButton(EXP_BUTTON_SIZE, EXP_ICON_SIZE)
+
   def _create_navigation_card(self):
     return CarNavigationCardRenderer()
 

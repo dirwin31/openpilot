@@ -392,8 +392,9 @@ class NavigationRoute:
 class MapboxRouteEngine:
   DIRECTIONS_URL = "https://api.mapbox.com/directions/v5/mapbox/driving-traffic"
 
-  def __init__(self, session: Any = requests):
+  def __init__(self, session: Any = requests, usage: Any = None):
     self._session = session
+    self._usage = usage  # MapboxUsage, counting each directions request
 
   def fetch_route(self, token: str, start: Coordinate, destination: dict[str, Any], bearing: float | None = None) -> NavigationRoute | None:
     route_id = str(destination.get("routeId") or "main")
@@ -425,6 +426,8 @@ class MapboxRouteEngine:
     url = f"{self.DIRECTIONS_URL}/{start.longitude},{start.latitude};{end.longitude},{end.latitude}"
     try:
       response = self._session.get(url, params=params, timeout=5)
+      if self._usage is not None:
+        self._usage.add("directions")
       data = response.json() if response.status_code == 200 else {}
     except (requests.RequestException, ValueError):
       return []

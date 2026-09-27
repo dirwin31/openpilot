@@ -27,7 +27,13 @@ import requests
 TILE_SIZE = 512
 MIN_ZOOM = 0
 MAX_ZOOM = 18
-DEFAULT_STYLE = "mapbox/navigation-night-v1"
+# Neither style has traffic: raster tiles bake it in, and a saved tile would keep
+# showing the traffic from the day it was downloaded.
+LIGHT_STYLE = "mapbox/streets-v12"
+DARK_STYLE = "mapbox/dark-v11"
+DEFAULT_STYLE = DARK_STYLE
+# Styles used before, with traffic baked into their tiles. navtilesd deletes them.
+LEGACY_STYLES = ("mapbox/navigation-night-v1",)
 TILE_URL = "https://api.mapbox.com/styles/v1/{style}/tiles/{size}/{z}/{x}/{y}"
 
 MAX_DISK_BYTES = 300 * 1024 * 1024
@@ -150,6 +156,10 @@ def offline_root(base: Path | None = None) -> Path:
   return Path(base or default_cache_dir()) / "offline"
 
 
+def style_dir_name(style: str) -> str:
+  return style.replace("/", "_")
+
+
 class TileCache:
   """Tiles on disk as ``<root>/<style>/<z>/<x>/<y>.png``, trimmed oldest-first past a size cap.
 
@@ -159,7 +169,7 @@ class TileCache:
 
   def __init__(self, root: Path, style: str, max_bytes: int | None = MAX_DISK_BYTES, min_free_bytes: int = MIN_FREE_DISK_BYTES,
                pinned: TileCache | None = None):
-    self.root = Path(root) / style.replace("/", "_")
+    self.root = Path(root) / style_dir_name(style)
     self.max_bytes = max_bytes
     self.min_free_bytes = min_free_bytes
     self.pinned = pinned
@@ -280,8 +290,9 @@ class TileService:
                cache: TileCache | None = None, style: str = DEFAULT_STYLE, session: Any = None,
                workers: int = WORKERS, clock: Callable[[], float] = time.monotonic,
                prefetch_interval: float = PREFETCH_INTERVAL_SECONDS,
-               write_through: Callable[[TileKey, bytes], bool | None] | None = None):
+               write_through: Callable[[TileKey, bytes], bool | None] | None = None, usage: Any = None):
     self.style = style
+    self._usage = usage  # MapboxUsage: every tile request made counts toward the month's Mapbox usage
     self.prefetch_interval = prefetch_interval
     self.cache = cache or TileCache(default_cache_dir(), style)
     self._token = token
@@ -499,6 +510,8 @@ class TileService:
       return None
 
     status = response.status_code
+    if self._usage is not None:
+      self._usage.add("tiles", nbytes=len(response.content or b"") if status == 200 else 0)
     if status == 200 and image_extension(response.content) is not None:
       self.stats["network"] += 1
       return response.content

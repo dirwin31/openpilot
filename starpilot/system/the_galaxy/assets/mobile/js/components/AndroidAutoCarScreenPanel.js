@@ -144,7 +144,7 @@ export const AndroidAutoCarScreenPanel = {
         </template>
         <template v-else>
           <div class="gx-row__label">Status Column</div>
-          <p class="gx-row__desc">Choose the six stats on the right side of the driving view.</p>
+          <p class="gx-row__desc">Choose the seven stats on the right side of the driving view. A slot can also show the StarPilot logo or stay blank.</p>
           <label v-for="(metric, index) in settings.status_slots" :key="index" class="gx-row">
             <span class="gx-row__label">Slot {{ index + 1 }}</span>
             <GalaxySelect class="gx-field gx-car-display__metric" :value="metric" :disabled="saving"

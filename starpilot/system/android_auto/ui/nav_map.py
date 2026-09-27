@@ -7,8 +7,10 @@ fed, so a route turn is visible from the moment the model acts on it.
 
 Kept cheap on purpose: tiles are downloaded and decoded on worker threads, at
 most two textures are uploaded per frame, the route is projected with numpy and
-only its visible part is drawn, and GPS positions are dead-reckoned between the
-planner's 4 Hz updates rather than polled faster.
+only its visible part is drawn, and GPS positions are dead-reckoned between
+fixes rather than polled faster. The planner republishes the same fix at 4 Hz
+while the comma's own receiver only produces one a second, so a republished fix
+keeps its original time, and a new fix's correction is eased in instead of jumping.
 """
 
 from __future__ import annotations
@@ -36,10 +38,11 @@ from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import (
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.starpilot.navigation.destination_store import parse_destination_json
 from openpilot.starpilot.navigation.offline_maps import OfflineMaps
+from openpilot.starpilot.navigation.mapbox_usage import shared_usage
 from openpilot.starpilot.navigation.map_tiles import (
+  LIGHT_STYLE,
   TILE_SIZE,
   TileKey,
-  DEFAULT_STYLE,
   TileCache,
   TileService,
   default_cache_dir,
@@ -57,7 +60,12 @@ UPLOADS_PER_FRAME = 2
 MAX_FALLBACK_LEVELS = 6
 GPS_POLL_SECONDS = 0.2
 GPS_STALE_SECONDS = 3.0
-DEAD_RECKON_LIMIT = 1.0
+DEAD_RECKON_LIMIT = 1.6    # s; covers a late 1 Hz fix without running away when fixes stop
+CORRECTION_TAU = 0.35      # s; how quickly a new fix's disagreement with dead reckoning is eased out
+CORRECTION_MAX_METERS = 60.0  # larger disagreements snap: a GPS jump, not drift
+ACQUIRE_POLL_SECONDS = 1.0
+ACQUIRE_SATELLITE_WINDOW = 5.0  # s; a constellation report older than this no longer counts
+ACQUIRE_GOOD_SATELLITES = 6     # the progress bar is full here; a fix usually follows
 NAV_STALE_SECONDS = 3.5
 ROUTE_STALE_SECONDS = 30.0  # navigationd republishes the route every few seconds while it has one
 ROUTE_CHUNK_SEGMENTS = 128
@@ -76,6 +84,7 @@ PREVIEW_MAX_ZOOM = 16.0
 FOLLOW_ANCHOR_Y = 0.70
 
 MAP_BACKGROUND = rl.Color(20, 26, 38, 255)
+MAP_BACKGROUND_LIGHT = rl.Color(238, 236, 230, 255)  # behind streets-v12 while tiles load
 ROUTE_CASING = rl.Color(12, 40, 92, 255)
 ROUTE_FILL = rl.Color(64, 150, 255, 255)
 ROUTE_TRAVELED = rl.Color(120, 130, 150, 200)
@@ -92,6 +101,8 @@ DESIRE_ROUTE = rl.Color(52, 199, 120, 255)
 DESIRE_DRIVER = rl.Color(64, 150, 255, 255)
 DESIRE_HINT = rl.Color(232, 170, 70, 255)
 BADGE_WARN = rl.Color(232, 170, 70, 255)
+PROGRESS_TRACK = rl.Color(255, 255, 255, 36)
+PROGRESS_FILL = rl.Color(64, 150, 255, 255)
 
 DESIRE_NAMES = {
   1: "Turn left",
@@ -143,15 +154,42 @@ class TileTextures:
     self._token_lock = threading.Lock()
     self._textures: OrderedDict[TileKey, rl.Texture] = OrderedDict()
     self.offline_maps = OfflineMaps()
-    # navtilesd promotes requested driven tiles from the regular cache into the
-    # same pinned store used by explicit offline areas.
-    offline = TileCache(offline_root(), DEFAULT_STYLE, max_bytes=None)
-    regular = TileCache(default_cache_dir(), DEFAULT_STYLE, pinned=offline)
     self._save_viewed = False
     self._save_viewed_read = -math.inf
-    self.service = TileService(self._read_token, decode=_decode_tile, cache=regular, write_through=self._save_driven_tile)
+    self.service: TileService | None = None
+    self.style = ""
+    self._style_read = -math.inf
+    self._use_style(self.offline_maps.style)
     self._offline_status: dict = {}
     self._offline_status_read = -math.inf
+
+  def _use_style(self, style: str) -> None:
+    """Light and dark maps are different tile styles, cached separately."""
+    if self.service is not None:
+      self.service.close()
+    for texture in self._textures.values():
+      rl.unload_texture(texture)
+    self._textures.clear()
+    self.style = style
+    # navtilesd promotes requested driven tiles from the regular cache into the
+    # same pinned store used by explicit offline areas.
+    offline = TileCache(offline_root(), style, max_bytes=None)
+    regular = TileCache(default_cache_dir(), style, pinned=offline)
+    self.service = TileService(self._read_token, decode=_decode_tile, cache=regular, style=style,
+                               write_through=self._save_driven_tile, usage=shared_usage())
+
+  def _check_style(self) -> bool:
+    """Follow the map colors setting (and the sun, for automatic) within a couple of seconds.
+    True when the map must redraw."""
+    now = time.monotonic()
+    if now - self._style_read < OFFLINE_STATUS_SECONDS:
+      return False
+    self._style_read = now
+    style = self.offline_maps.style
+    if style == self.style:
+      return False
+    self._use_style(style)
+    return True
 
   def _save_driven_tile(self, key: TileKey, data: bytes) -> bool | None:
     del data
@@ -162,6 +200,10 @@ class TileTextures:
     if not self._save_viewed:
       return None
     return self.offline_maps.mark_auto_saved(key)
+
+  @property
+  def background(self) -> rl.Color:
+    return MAP_BACKGROUND_LIGHT if self.style == LIGHT_STYLE else MAP_BACKGROUND
 
   def offline_status(self) -> dict:
     now = time.monotonic()
@@ -186,6 +228,8 @@ class TileTextures:
       return self._token
 
   def upload(self) -> int:
+    """Upload decoded tiles; nonzero when the map changed (new tiles, or a new style)."""
+    switched = self._check_style()
     results = self.service.poll(UPLOADS_PER_FRAME)
     for key, image in results:
       texture = rl.load_texture_from_image(image)
@@ -200,7 +244,7 @@ class TileTextures:
       key, texture = self._textures.popitem(last=False)
       rl.unload_texture(texture)
       self.service.forget(key)
-    return len(results)
+    return len(results) + int(switched)
 
   def best(self, key: TileKey) -> tuple[rl.Texture, rl.Rectangle] | None:
     """The tile itself, or the part of the closest loaded ancestor that covers it."""
@@ -309,14 +353,80 @@ def _triangle(a: rl.Vector2, b: rl.Vector2, c: rl.Vector2, color: rl.Color) -> N
   rl.draw_triangle(a, b, c, color)
 
 
+def acquisition_progress(satellites: int | None) -> float:
+  """How full the "Finding GPS" bar is: satellites locked, out of the few a good fix needs."""
+  if not satellites:
+    return 0.04
+  return max(0.04, min(1.0, satellites / ACQUIRE_GOOD_SATELLITES))
+
+
+def _elapsed_text(seconds: float) -> str:
+  seconds = max(0, int(seconds))
+  return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+class GpsAcquisition:
+  """Satellites the receiver is tracking while it has no fix, for the map's progress bar.
+
+  u-blox reports a satellite count with every solution. The comma's Qualcomm receiver
+  does not, so its per-constellation measurement reports are counted instead (a
+  satellite in track or track-verify). Subscribed only while a fix is missing.
+  """
+
+  TRACKING_STATES = (4, 5)  # SVObservationState.trackVerify, .track
+
+  def __init__(self, sm_factory=None):
+    self._sm_factory = sm_factory
+    self._sm = None
+    self._by_source: dict[int, tuple[int, float]] = {}
+    self._external: tuple[int, float] | None = None
+    self.since: float | None = None
+
+  def _ensure(self):
+    if self._sm is None:
+      if self._sm_factory is not None:
+        self._sm = self._sm_factory()
+      else:
+        import cereal.messaging as messaging
+        self._sm = messaging.SubMaster(["gpsLocationExternal", "qcomGnss"])
+    return self._sm
+
+  def reset(self) -> None:
+    self._by_source.clear()
+    self._external = None
+    self.since = None
+
+  def update(self, now: float) -> None:
+    if self.since is None:
+      self.since = now
+    sm = self._ensure()
+    sm.update(0)
+    if sm.updated["gpsLocationExternal"]:
+      self._external = (int(sm["gpsLocationExternal"].satelliteCount), now)
+    if sm.updated["qcomGnss"]:
+      gnss = sm["qcomGnss"]
+      if gnss.which() == "measurementReport":
+        report = gnss.measurementReport
+        tracked = sum(1 for sv in report.sv if int(sv.observationState) in self.TRACKING_STATES)
+        self._by_source[int(report.source)] = (tracked, now)
+
+  def satellites(self, now: float) -> int | None:
+    """Satellites currently tracked, or None when no receiver has reported recently."""
+    if self._external is not None and now - self._external[1] < ACQUIRE_SATELLITE_WINDOW:
+      return self._external[0]
+    recent = [count for count, at in self._by_source.values() if now - at < ACQUIRE_SATELLITE_WINDOW]
+    return sum(recent) if recent else None
+
+
 @dataclass
 class GpsFix:
   latitude: float
   longitude: float
   bearing: float
   speed: float
-  received: float  # local monotonic time of the fix
+  received: float  # local monotonic time of the fix (dead reckoning starts here)
   fresh: bool
+  published: float = 0.0  # when the planner last republished it (freshness)
 
 
 class NavMapView(Widget):
@@ -349,6 +459,12 @@ class NavMapView(Widget):
     self._gps: GpsFix | None = None
     self._last_gps_poll = -math.inf
     self._last_gps_raw = ""
+    self._fix_key: tuple | None = None
+    self._correction = (0.0, 0.0)  # world units, eased to zero from _correction_at
+    self._correction_at = -math.inf
+    self._acquisition = GpsAcquisition()
+    self._acquire_polled = -math.inf
+    self._acquire_state: tuple | None = None
     self._display_bearing = 0.0
     self._zoom_speed: float | None = None
     self._zoom_time = -math.inf
@@ -435,6 +551,10 @@ class NavMapView(Widget):
       self._next_draw = now + interval
 
   @property
+  def background(self) -> rl.Color:
+    return self._tiles.background if self._tiles is not None else MAP_BACKGROUND
+
+  @property
   def offline(self) -> bool:
     return self._tiles is not None and self._tiles.service.offline
 
@@ -500,11 +620,43 @@ class NavMapView(Widget):
         self._params.get("NavDestination", encoding="utf-8")
       ) is not None
 
+    self._update_acquisition(now)
+
     overlay = (id(self._nav), self._desire, self._nav_desire, ui_state.started, self._route_key,
-               self._gps is not None and self._gps.fresh, self._navigation_requested, self.offline)
+               self._gps is not None and self._gps.fresh, self._navigation_requested, self.offline,
+               self._acquire_state)
     if overlay != self._overlay_state:
       self._overlay_state = overlay
       self._dirty = True
+
+  def _acquiring(self) -> bool:
+    """Onroad without a fresh fix. Offroad the GPS receiver is not running at all."""
+    return ui_state.started and not self._preview_active and (self._gps is None or not self._gps.fresh)
+
+  def _update_acquisition(self, now: float) -> None:
+    if not self._acquiring():
+      if self._acquire_state is not None or self._acquisition.since is not None:
+        self._acquisition.reset()
+        self._acquire_state = None
+      return
+    if now - self._acquire_polled < ACQUIRE_POLL_SECONDS:
+      return
+    self._acquire_polled = now
+    try:
+      self._acquisition.update(now)
+    except Exception:
+      pass  # a missing service must never take the map down
+    since = self._acquisition.since if self._acquisition.since is not None else now
+    self._acquire_state = (self._acquisition.satellites(now), int(now - since))
+
+  def _acquisition_text(self) -> tuple[str, float]:
+    """(detail, progress) for the "Finding GPS" card and badge."""
+    satellites, elapsed = self._acquire_state or (None, 0)
+    if satellites is None:
+      detail = f"Searching for satellites  •  {_elapsed_text(elapsed)}"
+    else:
+      detail = f"{satellites} satellite{'s' if satellites != 1 else ''} locked  •  {_elapsed_text(elapsed)}"
+    return detail, acquisition_progress(satellites)
 
   def _nav_active(self, now: float) -> bool:
     return self._nav is not None and now - self._nav_received < NAV_STALE_SECONDS
@@ -519,7 +671,7 @@ class NavMapView(Widget):
       self._gps = None
       return
     if raw == self._last_gps_raw and self._gps is not None:
-      if now - self._gps.received > GPS_STALE_SECONDS:
+      if now - self._gps.published > GPS_STALE_SECONDS:
         self._gps.fresh = False
       return
     self._last_gps_raw = raw
@@ -531,13 +683,31 @@ class NavMapView(Widget):
     if not (math.isfinite(latitude) and math.isfinite(longitude)) or (abs(latitude) < 1e-6 and abs(longitude) < 1e-6):
       return
     bearing = float(state.get("bearing", 0.0) or 0.0)
+    bearing = bearing if math.isfinite(bearing) else 0.0
     speed = max(0.0, float(state.get("speed", 0.0) or 0.0))
     updated = float(state.get("updatedAtMonotonic", 0.0) or 0.0)
     fresh = fresh and bool(state.get("hasFix", True)) and (updated <= 0.0 or now - updated < GPS_STALE_SECONDS)
     # AA polls at 5 Hz while positions are published at 4 Hz. Starting dead
     # reckoning at read time instead of publish time introduces periodic backsteps.
-    received = updated if ui_state.android_auto_car_view and 0.0 < updated <= now else now
-    self._gps = GpsFix(latitude, longitude, bearing if math.isfinite(bearing) else 0.0, speed, received, fresh)
+    published = updated if ui_state.android_auto_car_view and 0.0 < updated <= now else now
+
+    fix_key = (latitude, longitude, bearing)
+    if self._gps is not None and self._gps.fresh and fix_key == self._fix_key:
+      # The planner republishes the last fix at 4 Hz with a new timestamp while the
+      # receiver may only produce one a second. Restarting dead reckoning from the
+      # old position each time made the car step back and stall.
+      self._gps.speed, self._gps.fresh, self._gps.published = speed, fresh, published
+      return
+
+    before = self._car_world(published) if self._gps is not None and self._gps.fresh and fresh else None
+    self._fix_key = fix_key
+    self._gps = GpsFix(latitude, longitude, bearing, speed, published, fresh, published)
+    self._correction, self._correction_at = (0.0, 0.0), -math.inf
+    if before is not None:
+      after = self._car_world(published)
+      dx, dy = before[0] - after[0], before[1] - after[1]
+      if math.hypot(dx, dy) * meters_per_world_unit(latitude) <= CORRECTION_MAX_METERS:
+        self._correction, self._correction_at = (dx, dy), published
     self._update_route_progress()
 
   def _car_world(self, now: float) -> tuple[float, float] | None:
@@ -546,13 +716,41 @@ class NavMapView(Widget):
       return None
     x, y = world_xy(gps.latitude, gps.longitude)
     if gps.fresh and gps.speed > 0.5:
-      # Move along the heading between fixes so the map glides instead of stepping at 4 Hz.
-      dt = min(DEAD_RECKON_LIMIT, now - gps.received)
+      # Move along the heading between fixes so the map glides instead of stepping once a second.
+      dt = max(0.0, min(DEAD_RECKON_LIMIT, now - gps.received))
       meters = gps.speed * dt
       units = meters / meters_per_world_unit(gps.latitude)
       x += math.sin(math.radians(gps.bearing)) * units
       y -= math.cos(math.radians(gps.bearing)) * units
+    if gps.fresh and now >= self._correction_at:
+      # Ease out the gap between where dead reckoning had the car and the new fix.
+      fade = math.exp(-(now - self._correction_at) / CORRECTION_TAU)
+      x += self._correction[0] * fade
+      y += self._correction[1] * fade
     return x, y
+
+  def _route_split(self, now: float) -> tuple[int, np.ndarray] | None:
+    """(segment index, world point): where the car sits on the route, between vertices.
+
+    Splitting at the nearest vertex made the blue line vanish a whole segment at a
+    time, often ahead of the car on long straight segments.
+    """
+    route = self._route_world
+    car = self._car_world(now)
+    if car is None or len(route) < 2:
+      return None
+    start = max(0, self._route_progress - 2)
+    end = min(len(route) - 1, self._route_progress + 40)
+    if end <= start:
+      return None
+    a, b = route[start:end], route[start + 1:end + 1]
+    ab = b - a
+    lengths = np.sum(ab * ab, axis=1)
+    lengths[lengths == 0.0] = 1e-30
+    t = np.clip(np.sum((np.asarray(car) - a) * ab, axis=1) / lengths, 0.0, 1.0)
+    projected = a + ab * t[:, None]
+    index = int(np.argmin(np.sum((projected - car) ** 2, axis=1)))
+    return start + index, projected[index]
 
   def _update_route_progress(self) -> None:
     if self._gps is None or len(self._route_world) < 2:
@@ -664,12 +862,12 @@ class NavMapView(Widget):
     camera = self._camera
     tile_scale = self._tile_scale()
 
-    rl.draw_rectangle_rec(rect, MAP_BACKGROUND)
+    rl.draw_rectangle_rec(rect, self.background)
     if self._clip:
       rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
     try:
       if self._gps is not None or self._preview_active:
-        self._draw_world(rect, camera, anchor, tile_scale)
+        self._draw_world(rect, camera, anchor, tile_scale, now)
         self._draw_car(camera, anchor, tile_scale, now)
     finally:
       if self._clip:
@@ -677,10 +875,10 @@ class NavMapView(Widget):
 
     self._draw_overlays(rect, now)
 
-  def _draw_world(self, rect, camera, anchor, tile_scale):
+  def _draw_world(self, rect, camera, anchor, tile_scale, now: float | None = None):
     if self._gps is not None or self._preview_active:
       self._draw_tiles(rect, camera, anchor, tile_scale)
-      self._draw_routes(rect, camera, anchor, tile_scale)
+      self._draw_routes(rect, camera, anchor, tile_scale, time.monotonic() if now is None else now)
       self._draw_destination(camera, anchor, tile_scale)
 
   def _draw_overlays(self, rect: rl.Rectangle, now: float):
@@ -745,7 +943,9 @@ class NavMapView(Widget):
     # Keep everything between the first and last candidates: routes can leave and re-enter the view.
     return slice(int(visible[0]) * ROUTE_CHUNK_SEGMENTS, min(len(points), (int(visible[-1]) + 1) * ROUTE_CHUNK_SEGMENTS + 1))
 
-  def _draw_routes(self, rect: rl.Rectangle, camera: Camera, anchor: tuple[float, float], tile_scale: float) -> None:
+  def _draw_routes(self, rect: rl.Rectangle, camera: Camera, anchor: tuple[float, float], tile_scale: float,
+                   now: float | None = None) -> None:
+    now = time.monotonic() if now is None else now
     margin = 40.0
     if self._preview_active:
       for index, route in enumerate(self._preview_routes):
@@ -762,16 +962,27 @@ class NavMapView(Widget):
           _draw_polyline(sx, sy, start, end, ((15.0, ROUTE_CASING), (9.0, ROUTE_FILL)), caps=(start == 0, end == last))
       return
 
-    if len(self._route_world) < 2 or time.monotonic() - self._route_received > ROUTE_STALE_SECONDS:
+    if len(self._route_world) < 2 or now - self._route_received > ROUTE_STALE_SECONDS:
       return
     route_slice = slice(0, None)
     # Short routes are cheaper to project directly than to search the bounds.
     if ui_state.android_auto_car_view and len(self._route_world) >= 8192:
       route_slice = self._route_slice(rect, camera, anchor, tile_scale, margin)
     sx, sy = self._project(self._route_world[route_slice], camera, anchor, tile_scale)
-    last = len(self._route_world) - 1
-    split = max(0, min(self._route_progress, last)) - route_slice.start
-    last -= route_slice.start
+    offset = route_slice.start or 0
+    last = len(self._route_world) - 1 - offset
+    split = max(0, min(self._route_progress, len(self._route_world) - 1)) - offset
+    at_car = self._route_split(now)
+    if at_car is not None:
+      segment, point = at_car
+      local = segment - offset
+      if 0 <= local < len(sx) - 1:
+        # Split exactly under the car: traveled up to it, blue from it.
+        px, py = camera.to_screen(point[0], point[1], anchor, tile_scale)
+        sx, sy = np.insert(sx, local + 1, px), np.insert(sy, local + 1, py)
+        split, last = local + 1, last + 1
+      else:
+        split = local + 1
     for start, end in _visible_runs(sx, sy, rect, margin):
       if start < split:
         _draw_polyline(sx, sy, start, min(end, split), ((9.0, ROUTE_TRAVELED),))
@@ -883,20 +1094,36 @@ class NavMapView(Widget):
     rl.draw_texture_pro(texture, rl.Rectangle(0, 0, texture.width, texture.height),
                         rl.Rectangle(x, y, size, size), rl.Vector2(0, 0), 0.0, rl.WHITE)
 
-  def _draw_center_message(self, rect: rl.Rectangle, title: str, body: str) -> None:
+  def _progress_bar(self, x: float, y: float, width: float, height: float, progress: float) -> None:
+    track = rl.Rectangle(x, y, width, height)
+    rl.draw_rectangle_rounded(track, 1.0, 8, PROGRESS_TRACK)
+    fill = rl.Rectangle(x, y, max(height, width * max(0.0, min(1.0, progress))), height)
+    rl.draw_rectangle_rounded(fill, 1.0, 8, PROGRESS_FILL)
+
+  def _draw_center_message(self, rect: rl.Rectangle, title: str, body: str, progress: float | None = None) -> None:
     width = min(rect.width - 80, 720)
-    card = rl.Rectangle(rect.x + (rect.width - width) / 2, rect.y + rect.height / 2 - 80, width, 160)
+    height = 160 if progress is None else 196
+    card = rl.Rectangle(rect.x + (rect.width - width) / 2, rect.y + rect.height / 2 - height / 2, width, height)
     self._card(card)
     self._text(title, card.x + 36, card.y + 30, 44, TEXT, bold=True)
     self._text(self._fit_text(body, 30, width - 72), card.x + 36, card.y + 94, 30, SUBTEXT)
+    if progress is not None:
+      self._progress_bar(card.x + 36, card.y + 146, width - 72, 14, progress)
 
-  def _center_message(self) -> tuple[str, str] | None:
+  def _center_message(self) -> tuple[str, str] | tuple[str, str, float] | None:
+    """(title, body), plus a progress fraction while the GPS is being acquired."""
     if self._preview_active:
       return None
     has_fresh_gps = self._gps is not None and self._gps.fresh
+    acquiring = self._acquiring()
+    detail, progress = self._acquisition_text() if acquiring else ("", None)
     if self._show_navigation_waiting and self._navigation_requested and not has_fresh_gps:
+      if acquiring:
+        return "Navigation active", f"Finding GPS to start your route  •  {detail}", progress
       return "Navigation active", "Waiting for GPS to start your route."
     if self._gps is None:
+      if acquiring:
+        return "Finding GPS", detail, progress
       return "Waiting for GPS", "The map appears once the car has a location."
     return None
 
@@ -911,16 +1138,26 @@ class NavMapView(Widget):
       remaining, total = int(route.get("remaining") or 0), int(route.get("total") or 0)
       if remaining > 0 and total > 0:
         badges.append((f"Saving route for offline • {100 * (total - remaining) // total}%", SUBTEXT))
+    progress = None
     if self._gps is not None and not self._gps.fresh and not self._preview_active:
-      badges.append(("No GPS fix", BADGE_WARN))
+      if self._acquiring():
+        satellites = (self._acquire_state or (None, 0))[0]
+        label = "Finding GPS" if satellites is None else f"Finding GPS  •  {satellites} sat{'s' if satellites != 1 else ''}"
+        progress = acquisition_progress(satellites)
+        badges.append((label, BADGE_WARN))
+      else:
+        badges.append(("No GPS fix", BADGE_WARN))
     x = rect.x + rect.width - 24
     y = rect.y + 24
-    for label, color in badges:
+    for index, (label, color) in enumerate(badges):
+      bar = progress is not None and index == len(badges) - 1
       width = self._text_width(label, 28) + 44
-      badge = rl.Rectangle(x - width, y, width, 56)
+      badge = rl.Rectangle(x - width, y, width, 72 if bar else 56)
       self._card(badge)
       self._text(label, badge.x + 22, badge.y + 13, 28, color)
-      y += 68
+      if bar:
+        self._progress_bar(badge.x + 22, badge.y + 52, width - 44, 8, progress)
+      y += badge.height + 12
 
   def _draw_attribution(self, rect: rl.Rectangle) -> None:
     label = "(c) Mapbox (c) OpenStreetMap"

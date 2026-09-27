@@ -1,6 +1,7 @@
 import { api, showSnackbar } from "../api.js"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "./GxNotice.js"
+import { GalaxyConfirm } from "./GalaxyModal.js"
 import {
   circlePolygon,
   coverageToGeoJson,
@@ -15,6 +16,14 @@ import {
   serviceNotice,
 } from "./auto_offline_helpers.js?v=auto-offline-3"
 import { getMapboxSearchContext } from "../../../components/navigation/navigation_utilities.js?v=nav-route-selection-1"
+
+// Map colors: the tile styles each choice keeps downloaded. No choice has traffic.
+const MAP_THEME_COLORS = { light: ["light"], dark: ["dark"], auto: ["light", "dark"] }
+const MAP_THEME_OPTIONS = [
+  { value: "dark", label: "Dark" },
+  { value: "light", label: "Light" },
+  { value: "auto", label: "Light & dark (automatic)" },
+]
 
 const MAPBOX_STYLE = "mapbox://styles/frogsgomoo/cmcfv151j000o01rcdxebhl76"
 const EMPTY = { type: "FeatureCollection", features: [] }
@@ -156,6 +165,7 @@ export const AndroidAutoOfflinePanel = {
       areaError: "",
       areaRequest: 0,
       cacheSettingBusy: false,
+      mapThemeOptions: MAP_THEME_OPTIONS,
       routeFrom: null,
       routeTo: null,
       routes: [],
@@ -196,6 +206,14 @@ export const AndroidAutoOfflinePanel = {
     storageLabel() {
       if (!this.summary) return "Checking..."
       return `${formatBytes(this.summary.offline_bytes)} of ${formatBytes(this.summary.max_bytes)}`
+    },
+    mapboxUsageLabel() {
+      const usage = this.summary?.usage
+      if (!usage) return "Checking..."
+      const tiles = Number(usage.tiles || 0).toLocaleString()
+      const free = Number(usage.free_tiles || 200000).toLocaleString()
+      const routes = Number(usage.directions || 0)
+      return `${tiles} of ${free} free tiles` + (routes ? ` • ${routes.toLocaleString()} route lookups` : "")
     },
     downloaderLabel() {
       if (!this.summary) return "Checking..."
@@ -471,6 +489,35 @@ export const AndroidAutoOfflinePanel = {
         this.cacheSettingBusy = false
       }
     },
+    async setMapTheme(event) {
+      if (!this.summary || this.cacheSettingBusy) return
+      const theme = String(event?.target?.value || "")
+      const previous = this.summary.map_theme || "dark"
+      if (!MAP_THEME_COLORS[theme] || theme === previous) return
+      const dropped = MAP_THEME_COLORS[previous].filter((color) => !MAP_THEME_COLORS[theme].includes(color))
+      let discardDropped = false
+      if (dropped.length) {
+        // Dismissing keeps them: nothing is deleted without a clear yes.
+        discardDropped = await GalaxyConfirm({
+          title: `Keep the saved ${dropped.join(" and ")} maps?`,
+          message: "Keeping them lets you switch back, or use light & dark, without downloading them again. They still count toward offline storage. Deleting frees the space.",
+          confirmLabel: "Delete",
+          cancelLabel: "Keep",
+          danger: true,
+        })
+      }
+      this.summary = { ...this.summary, map_theme: theme }
+      this.cacheSettingBusy = true
+      try {
+        const result = await api.setAutoOfflineSettings({ map_theme: theme, discard_dropped: discardDropped })
+        this.summary = { ...this.summary, map_theme: result.map_theme }
+      } catch (e) {
+        this.summary = { ...this.summary, map_theme: previous }
+        showSnackbar(e?.message || "Could not change the map colors.", "error")
+      } finally {
+        this.cacheSettingBusy = false
+      }
+    },
 
     // ── routes ─────────────────────────────────────────────────────────────
     clearRoutes() {
@@ -600,12 +647,23 @@ export const AndroidAutoOfflinePanel = {
             <span class="gx-switch__track"></span><span class="gx-switch__thumb"></span>
           </label>
         </div>
+        <div class="gx-row" style="border:none; padding:10px var(--sp-3); align-items:flex-start;">
+          <div class="gx-row__info">
+            <span class="gx-row__label">Map Colors</span>
+            <span class="gx-row__desc">No traffic is shown: saved maps would show the traffic from the day they were downloaded. Light & dark switches at sunrise and sunset where the car is, and keeps both downloaded. A new color downloads your saved areas again on Wi-Fi.</span>
+          </div>
+          <GalaxySelect class="gx-field" style="flex:none; min-width:170px;" :value="summary?.map_theme || 'dark'" :disabled="!summary || cacheSettingBusy" @change="setMapTheme" aria-label="Map colors">
+            <option v-for="option in mapThemeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </GalaxySelect>
+        </div>
       </section>
 
       <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; font-size:var(--fs-sm); color:var(--text-muted); padding:2px 0;">
         <span>Downloader: <strong style="color:var(--text);">{{ downloaderLabel }}</strong></span>
         <span style="opacity:0.3;">•</span>
         <span>Storage: <strong style="color:var(--text);">{{ storageLabel }}</strong></span>
+        <span style="opacity:0.3;">•</span>
+        <span title="Map tiles and route lookups this comma requested from Mapbox this month (UTC). Searches and maps in The Galaxy are not included.">Mapbox this month: <strong style="color:var(--text);">{{ mapboxUsageLabel }}</strong></span>
         <span style="opacity:0.3;">•</span>
         <span>Current Route: <strong style="color:var(--text);">{{ summary ? activeRouteLabel : 'Checking...' }}</strong></span>
       </div>

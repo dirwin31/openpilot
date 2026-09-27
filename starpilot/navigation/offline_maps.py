@@ -13,7 +13,8 @@ State is plain JSON files beside the tiles, each written atomically by one side:
   offline/areas/<id>.json      area definitions (UI writes, navtilesd deletes)
   offline/auto_saved/...       markers protecting tiles saved while driving
   offline/auto_saved_pending/  tiles waiting to be promoted from regular cache
-  offline/settings.json        save-as-you-drive preference (UI writes, map reads)
+  offline/settings.json        save-as-you-drive and map colors, plus styles to delete (UI writes, map and navtilesd read)
+  offline/usage.json           Mapbox requests this month (see mapbox_usage.py)
   offline/promote_viewed       one-shot request to pin tiles already in the regular cache
   offline/status.json          download progress (navtilesd writes)
   offline/preview_route.json   the route being previewed in the UI (UI writes)
@@ -33,13 +34,15 @@ from pathlib import Path
 from typing import Any
 
 from openpilot.starpilot.navigation.map_tiles import (
-  DEFAULT_STYLE,
   TILE_SIZE,
   TileCache,
   TileKey,
   corridor_tiles,
   default_cache_dir,
+  DARK_STYLE,
+  LIGHT_STYLE,
   offline_root,
+  style_dir_name,
   tiles_covering,
   world_xy,
 )
@@ -65,6 +68,69 @@ AREA_MAX_RADIUS_KM = 150.0
 # radius in this range and derives detail with ``area_zoom_for_radius``.
 AREA_PRESETS = ((10.0, 16), (30.0, 15), (60.0, 14), (150.0, 13))
 AREA_ZOOM_CHOICES = (14, 15, 16)  # detail The Galaxy lets the user pick instead of the radius default
+
+# Map colors. "auto" keeps both styles and shows light between sunrise and sunset.
+MAP_THEMES = ("light", "dark", "auto")
+DEFAULT_MAP_THEME = "dark"
+THEME_STYLES = {"light": (LIGHT_STYLE,), "dark": (DARK_STYLE,), "auto": (LIGHT_STYLE, DARK_STYLE)}
+SUNSET_ELEVATION = -0.833  # degrees: the sun's upper edge on the horizon, refraction included
+FALLBACK_DAY_HOURS = (7, 19)  # local clock hours for light maps before the device has ever had a location
+
+
+def sun_elevation(latitude: float, longitude: float, wall: float) -> float:
+  """The sun's elevation in degrees (NOAA's low-precision formulas, well under a degree off)."""
+  days = wall / 86400.0 + 2440587.5 - 2451545.0  # since J2000
+  anomaly = math.radians((357.529 + 0.98560028 * days) % 360.0)
+  mean_longitude = 280.459 + 0.98564736 * days
+  ecliptic = math.radians(mean_longitude + 1.915 * math.sin(anomaly) + 0.020 * math.sin(2 * anomaly))
+  obliquity = math.radians(23.439 - 0.00000036 * days)
+  right_ascension = math.atan2(math.cos(obliquity) * math.sin(ecliptic), math.cos(ecliptic))
+  declination = math.asin(math.sin(obliquity) * math.sin(ecliptic))
+  sidereal_hours = (18.697374558 + 24.06570982441908 * days) % 24.0
+  hour_angle = math.radians(sidereal_hours * 15.0 + longitude) - right_ascension
+  lat = math.radians(latitude)
+  return math.degrees(math.asin(math.sin(lat) * math.sin(declination) +
+                                math.cos(lat) * math.cos(declination) * math.cos(hour_angle)))
+
+
+def is_daytime(position: tuple[float, float] | None, wall: float) -> bool:
+  if position is None:
+    return FALLBACK_DAY_HOURS[0] <= time.localtime(wall).tm_hour < FALLBACK_DAY_HOURS[1]
+  return sun_elevation(position[0], position[1], wall) > SUNSET_ELEVATION
+
+
+def theme_style(theme: str, position: tuple[float, float] | None, wall: float) -> str:
+  """The style the map shows right now."""
+  if theme == "light":
+    return LIGHT_STYLE
+  if theme == "auto":
+    return LIGHT_STYLE if is_daytime(position, wall) else DARK_STYLE
+  return DARK_STYLE
+
+
+def parse_position(raw: Any) -> tuple[float, float] | None:
+  """(latitude, longitude) from a LastGPSPosition value, or None."""
+  try:
+    state = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    latitude, longitude = float(state["latitude"]), float(state["longitude"])
+  except (TypeError, ValueError, KeyError):
+    return None
+  if not (math.isfinite(latitude) and math.isfinite(longitude)) or (abs(latitude) < 1e-6 and abs(longitude) < 1e-6):
+    return None
+  return latitude, longitude
+
+
+def last_known_position() -> tuple[float, float] | None:
+  """The device's live position, else the last one saved. Only used to place the sun."""
+  try:
+    from openpilot.common.params import Params
+    for params in (Params(memory=True), Params()):
+      position = parse_position(params.get("LastGPSPosition", encoding="utf-8"))
+      if position is not None:
+        return position
+  except Exception:
+    pass
+  return None
 
 
 def _now() -> float:
@@ -254,7 +320,8 @@ def thin_points(points: Sequence[tuple[float, float]], limit: int) -> list[tuple
 
 
 class OfflineMaps:
-  def __init__(self, base: Path | None = None):
+  def __init__(self, base: Path | None = None, position=last_known_position):
+    self._position = position
     self.base = Path(base or default_cache_dir())
     self.root = offline_root(self.base)
     self.areas_dir = self.root / "areas"
@@ -330,14 +397,70 @@ class OfflineMaps:
       "service_running": updated > 0 and _now() - updated < SERVICE_STALE_SECONDS,
       "refresh_days": AREA_REFRESH_SECONDS // 86400,
       "save_viewed_cache": self.save_viewed_cache(),
+      "map_theme": self.map_theme(),
+      "usage": self.usage(),
     }
 
-  def save_viewed_cache(self) -> bool:
+  def _settings(self) -> dict[str, Any]:
     raw = _read_json(self.settings_path)
-    return bool(raw.get("save_viewed_cache")) if isinstance(raw, dict) else False
+    return raw if isinstance(raw, dict) else {}
+
+  def save_viewed_cache(self) -> bool:
+    return bool(self._settings().get("save_viewed_cache"))
+
+  def map_theme(self) -> str:
+    theme = self._settings().get("map_theme")
+    return theme if theme in MAP_THEMES else DEFAULT_MAP_THEME
+
+  def active_styles(self) -> tuple[str, ...]:
+    """Styles kept downloaded for saved areas."""
+    return THEME_STYLES[self.map_theme()]
+
+  def display_style(self, wall: float | None = None) -> str:
+    return theme_style(self.map_theme(), self._position() if self.map_theme() == "auto" else None,
+                       _now() if wall is None else wall)
+
+  @property
+  def style(self) -> str:
+    """The style shown now; the one coverage and save-as-you-drive work in."""
+    return self.display_style()
+
+  def dropped_styles(self, theme: str) -> list[str]:
+    """Styles in use now that ``theme`` would stop using: the ones to ask keep-or-delete about."""
+    return [style for style in self.active_styles() if style not in THEME_STYLES[theme]]
+
+  def set_map_theme(self, theme: str, discard_dropped: bool = False) -> None:
+    """Switch map colors. Dropped styles stay on disk (for switching back) unless discarded;
+    navtilesd deletes discarded ones and downloads saved areas in any new style on Wi-Fi."""
+    if theme not in MAP_THEMES:
+      raise ValueError(f"Unknown map colors {theme!r}")
+    settings = self._settings()
+    discard = [style for style in settings.get("discard_styles") or [] if style not in THEME_STYLES[theme]]
+    if discard_dropped:
+      discard += [style for style in self.dropped_styles(theme) if style not in discard]
+    settings.pop("show_traffic", None)
+    _write_json(self.settings_path, {**settings, "map_theme": theme, "discard_styles": discard})
+
+  def pending_discards(self) -> list[str]:
+    styles = self._settings().get("discard_styles") or []
+    return [style for style in styles if isinstance(style, str) and style not in self.active_styles()]
+
+  def clear_discards(self, styles: Iterable[str]) -> None:
+    settings = self._settings()
+    done = set(styles)
+    settings["discard_styles"] = [style for style in settings.get("discard_styles") or [] if style not in done]
+    _write_json(self.settings_path, settings)
+
+  def style_roots(self, style: str) -> list[Path]:
+    """Every directory holding tiles of ``style``: saved areas and the temporary cache."""
+    return [self.root / style_dir_name(style), self.base / style_dir_name(style)]
+
+  def usage(self) -> dict[str, Any]:
+    from openpilot.starpilot.navigation.mapbox_usage import FREE_DIRECTIONS_REQUESTS, FREE_TILE_REQUESTS, read_usage
+    return {**read_usage(self.root / "usage.json"), "free_tiles": FREE_TILE_REQUESTS, "free_directions": FREE_DIRECTIONS_REQUESTS}
 
   def set_save_viewed_cache(self, enabled: bool) -> None:
-    _write_json(self.settings_path, {"save_viewed_cache": bool(enabled)})
+    _write_json(self.settings_path, {**self._settings(), "save_viewed_cache": bool(enabled)})
     if enabled:
       # Tiles already in the temporary cache should turn green right away, not only
       # ones viewed after this point. navtilesd picks up the request and promotes them.
@@ -363,7 +486,7 @@ class OfflineMaps:
 
   def cached_regular_tiles(self) -> list[TileKey]:
     """Tiles present in the temporary route cache."""
-    root = TileCache(self.base, DEFAULT_STYLE).root
+    root = TileCache(self.base, self.style).root
     keys = []
     try:
       for path in root.glob("*/*/*.png"):
@@ -381,7 +504,7 @@ class OfflineMaps:
     Called when save-as-you-drive is switched on so tiles on disk turn green without
     waiting to be viewed again. Already-pinned or already-marked tiles are left alone.
     """
-    pinned = TileCache(self.root, DEFAULT_STYLE)
+    pinned = TileCache(self.root, self.style)
     marked = 0
     for key in self.cached_regular_tiles():
       if pinned.contains(key) or self.is_auto_saved(key):
@@ -459,7 +582,7 @@ class OfflineMaps:
     first_y, last_y = tile_y(north), tile_y(south)
     found = {}
     for base, saved in ((self.root, True), (self.base, False)):
-      root = TileCache(base, DEFAULT_STYLE).root / str(zoom)
+      root = TileCache(base, self.style).root / str(zoom)
       try:
         columns = list(root.iterdir())
       except OSError:

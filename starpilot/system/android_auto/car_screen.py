@@ -45,7 +45,10 @@ STATUS_METRICS = {
   "temperature": (20, "Temperature"),
   "memory": (21, "Memory Usage"),
   "storage": (22, "Free Storage"),
+  "starpilot_logo": (23, "StarPilot Logo"),
+  "blank": (-1, "Blank"),  # keeps its place in the column, draws nothing
 }
+STATUS_SLOT_COUNT = 7
 DEFAULTS = {
   "onroad_view": "split",
   "map_side": "right",
@@ -54,7 +57,7 @@ DEFAULTS = {
   "blind_spot_monitors": True,
   "blind_spot_min_speed_ms": 0.0,
   "sleep_device_screen": False,
-  "status_slots": ["steer_delay", "friction", "cpu", "gpu", "temperature", "memory"],
+  "status_slots": ["steer_delay", "friction", "cpu", "gpu", "temperature", "memory", "starpilot_logo"],
 }
 RELOAD_SECONDS = 1.0
 # Set by tools/android_auto/dhu_device.py for a Desktop Head Unit session; the car view
@@ -83,7 +86,11 @@ def normalize(raw: object) -> dict:
     if isinstance(raw.get("sleep_device_screen"), bool):
       settings["sleep_device_screen"] = raw["sleep_device_screen"]
     status_slots = raw.get("status_slots")
-    if isinstance(status_slots, list) and len(status_slots) == 6 and all(isinstance(slot, str) and slot in STATUS_METRICS for slot in status_slots):
+    if isinstance(status_slots, list) and len(status_slots) == STATUS_SLOT_COUNT - 1:
+      # Saved before the seventh slot existed: keep the six, add the default seventh.
+      status_slots = [*status_slots, DEFAULTS["status_slots"][-1]]
+    if isinstance(status_slots, list) and len(status_slots) == STATUS_SLOT_COUNT and \
+       all(isinstance(slot, str) and slot in STATUS_METRICS for slot in status_slots):
       settings["status_slots"] = list(status_slots)
     minimum_speed = raw.get("blind_spot_min_speed_ms")
     if isinstance(minimum_speed, (int, float)) and not isinstance(minimum_speed, bool) and math.isfinite(minimum_speed):
