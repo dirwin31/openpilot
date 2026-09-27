@@ -14,6 +14,7 @@ from openpilot.system.ui.widgets import Widget, DialogResult
 from openpilot.system.ui.widgets.label import gui_label
 
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.scribble import draw_custom_icon
+from openpilot.starpilot.system.android_auto.ui import settings_style as _style
 from openpilot.selfdrive.ui.lib.ui_param_cache import shared_ui_params
 
 
@@ -25,9 +26,9 @@ MIN_TILE_WIDTH = 300
 TOGGLE_ROW_HEIGHT = 128
 TOGGLE_MIN_HEIGHT = 80
 
-_HUD_BG_ON = rl.Color(12, 10, 18, 230)
-_HUD_BG_DISABLED = rl.Color(6, 5, 10, 235)
-_HUD_BORDER_OFF = rl.Color(28, 27, 34, 255)
+_HUD_BG_ON = rl.Color(14, 12, 23, 235)
+_HUD_BG_DISABLED = rl.Color(8, 7, 16, 235)
+_HUD_BORDER_OFF = rl.Color(27, 20, 46, 255)
 _HUD_TEXT_DIM = rl.Color(220, 220, 230, 220)
 # Constellation accent node colors (replaces top dash LED)
 _CONST_PRIMARY = rl.Color(235, 240, 255, 255)
@@ -243,6 +244,12 @@ def draw_rounded_stroke(rect: rl.Rectangle, color: rl.Color, thickness: int = 1,
   rl.draw_rectangle_rounded_lines_ex(snapped, _roundness_for(snapped, radius_px), segments or _segments_for(snapped, radius_px), thickness, color)
 
 
+def text_y(top: float, height: float, size: float) -> float:
+  """Top of text that looks vertically centred in (top, height). Glyphs are drawn at
+  size * FONT_SCALE, and the capitals sit in the middle of that box."""
+  return top + (height - size * FONT_SCALE) / 2
+
+
 def truncate_text_ellipsis(
   font: rl.Font, text: str, max_width: float, font_size: int
 ) -> str:
@@ -257,22 +264,23 @@ def truncate_text_ellipsis(
 
 
 class AetherListColors:
-  PANEL_BG = rl.Color(8, 8, 10, 255)
-  PANEL_BORDER = rl.Color(255, 255, 255, 22)
-  PANEL_GLOW = rl.Color(92, 116, 151, 34)
-  HEADER = rl.Color(236, 242, 250, 255)
-  SUBTEXT = rl.Color(200, 210, 225, 255)
-  MUTED = rl.Color(160, 170, 185, 255)
+  # The car settings palette (settings_style), so the older StarPilot pages match the new ones.
+  PANEL_BG = _style.SIDEBAR
+  PANEL_BORDER = _style.BORDER
+  PANEL_GLOW = rl.Color(145, 96, 255, 20)
+  HEADER = _style.TEXT
+  SUBTEXT = rl.Color(205, 205, 230, 255)
+  MUTED = _style.MUTED
   ROW_BG = rl.Color(255, 255, 255, 0)
   ROW_BORDER = rl.Color(255, 255, 255, 0)
-  ROW_SEPARATOR = rl.Color(255, 255, 255, 16)
-  ROW_HOVER = rl.Color(255, 255, 255, 8)
-  CURRENT_BG = rl.Color(139, 92, 246, 18)
-  CURRENT_BORDER = rl.Color(139, 92, 246, 44)
+  ROW_SEPARATOR = rl.Color(58, 42, 106, 170)
+  ROW_HOVER = rl.Color(145, 96, 255, 14)
+  CURRENT_BG = _style.SELECTED
+  CURRENT_BORDER = _style.SELECTED_BORDER
   ACTION_BG = rl.Color(255, 255, 255, 0)
-  ACTION_SEPARATOR = rl.Color(255, 255, 255, 18)
-  PRIMARY = hex_to_color("#8B5CF6")
-  PRIMARY_SOFT = rl.Color(89, 116, 151, 48)
+  ACTION_SEPARATOR = rl.Color(58, 42, 106, 170)
+  PRIMARY = _style.ACCENT
+  PRIMARY_SOFT = rl.Color(145, 96, 255, 48)
   DANGER = rl.Color(173, 78, 90, 255)
   DANGER_SOFT = rl.Color(173, 78, 90, 44)
   SUCCESS = rl.Color(94, 168, 130, 255)
@@ -356,15 +364,15 @@ DEFAULT_PANEL_STYLE = PanelStyle(
   shell_bg=AetherListColors.PANEL_BG,
   shell_border=AetherListColors.PANEL_BORDER,
   shell_glow=AetherListColors.PANEL_GLOW,
-  surface_fill=rl.Color(255, 255, 255, 4),
-  surface_border=rl.Color(255, 255, 255, 14),
-  current_fill=rl.Color(255, 255, 255, 12),
-  current_border=rl.Color(255, 255, 255, 20),
+  surface_fill=_style.SURFACE,
+  surface_border=_style.BORDER,
+  current_fill=_style.SELECTED,
+  current_border=_style.SELECTED_BORDER,
   title_color=AetherListColors.HEADER,
   subtitle_color=AetherListColors.SUBTEXT,
   muted_color=AetherListColors.MUTED,
-  divider_color=rl.Color(255, 255, 255, 14),
-  underline_color=rl.Color(116, 136, 168, 150),
+  divider_color=AetherListColors.ROW_SEPARATOR,
+  underline_color=rl.Color(145, 96, 255, 150),
   accent=AetherListColors.PRIMARY,
   danger_fill=AetherListColors.DANGER_SOFT,
   danger_border=rl.Color(173, 78, 90, 50),
@@ -1769,7 +1777,7 @@ def draw_action_pill(
   draw_text_fit_common(
     gui_app.font(FontWeight.SEMI_BOLD),
     text,
-    rl.Vector2(rect.x + 12, rect.y + (rect.height - font_size) / 2),
+    rl.Vector2(rect.x + 12, text_y(rect.y, rect.height, font_size)),
     max(1.0, rect.width - 24),
     font_size,
     align_center=True,
@@ -1901,7 +1909,7 @@ def draw_tab_card(
     draw_text_fit_common(
       gui_app.font(FontWeight.MEDIUM),
       title,
-      rl.Vector2(rect.x + 12, rect.y + (rect.height - title_size) / 2),
+      rl.Vector2(rect.x + 12, text_y(rect.y, rect.height, title_size)),
       max(1.0, rect.width - 24),
       title_size,
       align_center=True,
@@ -2142,7 +2150,7 @@ def draw_settings_list_row(
       )
     else:
       eff_title_size = min(36, title_size)
-      title_y = draw_rect.y + (draw_rect.height - eff_title_size) / 2
+      title_y = text_y(draw_rect.y, draw_rect.height, eff_title_size)
       draw_text_fit_common(
         gui_app.font(FontWeight.SEMI_BOLD), title,
         rl.Vector2(text_left, title_y),
@@ -2204,7 +2212,7 @@ def draw_settings_list_row(
         v_right = chevron_rect.x - 16 if show_chevron else draw_rect.x + draw_rect.width - 24
 
       eff_value_size = min(28, value_size) if is_narrow else min(32, value_size)
-      value_y = draw_rect.y + (draw_rect.height - eff_value_size) / 2
+      value_y = text_y(draw_rect.y, draw_rect.height, eff_value_size)
 
       if subtitle:
         eff_title_size = min(34, title_size)
@@ -2226,7 +2234,7 @@ def draw_settings_list_row(
         )
       else:
         eff_title_size = min(36, title_size) if is_narrow else title_size
-        title_y = draw_rect.y + (draw_rect.height - eff_title_size) / 2
+        title_y = text_y(draw_rect.y, draw_rect.height, eff_title_size)
 
         draw_text_fit_common(
           gui_app.font(FontWeight.SEMI_BOLD), title,
@@ -2269,7 +2277,7 @@ def draw_settings_list_row(
     )
   else:
     eff_title_size = min(36, title_size)
-    title_y = draw_rect.y + (draw_rect.height - eff_title_size) / 2
+    title_y = text_y(draw_rect.y, draw_rect.height, eff_title_size)
     draw_text_fit_common(
       gui_app.font(FontWeight.SEMI_BOLD), title,
       rl.Vector2(text_left, title_y),
@@ -2307,7 +2315,7 @@ def draw_selectable_chip(rect: rl.Rectangle, text: str, *,
   draw_text_fit_common(
     resolved_font,
     text,
-    rl.Vector2(rect.x + padding_x, rect.y + (rect.height - font_size) / 2),
+    rl.Vector2(rect.x + padding_x, text_y(rect.y, rect.height, font_size)),
     max(1.0, rect.width - padding_x * 2),
     font_size,
     align_center=True,
@@ -2945,7 +2953,7 @@ def draw_selection_list_row(
     title_y = info_rect.y + (info_rect.height - text_height) / 2
     subtitle_y = title_y + title_size + 8
   else:
-    title_y = info_rect.y + (info_rect.height - title_size) / 2
+    title_y = text_y(info_rect.y, info_rect.height, title_size)
     subtitle_y = title_y
 
   draw_text_fit_common(
@@ -4792,7 +4800,8 @@ class AetherSliderDialog(Widget):
     width = min(px(1000), rect.width - px(32))
     height = min(px(550), rect.height - px(32))
     box = rl.Rectangle(rect.x + (rect.width - width) / 2, rect.y + (rect.height - height) / 2, width, height)
-    rl.draw_rectangle_rounded(box, .08, 16, style.BG)
+    style.rounded(box, px(24), style.BG)
+    style.outline(box, px(24), style.BORDER)
     pad, button_h, knob = px(24), px(56), px(56)
     style.text(rl.Rectangle(box.x + pad, box.y + px(16), width - pad * 2, px(48)), self.title, px(30), bold=True)
     style.text(rl.Rectangle(box.x + pad, box.y + px(76), width - pad * 2, px(66)), self.formatted_value(), px(48), style.ACCENT, True)
@@ -5322,7 +5331,7 @@ class AetherSegmentedControl(Widget):
         draw_text_fit_common(
           self._font,
           label,
-          rl.Vector2(face_rect.x + 16, face_rect.y + (face_rect.height - title_size) / 2),
+          rl.Vector2(face_rect.x + 16, text_y(face_rect.y, face_rect.height, title_size)),
           face_rect.width - 32,
           title_size,
           align_center=True,

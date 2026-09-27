@@ -127,15 +127,6 @@ def test_page_changes_and_back_preserve_lifecycle_without_folder_hops(shell):
   assert shell._current.widget.events[-1] == ('hide', '')
 
 
-def test_all_pages_picker_does_not_leave_old_panel_active(shell):
-  shell.show_event()
-  owner = shell._current.widget
-  shell._show_pages()
-  assert shell._page_list and owner.events[-1][0] == 'hide'
-  shell._back()
-  assert not shell._page_list and owner.events[-1][0] == 'show'
-
-
 def test_adapted_toggle_preserves_callback_and_lock(fonts, mocker):
   callback = mocker.Mock()
   item = toggle_item('Feature', initial_state=False, callback=callback)

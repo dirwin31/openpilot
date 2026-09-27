@@ -155,8 +155,13 @@ class NullPubMaster:
 def logical_size(request: FrameRequest) -> tuple[int, int, float, float]:
   """Logical UI size for the car's visible area, and the x/y scale to physical pixels."""
   visible_w, visible_h = request.width - request.margin_w, request.height - request.margin_h
-  width = max(MIN_LOGICAL_WIDTH, round(LOGICAL_HEIGHT * visible_w / visible_h))
-  return width, LOGICAL_HEIGHT, visible_w / width, visible_h / LOGICAL_HEIGHT
+  width = round(LOGICAL_HEIGHT * visible_w / visible_h)
+  if width >= MIN_LOGICAL_WIDTH:
+    return width, LOGICAL_HEIGHT, visible_w / width, visible_h / LOGICAL_HEIGHT
+  # Narrower than about 3:2 (4:3, portrait): keep the minimum width and grow the height, so
+  # both axes scale alike. Scaling them differently stretched the UI and misplaced clipping.
+  height = round(MIN_LOGICAL_WIDTH * visible_h / visible_w)
+  return MIN_LOGICAL_WIDTH, height, visible_w / MIN_LOGICAL_WIDTH, visible_h / height
 
 
 class TouchInput:

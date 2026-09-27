@@ -11,17 +11,21 @@ from contextlib import contextmanager
 
 import pyray as rl
 
-from openpilot.system.ui.lib.application import FontWeight, MousePos, gui_app
+from openpilot.system.ui.lib.application import FONT_SCALE, FontWeight, MousePos, gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 
-BG = rl.Color(12, 13, 20, 255)
-SURFACE = rl.Color(21, 22, 32, 255)
-BORDER = rl.Color(47, 48, 64, 255)
-TEXT = rl.Color(241, 241, 248, 255)
-MUTED = rl.Color(160, 164, 184, 255)
-ACCENT = rl.Color(153, 119, 255, 255)
-SELECTED = rl.Color(48, 37, 76, 255)
+# The Galaxy palette the car settings used before: blue-black surfaces with purple edges.
+BG = rl.Color(6, 6, 15, 255)
+SIDEBAR = rl.Color(10, 10, 22, 255)
+SURFACE = rl.Color(14, 12, 23, 255)
+BORDER = rl.Color(58, 42, 106, 255)
+SELECTED = rl.Color(33, 24, 62, 255)
+SELECTED_BORDER = rl.Color(118, 80, 214, 255)
+TRACK = rl.Color(40, 34, 66, 255)
+TEXT = rl.Color(248, 248, 255, 255)
+MUTED = rl.Color(160, 160, 191, 255)
+ACCENT = rl.Color(145, 96, 255, 255)
 
 UNIT = 1.6  # logical pixels per design pixel
 
@@ -90,11 +94,24 @@ def hairline():
   return max(1.0, 1.0 / gui_app._scale) if gui_app._scale > 0 else 1.0
 
 
-def outline(rect, roundness, color):
+def roundness(rect, radius):
+  """raylib's roundness for a corner radius in logical pixels."""
+  return min(1.0, 2.0 * radius / max(1.0, min(rect.width, rect.height)))
+
+
+def rounded(rect, radius, color):
+  rl.draw_rectangle_rounded(rect, roundness(rect, radius), 16, color)
+
+
+def outline(rect, radius, color):
   """Stroke just inside `rect`: raylib strokes outward, where a clip of the same size would cut it off."""
   t = hairline()
   inner = rl.Rectangle(rect.x + t, rect.y + t, max(0, rect.width - 2 * t), max(0, rect.height - 2 * t))
-  rl.draw_rectangle_rounded_lines_ex(inner, roundness, 12, t, color)
+  rl.draw_rectangle_rounded_lines_ex(inner, roundness(inner, max(0.0, radius - t)), 16, t, color)
+
+
+BUTTON_RADIUS = px(16)
+ROW_RADIUS = px(18)
 
 
 def text(rect, value, size=TEXT_SIZE, color=TEXT, bold=False, align='left'):
@@ -106,18 +123,25 @@ def text(rect, value, size=TEXT_SIZE, color=TEXT, bold=False, align='left'):
   if align != 'left':
     slack = max(0, rect.width - measure_text_cached(font, value, size).x)
     x += slack / 2 if align == 'center' else slack
-  rl.draw_text_ex(font, value, rl.Vector2(round(x), round(rect.y + (rect.height - size) / 2)), size, 0, color)
+  # Glyphs are drawn at size * FONT_SCALE; centring that box centres the capitals.
+  rl.draw_text_ex(font, value, rl.Vector2(round(x), round(rect.y + (rect.height - size * FONT_SCALE) / 2)), size, 0, color)
+
+
+def text_width(value, size, bold=False):
+  return measure_text_cached(gui_app.font(FontWeight.SEMI_BOLD if bold else FontWeight.NORMAL), str(value), size).x
 
 
 def button(rect, label, selected=False, size=BUTTON_SIZE, align='center', enabled=True):
-  rl.draw_rectangle_rounded(rect, 0.22, 12, SELECTED if selected else SURFACE)
-  outline(rect, 0.22, ACCENT if selected else BORDER)
-  text(rl.Rectangle(rect.x + px(16), rect.y, max(0, rect.width - px(32)), rect.height), label, size,
+  # Corners and padding are logical sizes; inside a zoomed page they stay the same on screen.
+  radius, pad = min(BUTTON_RADIUS / zoom_level(), rect.height / 2), px(16) / zoom_level()
+  rounded(rect, radius, SELECTED if selected else SURFACE)
+  outline(rect, radius, SELECTED_BORDER if selected else BORDER)
+  text(rl.Rectangle(rect.x + pad, rect.y, max(0, rect.width - 2 * pad), rect.height), label, size,
        TEXT if enabled else MUTED, bold=selected, align=align)
 
 
 def switch(rect, value, enabled=True):
-  color = ACCENT if value else BORDER
+  color = ACCENT if value else TRACK
   if not enabled:
     color = rl.Color(color.r, color.g, color.b, 100)
   rl.draw_rectangle_rounded(rect, 1, 16, color)
@@ -279,7 +303,9 @@ def render_settings(view, rect):
       _, width, size, sub_size, title_lines, subtitle_lines, control, text_top, stacked = layout
       target = f'{row.type}:{row.id}' if row.id != '__parent' else f'parent_toggle:{view._parent_toggle.label}'
       view._interactive_rects[target] = bounds
-      rl.draw_rectangle_rounded(bounds, .10, 10, SELECTED if view._pressed_target == target else SURFACE)
+      pressed = view._pressed_target == target
+      rounded(bounds, ROW_RADIUS, SELECTED if pressed else SURFACE)
+      outline(bounds, ROW_RADIUS, SELECTED_BORDER if pressed else BORDER)
       control = rl.Rectangle(bounds.x + control.x, bounds.y + control.y, control.width, control.height)
       ty = bounds.y + text_top
       for line in title_lines:

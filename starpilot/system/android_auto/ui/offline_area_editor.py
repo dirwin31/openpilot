@@ -12,7 +12,7 @@ import pyray as rl
 
 from openpilot.starpilot.navigation.map_tiles import TILE_SIZE, meters_per_world_unit, world_xy
 from openpilot.starpilot.system.android_auto.ui import settings_style as style
-from openpilot.starpilot.system.android_auto.ui.nav_map import Camera, NavMapView
+from openpilot.starpilot.system.android_auto.ui.nav_map import BADGE_WARN, Camera, NavMapView
 from openpilot.system.ui.lib.application import MousePos
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import Widget
@@ -85,6 +85,27 @@ class AreaMapView(NavMapView):
     rl.draw_circle_v(rl.Vector2(x, y), radius, CIRCLE_FILL)
     rl.draw_ring(rl.Vector2(x, y), max(0.0, radius - 3.0), radius, 0.0, 360.0, 96, CIRCLE_EDGE)
     self._draw_destination(camera, anchor, tile_scale)  # keep the pin above the circle
+
+  def _draw_status(self, rect: rl.Rectangle) -> None:
+    """Keep notices inside this small map: centered, and wrapped to its width."""
+    if self._tiles is None:
+      return
+    if not self._tiles.has_token:
+      # Without a key there are no tiles to see, so the notice takes the middle of the box.
+      self._notice(rect, "Add a Mapbox key in The Galaxy", middle=True)
+    elif self._tiles.service.offline:
+      self._notice(rect, "Offline - cached map", middle=False)
+
+  def _notice(self, rect: rl.Rectangle, label: str, middle: bool) -> None:
+    size, line_h, pad = 24, 32.0, 20.0
+    lines = style.lines(label, max(1.0, rect.width - 4 * pad), size)
+    width = min(rect.width - 2 * pad, max(style.text_width(line, size) for line in lines) + 2 * pad)
+    height = len(lines) * line_h + pad
+    y = rect.y + (rect.height - height) / 2 if middle else rect.y + pad
+    card = rl.Rectangle(rect.x + (rect.width - width) / 2, y, width, height)
+    self._card(card)
+    for index, line in enumerate(lines):
+      style.text(rl.Rectangle(card.x, card.y + pad / 2 + index * line_h, card.width, line_h), line, size, BADGE_WARN, align='center')
 
   def _handle_mouse_release(self, mouse_pos: MousePos) -> None:
     if self._preview_destination is None:

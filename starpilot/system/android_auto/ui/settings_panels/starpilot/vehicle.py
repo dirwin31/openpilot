@@ -15,6 +15,7 @@ from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmD
 from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOptionDialog
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import _SettingsPage
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import (
+  text_y,
   AETHER_LIST_METRICS,
   AetherSliderDialog,
   COMPACT_PANEL_METRICS,
@@ -574,7 +575,7 @@ class ButtonActionComboDialog(Widget):
         rl.draw_line(int(row_rect.x + 24), sep_y, int(row_rect.x + row_rect.width - 24), sep_y, rl.Color(255, 255, 255, 16))
 
       title_x = int(row_rect.x + 24)
-      title_y = int(row_rect.y + (row_rect.height - title_fs) / 2)
+      title_y = int(text_y(row_rect.y, row_rect.height, title_fs))
       rl.draw_text_ex(self._font_title, self._labels[i], rl.Vector2(title_x, title_y), title_fs, 0, rl.WHITE)
 
       action_name = self._controller._get_action_name(self._keys[i])
@@ -584,12 +585,12 @@ class ButtonActionComboDialog(Widget):
       text_w = measure_text_cached(font_label, action_name, value_fs).x
       if text_w <= available_w:
         val_x = value_right - text_w
-        val_y = int(row_rect.y + (row_rect.height - value_fs) / 2)
+        val_y = int(text_y(row_rect.y, row_rect.height, value_fs))
         rl.draw_text_ex(font_value, action_name, rl.Vector2(val_x, val_y), value_fs, 0, rl.WHITE)
       else:
         draw_text_fit_common(
           font_value, action_name,
-          rl.Vector2(value_left, int(row_rect.y + (row_rect.height - value_fs) / 2)),
+          rl.Vector2(value_left, int(text_y(row_rect.y, row_rect.height, value_fs))),
           available_w, value_fs, color=rl.WHITE,
         )
 
