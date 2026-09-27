@@ -13,4 +13,4 @@ class Button(BaseButton):
 
   def _render(self, rect):
     label = self._label._text
-    style.button(rect, label() if callable(label) else label, self.is_pressed, 24, self._align)
+    style.button(rect, label() if callable(label) else label, self.is_pressed, style.px(24), self._align)

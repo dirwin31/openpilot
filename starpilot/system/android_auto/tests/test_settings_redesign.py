@@ -35,9 +35,10 @@ def test_rows_reserve_space_for_text_and_controls(fonts, width, kind, value):
   assert height >= 96
   assert control.x >= 0 and control.x + control.width <= width
   assert control.y >= 0 and control.y + control.height <= height
-  text_bottom = text_top + len(titles) * (size + 5) + 6 + len(subtitles) * (sub_size + 5)
-  assert 20 <= text_top and text_bottom <= height - 20
-  assert 20 + text_width <= control.x or text_bottom <= control.y
+  pad = style.ROW_PAD
+  text_bottom = text_top + len(titles) * (size + style.LINE_GAP) + style.px(6) + len(subtitles) * (sub_size + style.LINE_GAP)
+  assert pad <= text_top and text_bottom <= height - pad
+  assert pad + text_width <= control.x or text_bottom <= control.y
 
 
 def test_car_and_galaxy_updates_preserve_each_others_preferences(tmp_path, monkeypatch):
@@ -241,3 +242,21 @@ def test_selected_page_stays_visible_after_resize(shell, monkeypatch):
     selected = shell._targets['page:driving_11']
     assert selected.width >= 130
     assert 0 <= selected.x < selected.x + selected.width <= width
+
+
+def test_zoom_maps_touches_and_clipping_then_restores(monkeypatch, mocker):
+  from openpilot.system.ui.lib.application import MouseEvent, MousePos
+  for name in ('rl_push_matrix', 'rl_pop_matrix', 'rl_scalef'):
+    monkeypatch.setattr(rl, name, mocker.Mock())
+  app = style.gui_app
+  event = MouseEvent(MousePos(160, 320), 0, True, False, True, 0.0)
+  monkeypatch.setattr(app, '_mouse_events', [event])
+  monkeypatch.setattr(app, '_last_mouse_event', event)
+  monkeypatch.setattr(app, '_scale', 0.5)
+  patch = mocker.patch.object(app, '_patch_scissor_mode')
+  with style.zoom(rl.Rectangle(160, 320, 800, 400), 1.6) as inner:
+    assert (inner.x, inner.y, inner.width, inner.height) == (100, 200, 500, 250)
+    assert app._mouse_events[0].pos == MousePos(100, 200) and app._last_mouse_event.pos == MousePos(100, 200)
+    assert app._scale == 0.8 and style.zoom_level() == 1.6
+  assert app._mouse_events == [event] and app._scale == 0.5 and style.zoom_level() == 1.0
+  assert patch.call_count == 2

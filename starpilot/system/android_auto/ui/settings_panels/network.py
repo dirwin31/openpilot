@@ -29,8 +29,9 @@ except Exception:
 NM_DEVICE_STATE_NEED_AUTH = 60
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 64
-ITEM_HEIGHT = 132
-ICON_SIZE = 50
+px = style.px
+ITEM_HEIGHT = px(132)
+ICON_SIZE = px(50)
 
 STRENGTH_ICONS = [
   "icons/wifi_strength_low.png",
@@ -57,10 +58,10 @@ class NavButton(Widget):
   def __init__(self, text: str):
     super().__init__()
     self.text = text
-    self.set_rect(rl.Rectangle(0, 0, 170, 56))
+    self.set_rect(rl.Rectangle(0, 0, px(170), px(56)))
 
   def _render(self, rect):
-    style.button(rect, self.text, self.is_pressed, 25)
+    style.button(rect, self.text, self.is_pressed, px(25))
 
 
 class NetworkUI(Widget):
@@ -88,11 +89,11 @@ class NetworkUI(Widget):
     super().hide_event()
 
   def _render(self, rect):
-    style.text(rl.Rectangle(rect.x + 16, rect.y + 8, max(1, rect.width - 210), 56), tr("Wi-Fi"), 32, bold=True)
-    self._nav_button.set_rect(rl.Rectangle(rect.x + rect.width - 186, rect.y + 8, 170, 56))
+    style.text(rl.Rectangle(rect.x + px(16), rect.y + px(8), max(1, rect.width - px(210)), px(56)), tr("Wi-Fi"), px(32), bold=True)
+    self._nav_button.set_rect(rl.Rectangle(rect.x + rect.width - px(186), rect.y + px(8), px(170), px(56)))
     self._nav_button.text = tr("Advanced") if self._current_panel == PanelType.WIFI else tr("Networks")
     self._nav_button.render()
-    content_rect = rl.Rectangle(rect.x, rect.y + 80, rect.width, max(1, rect.height - 80))
+    content_rect = rl.Rectangle(rect.x, rect.y + px(80), rect.width, max(1, rect.height - px(80)))
     panel = self._wifi_panel if self._current_panel == PanelType.WIFI else self._advanced_panel
     panel.set_parent_rect(content_rect)
     panel.render(content_rect)
@@ -365,9 +366,9 @@ class WifiManagerUI(Widget):
 
   def _draw_network_item(self, rect, network: Network):
     # Reserve the action rail first so long SSIDs cannot run underneath it.
-    narrow = rect.width < 750
-    rail_width = 120 if narrow else 280
-    ssid_rect = rl.Rectangle(rect.x + 12, rect.y + 10, max(1, rect.width - rail_width - 36), 64)
+    narrow = rect.width < px(750)
+    rail_width = px(120) if narrow else px(280)
+    ssid_rect = rl.Rectangle(rect.x + px(12), rect.y + px(10), max(1, rect.width - rail_width - px(36)), px(64))
     busy = self._state_network is not None and self._state_network.ssid == network.ssid and self.state in (UIState.CONNECTING, UIState.FORGETTING)
     connect = self._networks_buttons[network.ssid]
     connect.set_enabled(not busy and network.security_type != SecurityType.UNSUPPORTED)
@@ -377,15 +378,15 @@ class WifiManagerUI(Widget):
       status = tr("Connecting...") if self.state == UIState.CONNECTING else tr("Forgetting...")
     else:
       status = tr("Connected") if self._wifi_manager.connected_ssid == network.ssid else tr("Tap to connect")
-    style.text(rl.Rectangle(rect.x + 28, rect.y + 78, max(1, rect.width - rail_width - 50), 40), status, 24, style.MUTED)
+    style.text(rl.Rectangle(rect.x + px(28), rect.y + px(78), max(1, rect.width - rail_width - px(50)), px(40)), status, px(24), style.MUTED)
     if not busy and self._wifi_manager.is_connection_saved(network.ssid):
       forget = self._forget_networks_buttons[network.ssid]
       forget.set_parent_rect(self._rect)
-      forget.render(rl.Rectangle(rect.x + rect.width - 132, rect.y + (rect.height - 56) / 2, 120, 56))
+      forget.render(rl.Rectangle(rect.x + rect.width - px(132), rect.y + (rect.height - px(56)) / 2, px(120), px(56)))
     if not narrow:
       icon_y = rect.y + (rect.height - ICON_SIZE) / 2
-      signal_icon_rect = rl.Rectangle(rect.x + rect.width - 270, icon_y, ICON_SIZE, ICON_SIZE)
-      security_icon_rect = rl.Rectangle(rect.x + rect.width - 210, icon_y, ICON_SIZE, ICON_SIZE)
+      signal_icon_rect = rl.Rectangle(rect.x + rect.width - px(270), icon_y, ICON_SIZE, ICON_SIZE)
+      security_icon_rect = rl.Rectangle(rect.x + rect.width - px(210), icon_y, ICON_SIZE, ICON_SIZE)
       self._draw_status_icon(security_icon_rect, network)
       self._draw_signal_strength_icon(signal_icon_rect, network)
 

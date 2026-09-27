@@ -13,7 +13,7 @@ from openpilot.starpilot.system.android_auto.ui.settings_panels.network import N
 from openpilot.starpilot.system.android_auto.ui.settings_panels.software import SoftwareLayout
 from openpilot.starpilot.system.android_auto.ui.settings_panels.toggles import TogglesLayout
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import AetherSettingsView, SettingRow, SettingSection
-from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import StarPilotPanelType
+from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import StarPilotPanel, StarPilotPanelType
 from openpilot.starpilot.system.android_auto.ui.starpilot_settings import CarStarPilotLayout
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.bluetooth_manager import BluetoothManager
@@ -22,13 +22,12 @@ from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.wifi_manager import WifiManager
 from openpilot.system.ui.widgets import Widget
 
-HEADER_ROW = 60  # the Back bar's height plus the gap below it
 SECTIONS = ('Car Display', 'Navigation', 'Driving', 'Sounds & Alerts', 'Connections', 'Vehicle', 'Device & System')
 
 
 def sidebar_width(width):
   # On portrait/small screens the same labelled navigation becomes a drawer.
-  return 0 if width < 760 else min(300, max(210, width * .18))
+  return 0 if width < style.px(760) else min(style.px(320), max(style.px(210), width * .22))
 
 
 @dataclass
@@ -250,32 +249,49 @@ class CarSettingsLayout(Widget):
       index = min(current + 1, last)
     self._tabs_scroll.set_offset(-starts[max(0, index)])
 
-  def _button(self, key, rect, label, selected=False, clip=None, size=26, align='center'):
+  def _button(self, key, rect, label, selected=False, clip=None, size=None, align='center'):
+    size = size or style.px(26)
     from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import draw_chevron_icon
+    icon = style.px(20)
     if key in ('previous', 'next'):
-      draw_chevron_icon(rl.Rectangle(rect.x + 10, rect.y + 17, 20, 20), style.MUTED, direction='left' if key == 'previous' else 'right')
+      draw_chevron_icon(rl.Rectangle(rect.x + (rect.width - icon) / 2, rect.y + (rect.height - icon) / 2, icon, icon), style.MUTED,
+                        thickness=style.px(4), direction='left' if key == 'previous' else 'right')
     elif key == 'back':
-      # A full-width bar: the chevron and label sit at its left edge, like a list row.
+      # Laid out like the section rows under it, with a chevron before the label.
       style.button(rect, '', self._pressed == 'back', size)
-      draw_chevron_icon(rl.Rectangle(rect.x + 18, rect.y + (rect.height - 20) / 2, 20, 20), style.TEXT, direction='left')
-      style.text(rl.Rectangle(rect.x + 48, rect.y, max(0, rect.width - 64), rect.height), label, size)
+      inset = style.px(16)
+      draw_chevron_icon(rl.Rectangle(rect.x + inset, rect.y + (rect.height - icon) / 2, icon, icon), style.TEXT,
+                        thickness=style.px(4), direction='left')
+      text_x = rect.x + inset + icon + style.px(10)
+      style.text(rl.Rectangle(text_x, rect.y, max(0, rect.x + rect.width - inset - text_x), rect.height), label, size)
     else:
       style.button(rect, label, selected, size, align)
     bounds = rl.get_collision_rec(rect, clip) if clip else rect
     if bounds.width > 0 and bounds.height > 0:
       self._targets[key] = bounds
 
-  def _draw_navigation(self, rect):
+  def _draw_navigation(self, rect, back=True):
+    """Back, then one row per section, all the same width."""
     rl.draw_rectangle_rec(rect, style.BG)
-    style.text(rl.Rectangle(rect.x + 18, rect.y + 16, rect.width - 36, 44), 'Settings', 30, bold=True)
-    area = rl.Rectangle(rect.x + 12, rect.y + 76, rect.width - 24, max(1, rect.height - 88))
-    row_height = min(70, max(48, (area.height - 8 * (len(SECTIONS) - 1)) / len(SECTIONS)))
-    offset = self._nav_scroll.update(area, len(SECTIONS) * row_height + (len(SECTIONS) - 1) * 8)
+    gap, margin = style.px(8), style.px(12)
+    area = rl.Rectangle(rect.x + margin, rect.y + margin, rect.width - 2 * margin, max(1, rect.height - 2 * margin))
+    rows = (['back'] if back else []) + [f'section:{section}' for section in SECTIONS]
+    back_gap = style.px(10) if back else 0  # sets Back apart from the sections
+    row_height = min(style.px(70), max(style.px(48), (area.height - back_gap - gap * (len(rows) - 1)) / len(rows)))
+    offset = self._nav_scroll.update(area, len(rows) * row_height + (len(rows) - 1) * gap + back_gap)
+    size = style.px(22) if rect.width < style.px(260) else style.px(24)
     rl.begin_scissor_mode(int(area.x), int(area.y), int(area.width), int(area.height))
-    for index, section in enumerate(SECTIONS):
-      item = rl.Rectangle(area.x, area.y + index * (row_height + 8) + offset, area.width, row_height)
-      label = {'Sounds & Alerts': 'Sounds', 'Device & System': 'System'}.get(section, section)
-      self._button(f'section:{section}', item, label, section == self._section, area, size=23 if rect.width < 250 else 26, align='left')
+    y = area.y + offset
+    for key in rows:
+      item = rl.Rectangle(area.x, y, area.width, row_height)
+      if key == 'back':
+        self._button('back', item, 'Back', clip=area, size=size)
+        y += back_gap
+      else:
+        section = key[8:]
+        label = {'Sounds & Alerts': 'Sounds', 'Device & System': 'System'}.get(section, section)
+        self._button(key, item, label, section == self._section, area, size=size, align='left')
+      y += row_height + gap
     rl.end_scissor_mode()
 
   def _render(self, rect):
@@ -284,27 +300,30 @@ class CarSettingsLayout(Widget):
     width = sidebar_width(rect.width)
     if width:
       self._draw_navigation(rl.Rectangle(rect.x, rect.y, width, rect.height))
-    gap = 16 if width else 8
-    content = rl.Rectangle(rect.x + width + gap, rect.y + 12, max(1, rect.width - width - gap * 2), rect.height - 24)
-    # Row 1 is a full-width Back bar; row 2 holds the section title and All Pages.
-    self._button('back', rl.Rectangle(content.x, content.y, content.width, 52), 'Back', size=24)
-    row = content.y + HEADER_ROW
-    sections_w = 0 if width else 148
+    gap = style.px(16) if width else style.px(8)
+    margin = style.px(12)
+    content = rl.Rectangle(rect.x + width + gap, rect.y + margin, max(1, rect.width - width - gap * 2), rect.height - 2 * margin)
+    # The header row: section title and All Pages. Without the sidebar, Back and Sections lead it.
+    head_h, font = style.px(52), style.px(24)
+    title_x = content.x + style.px(16)
     if not width:
-      self._button('sections', rl.Rectangle(content.x, row, 140, 52), 'Sections', size=24)
-    title_x = content.x + sections_w + 16
-    title_w = max(0, content.x + content.width - title_x - 152)
-    style.text(rl.Rectangle(title_x, row, title_w, 52), self._section, 28, bold=True)
-    self._button('pages', rl.Rectangle(content.x + content.width - 144, row, 144, 52), 'All Pages', self._page_list, size=24)
+      self._button('back', rl.Rectangle(content.x, content.y, style.px(120), head_h), 'Back', size=font)
+      self._button('sections', rl.Rectangle(content.x + style.px(128), content.y, style.px(140), head_h), 'Sections', size=font)
+      title_x = content.x + style.px(284)
+    pages_w = style.px(144)
+    title_w = max(0, content.x + content.width - title_x - pages_w - style.px(8))
+    style.text(rl.Rectangle(title_x, content.y, title_w, head_h), self._section, style.px(28), bold=True)
+    self._button('pages', rl.Rectangle(content.x + content.width - pages_w, content.y, pages_w, head_h), 'All Pages', self._page_list, size=font)
     pages = [page for page in self._pages.values() if page.section == self._section]
-    widths = [max(130, measure_text_cached(gui_app.font(FontWeight.NORMAL), page.title, 25).x + 40) for page in pages]
-    starts = [sum(widths[:i]) + 8 * i for i in range(len(pages))]
-    total = sum(widths) + 8 * max(0, len(pages) - 1)
+    tab_font, tab_h, tab_gap, inset, arrow = style.px(25), style.px(54), style.px(8), style.px(16), style.px(44)
+    widths = [max(style.px(130), measure_text_cached(gui_app.font(FontWeight.NORMAL), page.title, tab_font).x + style.px(40)) for page in pages]
+    starts = [sum(widths[:i]) + tab_gap * i for i in range(len(pages))]
+    total = sum(widths) + tab_gap * max(0, len(pages) - 1)
     # Tabs that fit line up with the rows below; arrows take the edges only when they overflow.
-    overflow = total > content.width - 32
-    tabs_y = content.y + HEADER_ROW + 64
-    tabs = rl.Rectangle(content.x + 48, tabs_y, max(1, content.width - 96), 54) if overflow else \
-      rl.Rectangle(content.x + 16, tabs_y, max(1, content.width - 32), 54)
+    overflow = total > content.width - 2 * inset
+    tabs_y = content.y + head_h + style.px(12)
+    tabs = rl.Rectangle(content.x + arrow + tab_gap, tabs_y, max(1, content.width - 2 * (arrow + tab_gap)), tab_h) if overflow else \
+      rl.Rectangle(content.x + inset, tabs_y, max(1, content.width - 2 * inset), tab_h)
     self._tab_starts, self._tab_widths, self._tab_view_width = starts, widths, tabs.width
     # Scroll only to tab edges, so no tab is left half-drawn at the left.
     extent = starts[self._first_tab(len(pages) - 1, total, tabs.width)] + tabs.width if overflow else total
@@ -316,19 +335,20 @@ class CarSettingsLayout(Widget):
     offset = self._tabs_scroll.update(tabs, extent)
     rl.begin_scissor_mode(int(tabs.x), int(tabs.y), int(tabs.width), int(tabs.height))
     for page, x, w in zip(pages, starts, widths, strict=True):
-      self._button(f'page:{page.key}', rl.Rectangle(tabs.x + offset + x, tabs.y, w, tabs.height), page.title, page.key == self._page, tabs, 25)
+      self._button(f'page:{page.key}', rl.Rectangle(tabs.x + offset + x, tabs.y, w, tabs.height), page.title, page.key == self._page, tabs, tab_font)
     rl.end_scissor_mode()
     if overflow:
-      self._button('previous', rl.Rectangle(content.x, tabs.y, 40, 54), '‹', size=28)
-      self._button('next', rl.Rectangle(content.x + content.width - 40, tabs.y, 40, 54), '›', size=28)
-    scope_h = 32 if self._current.scope and not self._page_list else 0
+      self._button('previous', rl.Rectangle(content.x, tabs.y, arrow, tab_h), '‹')
+      self._button('next', rl.Rectangle(content.x + content.width - arrow, tabs.y, arrow, tab_h), '›')
+    scope_h = style.px(32) if self._current.scope and not self._page_list else 0
     if scope_h:
-      style.text(rl.Rectangle(content.x + 16, tabs_y + 62, content.width - 32, scope_h), self._current.scope, 22, style.MUTED)
-    top = HEADER_ROW + 130 + scope_h
+      style.text(rl.Rectangle(content.x + inset, tabs_y + tab_h + style.px(8), content.width - 2 * inset, scope_h),
+                 self._current.scope, style.px(22), style.MUTED)
+    top = tabs_y - content.y + tab_h + style.px(12) + scope_h
     body = rl.Rectangle(content.x, content.y + top, content.width, max(1, content.height - top))
     if self._drawer and not width:
       self._targets = {key: value for key, value in self._targets.items() if key in ('back', 'sections')}
-      self._draw_navigation(body)
+      self._draw_navigation(body, back=False)
     else:
       widget = self._picker if self._page_list else self._current.widget
       widget.set_parent_rect(body)
@@ -336,7 +356,11 @@ class CarSettingsLayout(Widget):
       if view is not None:
         view._in_settings_shell = True
       rl.begin_scissor_mode(int(body.x), int(body.y), int(body.width), int(body.height))
-      widget.render(body)
+      if isinstance(widget, StarPilotPanel):
+        # StarPilot pages keep their 1:1 layouts; drawing them zoomed matches the px() pages.
+        style.render_zoomed(widget, body)
+      else:
+        widget.render(body)
       rl.end_scissor_mode()
 
   def show_event(self):

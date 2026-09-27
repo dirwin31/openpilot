@@ -21,14 +21,15 @@ from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOpt
 from openpilot.system.ui.widgets.toggle import Toggle
 
 
-HEADER_HEIGHT = 100
-NARROW_HEADER_HEIGHT = 156
-NARROW_HEADER_WIDTH = 460
-ITEM_HEIGHT = 120
-HEADER_PADDING = 20
-SCAN_BUTTON_WIDTH = 260
-FORGET_BUTTON_WIDTH = 128
-ACTION_GAP = 16
+px = style.px
+HEADER_HEIGHT = px(100)
+NARROW_HEADER_HEIGHT = px(156)
+NARROW_HEADER_WIDTH = px(460)
+ITEM_HEIGHT = px(120)
+HEADER_PADDING = px(20)
+SCAN_BUTTON_WIDTH = px(260)
+FORGET_BUTTON_WIDTH = px(128)
+ACTION_GAP = px(16)
 
 # Match the Network panel: the Settings surface stays pure black and list rows are transparent over it.
 PANEL_BACKGROUND = style.BG
@@ -110,9 +111,9 @@ class BluetoothDeviceRow(Widget):
     if self._show_forget():
       self._forget_rect = rl.Rectangle(
         self._rect.x + self._rect.width - FORGET_BUTTON_WIDTH,
-        self._rect.y + (self._rect.height - 80) / 2,
+        self._rect.y + (self._rect.height - px(56)) / 2,
         FORGET_BUTTON_WIDTH,
-        80,
+        px(56),
       )
     else:
       self._forget_rect = rl.Rectangle(0, 0, 0, 0)
@@ -133,17 +134,17 @@ class BluetoothDeviceRow(Widget):
 
     right_padding = FORGET_BUTTON_WIDTH + ACTION_GAP if self._show_forget() else HEADER_PADDING
     # Name and status are centered as one block on the row's midline, level with Forget.
-    top = rect.y + (rect.height - 76) / 2
-    text_rect = rl.Rectangle(rect.x + HEADER_PADDING, top, rect.width - HEADER_PADDING - right_padding, 40)
+    top = rect.y + (rect.height - px(76)) / 2
+    text_rect = rl.Rectangle(rect.x + HEADER_PADDING, top, rect.width - HEADER_PADDING - right_padding, px(40))
     text_color = rl.WHITE if enabled else TEXT_DISABLED
-    style.text(text_rect, state.device.name, 30, text_color, bold=True)
+    style.text(text_rect, state.device.name, px(30), text_color, bold=True)
 
-    status_rect = rl.Rectangle(text_rect.x, top + 44, text_rect.width, 32)
+    status_rect = rl.Rectangle(text_rect.x, top + px(44), text_rect.width, px(32))
     status = device_status_text(state.device, state.operation, state.selected_audio)
     status_color = TEXT_CONNECTED if state.device.connected and not state.operation else TEXT_SECONDARY
     if not enabled:
       status_color = TEXT_DISABLED
-    style.text(status_rect, status, 23, status_color)
+    style.text(status_rect, status, px(23), status_color)
 
     if self._show_forget():
       self._forget_button.set_enabled(enabled)
@@ -412,17 +413,17 @@ class BluetoothManagerUI(Widget):
     rl.draw_rectangle_rec(rect, PANEL_BACKGROUND)
     # The controls share the title's midline; only very narrow screens move them below it.
     narrow = rect.width < NARROW_HEADER_WIDTH
-    controls_y = rect.y + 94 if narrow else rect.y + 24
-    text_width = rect.width - 40 if narrow else max(80, rect.width - 310)
-    style.text(rl.Rectangle(rect.x + 20, rect.y + 12, text_width, 40), tr("Bluetooth"), 32, bold=True)
+    controls_y = rect.y + px(94) if narrow else rect.y + px(24)
+    text_width = rect.width - px(40) if narrow else max(px(80), rect.width - px(310))
+    style.text(rl.Rectangle(rect.x + px(20), rect.y + px(12), text_width, px(40)), tr("Bluetooth"), px(32), bold=True)
     subtitle = tr("On") if status.enabled else tr("Off")
     if status.enabled and not status.offroad:
       subtitle += " · " + tr("Limited while driving")
-    style.text(rl.Rectangle(rect.x + 20, rect.y + 52, text_width, 28), subtitle, 23, style.MUTED)
-    toggle_rect = rl.Rectangle(rect.x + rect.width - 108, controls_y, 88, 44)
+    style.text(rl.Rectangle(rect.x + px(20), rect.y + px(52), text_width, px(28)), subtitle, px(23), style.MUTED)
+    toggle_rect = rl.Rectangle(rect.x + rect.width - px(108), controls_y, px(88), px(44))
     # Preserve the existing toggle's input handling while drawing a clean switch.
     self._power_toggle.render(toggle_rect)
-    scan_rect = rl.Rectangle(toggle_rect.x - 156, controls_y - 4, 140, 52)
+    scan_rect = rl.Rectangle(toggle_rect.x - px(156), controls_y - px(4), px(140), px(52))
     self._scan_button.render(scan_rect)
 
   def _render_device_list(self, rect: rl.Rectangle, rows: list[BluetoothDeviceRow]):

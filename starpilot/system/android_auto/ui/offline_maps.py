@@ -38,7 +38,7 @@ from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aether
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.navigation import SearchResult
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import FrameCachedParams, _SettingsPage
 from openpilot.starpilot.navigation.destination_store import NavigationDestinationStore
-from openpilot.starpilot.navigation.offline_maps import AREA_PRESETS, OFFLINE_MAX_BYTES, OfflineMaps, estimate_area, format_bytes
+from openpilot.starpilot.navigation.offline_maps import OFFLINE_MAX_BYTES, OfflineMaps, area_zoom_for_radius, estimate_area, format_bytes
 from openpilot.starpilot.system.android_auto.ui.navigation import CarMapboxSearchClient
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
@@ -58,12 +58,15 @@ ROW_HEIGHT = 118.0
 BUTTON_HEIGHT = 84.0
 EMPTY_HEIGHT = 140.0
 REFRESH_SECONDS = 2.0
-AREA_DETAIL = {16: "street detail", 15: "city detail", 14: "road detail", 13: "regional"}
 
 SEGMENT_DISPLAY = 0
 SEGMENT_ROAD_DATA = 1
 SEGMENT_HEIGHT = 68.0
 CAPTION_HEIGHT = 44.0
+CAPTION_SIZE = 26
+CAPTION_LINE = 34.0
+STATUS_SIZE = 27
+STATUS_LINE = 36.0
 SEGMENT_CAPTIONS = (
   "The map on the comma and car screen. Saved areas keep it working without signal.",
   "Road data for speed limits and curve control, by state or country. Doesn't draw the map.",
@@ -87,7 +90,7 @@ class OfflineMapsManagerView(PanelManagerView):
     del rect
 
   def _measure_content_height(self, content_width: float) -> float:
-    del content_width
+    self._controller.row_width = max(1.0, content_width - INSET * 2)
     return INSET * 2 + sum(height for _, height, _ in self._controller.layout_rows())
 
   def _draw_scroll_content(self, scroll_rect: rl.Rectangle, content_width: float):
@@ -113,7 +116,9 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
     self.summary: dict[str, Any] = {}
     self.areas: list = []
     self.selected_area_id: str | None = None
-    self.chooser: dict[str, Any] | None = None  # {"latitude", "longitude", "name", "estimates"}
+    # The area being set up: {"latitude", "longitude", "name", "radius_km", "zoom" (None = auto), "estimate"}
+    self.chooser: dict[str, Any] | None = None
+    self._editor = None  # built on first use: its map loads fonts and tiles
     self.search_results: list[SearchResult] = []
     self.search_busy = False
     self.message = ""
@@ -152,11 +157,22 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
       self._segments = AetherSegmentedControl([tr("Map display"), tr("Speed limit data")], lambda: self.segment, self.open_segment,
                                               style=PANEL_STYLE, suppress_background=True)
     self._segments.render(rl.Rectangle(rect.x + INSET, rect.y, rect.width - INSET * 2, SEGMENT_HEIGHT))
+    # The caption wraps rather than being cut off; the page below moves down to make room.
     caption_y = rect.y + SEGMENT_HEIGHT + 8
-    style.text(rl.Rectangle(rect.x + INSET + 4, caption_y, rect.width - INSET * 2 - 8, CAPTION_HEIGHT),
-               tr(SEGMENT_CAPTIONS[self.segment]), 24, style.MUTED)
-    top = SEGMENT_HEIGHT + 8 + CAPTION_HEIGHT
-    self._segment_view(self.segment).render(rl.Rectangle(rect.x, rect.y + top, rect.width, max(1.0, rect.height - top)))
+    caption_w = rect.width - INSET * 2 - 8
+    editing = self.chooser is not None and self.segment == SEGMENT_DISPLAY  # the editor needs the room
+    captions = [] if editing else style.lines(tr(SEGMENT_CAPTIONS[self.segment]), caption_w, CAPTION_SIZE)
+    for index, line in enumerate(captions):
+      style.text(rl.Rectangle(rect.x + INSET + 4, caption_y + 5 + index * CAPTION_LINE, caption_w, CAPTION_LINE), line, CAPTION_SIZE, style.MUTED)
+    top = SEGMENT_HEIGHT + 8 + (max(CAPTION_HEIGHT, len(captions) * CAPTION_LINE + 10) if captions else 4)
+    body = rl.Rectangle(rect.x, rect.y + top, rect.width, max(1.0, rect.height - top))
+    if self.chooser is not None and self.segment == SEGMENT_DISPLAY:
+      if self._editor is None:
+        from openpilot.starpilot.system.android_auto.ui.offline_area_editor import AreaEditor
+        self._editor = AreaEditor(self)
+      self._editor.render(body)
+    else:
+      self._segment_view(self.segment).render(body)
 
   def hide_event(self):
     self._shown = False
@@ -296,8 +312,14 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
       index = int(target.split(":", 1)[1])
       if 0 <= index < len(self.search_results):
         self._pick_result(self.search_results[index])
-    elif target.startswith("preset:"):
-      self.save_preset(int(target.split(":", 1)[1]))
+    elif target.startswith("area_radius:") and self.chooser is not None:
+      self.step_radius(int(target.split(":", 1)[1]))
+    elif target.startswith("area_level:") and self.chooser is not None:
+      level = target.split(":", 1)[1]
+      self.chooser["zoom"] = None if level == "auto" else int(level)
+      self._estimate()
+    elif target == "area_save":
+      self.save_area()
     elif target.startswith("area:"):
       area_id = target.split(":", 1)[1]
       self.selected_area_id = None if self.selected_area_id == area_id else area_id
@@ -310,34 +332,81 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
     elif target == "area_action:delete" and self.selected_area_id:
       self._confirm_delete(self.selected_area_id)
 
+  @property
+  def metric(self) -> bool:
+    return bool(ui_state.is_metric)
+
   def open_chooser(self, latitude: float, longitude: float, name: str, reverse: bool = False) -> None:
+    """Drop the pin and open the area editor, keeping the radius and detail of an editor already open."""
+    from openpilot.starpilot.system.android_auto.ui.offline_area_editor import DEFAULT_RADIUS, MILE_KM
+    previous = self.chooser or {}
+    default_km = DEFAULT_RADIUS[self.metric] * (1.0 if self.metric else MILE_KM)
     self._generation += 1
-    generation = self._generation
-    fallback = name or f"{latitude:.3f}, {longitude:.3f}"
     self.search_results = []
-    self.chooser = {"latitude": latitude, "longitude": longitude, "name": fallback, "estimates": None}
-    public_key, search_client = self._public_key(), self._search_client
+    self.chooser = {"latitude": latitude, "longitude": longitude, "name": name or f"{latitude:.3f}, {longitude:.3f}",
+                    "radius_km": previous.get("radius_km", default_km), "zoom": previous.get("zoom"), "estimate": None}
+    if reverse:
+      self._name_pin(latitude, longitude)
+    self._estimate()
+
+  def move_pin(self, latitude: float, longitude: float) -> None:
+    if self.chooser is not None:
+      self.open_chooser(latitude, longitude, "", reverse=True)
+
+  def _name_pin(self, latitude: float, longitude: float) -> None:
+    generation, public_key, search_client = self._generation, self._public_key(), self._search_client
+    if not public_key:
+      return
 
     def worker():
-      estimates = [(radius, zoom) + estimate_area(latitude, longitude, radius, zoom) for radius, zoom in AREA_PRESETS]
-      place = fallback
-      if reverse and public_key:
-        try:
-          place = search_client.reverse(latitude, longitude, public_key) or fallback
-        except Exception:
-          pass
-      self._pending.put(("chooser", generation, {"estimates": estimates, "name": place}))
+      try:
+        place = search_client.reverse(latitude, longitude, public_key)
+      except Exception:
+        return
+      if place:
+        self._pending.put(("name", generation, place))
+
+    threading.Thread(target=worker, daemon=True, name="offline-area-name").start()
+
+  def area_zoom(self) -> int:
+    chooser = self.chooser or {}
+    return chooser.get("zoom") or area_zoom_for_radius(chooser.get("radius_km", 10.0))
+
+  def step_radius(self, direction: int) -> None:
+    from openpilot.starpilot.system.android_auto.ui.offline_area_editor import radius_steps
+    steps = radius_steps(self.metric)
+    current = min(range(len(steps)), key=lambda index: abs(steps[index] - self.chooser["radius_km"]))
+    self.chooser["radius_km"] = steps[max(0, min(len(steps) - 1, current + direction))]
+    self._estimate()
+
+  def _estimate(self) -> None:
+    """Size the area in the background; a newer change makes an older result stale."""
+    chooser = self.chooser
+    chooser["estimate"] = None
+    key = (chooser["latitude"], chooser["longitude"], chooser["radius_km"], self.area_zoom())
+    generation = self._generation
+
+    def worker():
+      self._pending.put(("estimate", generation, (key, estimate_area(*key))))
 
     threading.Thread(target=worker, daemon=True, name="offline-area-estimate").start()
 
-  def save_preset(self, index: int) -> None:
-    chooser = self.chooser
-    if chooser is None or not chooser.get("estimates") or not 0 <= index < len(chooser["estimates"]):
-      return
-    radius, zoom, _, size = chooser["estimates"][index]
+  def estimate_text(self) -> tuple[str, bool]:
+    """(text, whether the area can be saved)."""
+    from openpilot.starpilot.system.android_auto.ui.offline_area_editor import DETAIL
+    estimate = self.chooser and self.chooser.get("estimate")
+    if not estimate:
+      return tr("Sizing up the area…"), False
+    tiles, size = estimate
     if self.used_bytes + size > OFFLINE_MAX_BYTES:
+      return tr("Too large for the space left. Try a smaller radius or less detail."), False
+    return tr("{} • about {} • {} tiles").format(tr(DETAIL.get(self.area_zoom(), "")), format_bytes(size), f"{tiles:,}"), True
+
+  def save_area(self) -> None:
+    chooser = self.chooser
+    if chooser is None or not self.estimate_text()[1]:
       return
-    self._offline.add_area(chooser["name"], chooser["latitude"], chooser["longitude"], radius, zoom)
+    self._offline.add_area(chooser["name"], chooser["latitude"], chooser["longitude"], chooser["radius_km"], self.area_zoom())
     self.chooser = None
     self.refresh()
 
@@ -398,8 +467,12 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
         return
       if generation != self._generation:
         continue
-      if kind == "chooser" and self.chooser is not None:
-        self.chooser.update(payload)
+      if kind == "name" and self.chooser is not None:
+        self.chooser["name"] = payload
+      elif kind == "estimate" and self.chooser is not None:
+        key, estimate = payload
+        if key == (self.chooser["latitude"], self.chooser["longitude"], self.chooser["radius_km"], self.area_zoom()):
+          self.chooser["estimate"] = estimate
       elif kind == "search":
         self.search_busy = False
         if isinstance(payload, Exception):
@@ -439,20 +512,14 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
 
   def layout_rows(self) -> list[tuple[str, float, Any]]:
     """(kind, height, data) rows, shared by drawing and measuring."""
-    rows: list[tuple[str, float, Any]] = [("storage", STORAGE_HEIGHT + GAP, None), ("add_header", SECTION_HEIGHT, None)]
-    if self.chooser is not None:
-      if self.chooser.get("estimates") is None:
-        rows.append(("estimating", ROW_HEIGHT, None))
-      else:
-        rows += [("preset", ROW_HEIGHT, index) for index in range(len(self.chooser["estimates"]))]
+    rows: list[tuple[str, float, Any]] = [("storage", self.storage_height() + GAP, None), ("add_header", SECTION_HEIGHT, None)]
+    # While an area is being set up the editor replaces this list (see _render).
+    rows.append(("add_buttons", BUTTON_HEIGHT + GAP, None))
+    if self.search_busy:
+      rows.append(("searching", ROW_HEIGHT, None))
+    rows += [("result", ROW_HEIGHT, index) for index in range(len(self.search_results))]
+    if self.search_results:
       rows.append(("cancel", BUTTON_HEIGHT + GAP, None))
-    else:
-      rows.append(("add_buttons", BUTTON_HEIGHT + GAP, None))
-      if self.search_busy:
-        rows.append(("searching", ROW_HEIGHT, None))
-      rows += [("result", ROW_HEIGHT, index) for index in range(len(self.search_results))]
-      if self.search_results:
-        rows.append(("cancel", BUTTON_HEIGHT + GAP, None))
     if self.message:
       rows.append(("message", EMPTY_HEIGHT + GAP, None))
     route = self.route_text()
@@ -495,8 +562,9 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
     saved = [area for area in self.areas if not area.deleted]
     used = tr("{} of {} used").format(format_bytes(self.used_bytes), format_bytes(OFFLINE_MAX_BYTES))
     count = tr("{} saved map").format(len(saved)) if len(saved) == 1 else tr("{} saved maps").format(len(saved))
-    style.text(rl.Rectangle(x, rect.y + 14, width, 38), used, 30, bold=True)
-    style.text(rl.Rectangle(x, rect.y + 52, width, 28), count, 23, style.MUTED)
+    # Size used on the left, map count on the right of the same line, above the bar.
+    style.text(rl.Rectangle(x, rect.y + 20, width * .62, 50), used, 38, bold=True)
+    style.text(rl.Rectangle(x + width * .62, rect.y + 20, width * .38, 50), count, 28, style.MUTED, align='right')
 
     bar = rl.Rectangle(x, rect.y + 86, width, 16)
     fraction = min(1.0, self.used_bytes / OFFLINE_MAX_BYTES)
@@ -507,32 +575,31 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
 
     text, color = self.connection_text()
     rl.draw_circle_v(rl.Vector2(x + 8, rect.y + 145), 7, color)
-    style.text(rl.Rectangle(x + 28, rect.y + 126, width - 28, 40), text, 23, style.MUTED)
+    for index, line in enumerate(self.status_lines(rect.width)):
+      style.text(rl.Rectangle(x + 28, rect.y + 126 + index * STATUS_LINE, width - 28, 40), line, STATUS_SIZE, style.MUTED)
+
+  def status_lines(self, card_width: float) -> list[str]:
+    return style.lines(self.connection_text()[0], max(1.0, card_width - 60 - 28), STATUS_SIZE)
+
+  def storage_height(self) -> float:
+    """The storage card grows by a line for each extra line of status, so none of it is cut off."""
+    width = getattr(self, "row_width", None)
+    return STORAGE_HEIGHT if width is None else STORAGE_HEIGHT + STATUS_LINE * max(0, len(self.status_lines(width)) - 1)
 
   def draw_rows(self, scroll_rect: rl.Rectangle, content_width: float, scroll_offset: float, manager) -> None:
     x = scroll_rect.x + INSET
     width = max(1.0, content_width - INSET * 2)
+    self.row_width = width
     y = scroll_rect.y + scroll_offset + INSET
-    chooser = self.chooser
     for kind, height, data in self.layout_rows():
       rect = rl.Rectangle(x, y, width, height)
       if kind == "storage":
-        self._draw_storage(rl.Rectangle(x, y, width, STORAGE_HEIGHT))
+        self._draw_storage(rl.Rectangle(x, y, width, self.storage_height()))
       elif kind == "add_header":
-        title = tr("How much around {}?").format(chooser["name"]) if chooser else tr("Save a new area")
+        title = tr("Save a new area")
         draw_section_header(rect, title, title_size=30, style=PANEL_STYLE)
       elif kind == "add_buttons":
         self._pills(manager, x, y, width, [(target, label, None) for target, label in self.add_buttons()])
-      elif kind == "estimating":
-        self._row(manager, rect, None, tr("Sizing up the area…"), chooser["name"] if chooser else "")
-      elif kind == "preset" and chooser is not None:
-        radius, zoom, tiles, size = chooser["estimates"][data]
-        fits = self.used_bytes + size <= OFFLINE_MAX_BYTES
-        radius_text = f"{radius:.0f} km" if ui_state.is_metric else f"{radius * 0.621371:.0f} mi"
-        subtitle = (tr("{} • about {} • {} tiles").format(tr(AREA_DETAIL.get(zoom, "")), format_bytes(size), f"{tiles:,}")
-                    if fits else tr("Too large for the space left"))
-        self._row(manager, rect, f"preset:{data}" if fits else None, tr("{} around").format(radius_text), subtitle,
-                  tr("Save") if fits else "")
       elif kind == "cancel":
         self._pills(manager, x, y, width, [("add:cancel", tr("Cancel"), None)])
       elif kind == "searching":
