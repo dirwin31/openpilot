@@ -82,6 +82,28 @@ def test_heading_up_puts_the_road_ahead_above_the_car(bearing):
   assert y < 450.0
 
 
+def test_follow_map_can_keep_raster_labels_north_up(view):
+  now = 100.0
+  rect = nav_map.rl.Rectangle(20, 30, 800, 600)
+  view._gps = nav_map.GpsFix(36.3, -115.3, 180.0, 20.0, now, True)
+
+  heading_camera, heading_anchor, follow = view._target_camera(rect, now)
+  assert follow and heading_camera.bearing == 180.0
+  assert heading_anchor == (420.0, 450.0)
+
+  view._dirty = False
+  view.set_heading_up(False)
+  assert view._dirty
+  north_camera, north_anchor, follow = view._target_camera(rect, now)
+  assert follow and north_camera.bearing == 0.0
+  assert north_anchor == (420.0, 330.0)
+  assert view._display_bearing == 180.0, "the vehicle marker retains its actual heading"
+
+  view._dirty = False
+  view.set_heading_up(False)
+  assert not view._dirty, "an unchanged live setting must not force another map redraw"
+
+
 def test_visible_runs_keep_long_segments_that_cross_the_view():
   rect = nav_map.rl.Rectangle(0, 0, 100, 100)
   # Both ends far outside, the segment passes straight through the view.

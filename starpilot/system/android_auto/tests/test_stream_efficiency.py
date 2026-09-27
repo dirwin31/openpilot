@@ -420,3 +420,131 @@ def test_fast_struct_constructors_match_pyray_and_skip_pointer_structs(monkeypat
     fast, slow = getattr(rl, name)(*args), originals[name](*args)
     assert bytes(rl.ffi.buffer(rl.ffi.addressof(fast))) == bytes(rl.ffi.buffer(rl.ffi.addressof(slow)))
   assert car_ui.use_fast_struct_constructors(rl) == []  # already fast: nothing left to replace
+
+
+class FlakyEncoder:
+  """Fails the encodes listed in ``failures`` (by call number) like a stalled VPU; ``reopen`` recovers."""
+  backend = "qcom-v4l2"
+
+  def __init__(self, failures, *, can_reopen=True, reopen_fails=False):
+    self.failures, self.calls, self.reopens, self.last_encode_ms = set(failures), 0, 0, 12.0
+    self.fresh, self.keyframes = True, []
+    self.reopen_fails = reopen_fails
+    if not can_reopen:
+      self.reopen = None
+
+  def encode_rgba(self, data, *, keyframe):
+    self.calls += 1
+    if self.calls in self.failures:
+      raise RuntimeError("Hardware encode exceeded 500 ms (input done, frame pending; copy 1.0 ms, queue 0.1 ms, wait 499.0 ms)")
+    keyframe, self.fresh = keyframe or self.fresh, False
+    self.keyframes.append(keyframe)
+    return b"h264", keyframe
+
+  def reopen(self):
+    if self.reopen_fails:
+      raise RuntimeError("encoder control failed")
+    self.reopens += 1
+    self.fresh = True  # a fresh driver session starts with an IDR
+
+
+def stream_with(encoder, frames_to_send, monkeypatch):
+  clock = [100.0]
+  monkeypatch.setattr(supervisor.time, "monotonic", lambda: clock[0])
+  stop, sent, events = threading.Event(), [], []
+
+  class Session:
+    focused, needs_keyframe, touch_events = True, True, []
+
+    def can_send(self):
+      return True
+
+    def pump(self, timeout):
+      clock[0] += 0.033
+      return False
+
+    def check_progress(self):
+      pass
+
+    def send_frame(self, data, timestamp, *, keyframe):
+      sent.append(keyframe)
+      self.needs_keyframe = False
+      if len(sent) == frames_to_send:
+        stop.set()
+
+    def stats(self):
+      return {}
+
+  class Source:
+    frames, label, view = 0, "mirror", "mirror"
+
+    def demand(self, seconds):
+      pass
+
+    def latest(self):
+      return SimpleNamespace(data=b"rgba", captured_ns=int(clock[0] * 1e9), pixel_format=FORMAT_RGBA)
+
+    def check(self, now, *, focused):
+      pass
+
+  sup = supervisor.Supervisor.__new__(supervisor.Supervisor)
+  sup._stop = stop
+  sup._status = {"state": "streaming"}
+  sup._stage = lambda _: None
+  sup._set = lambda **values: sup._status.update(values)
+  sup.log = lambda name, **values: events.append((name, values))
+  sup._stream(Session(), encoder, Source(), SimpleNamespace(still_connected=lambda: True), 1 / 30)
+  return sent, events, sup._status.get("stats")
+
+
+def test_a_stalled_hardware_encode_reopens_the_encoder_instead_of_ending_the_session(monkeypatch):
+  encoder = FlakyEncoder({3})
+  sent, events, _ = stream_with(encoder, 5, monkeypatch)
+  assert encoder.reopens == 1
+  assert sent == [True, False, True, False, False], "the frame after a reopen is an IDR the car can decode alone"
+  recovered = [values for name, values in events if name == "encoder_recovered"]
+  assert len(recovered) == 1 and "input done, frame pending" in recovered[0]["error"]
+  assert recovered[0]["recent_recoveries"] == 1
+
+
+def test_repeated_encoder_failures_still_end_the_attempt(monkeypatch):
+  encoder = FlakyEncoder(range(2, 100))
+  with pytest.raises(RuntimeError, match="exceeded 500 ms"):
+    stream_with(encoder, 50, monkeypatch)
+  assert encoder.reopens == supervisor.ENCODER_RECOVERIES
+
+
+def test_encoder_recoveries_spread_over_time_do_not_add_up(monkeypatch):
+  # One stall every ~4 s (120 frames at 30 fps) never puts 3 in one 10 s window.
+  encoder = FlakyEncoder(range(120, 1200, 120))
+  sent, events, _ = stream_with(encoder, 1000, monkeypatch)
+  assert encoder.reopens == 8
+  assert not [name for name, _ in events if name == "encoder_failed"]
+
+
+def test_software_encoder_errors_are_not_retried(monkeypatch):
+  encoder = FlakyEncoder({2}, can_reopen=False)
+  with pytest.raises(RuntimeError):
+    stream_with(encoder, 5, monkeypatch)
+
+
+def test_a_failed_reopen_ends_the_attempt_with_the_original_error(monkeypatch):
+  encoder = FlakyEncoder({2}, reopen_fails=True)
+  with pytest.raises(RuntimeError, match="exceeded 500 ms"):
+    stream_with(encoder, 5, monkeypatch)
+
+
+def test_session_logs_are_pruned_by_number_not_by_the_clock(tmp_path, monkeypatch):
+  from openpilot.starpilot.system.android_auto import identity as identity_store
+  for name in ("session-20260924-133852.jsonl", "session-20260925-141805.jsonl"):
+    (tmp_path / name).write_text("{}\n")
+  monkeypatch.setattr(supervisor, "MAX_LOG_FILES", 3)
+  stamps = iter(["20260728-080512", "20260926-150936", "20260728-080530"])  # the clock is unsynced right after boot
+  monkeypatch.setattr(identity_store, "timestamp", lambda: next(stamps))
+  for _ in range(3):
+    log = supervisor.EventLog(tmp_path)
+    log.open()
+    log("session_start")
+    log.close()
+  assert sorted(p.name for p in tmp_path.glob("session-*.jsonl")) == [
+    "session-000001-20260728-080512.jsonl", "session-000002-20260926-150936.jsonl", "session-000003-20260728-080530.jsonl"]

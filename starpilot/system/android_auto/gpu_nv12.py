@@ -46,11 +46,11 @@ ivec3 px(int x, int y) {
   ivec2 size = textureSize(texture0, 0);
   if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) return ivec3(6, 6, 15);
   if (composeSource != 0) p.y = size.y - 1 - p.y;
-  vec4 color = texelFetch(texture0, p, 0);
-  // Match the old composition pass's alpha blend onto the frame background.
-  // UI overlays can leave non-opaque alpha even after an opaque clear.
-  if (composeSource != 0) color.rgb = mix(vec3(6.0, 6.0, 15.0) / 255.0, color.rgb, color.a);
-  return ivec3(color.rgb * 255.0 + 0.5);
+  // Use RGB only. The UI texture starts from an opaque clear, so its RGB is
+  // already the final colour; its alpha depends on which blend mode drew each
+  // pixel and changes between frames. Blending by it made bright areas flicker.
+  vec3 color = texelFetch(texture0, p, 0).rgb;
+  return ivec3(color * 255.0 + 0.5);
 }
 int luma(ivec3 p) { return ((66 * p.r + 129 * p.g + 25 * p.b + 128) >> 8) + 16; }
 vec2 chroma(int x, int y) {
@@ -76,6 +76,25 @@ void main() {
   finalColor = vec4(chroma(o.x * 4, o.y * 2), chroma(o.x * 4 + 2, o.y * 2)) / 255.0;
 }
 """
+
+
+def compose_rgba(source, target, margin_w: int, margin_h: int) -> None:
+  """RGBA fallback composition, matching ``Nv12Converter(compose=True)``.
+
+  Centres the UI texture inside the car's margins, flips it top-down and copies
+  its RGB. Like the NV12 pass it never blends by the texture's alpha, which
+  varies between frames; blending by it made bright areas flicker.
+  """
+  import pyray as rl
+  rl.begin_texture_mode(target)
+  rl.clear_background(rl.Color(6, 6, 15, 255))
+  rl.rl_set_blend_factors(GL_ONE, GL_ZERO, GL_FUNC_ADD)
+  rl.begin_blend_mode(rl.BlendMode.BLEND_CUSTOM)
+  # A positive source height flips on the GPU so the readback is top-down for the encoder.
+  rl.draw_texture_pro(source, rl.Rectangle(0, 0, source.width, source.height),
+                      rl.Rectangle(margin_w // 2, margin_h // 2, source.width, source.height), rl.Vector2(0, 0), 0.0, rl.WHITE)
+  rl.end_blend_mode()
+  rl.end_texture_mode()
 
 
 def supported(width: int, height: int) -> bool:

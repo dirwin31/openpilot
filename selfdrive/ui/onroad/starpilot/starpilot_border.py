@@ -189,7 +189,7 @@ def get_traffic_border_colors() -> tuple[rl.Color, rl.Color] | None:
   left_blindspot = car_state.leftBlindspot
   right_blindspot = car_state.rightBlindspot
   if ui_state.starpilot_toggles.get("v_asm_enabled", False):
-    vasm_left, vasm_right = get_fresh_vasm_state(ui_state.params_memory)
+    vasm_left, vasm_right = get_fresh_vasm_state(ui_state.live_params)
     left_blindspot = left_blindspot or vasm_left
     right_blindspot = right_blindspot or vasm_right
   if not blind_spot_allowed:

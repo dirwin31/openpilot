@@ -143,8 +143,10 @@ enable **Sleep C4 Screen During Android Auto** (off by default). Onroad, the
 comma four display and native drawing sleep after the existing screen timeout
 while fresh car-view frames are being sent. AA's camera, path, HUD and map settings
 are unchanged. Tap the comma once to wake it for another timeout period. Lost
-focus, stale video, disconnect/fallback, disabling the toggle, and critical alerts
-wake it automatically. C3X and mirror mode are unchanged. A native Live UI viewer
+focus or video stalled for over 3 s, disconnect/fallback, disabling the toggle, and
+warning or critical alerts (Pay Attention, faults, Take Control) wake it
+automatically and hold it awake while shown. Engagement, turn and informational
+alerts, turn signals and wheel buttons do not; Standby wake choices do not apply. C3X and mirror mode are unchanged. A native Live UI viewer
 keeps native drawing active even with the physical panel off. The setting lives
 in `car_screen.json`; it can be configured without a connected car.
 

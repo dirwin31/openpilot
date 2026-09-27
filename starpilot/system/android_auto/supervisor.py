@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import threading
 import time
@@ -44,6 +45,8 @@ UNAVAILABLE_AFTER = 1.0      # focused but no fresh UI frame for this long -> "u
 SDP_SETTLE = (1.5, 2.2, 3.0)
 TCP_ATTEMPTS = 6
 MAX_LOG_FILES = 20
+ENCODER_RECOVERIES = 3       # hardware encoder reopens allowed per window before the session is torn down
+ENCODER_RECOVERY_WINDOW = 10.0
 CAR_LINK_HOLD = 10.0         # a hands-free connection from the car counts as "car present" this long
 
 STATE_LABELS = {
@@ -97,13 +100,22 @@ class EventLog:
     self.recent: deque[dict] = deque(maxlen=40)
     self.lock = threading.Lock()
 
+  @staticmethod
+  def _order(path: Path) -> tuple[int, str]:
+    # Files are numbered, because the clock can read a date from months ago until it syncs;
+    # pruning by the timestamp in the name deleted the newest session first.
+    # Unnumbered files are from before numbering, so they are the oldest.
+    match = re.fullmatch(r"session-(\d{6})-.*\.jsonl", path.name)
+    return (int(match[1]), path.name) if match else (-1, path.name)
+
   def open(self) -> None:
     try:
       self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-      logs = sorted(self.directory.glob("session-*.jsonl"))
+      logs = sorted(self.directory.glob("session-*.jsonl"), key=self._order)
       for old in logs[:max(0, len(logs) - MAX_LOG_FILES + 1)]:
         old.unlink(missing_ok=True)
-      path = self.directory / f"session-{identity_store.timestamp()}.jsonl"
+      number = max([0, *(self._order(log)[0] for log in logs)]) + 1
+      path = self.directory / f"session-{number:06d}-{identity_store.timestamp()}.jsonl"
       fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
       self.handle = os.fdopen(fd, "a")
     except OSError:
@@ -696,6 +708,8 @@ class Supervisor:
     ages: deque[float] = deque(maxlen=120)
     sent_times: deque[float] = deque(maxlen=200)
     unavailable: dict[str, bytes] = {}
+    recoveries: list[float] = []  # when the hardware encoder was reopened, this session
+    encode_peak = 0.0
     wait_for_frame = False
     self._stage("streaming")
     while not self._stop.is_set():
@@ -727,9 +741,11 @@ class Supervisor:
         frame = source.latest()
         if frame is not None:
           age = now - frame.captured_ns / 1e9
-          if age <= FRAME_MAX_AGE:
-            encode = encoder.encode_nv12 if frame.pixel_format == FORMAT_NV12 else encoder.encode_rgba
-            data, keyframe = encode(frame.data, keyframe=session.needs_keyframe)
+          encode = encoder.encode_nv12 if frame.pixel_format == FORMAT_NV12 else encoder.encode_rgba
+          encoded = self._encode(encoder, encode, frame.data, session.needs_keyframe, recoveries) if age <= FRAME_MAX_AGE else None
+          if encoded is not None:
+            data, keyframe = encoded
+            encode_peak = max(encode_peak, encoder.last_encode_ms)
             session.send_frame(data, frame.captured_ns // 1000, keyframe=keyframe)
             if source.view == "car":
               source.source.mark_sent(frame.captured_ns)
@@ -744,8 +760,9 @@ class Supervisor:
           text = "Starting StarPilot" if source.waiting_for_first_frame else "StarPilot display unavailable"
           if text not in unavailable:
             unavailable[text] = self._unavailable_frame(source.request, text)
-          data, keyframe = encoder.encode_rgba(unavailable[text], keyframe=True)
-          session.send_frame(data, time.monotonic_ns() // 1000, keyframe=keyframe)
+          encoded = self._encode(encoder, encoder.encode_rgba, unavailable[text], True, recoveries)
+          if encoded is not None:
+            session.send_frame(encoded[0], time.monotonic_ns() // 1000, keyframe=encoded[1])
           last_unavailable = now
       now = time.monotonic()
       if now >= next_check:
@@ -759,11 +776,38 @@ class Supervisor:
         window = [t for t in sent_times if now - t <= 5.0]
         ordered = sorted(ages)
         stats = {**session.stats(), "fps": round(len(window) / 5.0, 1), "encode_ms": round(encoder.last_encode_ms, 1),
+                 "encode_peak_ms": round(encode_peak, 1), "encoder_recoveries": len(recoveries),
                  "frame_age_p95_ms": round(ordered[int(len(ordered) * 0.95) - 1] * 1000) if ordered else None,
                  "uptime_s": round(now - started), "frames_from_view": source.frames}
         self._set(stats=stats)
         if int(now - started) % 30 == 0:
           self.log("stats", **stats)
+          encode_peak = 0.0  # the peak covers each logged 30 s window
+
+  def _encode(self, encoder, encode, data: bytes, keyframe: bool, recoveries: list[float]) -> tuple[bytes, bool] | None:
+    """Encode one frame. When the hardware encoder fails (the shared VPU stalled past the
+    deadline), reopen it and drop this frame instead of tearing down the whole session:
+    the next frame is an IDR, and the car waits 3 s for video before taking its screen back.
+    Repeated failures still end the attempt, which reconnects from scratch."""
+    started = time.monotonic()
+    try:
+      return encode(data, keyframe=keyframe)
+    except Exception as error:
+      failed = time.monotonic()
+      recent = sum(1 for at in recoveries if failed - at <= ENCODER_RECOVERY_WINDOW)
+      reopen = getattr(encoder, "reopen", None)  # libx264 has nothing to reopen
+      if reopen is None or recent >= ENCODER_RECOVERIES:
+        self.log("encoder_failed", error=str(error), encode_ms=round((failed - started) * 1000), recent_recoveries=recent)
+        raise
+      try:
+        reopen()
+      except Exception as reopen_error:
+        self.log("encoder_reopen_failed", error=str(error), reopen_error=str(reopen_error))
+        raise error from reopen_error
+      recoveries.append(failed)
+      self.log("encoder_recovered", error=str(error), encode_ms=round((failed - started) * 1000),
+               reopen_ms=round((time.monotonic() - failed) * 1000), recent_recoveries=recent + 1, total=len(recoveries))
+      return None
 
   @staticmethod
   def _unavailable_frame(request: FrameRequest | None, text: str) -> bytes:

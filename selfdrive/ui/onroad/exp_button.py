@@ -106,7 +106,8 @@ class ExpButton(Widget):
       if self._params.get_bool("ConditionalExperimental"):
         current_status = ui_state.params_memory.get_int("CEStatus", default=CEStatus["OFF"])
         override_value = next_manual_ce_status(current_status, self._experimental_mode)
-        ui_state.params_memory.put_int("CEStatus", override_value)
+        # Through live_params so the cached CEStatus the UI draws from updates this frame.
+        ui_state.live_params.put_int("CEStatus", override_value)
         sync_manual_ce_state(self._params, override_value)
         self._held_mode = None
         self._hold_end_time = None

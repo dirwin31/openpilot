@@ -45,12 +45,15 @@ def make_device(*, device_type="tici", **settings):
   rendering = {'value': True}
   app = SimpleNamespace(target_fps=20, big_ui=lambda: False, mouse_events=[],
                         set_should_render=lambda value: rendering.__setitem__('value', value),
-                        ui_stream_wants_frames=lambda: False)
+                        ui_stream_wants_frames=lambda: False, android_auto_enabled=False)
   app.rendering = rendering
   clock = {'now': 100}
   app.clock = clock
   env = {**vars(screen), 'ui_state': state, 'gui_app': app, 'UIStatus': status, 'BACKLIGHT_OFFROAD': 65,
-         'STREAM_OFFROAD_HOLD_MAX': 600.0,
+         'STREAM_OFFROAD_HOLD_MAX': 600.0, 'AA_SLEEP_STALE_GRACE': 3.0,
+         'AA_SLEEP_WAKE_KEYS': frozenset({'StandbyWakeWarningAlert', 'StandbyWakeCriticalAlert'}),
+         'CarScreenSettings': lambda: SimpleNamespace(poll=lambda: {'sleep_device_screen': False}),
+         'FrameProducer': lambda path: None, 'CAR_FRAME_PATH': '',
          'np': np, 'time': SimpleNamespace(monotonic=lambda: clock['now']), 'FirstOrderFilter': FirstOrderFilter,
          'Callable': Callable, 'HARDWARE': SimpleNamespace(set_display_power=lambda value: None, get_device_type=lambda: device_type),
          'cloudlog': SimpleNamespace(debug=lambda value: None), 'PC': False, 'TICI': True}

@@ -10,8 +10,8 @@ view and map ignore touches; only the small quick-menu button (Navigate, end rou
 home screen, back to driving, go offroad) and the screens it opens accept them. Destinations are
 set on one Navigate screen (car_navigate.py), onroad only below 10 mph of wheel speed.
 How the drive is laid out (map beside the driving view, driving view only, map
-only, camera on or off) comes from car_screen.json, set in The Galaxy and applied
-live.
+only, map orientation, camera on or off) comes from car_screen.json, set in The
+Galaxy and applied live.
 
 Started and stopped by android_autod; exits when demand stops or its parent dies.
 
@@ -30,6 +30,7 @@ import time
 
 from openpilot.starpilot.system.android_auto.frame_source import (FLAG_ASYNC_READBACK, FLAG_NV12, FORMAT_NV12, FORMAT_RGBA,
                                                                   FrameProducer, FrameRequest, frame_bytes)
+from openpilot.starpilot.system.android_auto.gpu_nv12 import compose_rgba
 from openpilot.starpilot.system.android_auto.touch import DEFAULT_TOUCH_SOCKET, TouchEvent, TouchReceiver
 
 LOGICAL_HEIGHT = 1080  # the landscape UI's design height
@@ -45,6 +46,8 @@ STATE_REFRESH = 5.0
 MAP_ONLY_BORDER = 14.0
 STATS_INTERVAL = 10.0
 GPU_SAMPLE_EVERY = 30  # only with AA_GPU_TIMING=1; glFinish perturbs normal rendering
+CAMERA_WAIT_STEP = 0.01    # s; keeps demand/stop checks responsive while waiting for the camera
+CAMERA_MAX_GAP = 0.1       # s; a shown camera silent this long stops pacing (the encoder rate applies)
 
 # Per-frame averages in render_stats. Wall-clock milliseconds except cpu_ms, the
 # renderer thread's own CPU time: frame_ms well above cpu_ms means it was waiting
@@ -198,6 +201,53 @@ class TouchInput:
     return self.MouseEvent(self.pos, 0, pressed, released, down, now, cancelled)
 
 
+class CameraPacer:
+  """Onroad, draw each frame of the camera on screen exactly once, as soon as it lands.
+
+  The road cameras and the driving model run at 20 Hz. A 30 fps timer redraws
+  every third frame for nothing and shows camera frames in an uneven 2-1
+  cadence; a 20 fps timer drifts against the camera clock and periodically
+  repeats one frame and skips the next. camerad hands the frame to VisionIPC
+  before it publishes the matching CameraState, so waking on that message means
+  CameraView's non-blocking recv already has the new frame.
+
+  Only the shown camera's CameraState is subscribed, conflated and never
+  deserialized: the pacer only needs to know that one arrived. When that camera
+  goes quiet, it stops pacing and the encoder's frame rate applies again.
+  """
+
+  def __init__(self, sock_factory=None, stream_types=None):
+    if sock_factory is None:
+      from cereal import messaging
+
+      def sock_factory(name):
+        poller = messaging.Poller()
+        return poller, messaging.sub_sock(name, poller=poller, conflate=True)
+    if stream_types is None:
+      from msgq.visionipc import VisionStreamType as stream_types
+    self.state_for_stream = {int(stream_types.VISION_STREAM_ROAD): "roadCameraState",
+                             int(stream_types.VISION_STREAM_WIDE_ROAD): "wideRoadCameraState",
+                             int(stream_types.VISION_STREAM_DRIVER): "driverCameraState"}
+    self._sock_factory = sock_factory
+    self._socks: dict[str, tuple] = {}   # opened on first use, so an unshown camera costs nothing
+    self._last_arrival: dict[str, float] = {}
+
+  def wait(self, stream_type, now: float) -> bool:
+    """True when a new frame of ``stream_type`` is ready, or when that camera is quiet; waits at most one step."""
+    state = self.state_for_stream.get(int(stream_type))
+    if state is None:
+      return True
+    if state not in self._socks:
+      self._socks[state] = self._sock_factory(state)
+    poller, sock = self._socks[state]
+    quiet = now - self._last_arrival.get(state, float("-inf")) >= CAMERA_MAX_GAP
+    # A quiet camera must not hold rendering back: just check whether it has resumed.
+    arrived = bool(poller.poll(0 if quiet else int(CAMERA_WAIT_STEP * 1000))) and sock.receive(non_blocking=True) is not None
+    if arrived:
+      self._last_arrival[state] = now
+    return arrived or quiet
+
+
 def car_layout(settings: dict, started: bool, on_home: bool, width: int, height: int):
   """(main layout rect or None, map rect or None) in logical pixels.
 
@@ -249,11 +299,12 @@ class MapPane:
       self._map.show_event()
     return self._map
 
-  def prepare(self, rect, scale_x: float, scale_y: float, now: float) -> None:
+  def prepare(self, rect, scale_x: float, scale_y: float, now: float, *, heading_up: bool = True) -> None:
     """Advance motion every frame without increasing the expensive redraw rate."""
     import pyray as rl
     from openpilot.selfdrive.ui.onroad.starpilot.nav_map import Camera
     nav_map = self._ensure_map()
+    nav_map.set_heading_up(heading_up)
     geometry = rect.width, rect.height, scale_x, scale_y
     if geometry != self._geometry:
       self._texture_valid = False
@@ -693,6 +744,7 @@ def run(frames_path: str, touch_path: str) -> int:
   device.update = lambda: None               # display power and brightness belong to the comma's own UI
   ui_state.prime_state.start = lambda: None  # no second comma API poller
   ui_state.ui_params.start()
+  ui_state.live_params.start()
   from openpilot.selfdrive.ui.layouts.main import MainLayout
   from openpilot.starpilot.system.android_auto.car_screen import STATUS_METRICS, CarScreenSettings, blind_spot_monitors_visible
   main_layout = MainLayout()
@@ -738,6 +790,8 @@ def run(frames_path: str, touch_path: str) -> int:
     sampler = RenderSampler(identity_store.LOG_DIR / "render_profile.txt", max_bytes=config["render_profile_kb"] * 1024)
     sampler.start()
   frame_count = 0
+  camera_pacer = CameraPacer()
+  camera_stream = None  # the camera stream the last frame showed, when onroad
   in_flight = {"captured_ns": 0}
   stop = {"flag": False}
   signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
@@ -767,12 +821,15 @@ def run(frames_path: str, touch_path: str) -> int:
           readback.release()
         if sampler is not None:
           sampler.rendering = False
+        context.pause()
         time.sleep(0.05)
         stats.reset(time.monotonic())
         continue
       if pending != request:
         return 3  # new geometry: android_autod starts a fresh renderer
       now_ns = time.monotonic_ns()
+      # The requested frame rate (the encoder's budget) always applies. Rendering
+      # only when it is due also keeps the schedule from running ahead of real time.
       capture_delay = producer.capture_delay(request, now_ns)
       if capture_delay > 0:
         if readback.pending:
@@ -783,11 +840,22 @@ def run(frames_path: str, touch_path: str) -> int:
         # demand/stop checks responsive even with a low configured frame rate.
         time.sleep(min(capture_delay, 0.05))
         continue
+      if camera_stream is not None:
+        # Within that budget, draw as soon as the camera on screen has a new frame.
+        if readback.pending:
+          publish_readback()
+        if not camera_pacer.wait(camera_stream, now):
+          if sampler is not None:
+            sampler.rendering = False
+          continue
+        now_ns = time.monotonic_ns()
+        now = now_ns / 1e9
 
       if sampler is not None:
         sampler.rendering = True
       frame_count += 1
       frame_began, cpu_began = now_ns / 1e9, time.thread_time()
+      context.begin_frame(frame_began)
       viewport = rl.Rectangle(0, 0, logical_w, logical_h)
       ui_state.update()
       started = ui_state.started
@@ -801,12 +869,16 @@ def run(frames_path: str, touch_path: str) -> int:
       main_rect, map_rect = car_layout(settings, started, controls.full_screen(started), logical_w, logical_h)
       ui_state.nav_map_beside_road = main_rect is not None and map_rect is not None
       ui_state.car_camera_off = started and not settings["camera"]
+      onroad_view = main_layout._layouts.get(controls._MainState.ONROAD)
+      camera_shown = (started and settings["camera"] and main_rect is not None and not controls.nav_open and
+                      not controls.full_screen(started) and onroad_view is not None)
+      camera_stream = onroad_view.stream_type if camera_shown else None
       ui_state.android_auto_blind_spot_monitors_visible = blind_spot_monitors_visible(settings, speed_ms)
       mark = time.monotonic()
       stats.add("update_ms", mark - frame_began)
       map_pane.set_shown(map_rect is not None)
       if map_rect is not None:
-        map_pane.prepare(map_rect, scale_x, scale_y, now)
+        map_pane.prepare(map_rect, scale_x, scale_y, now, heading_up=settings["map_orientation"] == "heading_up")
       stats.add("map_ms", time.monotonic() - mark)
       if readback.pending:
         # The previous frame, read back while this one was updating. Waiting any
@@ -854,13 +926,8 @@ def run(frames_path: str, touch_path: str) -> int:
       rl.rl_pop_matrix()
       rl.end_texture_mode()
       if output is not None:
-        # RGBA fallback: centre inside the car's margins and flip to top-down.
-        rl.begin_texture_mode(output)
-        rl.clear_background(rl.Color(6, 6, 15, 255))
-        rl.draw_texture_pro(content.texture, rl.Rectangle(0, 0, visible_w, visible_h),
-                            rl.Rectangle(request.margin_w // 2, request.margin_h // 2, visible_w, visible_h),
-                            rl.Vector2(0, 0), 0.0, rl.WHITE)
-        rl.end_texture_mode()
+        # RGBA fallback: the same composition the NV12 conversion does.
+        compose_rgba(content.texture, output, request.margin_w, request.margin_h)
       stats.add("compose_ms", time.monotonic() - mark)
       mark = time.monotonic()
       gui_app._populate_render_texture_cache()
@@ -901,6 +968,7 @@ def run(frames_path: str, touch_path: str) -> int:
     if output is not None:
       rl.unload_render_texture(output)
     context.close()
+    ui_state.live_params.stop()
 
 
 def main() -> int:

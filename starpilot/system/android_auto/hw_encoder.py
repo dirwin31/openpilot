@@ -6,7 +6,8 @@ copies NV12 the car renderer already converted on the GPU), and returns one
 access unit per call. ABI 3 adds NV12 input and constant-bitrate rate control;
 an ABI 2 library still works, RGBA and VBR only. ``create_encoder`` validates it with a forced
 keyframe before a session starts and falls back to libx264 on any failure. The
-codec is never swapped mid-session.
+codec is never swapped mid-session; a driver session that times out is reopened
+in place (``reopen``) so the projection survives a stall of the shared VPU.
 
 Adapted from yummydirtx/openpilot ``tools/android_auto/{hardware_encode,live_encode}.py``
 (MIT), pinned at 672a16f6183567c0ada53654f8527d97e1a483fa.
@@ -84,10 +85,19 @@ class HardwareH264Encoder:
     self.error = ctypes.create_string_buffer(512)
     self.output = ctypes.create_string_buffer(MAX_ACCESS_UNIT)
     options = (OPTION_CBR if self.rate_control == "cbr" else 0,) if self.abi >= 3 else ()
-    self.handle = self.lib.aa_encoder_create(width, height, fps, int(bitrate_kbps) * 1000, margin_height, *options,
-                                             self.error, len(self.error))
+    self._create_args = (width, height, fps, int(bitrate_kbps) * 1000, margin_height, *options)
+    self._open()
+
+  def _open(self) -> None:
+    self.handle = self.lib.aa_encoder_create(*self._create_args, self.error, len(self.error))
     if not self.handle:
       raise RuntimeError(self.error.value.decode("utf-8", "replace") or "hardware encoder unavailable")
+    self.frame_index = 0  # the first picture of a fresh driver session is an IDR
+
+  def reopen(self) -> None:
+    """Replace a failed driver session (a timeout leaves buffers queued) with a fresh one, same settings."""
+    self.close()
+    self._open()
 
   def encode_rgba(self, rgba, *, keyframe: bool = False) -> tuple[bytes, bool]:
     if len(rgba) != self.width * self.height * 4:

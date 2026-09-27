@@ -317,11 +317,13 @@ class GpsFix:
 
 
 class NavMapView(Widget):
-  def __init__(self, *, show_guidance: bool = True, clip: bool = True, show_navigation_waiting: bool = False):
+  def __init__(self, *, show_guidance: bool = True, clip: bool = True, show_navigation_waiting: bool = False,
+               heading_up: bool = True):
     super().__init__()
     self._show_guidance = show_guidance
     self._clip = clip  # off when the map owns its whole render target
     self._show_navigation_waiting = show_navigation_waiting
+    self._heading_up = heading_up
     self._navigation_requested = False
     self._dirty = True
     self._rendering_prepared = False
@@ -384,6 +386,13 @@ class NavMapView(Widget):
     self._preview_destination = None
     self._preview_active = False
     self._dirty = True
+
+  def set_heading_up(self, heading_up: bool) -> None:
+    """Choose a rotating heading-up map or a label-readable north-up map."""
+    heading_up = bool(heading_up)
+    if heading_up != self._heading_up:
+      self._heading_up = heading_up
+      self._dirty = True
 
   def update(self) -> None:
     """Advance data (tiles, messages, GPS) without drawing; see needs_redraw."""
@@ -560,7 +569,7 @@ class NavMapView(Widget):
     return max(1.0, min(2.0, 1.0 / max(0.25, float(getattr(gui_app, "_scale", 1.0) or 1.0))))
 
   def _target_camera(self, rect: rl.Rectangle, now: float) -> tuple[Camera, tuple[float, float], bool]:
-    """(camera, anchor, snap). Preview fits the routes north-up; otherwise follow the car heading-up."""
+    """(camera, anchor, snap). Preview fits the routes north-up; otherwise follow the car, heading-up or north-up."""
     tile_scale = self._tile_scale()
     center = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
     car = self._car_world(now)
@@ -589,8 +598,11 @@ class NavMapView(Widget):
       self._display_bearing = gps.bearing
     speed = gps.speed if gps is not None and gps.fresh else 0.0
     zoom = float(np.interp(speed, FOLLOW_SPEEDS, FOLLOW_ZOOMS)) if self._nav_active(now) or speed > 0.5 else IDLE_ZOOM
-    anchor = (center[0], rect.y + rect.height * FOLLOW_ANCHOR_Y)
-    return Camera(car[0], car[1], zoom, self._display_bearing), anchor, True
+    # Raster-tile labels rotate with the map. North-up keeps them readable and
+    # centers the car so every travel direction has equal look-ahead room.
+    anchor = (center[0], rect.y + rect.height * FOLLOW_ANCHOR_Y) if self._heading_up else center
+    bearing = self._display_bearing if self._heading_up else 0.0
+    return Camera(car[0], car[1], zoom, bearing), anchor, True
 
   def _step_camera(self, target: Camera, dt: float, follow: bool) -> None:
     if not self._camera_ready:

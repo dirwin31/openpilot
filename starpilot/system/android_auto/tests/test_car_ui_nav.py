@@ -18,7 +18,7 @@ def test_settings_default_validate_and_round_trip(tmp_path):
                    "blind_spot_monitors": False, "blind_spot_min_speed_ms": 8.0}
   assert car_screen.load(path) == saved
   assert car_screen.normalize({"onroad_view": "sideways", "camera": "yes", "blind_spot_monitors": "yes",
-                               "blind_spot_min_speed_ms": -1}) == car_screen.DEFAULTS
+                               "blind_spot_min_speed_ms": -1, "map_orientation": "sideways"}) == car_screen.DEFAULTS
   path.write_text("{not json")
   assert car_screen.load(path) == car_screen.DEFAULTS
 
@@ -35,6 +35,13 @@ def test_device_screen_sleep_is_opt_in_and_strictly_boolean(tmp_path):
   assert car_screen.save({"sleep_device_screen": True}, tmp_path / "car_screen.json")["sleep_device_screen"]
   for invalid in ("true", "false", 1, None):
     assert not car_screen.normalize({"sleep_device_screen": invalid})["sleep_device_screen"]
+
+
+def test_map_orientation_defaults_north_up_and_accepts_heading_up(tmp_path):
+  assert car_screen.DEFAULTS["map_orientation"] == "north_up"
+  path = tmp_path / "car_screen.json"
+  assert car_screen.save({"map_orientation": "heading_up"}, path)["map_orientation"] == "heading_up"
+  assert car_screen.load(path)["map_orientation"] == "heading_up"
 
 
 def test_blind_spot_monitors_support_off_always_and_minimum_speed():

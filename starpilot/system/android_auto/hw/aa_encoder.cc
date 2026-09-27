@@ -207,8 +207,20 @@ struct Encoder {
     for (int row = 0; row < height / 2; ++row) memcpy(base + uv_offset + size_t(row) * stride, uv + size_t(row) * width, width);
     return submit(key, dest, capacity, started);
   }
+  // The VPU is shared with loggerd's camera encoders, which can hold it for a while;
+  // the car only takes its screen back after 3 s without video.
+  static constexpr int DEADLINE_MS = 500;
+  [[noreturn]] void timed_out(bool input_done, bool frame_done, Clock::time_point started,
+                              Clock::time_point converted, Clock::time_point queued) {
+    auto ms = [](Clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
+    char text[160];
+    snprintf(text, sizeof(text), "Hardware encode exceeded %d ms (input %s, frame %s; copy %.1f ms, queue %.1f ms, wait %.1f ms)",
+             DEADLINE_MS, input_done ? "done" : "pending", frame_done ? "done" : "pending",
+             ms(converted - started), ms(queued - converted), ms(Clock::now() - queued));
+    throw std::runtime_error(text);
+  }
   size_t submit(bool key, unsigned char *dest, size_t capacity, Clock::time_point started) {
-    auto deadline = started + std::chrono::milliseconds(200);
+    auto deadline = started + std::chrono::milliseconds(DEADLINE_MS);
     auto converted = Clock::now();
     input.sync(false);
     if (key) control(V4L2_CID_MPEG_VIDC_VIDEO_REQUEST_IFRAME, 1);
@@ -219,12 +231,12 @@ struct Encoder {
     size_t result = 0;
     while (!input_done || !frame_done) {
       int remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
-      if (remaining <= 0) throw std::runtime_error("Hardware encode exceeded 200 ms");
+      if (remaining <= 0) timed_out(input_done, frame_done, started, converted, queued);
       pollfd p = {fd, short((frame_done ? 0 : POLLIN | POLLRDNORM) | (input_done ? 0 : POLLOUT | POLLWRNORM)), 0};
       int rc = poll(&p, 1, remaining);
       if (rc < 0 && errno == EINTR) continue;
       check(rc >= 0, "encoder poll");
-      if (rc == 0) throw std::runtime_error("Hardware encode timed out");
+      if (rc == 0) timed_out(input_done, frame_done, started, converted, queued);
       if (p.revents & (POLLERR | POLLHUP | POLLNVAL)) throw std::runtime_error("Encoder poll error");
       for (auto type : {V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE}) {
         if (!(p.revents & (type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE ? POLLIN | POLLRDNORM : POLLOUT | POLLWRNORM))) continue;

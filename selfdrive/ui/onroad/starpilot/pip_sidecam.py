@@ -188,7 +188,7 @@ class PipSideCamera(Widget):
     self._shape = shape
 
     self._params = ui_state.params
-    self._params_memory = ui_state.params_memory
+    self._params_memory = ui_state.live_params
 
     self.client = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_DRIVER, conflate=True)
     self._stream_type = VisionStreamType.VISION_STREAM_DRIVER

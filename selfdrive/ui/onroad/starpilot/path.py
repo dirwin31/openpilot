@@ -71,7 +71,7 @@ def render_adjacent_lanes(renderer) -> None:
     blindspot_left = bool(car_state.leftBlindspot)
     blindspot_right = bool(car_state.rightBlindspot)
     if ui_state.starpilot_toggles.get("v_asm_enabled", False):
-      vasm_left, vasm_right = get_fresh_vasm_state(ui_state.params_memory)
+      vasm_left, vasm_right = get_fresh_vasm_state(ui_state.live_params)
       blindspot_left = blindspot_left or vasm_left
       blindspot_right = blindspot_right or vasm_right
 

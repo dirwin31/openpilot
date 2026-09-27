@@ -260,6 +260,7 @@ def test_radial_favorites_lifecycle_is_bypassed_only_for_android_auto(monkeypatc
   state.android_auto_car_view = android_auto
   state.started = True
   state.ui_params, state.params_memory, state.sm = object(), object(), object()
+  state.live_params = object()
   module.gui_app.mouse_events = [object()]
   original_events = list(module.gui_app.mouse_events)
 

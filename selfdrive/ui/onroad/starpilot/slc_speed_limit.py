@@ -102,7 +102,7 @@ def _get_slc_state():
   speed_conversion = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
   dashboard_sl = sm["starpilotCarState"].dashboardSpeedLimit if sm.valid.get("starpilotCarState", False) else 0.0
   vision_enabled = params.get_bool("VisionSpeedLimitDetection")
-  vision_sl = ui_state.params_memory.get_float("VisionSpeedLimit") if vision_enabled else 0.0
+  vision_sl = ui_state.live_params.get_float("VisionSpeedLimit") if vision_enabled else 0.0
   primary_priority = params.get("SLCPriority1", encoding="utf-8") or "Map Data"
   secondary_priority = params.get("SLCPriority2", encoding="utf-8") or "None"
   mapbox_enabled = params.get_bool("SLCMapboxFiller") and bool(

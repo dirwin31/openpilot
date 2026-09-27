@@ -27,6 +27,7 @@ EGL_NONE = 0x3038
 EGL_CONTEXT_PRIORITY_LEVEL_IMG = 0x3100
 EGL_CONTEXT_PRIORITY_LOW_IMG = 0x3103
 EGL_BAD_ATTRIBUTE = 0x3004
+MIN_FRAME_TIME, MAX_FRAME_TIME = 0.001, 0.1  # seconds, for the headless raylib clock
 
 
 GL_FRAMEBUFFER = 0x8D40
@@ -209,11 +210,29 @@ class HeadlessContext:
     rl.rl_set_framebuffer_height(height)
     texture = rl.Texture(rl.rl_get_texture_id_default(), 1, 1, 1, 7)
     rl.set_shapes_texture(texture, rl.Rectangle(0, 0, 1, 1))
-    # No raylib window means no raylib clock; widgets only need monotonic time.
+    # No raylib window means no raylib clock. The caller reports each frame to
+    # begin_frame() so animations advance by the real interval: the renderer runs
+    # at the camera's 20 Hz onroad, the encoder's rate otherwise.
     started = time.monotonic()
+    self.frame_time = 1 / 30
+    self._fps_frame_time = self.frame_time
+    self._last_frame: float | None = None
     rl.get_time = lambda: time.monotonic() - started
-    rl.get_frame_time = lambda: 1 / 30
-    rl.get_fps = lambda: 30
+    rl.get_frame_time = lambda: self.frame_time
+    rl.get_fps = lambda: max(1, round(1 / self._fps_frame_time))
+
+  def begin_frame(self, now: float) -> None:
+    """Start a frame at ``now`` (time.monotonic()): what raylib's EndDrawing/BeginDrawing would time."""
+    if self._last_frame is not None:
+      # Clamped like a paused animation: after a stall, move on by at most MAX_FRAME_TIME.
+      self.frame_time = min(max(now - self._last_frame, MIN_FRAME_TIME), MAX_FRAME_TIME)
+      # raylib's GetFPS is an average too, not a per-frame reading
+      self._fps_frame_time += 0.1 * (self.frame_time - self._fps_frame_time)
+    self._last_frame = now
+
+  def pause(self) -> None:
+    """No frames for a while (the car shows its own screen); the next one keeps the last interval."""
+    self._last_frame = None
 
   def _check(self, value, operation: str) -> None:
     if not value:
