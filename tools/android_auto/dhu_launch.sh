@@ -86,7 +86,7 @@ if [[ "$state" == running* ]]; then
   say "stopping the comma's Android Auto session"
   remote "$REMOTE_PY -c 'from openpilot.starpilot.system.android_auto.protocol import AndroidAutoClient; AndroidAutoClient().stop()'"
 fi
-[[ "$state" == *onroad ]] && say "note: the comma is onroad; the car layout ignores touch until it is offroad"
+[[ "$state" == *onroad ]] && say "note: the comma is onroad; the car view takes touch only on its quick menu (Go offroad, or clear ForceOnroad)"
 
 # 3. Replace any earlier DHU session on this port, then start the comma side.
 remote "pkill -TERM -f '$TOOL_MATCH'; for i in \$(seq 1 20); do pgrep -f '$TOOL_MATCH' >/dev/null || exit 0; sleep 0.25; done; pkill -KILL -f '$TOOL_MATCH'; true"
