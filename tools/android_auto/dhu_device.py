@@ -10,11 +10,13 @@ the car view (or mirror), hardware H.264, touch input and the view health checks
              desktop-head-unit --adb=127.0.0.1:5288
 
 Stop Android Auto in settings first so the daemon is not projecting to a car.
-The DHU's certificate is not verified (its date format trips some OpenSSL
+While this runs, the daemon's auto-connect holds off (see supervisor.dhu_session_active),
+so going onroad does not start a car attempt that starves the tunnel. The DHU's certificate is not verified (its date format trips some OpenSSL
 builds), so a pass proves the comma side only, not Honda compatibility.
 """
 
 import argparse
+import atexit
 import json
 import os
 import signal
@@ -55,6 +57,10 @@ def main() -> int:
       config[key] = getattr(args, key)
   ident = identity_store.load_identity()
   print(f"identity ok, expires {ident.expires} ({ident.days_left} days)")
+
+  hold = identity_store.DATA_DIR / f"dhu-{args.port}.pid"
+  hold.write_text(f"{os.getpid()}\n")
+  atexit.register(hold.unlink, missing_ok=True)
 
   def stop(*_):
     supervisor._stop.set()
