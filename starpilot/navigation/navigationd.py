@@ -24,7 +24,10 @@ class Navigationd:
   def __init__(self, route_engine: MapboxRouteEngine | None = None):
     self.params = Params()
     self.params_memory = Params(memory=True)
-    self.route_engine = route_engine or MapboxRouteEngine()
+    if route_engine is None:
+      from openpilot.starpilot.navigation.mapbox_usage import shared_usage
+      route_engine = MapboxRouteEngine(usage=shared_usage())
+    self.route_engine = route_engine
 
     self.pm = messaging.PubMaster(["navInstruction", "navRoute"])
     self.rk = Ratekeeper(NAVIGATIOND_HZ)

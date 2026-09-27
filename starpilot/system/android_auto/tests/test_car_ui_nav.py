@@ -1,3 +1,4 @@
+import json
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -708,3 +709,43 @@ def test_navigate_screen_links_to_offline_maps_settings(controls, nav_screen):
   touches = touch_input()
   layout_events, _ = controls.route(tap(900, 500), touches, True, screen())
   assert len(layout_events) == 2
+
+
+def test_status_column_has_seven_slots_and_upgrades_six(tmp_path):
+  assert len(car_screen.DEFAULTS["status_slots"]) == car_screen.STATUS_SLOT_COUNT == 7
+  path = tmp_path / "car_screen.json"
+  six = ["cpu", "gpu", "memory", "temperature", "friction", "steer_delay"]
+  path.write_text(json.dumps({"status_slots": six}))
+  assert car_screen.load(path)["status_slots"] == [*six, car_screen.DEFAULTS["status_slots"][-1]]
+  seven = [*six[:5], "blank", "starpilot_logo"]
+  assert car_screen.update({"status_slots": seven}, path)["status_slots"] == seven
+  with pytest.raises(ValueError):
+    car_screen.update({"status_slots": six}, path)
+
+
+def test_map_compass_button_toggles_orientation_onroad(controls):
+  import pyray as rl
+  _, map_rect = car_ui.car_layout({"onroad_view": "split", "map_side": "right"}, True, False, 1920, 1080)
+  button = car_ui.compass_rect(map_rect)
+  assert map_rect.x < button.x and button.x + button.width < map_rect.x + map_rect.width
+  toggles = []
+  controls.map_button = button
+  controls.on_map_button = lambda: toggles.append(True)
+  touches = touch_input()
+  cx, cy = button.x + button.width / 2, button.y + button.height / 2
+  layout_events, menu_events = controls.route(tap(cx, cy), touches, True, screen())
+  assert toggles == [True] and layout_events == [] and menu_events == []
+
+  # Dragging off the button before lifting does nothing; the rest of the map still ignores taps.
+  controls.route([TouchEvent("down", cx / 1920, cy / 1080), TouchEvent("up", 100 / 1920, 100 / 1080)], touches, True, screen())
+  controls.route(tap(map_rect.x + 50, 300), touches, True, screen())
+  assert toggles == [True]
+  controls.map_button = None
+  controls.route(tap(cx, cy), touches, True, screen())
+  assert toggles == [True]
+  assert isinstance(button, type(rl.Rectangle(0, 0, 0, 0)))
+
+
+def test_next_orientation_flips():
+  assert car_ui.next_orientation("north_up") == "heading_up"
+  assert car_ui.next_orientation("heading_up") == "north_up"

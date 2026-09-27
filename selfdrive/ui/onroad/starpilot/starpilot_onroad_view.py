@@ -59,7 +59,7 @@ class StarPilotOnroadView(AugmentedRoadView):
     self._hud_renderer.draw_exp_button = False
 
     # Initialize layout widgets
-    self._set_speed_widget = SetSpeedWidget(self._hud_renderer)
+    self._set_speed_widget = self._create_set_speed_widget()
     self._speed_limit_widget = self._create_speed_limit_widget()
     self._aethergauge_widget = AetherGaugeWidget(self._hud_renderer)
     self._steering_wheel_widget = SteeringWheelWidget(self._hud_renderer._exp_button)
@@ -95,6 +95,9 @@ class StarPilotOnroadView(AugmentedRoadView):
 
   def _create_favorite_menu(self):
     return FavoriteRadialMenu(ui_state.ui_params, ui_state.params_memory, self._favorite_slot_options)
+
+  def _create_set_speed_widget(self):
+    return SetSpeedWidget(self._hud_renderer)
 
   def _create_speed_limit_widget(self):
     return SpeedLimitWidget()

@@ -8,12 +8,17 @@ Runs onroad and offroad, independent of the car screen:
     kept small, paced gently onroad.
   * Offline areas the user saved, on Wi-Fi only, with progress for the UI.
     Deleted areas have their tiles removed; areas re-download every few months.
+Tiles are stored per map style. Saved areas are kept in every style the map
+colors setting uses (light, dark, or both for automatic day and night); a style
+the user discards, and the old traffic styles, are deleted here, only while
+offroad: removing thousands of tiles would compete with the drive for the disk.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import shutil
 import threading
 import time
 
@@ -22,7 +27,8 @@ from cereal import log
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.starpilot.navigation.destination_store import parse_destination_json
-from openpilot.starpilot.navigation.map_tiles import DEFAULT_STYLE, TileCache, TileService, image_extension, offline_root
+from openpilot.starpilot.navigation.map_tiles import LEGACY_STYLES, TileCache, TileService, image_extension, offline_root
+from openpilot.starpilot.navigation.mapbox_usage import MapboxUsage, usage_path
 from openpilot.starpilot.navigation.offline_maps import (
   AREA_REFRESH_SECONDS,
   OFFLINE_MAX_BYTES,
@@ -47,6 +53,30 @@ ROUTE_INTERVAL_OFFROAD = 0.12
 AREA_INTERVAL = 0.08           # Wi-Fi only
 
 UNMETERED = (log.DeviceState.NetworkType.wifi, log.DeviceState.NetworkType.ethernet)
+# The one state a saved area shows when it has several styles: the first found here wins.
+STATE_PRIORITY = ("downloading", "waiting_wifi", "storage_full", "no_space", "incomplete", "queued", "complete")
+
+
+def _queued() -> dict:
+  return {"state": "queued", "done": 0, "total": 0, "bytes": 0, "completed_at": 0.0}
+
+
+def combine_states(states: list[dict]) -> dict:
+  """One progress entry for an area kept in several styles."""
+  if not states:
+    return _queued()
+  kinds = [state.get("state") or "queued" for state in states]
+  kind = next((candidate for candidate in STATE_PRIORITY if candidate in kinds), kinds[0])
+  complete = all(state == "complete" for state in kinds)
+  return {
+    "state": kind,
+    "done": sum(int(state.get("done") or 0) for state in states),
+    "total": sum(int(state.get("total") or 0) for state in states),
+    "bytes": sum(int(state.get("bytes") or 0) for state in states),
+    "completed_at": min(float(state.get("completed_at") or 0.0) for state in states) if complete else
+                    max(float(state.get("completed_at") or 0.0) for state in states),
+    "metered_wifi": any(bool(state.get("metered_wifi")) for state in states),
+  }
 
 
 def _wall() -> float:
@@ -59,21 +89,26 @@ def _signature(points: list[tuple[float, float]]) -> tuple | None:
 
 class Navtilesd:
   def __init__(self, maps: OfflineMaps | None = None, sm=None, params: Params | None = None,
-               route_engine: MapboxRouteEngine | None = None, session=None, workers: int = 2):
+               route_engine: MapboxRouteEngine | None = None, session=None, workers: int = 2, usage: MapboxUsage | None = None):
     self.maps = maps or OfflineMaps()
     self.params = params or Params()
     self.params_memory = Params(memory=True) if params is None else params
     self.sm = sm if sm is not None else messaging.SubMaster(["deviceState", "navRoute"])
-    self.route_engine = route_engine or MapboxRouteEngine()
+    self.usage = usage or MapboxUsage(usage_path(self.maps.base))
+    self.route_engine = route_engine or MapboxRouteEngine(usage=self.usage)
 
-    self.area_cache = TileCache(offline_root(self.maps.base), DEFAULT_STYLE, max_bytes=None)
-    self.route_cache = TileCache(self.maps.base, DEFAULT_STYLE, pinned=self.area_cache)
-    self.route_service = TileService(self._token, cache=self.route_cache, session=session, workers=workers,
-                                     prefetch_interval=ROUTE_INTERVAL_OFFROAD)
-    self.area_service = TileService(self._token, cache=self.area_cache, session=session, workers=workers + 1,
-                                    prefetch_interval=AREA_INTERVAL)
+    self._session, self._workers = session, workers
+    self.area_caches: dict[str, TileCache] = {}
+    self.area_services: dict[str, TileService] = {}
+    self.route_service: TileService | None = None
+    self.area_styles: tuple[str, ...] = ()
+    self.style = ""  # the style the map shows now: route tiles and save-as-you-drive use it
+    self._deleting: set[str] = set()
+    self._route_plan: tuple | None = None
+    self._use_styles(self.maps.active_styles(), self.maps.display_style())
 
     self.started = False
+    self.device_known = False  # no deviceState yet: don't assume offroad
     self.unmetered = False
     self.network_up = False
     self.metered_wifi = False
@@ -86,11 +121,11 @@ class Navtilesd:
     self._destination_fetching = False
     self._preview_points: list[tuple[float, float]] = []
     self._preview_checked = -math.inf
-    self._route_plan: tuple | None = None
     self._route_total = 0
 
     self._areas_checked = -math.inf
     self._active_area: OfflineArea | None = None
+    self._active_style = ""
     self._active_keys: list = []
     self._active_refresh = False
     self._active_queued = False
@@ -101,6 +136,83 @@ class Navtilesd:
     self._status_heartbeat = -math.inf
     self._last_status: dict | None = None
 
+  @property
+  def area_cache(self) -> TileCache:
+    return self.area_caches[self.style]
+
+  @property
+  def area_service(self) -> TileService:
+    return self.area_services[self.style]
+
+  def _use_styles(self, area_styles: tuple[str, ...], display: str) -> None:
+    wanted = tuple(dict.fromkeys((*area_styles, display)))
+    for style in [style for style in self.area_services if style not in wanted]:
+      self.area_services.pop(style).close()
+      self.area_caches.pop(style)
+    for style in wanted:
+      if style not in self.area_caches:
+        self.area_caches[style] = TileCache(offline_root(self.maps.base), style, max_bytes=None)
+        self.area_services[style] = TileService(self._token, cache=self.area_caches[style], style=style, session=self._session,
+                                                workers=self._workers + 1, prefetch_interval=AREA_INTERVAL, usage=self.usage)
+    if display != self.style:
+      if self.route_service is not None:
+        self.route_service.close()
+      self.route_cache = TileCache(self.maps.base, display, pinned=self.area_caches[display])
+      self.route_service = TileService(self._token, cache=self.route_cache, style=display, session=self._session,
+                                       workers=self._workers, prefetch_interval=ROUTE_INTERVAL_OFFROAD, usage=self.usage)
+      self.style = display
+      self._route_plan = None  # fetch the route again in the new style
+    self.area_styles = tuple(area_styles)
+
+  def _update_style(self, wall: float) -> None:
+    """Follow the map colors setting (and, for automatic, the sun), and delete discarded styles."""
+    area_styles, display = self.maps.active_styles(), self.maps.display_style(wall)
+    if (area_styles, display) != (self.area_styles, self.style):
+      cloudlog.info(f"navtilesd: map styles {self.area_styles} -> {area_styles}, showing {display}")
+      if self._active_area is not None and self._active_style not in area_styles:
+        self._stop_active()
+      self._use_styles(area_styles, display)
+    if self.started or not self.device_known:
+      return  # deletions wait for offroad
+    for style in (*self.maps.pending_discards(), *LEGACY_STYLES):
+      if style in self._deleting or style in area_styles or style == display:
+        continue
+      roots = [root for root in self.maps.style_roots(style) if root.exists()]
+      if not roots and style in LEGACY_STYLES:
+        continue
+      self._deleting.add(style)
+      for entry in self._area_status.values():
+        (entry.get("styles") or {}).pop(style, None)
+      threading.Thread(target=self._delete_style, args=(style, roots), name="navtilesd-delete", daemon=True).start()
+
+  def _delete_style(self, style: str, roots: list) -> None:
+    for root in roots:
+      shutil.rmtree(root, ignore_errors=True)
+    self.maps.clear_discards([style])
+    self._offline_bytes = None
+    self._deleting.discard(style)
+    cloudlog.info(f"navtilesd: deleted map style {style}")
+
+  def _scan_offline(self) -> int:
+    """Bytes of saved tiles in every style on disk, kept ones included: they share the limit."""
+    root = offline_root(self.maps.base)
+    try:
+      styles = [path.name.replace("_", "/", 1) for path in root.iterdir() if path.is_dir() and path.name.startswith("mapbox_")]
+    except OSError:
+      return 0
+    return sum((self.area_caches.get(style) or TileCache(root, style, max_bytes=None)).scan() for style in styles)
+
+  def _style_state(self, area_id: str, style: str) -> dict:
+    entry = self._area_status.setdefault(area_id, {})
+    return entry.setdefault("styles", {}).setdefault(style, _queued())
+
+  def _areas_summary(self) -> dict[str, dict]:
+    summary = {}
+    for area_id, entry in self._area_status.items():
+      styles = entry.get("styles") or {}
+      summary[area_id] = {**combine_states([styles.get(style) or _queued() for style in self.area_styles]), "styles": styles}
+    return summary
+
   def _token(self) -> str:
     return str(self.params.get("MapboxPublicKey", encoding="utf-8") or "").strip()
 
@@ -109,12 +221,14 @@ class Navtilesd:
   def _update_device(self) -> None:
     if not self.sm.seen["deviceState"]:
       return
+    self.device_known = True
     state = self.sm["deviceState"]
     network_up = state.networkType != log.DeviceState.NetworkType.none
     if network_up and not self.network_up:
       # A connection just came back: retry at once instead of waiting out the offline backoff.
       self.route_service.network_restored()
-      self.area_service.network_restored()
+      for service in self.area_services.values():
+        service.network_restored()
     self.network_up = network_up
     metered = bool(getattr(state, "networkMetered", False))
     self.unmetered = state.networkType in UNMETERED and not metered
@@ -192,12 +306,9 @@ class Navtilesd:
 
   # ── offline areas ───────────────────────────────────────────────────────
 
-  def _area_state(self, area_id: str) -> dict:
-    return self._area_status.setdefault(area_id, {"state": "queued", "done": 0, "total": 0, "bytes": 0, "completed_at": 0.0})
-
-  def _needs_download(self, area: OfflineArea, wall: float) -> tuple[bool, bool]:
-    """(needs work, refresh every tile)."""
-    state = self._area_state(area.id)
+  def _needs_download(self, area: OfflineArea, style: str, wall: float) -> tuple[bool, bool]:
+    """(needs work, refresh every tile) for one of the area's styles."""
+    state = self._style_state(area.id, style)
     completed_at = float(state.get("completed_at") or 0.0)
     if state.get("state") in ("incomplete", "storage_full", "no_space"):
       retry = area.update_requested > completed_at or wall - completed_at > AREA_RETRY_SECONDS
@@ -214,7 +325,15 @@ class Navtilesd:
     keep = set()
     for other in remaining:
       keep.update(other.tiles())
-    freed = sum(self.area_cache.remove(key) for key in area.tiles() if key not in keep and not self.maps.is_auto_saved(key))
+    root = offline_root(self.maps.base)
+    try:
+      styles = [path.name.replace("_", "/", 1) for path in root.iterdir() if path.is_dir() and path.name.startswith("mapbox_")]
+    except OSError:
+      styles = []
+    freed = 0
+    for style in styles:  # kept styles too: a deleted area goes from every one
+      cache = self.area_caches.get(style) or TileCache(root, style, max_bytes=None)
+      freed += sum(cache.remove(key) for key in area.tiles() if key not in keep and not self.maps.is_auto_saved(key))
     if self._offline_bytes is not None:
       self._offline_bytes = max(0, self._offline_bytes - freed)
     self.maps.forget_area(area.id)
@@ -223,10 +342,12 @@ class Navtilesd:
 
   def _stop_active(self, state: str | None = None) -> None:
     if self._active_area is not None and state is not None:
-      self._area_state(self._active_area.id).update(state=state, completed_at=_wall())
+      self._style_state(self._active_area.id, self._active_style).update(state=state, completed_at=_wall())
+    service = self.area_services.get(self._active_style)
     self._active_area = None
     self._active_keys = []
-    self.area_service.prefetch([])
+    if service is not None:
+      service.prefetch([])
 
   def _update_save_viewed(self) -> None:
     """Pin tiles already on disk when save-as-you-drive is switched on.
@@ -273,11 +394,11 @@ class Navtilesd:
       self.maps.finish_auto_saved(key)
 
   def _update_areas(self, now: float, wall: float) -> None:
-    if self._offline_bytes is None:
-      self._offline_bytes = self.area_cache.scan()
-
     if now - self._areas_checked >= AREA_CHECK_SECONDS:
       self._areas_checked = now
+      self._update_style(wall)
+      if self._offline_bytes is None:
+        self._offline_bytes = self._scan_offline()
       areas = self.maps.areas(include_deleted=True)
       live = [area for area in areas if not area.deleted]
       for area in areas:
@@ -292,19 +413,21 @@ class Navtilesd:
         elif current.allow_metered != self._active_area.allow_metered:
           self._active_area = current
       if self._active_area is None:
-        for area in live:
-          needed, refresh = self._needs_download(area, wall)
+        work = ((area, style) for area in live for style in self.area_styles)
+        for area, style in work:
+          needed, refresh = self._needs_download(area, style, wall)
           if needed:
-            self._start_area(area, refresh)
+            self._start_area(area, style, refresh)
             break
 
     area = self._active_area
     if area is None:
       return
-    state = self._area_state(area.id)
+    service = self.area_services[self._active_style]
+    state = self._style_state(area.id, self._active_style)
     if not (self.unmetered or (area.allow_metered and self.network_up)):
-      if self.area_service.prefetch_position or not self.area_service.idle:
-        self.area_service.prefetch([])
+      if service.prefetch_position or not service.idle:
+        service.prefetch([])
       state["state"] = "waiting_wifi"
       state["metered_wifi"] = self.metered_wifi
       self._active_queued = False
@@ -312,47 +435,49 @@ class Navtilesd:
     if self._offline_bytes is not None and self._offline_bytes >= OFFLINE_MAX_BYTES and not self._active_refresh:
       self._stop_active("storage_full")
       return
-    if self.area_service.stats["write_failed"]:
-      self.area_service.stats["write_failed"] = 0
+    if service.stats["write_failed"]:
+      service.stats["write_failed"] = 0
       self._stop_active("no_space")
       return
     if not self._active_queued:
-      self.area_service.prefetch(self._active_keys, refresh=self._active_refresh)
+      service.prefetch(self._active_keys, refresh=self._active_refresh)
       self._active_queued = True
     state["state"] = "downloading"
-    state["done"] = min(state["total"], self.area_service.prefetch_position)
-    if self.area_service.idle:
+    state["done"] = min(state["total"], service.prefetch_position)
+    if service.idle:
       self._verify_area(area, wall)
 
-  def _start_area(self, area: OfflineArea, refresh: bool) -> None:
+  def _start_area(self, area: OfflineArea, style: str, refresh: bool) -> None:
     self._active_area = area
+    self._active_style = style
     self._active_keys = area.tiles()
     self._active_refresh = refresh
     self._verify_attempts = 0
     self._active_queued = False
-    state = self._area_state(area.id)
+    state = self._style_state(area.id, style)
     state.update(total=len(self._active_keys), done=0, state="queued")
-    cloudlog.info(f"navtilesd: area {area.id} {len(self._active_keys)} tiles refresh={refresh}")
+    cloudlog.info(f"navtilesd: area {area.id} {style} {len(self._active_keys)} tiles refresh={refresh}")
 
   def _verify_area(self, area: OfflineArea, wall: float) -> None:
-    missing = [key for key in self._active_keys if key not in self.area_service.not_found and not self.area_cache.contains(key)]
-    state = self._area_state(area.id)
+    service, cache = self.area_services[self._active_style], self.area_caches[self._active_style]
+    missing = [key for key in self._active_keys if key not in service.not_found and not cache.contains(key)]
+    state = self._style_state(area.id, self._active_style)
     if missing and self._verify_attempts < AREA_VERIFY_ATTEMPTS:
       # Some downloads failed (dropped connection); fetch just those again.
       self._verify_attempts += 1
       self._active_refresh = False
       self._active_keys = missing
-      self.area_service.prefetch(missing)
+      service.prefetch(missing)
       return
     total_bytes = 0
     for key in area.tiles():
       try:
-        total_bytes += self.area_cache.path(key).stat().st_size
+        total_bytes += cache.path(key).stat().st_size
       except OSError:
         pass
     state.update(bytes=total_bytes, done=state["total"] - len(missing),
                  state="complete" if not missing else "incomplete", completed_at=wall)
-    self._offline_bytes = self.area_cache.scan()
+    self._offline_bytes = self._scan_offline()
     self._active_area = None
     self._active_keys = []
 
@@ -363,7 +488,7 @@ class Navtilesd:
       return
     status = {
       "route": {"total": self._route_total, "remaining": self.route_service.prefetch_remaining if self._route_total else 0},
-      "areas": self._area_status,
+      "areas": self._areas_summary(),
       "offline_bytes": self._offline_bytes or 0,
       "unmetered": self.unmetered,
       "offline": self.route_service.offline or not self.network_up,

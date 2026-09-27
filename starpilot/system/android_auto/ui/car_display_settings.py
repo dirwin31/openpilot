@@ -36,7 +36,7 @@ class CarDisplaySettings(AetherSettingsView):
       sections = [SettingSection('Status Column', [
         SettingRow(f'slot_{i}', 'value', f'Slot {i + 1}',
                    get_value=lambda i=i: car_screen.STATUS_METRICS[self.current['status_slots'][i]][1],
-                   on_click=lambda i=i: self._slot_picker(i)) for i in range(6)
+                   on_click=lambda i=i: self._slot_picker(i)) for i in range(car_screen.STATUS_SLOT_COUNT)
       ])]
     super().__init__(self, sections, header_title='Status Widgets' if metrics else 'Car Display',
                      header_subtitle='Car display only · Changes also appear in Galaxy.')

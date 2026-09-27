@@ -76,7 +76,8 @@ class CarNavigationLayout(StarPilotNavigationLayout):
   def __init__(self, on_started=None):
     super().__init__()
     self._on_started = on_started
-    self._route_engine = MapboxRouteEngine()
+    from openpilot.starpilot.navigation.mapbox_usage import shared_usage
+    self._route_engine = MapboxRouteEngine(usage=shared_usage())
     self._map = NavMapView(show_guidance=True)
     self._route_pending: queue.Queue = queue.Queue()
     self._route_generation = 0

@@ -8,7 +8,8 @@ display power, touch hardware or publishers. Frames
 go to android_autod through the same bounded shared-memory slot as mirroring,
 and car touches arrive as datagrams. Offroad every touch works. Onroad the driving
 view and map ignore touches; only the small quick-menu button (Navigate, end route,
-home screen, back to driving, go offroad) and the screens it opens accept them. Destinations are
+home screen, back to driving, go offroad), the map's compass button (north-up or
+heading-up) and the screens the menu opens accept them. Destinations are
 set on one Navigate screen (car_navigate.py), onroad only below 10 mph of wheel speed.
 How the drive is laid out (map beside the driving view, driving view only, map
 only, map orientation, camera on or off) comes from car_screen.json, set in The
@@ -45,6 +46,9 @@ HOME_ONROAD_TIMEOUT = 45.0  # back to the drive after this long untouched on the
 # Drive view is tapped, a critical alert shows, or the car is past the Navigate speed lock.
 STATE_REFRESH = 5.0
 MAP_ONLY_BORDER = 14.0
+COMPASS_SIZE = 96.0
+COMPASS_MARGIN = 24.0
+COMPASS_TRIP_BAR_CLEARANCE = 44 + 96 + 20  # the trip bar's bottom gap, height, and a gap above it
 STATS_INTERVAL = 10.0
 GPU_SAMPLE_EVERY = 30  # only with AA_GPU_TIMING=1; glFinish perturbs normal rendering
 CAMERA_WAIT_STEP = 0.01    # s; keeps demand/stop checks responsive while waiting for the camera
@@ -277,6 +281,35 @@ def car_layout(settings: dict, started: bool, on_home: bool, width: int, height:
   return rl.Rectangle(0, 0, width - map_w, height), rl.Rectangle(width - map_w, 0, map_w, height)
 
 
+def compass_rect(map_rect):
+  """The map's orientation button: bottom-right of the map, clear of the centred trip bar."""
+  import pyray as rl
+  return rl.Rectangle(map_rect.x + map_rect.width - COMPASS_MARGIN - COMPASS_SIZE,
+                      map_rect.y + map_rect.height - COMPASS_TRIP_BAR_CLEARANCE - COMPASS_SIZE,
+                      COMPASS_SIZE, COMPASS_SIZE)
+
+
+def next_orientation(orientation: str) -> str:
+  return "north_up" if orientation == "heading_up" else "heading_up"
+
+
+def _draw_compass_needle(x: float, y: float, bearing: float) -> None:
+  """A north needle (red tip) centred at x, y, rotated so it points at screen north."""
+  import math
+  import pyray as rl
+  from openpilot.starpilot.system.android_auto.ui.nav_map import _triangle
+  angle = math.radians(-bearing)
+
+  def point(forward: float, side: float):
+    return rl.Vector2(x + math.sin(angle) * forward + math.cos(angle) * side,
+                      y - math.cos(angle) * forward + math.sin(angle) * side)
+
+  tip, tail, left, right = point(30, 0), point(-30, 0), point(0, -11), point(0, 11)
+  _triangle(tip, left, right, rl.Color(236, 72, 94, 255))
+  _triangle(tail, left, right, rl.Color(236, 240, 246, 255))
+  rl.draw_circle_v(rl.Vector2(x, y), 4.0, rl.Color(10, 13, 20, 255))
+
+
 class MapPane:
   """Redraw the world at 15 Hz; move its cached image on every car frame."""
 
@@ -291,12 +324,16 @@ class MapPane:
     self._cached_camera = None
     self._camera = None
     self._geometry = None
+    self._heading_up = False
+    self.button_rect = None  # the compass button, in logical pixels, while the map is shown
     self.redraws = 0
 
   def set_shown(self, shown: bool) -> None:
     if shown != self._shown and self._map is not None:
       (self._map.show_event if shown else self._map.hide_event)()
     self._shown = shown
+    if not shown:
+      self.button_rect = None
 
   def _ensure_map(self):
     if self._map is None:
@@ -311,6 +348,8 @@ class MapPane:
     from openpilot.starpilot.system.android_auto.ui.nav_map import Camera
     nav_map = self._ensure_map()
     nav_map.set_heading_up(heading_up)
+    self._heading_up = heading_up
+    self.button_rect = compass_rect(rect)
     geometry = rect.width, rect.height, scale_x, scale_y
     if geometry != self._geometry:
       self._texture_valid = False
@@ -335,7 +374,7 @@ class MapPane:
     px, py = MAP_BORDER / scale_x, MAP_BORDER / scale_y
     if not self._texture_valid or nav_map.needs_redraw(now):
       padded = rl.Rectangle(-px, -py, rect.width + 2 * px, rect.height + 2 * py)
-      self._render_layer(self._texture, lambda: nav_map._draw_world(padded, self._camera, self._anchor, self._tile_scale))
+      self._render_layer(self._texture, lambda: nav_map._draw_world(padded, self._camera, self._anchor, self._tile_scale, now))
       self._cached_camera = self._camera
       self._cached_anchor = self._anchor
       self._texture_valid = True
@@ -366,9 +405,8 @@ class MapPane:
 
   def _render_layer(self, target, draw, transparent=False) -> None:
     import pyray as rl
-    from openpilot.starpilot.system.android_auto.ui.nav_map import MAP_BACKGROUND
     rl.begin_texture_mode(self._msaa.render_texture if self._msaa is not None else target)
-    rl.clear_background(rl.BLANK if transparent else MAP_BACKGROUND)
+    rl.clear_background(rl.BLANK if transparent else self._map.background)
     # Keep the world opaque and overlays premultiplied; ordinary blending would
     # square translucent alpha before these textures are composited again.
     rl.rl_set_blend_factors_separate(rl.RL_SRC_ALPHA, rl.RL_ONE_MINUS_SRC_ALPHA, rl.RL_ONE, rl.RL_ONE_MINUS_SRC_ALPHA,
@@ -410,7 +448,31 @@ class MapPane:
     rl.draw_texture_pro(self._overlay.texture, source, padded, origin, 0, rl.WHITE)
     rl.end_blend_mode()
     rl.rl_pop_matrix()
+    self._draw_compass(compass_rect(rect))
     rl.end_scissor_mode()
+
+  def _draw_compass(self, button) -> None:
+    """Drawn every frame (not in the cached overlay) so the needle turns with the map."""
+    import pyray as rl
+    from openpilot.system.ui.lib.application import gui_app
+    from openpilot.starpilot.system.android_auto.ui.nav_map import CARD_BG, CARD_BORDER, CAR_ACCENT
+    center = rl.Vector2(button.x + button.width / 2, button.y + button.height / 2)
+    radius = button.width / 2
+    rl.draw_circle_v(center, radius, CARD_BG)
+    # Blue ring while heading-up, so the mode reads at a glance.
+    rl.draw_ring(center, radius - (5 if self._heading_up else 2), radius, 0, 360, 48,
+                 CAR_ACCENT if self._heading_up else CARD_BORDER)
+    bearing = self._camera.bearing if self._camera is not None else 0.0
+    size = 72
+    texture = gui_app.cached_render_texture("aa_map_compass", size, size,
+                                           lambda: _draw_compass_needle(size / 2, size / 2, 0.0), supersample=2)
+    if texture is None:
+      _draw_compass_needle(center.x, center.y, bearing)
+      return
+    rl.begin_blend_mode(rl.BlendMode.BLEND_ALPHA_PREMULTIPLY)
+    rl.draw_texture_pro(texture, rl.Rectangle(0, 0, texture.width, -texture.height),
+                        rl.Rectangle(center.x, center.y, size, size), rl.Vector2(size / 2, size / 2), -bearing, rl.WHITE)
+    rl.end_blend_mode()
 
   def _unload_texture(self) -> None:
     import pyray as rl
@@ -518,6 +580,8 @@ class OnroadControls:
                              go_offroad=self.go_offroad, on_open=self.refresh)
     self.target: str | None = None
     self.last_touch = clock()
+    self.map_button = None  # the map's compass button while the map is on screen
+    self.on_map_button = None
     self._state_read = -STATE_REFRESH
     self._started = False
     self._hold_home = False  # the home screen shown at drive start; no idle timeout while slow
@@ -668,6 +732,10 @@ class OnroadControls:
     self.menu.on_home = self.on_home(started)
     self.menu.corner = "right" if self.menu.on_home else "left"
 
+  def _on_map_button(self, x: float, y: float) -> bool:
+    button = self.map_button
+    return button is not None and button.x <= x <= button.x + button.width and button.y <= y <= button.y + button.height
+
   def full_screen(self, started: bool) -> bool:
     """Whether the main layout (or the Navigate screen) fills the car screen instead of the drive layout."""
     return self.nav_open or self.on_home(started)
@@ -680,15 +748,24 @@ class OnroadControls:
       layout_events += touch_input.events([], allowed=False, now=self._clock())
       self.target = None
     for touch in touches:
+      x, y = touch.x * touch_input.logical_w, touch.y * touch_input.logical_h
       if touch.kind == "down":
-        x, y = touch.x * touch_input.logical_w, touch.y * touch_input.logical_h
         if started and not self.nav_open and self.menu.captures(x, y, screen):
           self.target = "menu"
         elif layout_ok:
           self.target = "layout"
+        elif started and self._on_map_button(x, y):
+          self.target = "map_button"
         else:
           self.target = None
         self.last_touch = self._clock()
+      if self.target == "map_button":
+        # A plain button: it acts when the finger lifts on it, and takes no widget events.
+        if touch.kind in ("up", "cancel"):
+          if touch.kind == "up" and self._on_map_button(x, y) and self.on_map_button is not None:
+            self.on_map_button()
+          self.target = None
+        continue
       events = touch_input.events([touch], allowed=self.target is not None, now=self._clock())
       (menu_events if self.target == "menu" else layout_events).extend(events)
     return layout_events, menu_events
@@ -757,6 +834,16 @@ def run(frames_path: str, touch_path: str) -> int:
   car_settings = CarScreenSettings()
   controls = OnroadControls(main_layout)
   map_status: MapOnlyStatus | None = None
+
+  def toggle_map_orientation() -> None:
+    from openpilot.starpilot.system.android_auto import car_screen
+    orientation = next_orientation(car_settings.poll()["map_orientation"])
+    try:
+      car_settings.current = car_screen.update({"map_orientation": orientation})
+    except (OSError, ValueError) as error:
+      print(json.dumps({"event": "map_orientation_save_failed", "error": str(error)[:200]}), flush=True)
+
+  controls.on_map_button = toggle_map_orientation
 
   content = rl.load_render_texture(visible_w, visible_h)
   # The second UI shares the GPU with driver monitoring. Single-sample rendering
@@ -868,6 +955,8 @@ def run(frames_path: str, touch_path: str) -> int:
         sampler.onroad = started
       speed_ms = navigation_speed(ui_state)
       controls.update(started, speed_ms, vehicle_parked(ui_state))
+      # Last frame's map placement; the layout only changes with settings or a screen switch.
+      controls.map_button = map_pane.button_rect if started and not controls.full_screen(started) else None
       layout_events, menu_events = controls.route(receiver.drain(), touch, started, viewport)
       settings = car_settings.poll()
       main_layout._dev_sidebar.metric_override = [STATUS_METRICS[slot][0] for slot in settings["status_slots"]]

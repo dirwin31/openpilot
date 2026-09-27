@@ -178,6 +178,7 @@ from openpilot.starpilot.navigation.offline_maps import (
   OFFLINE_MAX_BYTES,
   AVERAGE_TILE_BYTES as OFFLINE_TILE_BYTES,
   OfflineMaps,
+  MAP_THEMES as OFFLINE_MAP_THEMES,
   area_zoom_for_radius,
   clean_route_points,
   estimate_area as estimate_offline_area,
@@ -5664,11 +5665,19 @@ def setup(app):
   @app.route("/api/android_auto/offline/settings", methods=["POST"])
   def android_auto_offline_settings():
     payload = request.get_json(silent=True)
-    if not isinstance(payload, dict) or not isinstance(payload.get("save_viewed_cache"), bool):
+    if not isinstance(payload, dict) or not ({"save_viewed_cache", "map_theme"} & payload.keys()):
+      return jsonify({"error": "Choose whether maps should be saved as you drive, or the map colors."}), 400
+    if "save_viewed_cache" in payload and not isinstance(payload["save_viewed_cache"], bool):
       return jsonify({"error": "Choose whether maps should be saved as you drive."}), 400
+    if "map_theme" in payload and (payload["map_theme"] not in OFFLINE_MAP_THEMES or
+                                   not isinstance(payload.get("discard_dropped", False), bool)):
+      return jsonify({"error": "Choose light, dark, or light and dark maps."}), 400
     offline_maps = OfflineMaps()
-    offline_maps.set_save_viewed_cache(payload["save_viewed_cache"])
-    return jsonify({"save_viewed_cache": offline_maps.save_viewed_cache()}), 200
+    if "save_viewed_cache" in payload:
+      offline_maps.set_save_viewed_cache(payload["save_viewed_cache"])
+    if "map_theme" in payload:
+      offline_maps.set_map_theme(payload["map_theme"], discard_dropped=payload.get("discard_dropped", False))
+    return jsonify({"save_viewed_cache": offline_maps.save_viewed_cache(), "map_theme": offline_maps.map_theme()}), 200
 
   @app.route("/api/android_auto/offline/coverage", methods=["GET"])
   def android_auto_offline_coverage():

@@ -38,13 +38,14 @@ from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aether
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.navigation import SearchResult
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import FrameCachedParams, _SettingsPage
 from openpilot.starpilot.navigation.destination_store import NavigationDestinationStore
+from openpilot.starpilot.navigation.map_tiles import LIGHT_STYLE
 from openpilot.starpilot.navigation.offline_maps import OFFLINE_MAX_BYTES, OfflineMaps, area_zoom_for_radius, estimate_area, format_bytes
 from openpilot.starpilot.system.android_auto.ui.navigation import CarMapboxSearchClient
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import DialogResult
-from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog, MultiOptionDialog
 from openpilot.system.ui.widgets.keyboard import Keyboard
 
 PANEL_STYLE = DEFAULT_PANEL_STYLE
@@ -58,6 +59,11 @@ ROW_HEIGHT = 118.0
 BUTTON_HEIGHT = 84.0
 EMPTY_HEIGHT = 140.0
 REFRESH_SECONDS = 2.0
+
+THEME_LABELS = {"light": "Light", "dark": "Dark", "auto": "Light & dark (automatic)"}
+STYLE_NAMES = {LIGHT_STYLE: "light"}  # any other style is the dark one
+KEEP_QUESTION = "Keep the saved {} maps? Keeping them lets you switch back, or use light & dark, without downloading them again. " + \
+                "Deleting frees the space."
 
 SEGMENT_DISPLAY = 0
 SEGMENT_ROAD_DATA = 1
@@ -114,6 +120,7 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
     self._session_token = str(uuid.uuid4())
 
     self.summary: dict[str, Any] = {}
+    self.showing_light = False
     self.areas: list = []
     self.selected_area_id: str | None = None
     # The area being set up: {"latitude", "longitude", "name", "radius_km", "zoom" (None = auto), "estimate"}
@@ -203,6 +210,7 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
   def refresh(self) -> None:
     self._refreshed = time.monotonic()
     self.summary = self._offline.summary()
+    self.showing_light = self.summary.get("map_theme") == "auto" and self._offline.display_style() == LIGHT_STYLE
     self.areas = self._offline.areas(include_deleted=True)
     if self.selected_area_id is not None and not any(a.id == self.selected_area_id and not a.deleted for a in self.areas):
       self.selected_area_id = None
@@ -331,6 +339,8 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
       self.refresh()
     elif target == "area_action:delete" and self.selected_area_id:
       self._confirm_delete(self.selected_area_id)
+    elif target == "theme":
+      self._pick_theme()
 
   @property
   def metric(self) -> bool:
@@ -501,6 +511,50 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
 
     gui_app.push_widget(ConfirmDialog(tr("Delete the offline map for {}?").format(self.area_title(area)), tr("Delete"), callback=on_result))
 
+  def theme_text(self) -> str:
+    theme = self.summary.get("map_theme") or self._offline.map_theme()
+    if theme != "auto":
+      return tr("{} map • no traffic").format(tr(THEME_LABELS[theme]))
+    now = tr("light now") if self.showing_light else tr("dark now")
+    return tr("Light from sunrise, dark from sunset • {}").format(now)
+
+  def _pick_theme(self) -> None:
+    labels = {theme: tr(label) for theme, label in THEME_LABELS.items()}
+    current = self._offline.map_theme()
+    dialog = None
+
+    def apply(theme: str, discard: bool) -> None:
+      try:
+        self._offline.set_map_theme(theme, discard_dropped=discard)
+      except (OSError, ValueError) as error:
+        self.message = tr("Couldn't change map colors: {}").format(error)
+      self.refresh()
+
+    def on_pick(result: DialogResult) -> None:
+      theme = next((key for key, label in labels.items() if label == dialog.selection), current)
+      if result != DialogResult.CONFIRM or theme == current:
+        return
+      dropped = self._offline.dropped_styles(theme)
+      if not dropped:
+        apply(theme, False)
+        return
+      names = " and ".join(tr(STYLE_NAMES.get(style, "dark")) for style in dropped)
+      # Cancel (or leaving the dialog) keeps them: nothing is deleted without a clear yes.
+      gui_app.push_widget(ConfirmDialog(
+        tr(KEEP_QUESTION).format(names),
+        tr("Delete"), cancel_text=tr("Keep"),
+        callback=lambda answer: apply(theme, answer == DialogResult.CONFIRM)))
+
+    dialog = MultiOptionDialog(tr("Map colors"), list(labels.values()), labels[current], callback=on_pick)
+    gui_app.push_widget(dialog)
+
+  def usage_text(self) -> str:
+    usage = self.summary.get("usage") or {}
+    tiles, free = int(usage.get("tiles") or 0), int(usage.get("free_tiles") or 200_000)
+    text = tr("Mapbox this month: {} of {} free tile requests").format(f"{tiles:,}", f"{free:,}")
+    routes = int(usage.get("directions") or 0)
+    return text + (tr(" • {} route lookups").format(f"{routes:,}") if routes else "")
+
   # ── layout ────────────────────────────────────────────────────────────────
 
   def add_buttons(self) -> list[tuple[str, str]]:
@@ -512,7 +566,8 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
 
   def layout_rows(self) -> list[tuple[str, float, Any]]:
     """(kind, height, data) rows, shared by drawing and measuring."""
-    rows: list[tuple[str, float, Any]] = [("storage", self.storage_height() + GAP, None), ("add_header", SECTION_HEIGHT, None)]
+    rows: list[tuple[str, float, Any]] = [("storage", self.storage_height() + GAP, None), ("theme", ROW_HEIGHT + GAP, None),
+                                         ("add_header", SECTION_HEIGHT, None)]
     # While an area is being set up the editor replaces this list (see _render).
     rows.append(("add_buttons", BUTTON_HEIGHT + GAP, None))
     if self.search_busy:
@@ -579,7 +634,8 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
       style.text(rl.Rectangle(x + 28, rect.y + 126 + index * STATUS_LINE, width - 28, 40), line, STATUS_SIZE, style.MUTED)
 
   def status_lines(self, card_width: float) -> list[str]:
-    return style.lines(self.connection_text()[0], max(1.0, card_width - 60 - 28), STATUS_SIZE)
+    width = max(1.0, card_width - 60 - 28)
+    return style.lines(self.connection_text()[0], width, STATUS_SIZE) + style.lines(self.usage_text(), width, STATUS_SIZE)
 
   def storage_height(self) -> float:
     """The storage card grows by a line for each extra line of status, so none of it is cut off."""
@@ -595,6 +651,8 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
       rect = rl.Rectangle(x, y, width, height)
       if kind == "storage":
         self._draw_storage(rl.Rectangle(x, y, width, self.storage_height()))
+      elif kind == "theme":
+        self._row(manager, rl.Rectangle(x, y, width, ROW_HEIGHT), "theme", tr("Map colors"), self.theme_text(), tr("Change"))
       elif kind == "add_header":
         title = tr("Save a new area")
         draw_section_header(rect, title, title_size=30, style=PANEL_STYLE)
