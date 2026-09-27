@@ -21,12 +21,12 @@ from openpilot.system.hardware.hw import Paths
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.multilang import multilang, tr, tr_noop
 from openpilot.system.ui.widgets import Widget, DialogResult
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog, alert_dialog
 from openpilot.system.ui.widgets.html_render import HtmlModal
 from openpilot.system.ui.widgets.keyboard import Keyboard
 from openpilot.system.ui.widgets.list_view import text_item, button_item, dual_button_item
-from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
-from openpilot.system.ui.widgets.scroller_tici import Scroller
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOptionDialog
+from openpilot.starpilot.system.android_auto.ui.settings_adapters import ResponsiveScroller as Scroller
 
 # Description constants
 DESCRIPTIONS = {
@@ -127,6 +127,7 @@ class DeviceLayout(Widget):
 
     items = self._initialize_items()
     self._scroller = Scroller(items, line_separator=True, spacing=0)
+    self._child(self._scroller)
 
     ui_state.add_offroad_transition_callback(self._offroad_transition)
 

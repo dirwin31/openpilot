@@ -215,6 +215,12 @@ def draw_text_fit_common(
     render_width = measure_text_cached(font, text, actual_font_size, spacing=spacing).x
   else:
     render_width = size.x
+  if render_width > max_width:
+    # A minimum font size must never let text invade the adjacent control.
+    while text and measure_text_cached(font, text + "...", actual_font_size, spacing=spacing).x > max_width:
+      text = text[:-1]
+    text = text.rstrip() + "..." if text else ""
+    render_width = measure_text_cached(font, text, actual_font_size, spacing=spacing).x
   nudge_y = (font_size - actual_font_size) / 2
   draw_x = pos.x
   if align_center:
@@ -1741,49 +1747,9 @@ def draw_toggle_switch(
   radius_px: float = TILE_RADIUS_PX,
   bg_color: rl.Color | None = None,
 ):
+  from openpilot.starpilot.system.android_auto.ui.settings_style import switch
   toggle_rect = rl.Rectangle(rect.x + rect.width - width - right_inset, rect.y + (rect.height - height) / 2, width, height)
-
-  if knob_progress is None:
-    knob_progress = 1.0 if enabled else 0.0
-
-  if not is_enabled:
-    knob_color = with_alpha(knob_color, 132)
-
-  knob_x = toggle_rect.x + knob_offset + knob_progress * (toggle_rect.width - 2 * knob_offset)
-  knob_y = toggle_rect.y + toggle_rect.height / 2
-
-  # Delegate to draw_hud_background — same layered bloom, fill, and lerped border as tiles
-  draw_hud_background(toggle_rect, track_color if is_enabled else with_alpha(track_color, 80), knob_progress, radius_px=radius_px, bg_color=bg_color)
-
-  if seed_id and enabled:
-    nodes, vecs = _get_or_create_toggle_constellation(seed_id)
-    glow = knob_progress
-    draw_constellation_nodes(nodes, vecs, toggle_rect, track_color, glow, scale=0.45)
-
-    # Gravity tethers during slide — drawn after stars so they appear under knob
-    if 0.0 < knob_progress < 1.0:
-      tether_alpha = int(60 * math.sin(knob_progress * math.pi))
-      tether_col = rl.Color(track_color.r, track_color.g, track_color.b, tether_alpha)
-      for node in nodes:
-        nx = toggle_rect.x + node['x'] * toggle_rect.width
-        ny = toggle_rect.y + node['y'] * toggle_rect.height
-        rl.draw_line_ex(rl.Vector2(nx, ny), rl.Vector2(knob_x, knob_y), 1.2, tether_col)
-
-  # Nearly-square slider thumb — physical button sliding across the starfield
-  knob_w = 44.0
-  knob_h = toggle_rect.height - 8.0  # 4px inset top + bottom = 34px
-  knob_roundness = 0.65              # ≈10px corner radius on 30px width — rect, not pill
-  knob_segments = 8
-  knob_rect = snap_rect(rl.Rectangle(
-    knob_x - knob_w / 2, knob_y - knob_h / 2, knob_w, knob_h
-  ))
-  # Base fill
-  rl.draw_rectangle_rounded(knob_rect, knob_roundness, knob_segments, knob_color)
-  # Glass highlight — top ~40% of knob at low opacity, simulates light catching the face
-  highlight_rect = rl.Rectangle(knob_rect.x + 2, knob_rect.y + 2, knob_rect.width - 4, knob_rect.height * 0.40)
-  rl.draw_rectangle_rounded(highlight_rect, knob_roundness, knob_segments, with_alpha(rl.WHITE, 38))
-  # Thin border for depth
-  rl.draw_rectangle_rounded_lines_ex(knob_rect, knob_roundness, knob_segments, 1.0, with_alpha(rl.WHITE, 50))
+  switch(toggle_rect, enabled, is_enabled)
 
 
 def draw_action_pill(
@@ -3296,11 +3262,6 @@ class AetherSettingsView(PanelManagerView):
     return None
 
   def _target_at(self, mouse_pos: MousePos) -> str | None:
-    if self._parent_toggle:
-      mid = f"parent_toggle:{self._parent_toggle.label}"
-      rect = self._interactive_rects.get(mid)
-      if rect and point_hits(mouse_pos, rect, None, pad_x=6, pad_y=6):
-        return mid
     return super()._target_at(mouse_pos)
 
   def _activate_target(self, target_id: str | None):
@@ -3352,43 +3313,8 @@ class AetherSettingsView(PanelManagerView):
     return h
 
   def _render(self, rect: rl.Rectangle):
-    self.set_rect(rect)
-    self._interactive_rects.clear()
-
-    shell_w = min(rect.width - self._metrics.outer_margin_x * 2, self._metrics.max_content_width)
-    content_width = shell_w - self._metrics.panel_padding_x * 2 - AETHER_LIST_METRICS.content_right_gutter
-
-    header_h = self._compute_header_height(content_width)
-    metrics = replace(self._metrics, header_height=header_h) if header_h > 0 else self._metrics
-    frame, scroll_rect, content_width = init_list_panel(rect, self._panel_style, metrics=metrics)
-    self._scroll_rect = scroll_rect
-
-    if self._has_header:
-      self._draw_header(frame.header)
-
-    self._content_height = self._measure_content_height(content_width)
-    self._scroll_panel.set_enabled(self.is_visible)
-
-    scroll_disabled = getattr(self, "vertical_scrolling_disabled", False)
-    effective_height = self._scroll_rect.height if scroll_disabled else self._content_height
-
-    self._scroll_offset = self._scroll_panel.update(
-      self._scroll_rect, max(effective_height, self._scroll_rect.height))
-
-    if scroll_disabled:
-      self._scroll_offset = 0.0
-
-    aether_begin_scissor_mode(int(self._scroll_rect.x), int(self._scroll_rect.y),
-                              int(self._scroll_rect.width), int(self._scroll_rect.height))
-    self._draw_scroll_content(self._scroll_rect, content_width)
-    aether_end_scissor_mode()
-
-    if self._content_height > self._scroll_rect.height and not scroll_disabled:
-      self._scrollbar.render(self._scroll_rect, self._content_height, self._scroll_offset)
-
-    if not scroll_disabled:
-      draw_list_scroll_fades(self._scroll_rect, self._content_height, self._scroll_offset,
-                             AetherListColors.PANEL_BG, fade_height=self._fade_height)
+    from openpilot.starpilot.system.android_auto.ui.settings_style import render_settings
+    render_settings(self, rect)
 
   def _draw_header(self, rect: rl.Rectangle):
     title = tr(self._header_title) if self._header_title else ""
@@ -3648,16 +3574,12 @@ class CardHubManagerView(AetherSettingsView):
         raise NotImplementedError
 
     def _render(self, rect: rl.Rectangle):
-        self.set_rect(rect)
-        self._interactive_rects.clear()
-        frame, scroll_rect, content_width = init_list_panel(rect, self._panel_style, self._metrics)
-        self._scroll_rect = scroll_rect
-        self._content_height = scroll_rect.height
-        self._scroll_panel.set_enabled(self.is_visible)
-        self._scroll_offset = self._scroll_panel.update(
-            scroll_rect, scroll_rect.height)
-        self._scroll_offset = 0.0
-        self._draw_scroll_content(scroll_rect, content_width)
+        # A scrollable list keeps every category reachable on short car screens.
+        self._sections = [SettingSection("", [
+            SettingRow(str(i), "value", card["title"], card["desc"], on_click=card["on_click"])
+            for i, card in enumerate(self._build_cards())
+        ])]
+        super()._render(rect)
 
     def _draw_scroll_content(self, rect: rl.Rectangle, width: float):
         y = rect.y + self._scroll_offset
@@ -4856,129 +4778,41 @@ class AetherSliderDialog(Widget):
                          font_size=41, radius_px=16, padding_x=14)
 
   def _render(self, rect: rl.Rectangle):
-    dt = rl.get_frame_time()
-    self._ok_offset += (self._ok_target - self._ok_offset) * (1 - math.exp(-dt / PLATE_TAU))
-    self._cancel_offset += (self._cancel_target - self._cancel_offset) * (1 - math.exp(-dt / PLATE_TAU))
-    rl.draw_rectangle(0, 0, gui_app.width, gui_app.height, rl.Color(0, 0, 0, 160))
-
-    has_presets = len(self._presets) > 0
-    dialog_w = min(2320, int(rect.width - 40))
-    dialog_h = min(1218 if has_presets else 1015, int(rect.height - 40))
-    button_height = 160
-    button_width = 870
-
-    dx, dy = rect.x + (rect.width - dialog_w) / 2, rect.y + (rect.height - dialog_h) / 2
-    self._ok_rect = rl.Rectangle(dx + dialog_w - button_width - 116, dy + dialog_h - button_height - 87, button_width, button_height)
-    self._cancel_rect = rl.Rectangle(dx + 116, dy + dialog_h - button_height - 87, button_width, button_height)
-
-    d_rect = snap_rect(rl.Rectangle(dx, dy, dialog_w, dialog_h))
-    draw_rounded_fill(d_rect, rl.Color(10, 12, 16, 255), radius_px=35)
-    draw_rounded_stroke(d_rect, rl.Color(255, 255, 255, 16), radius_px=35)
-    rl.draw_rectangle_rec(rl.Rectangle(d_rect.x, d_rect.y, d_rect.width, 3), self._color)
-
-    title_size = 64
-    ts = measure_text_cached(self._font_title, self.title, title_size)
-    rl.draw_text_ex(self._font_title, self.title, rl.Vector2(round(dx + (dialog_w - ts.x) / 2), round(dy + 87)), title_size, 0, rl.WHITE)
-
-    # Large value display below title
-    val_str = self.formatted_value()
-    val_size = 139
-    vts = measure_text_cached(self._font_value, val_str, val_size)
-    rl.draw_text_ex(self._font_value, val_str, rl.Vector2(round(dx + (dialog_w - vts.x) / 2), round(dy + 203)), val_size, 0, self._color)
-
-    # Render presets below the value display (if any)
-    presets_y = dy + 392
+    from openpilot.starpilot.system.android_auto.ui import settings_style as style
+    rl.draw_rectangle_rec(rect, rl.Color(0, 0, 0, 180))
+    width = min(1000, rect.width - 32)
+    height = min(550, rect.height - 32)
+    box = rl.Rectangle(rect.x + (rect.width - width) / 2, rect.y + (rect.height - height) / 2, width, height)
+    rl.draw_rectangle_rounded(box, .08, 16, style.BG)
+    pad = 24
+    style.text(rl.Rectangle(box.x + pad, box.y + 16, width - pad * 2, 48), self.title, 30, bold=True)
+    style.text(rl.Rectangle(box.x + pad, box.y + 76, width - pad * 2, 66), self.formatted_value(), 48, style.ACCENT, True)
+    footer_y = box.y + height - 76
+    button_w = (width - pad * 2 - 16) / 2
+    self._cancel_rect = rl.Rectangle(box.x + pad, footer_y, button_w, 56)
+    self._ok_rect = rl.Rectangle(box.x + pad + button_w + 16, footer_y, button_w, 56)
+    style.button(self._cancel_rect, tr("Cancel"), self._is_pressed_cancel)
+    style.button(self._ok_rect, tr("Save"), True)
+    slider_y = footer_y - 78
+    self._minus_rect = rl.Rectangle(box.x + pad, slider_y - 28, 56, 56)
+    self._plus_rect = rl.Rectangle(box.x + width - pad - 56, slider_y - 28, 56, 56)
+    style.button(self._minus_rect, "-", self._pressed_zone == "minus", 28)
+    style.button(self._plus_rect, "+", self._pressed_zone == "plus", 28)
+    self._track_rect = rl.Rectangle(self._minus_rect.x + 76, slider_y - 5, width - pad * 2 - 152, 10)
+    rl.draw_rectangle_rounded(self._track_rect, 1, 12, style.BORDER)
+    fraction = self._value_fraction(self._current_val)
+    rl.draw_rectangle_rounded(rl.Rectangle(self._track_rect.x, self._track_rect.y, self._track_rect.width * fraction, 10), 1, 12, style.ACCENT)
+    rl.draw_circle_v(rl.Vector2(self._track_rect.x + self._track_rect.width * fraction, slider_y), 14, style.TEXT)
     self._preset_rects.clear()
-    if has_presets:
-      chip_h = 122.0
-      chip_gap = 35.0
-      chip_w = max(90.0, (dialog_w - 80 * 2 - chip_gap * (len(self._presets) - 1)) / max(1, len(self._presets)))
-      for index, val in enumerate(self._presets):
-        chip_x = dx + 80 + index * (chip_w + chip_gap)
-        chip_rect = snap_rect(rl.Rectangle(chip_x, presets_y, chip_w, chip_h))
-        self._preset_rects.append((val, chip_rect))
-        formatted_label = format_adjustor_value(val, step=self.step, unit=self._unit, labels=self._labels)
-        self._render_preset_chip(
-          chip_rect,
-          formatted_label,
-          current=abs(self._current_val - val) <= 0.5 * self.step,
-          pressed=self._pressed_zone == f"preset:{val}",
-        )
-      slider_y = dy + 682
-    else:
-      slider_y = dy + 479
-
-    # Slider
-    btn_size = 160
-    self._minus_rect = snap_rect(rl.Rectangle(dx + 80, slider_y - btn_size / 2, btn_size, btn_size))
-    self._plus_rect = snap_rect(rl.Rectangle(dx + dialog_w - 80 - btn_size, slider_y - btn_size / 2, btn_size, btn_size))
-
-    # Draw minus button
-    minus_pressed = self._pressed_zone == "minus"
-    draw_rounded_fill(self._minus_rect, rl.Color(255, 255, 255, 14 if minus_pressed else 8), radius_px=80)
-    draw_rounded_stroke(self._minus_rect, rl.Color(255, 255, 255, 28 if minus_pressed else 18), radius_px=80)
-    mts = measure_text_cached(self._font_btn, "-", 64)
-    rl.draw_text_ex(self._font_btn, "-", rl.Vector2(round(self._minus_rect.x + (btn_size - mts.x) / 2), round(self._minus_rect.y + (btn_size - mts.y) / 2)), 64, 0, rl.WHITE)
-
-    # Draw plus button
-    plus_pressed = self._pressed_zone == "plus"
-    draw_rounded_fill(self._plus_rect, rl.Color(255, 255, 255, 14 if plus_pressed else 8), radius_px=80)
-    draw_rounded_stroke(self._plus_rect, rl.Color(255, 255, 255, 28 if plus_pressed else 18), radius_px=80)
-    pts = measure_text_cached(self._font_btn, "+", 64)
-    rl.draw_text_ex(self._font_btn, "+", rl.Vector2(round(self._plus_rect.x + (btn_size - pts.x) / 2), round(self._plus_rect.y + (btn_size - pts.y) / 2)), 64, 0, rl.WHITE)
-
-    # Draw track
-    track_x = self._minus_rect.x + btn_size + 36
-    track_w = self._plus_rect.x - 36 - track_x
-    track_h = 23
-    track_y = slider_y - track_h / 2
-    self._track_rect = snap_rect(rl.Rectangle(track_x, track_y, track_w, track_h))
-
-    draw_rounded_fill(self._track_rect, rl.Color(255, 255, 255, 14), radius_px=12)
-    draw_rounded_stroke(self._track_rect, rl.Color(255, 255, 255, 8), radius_px=12)
-
-    # Draw ticks at preset values (or custom ticks if no presets)
-    ticks_to_draw = self._presets
-    if not has_presets:
-      ticks_to_draw = [self.min_val, (self.min_val + self.max_val) / 2, self.max_val]
-
-    for val in ticks_to_draw:
-      frac = self._value_fraction(val)
-      tick_x = track_x + frac * track_w
-      rl.draw_rectangle_rec(rl.Rectangle(tick_x - 2, track_y - 7, 4, 44), rl.Color(255, 255, 255, 28))
-
-    # Draw active fill
-    fill_frac = self._value_fraction(self._current_val)
-    fill_w = fill_frac * track_w
-    if fill_w > 0:
-      fill_rect = snap_rect(rl.Rectangle(track_x, track_y, fill_w, track_h))
-      draw_rounded_fill(fill_rect, self._color, radius_px=12)
-
-    # Draw thumb
-    thumb_w = 46
-    thumb_h = 93
-    thumb_x = track_x + fill_frac * track_w
-    self._thumb_rect = snap_rect(rl.Rectangle(thumb_x - thumb_w / 2, slider_y - thumb_h / 2, thumb_w, thumb_h))
-    draw_rounded_fill(self._thumb_rect, rl.WHITE, radius_px=23)
-    draw_rounded_stroke(self._thumb_rect, rl.Color(20, 22, 28, 46), radius_px=23)
-
-    # Cancel Button
-    c_face_x = self._cancel_rect.x
-    c_face_y = self._cancel_rect.y + min(1.0, GEOMETRY_OFFSET * self._cancel_offset * 0.1)
-    c_face = snap_rect(rl.Rectangle(c_face_x, c_face_y, button_width, button_height))
-    draw_rounded_fill(c_face, rl.Color(34, 38, 48, 255), radius_px=41)
-    draw_rounded_stroke(c_face, rl.Color(255, 255, 255, 20), radius_px=41)
-    cts = measure_text_cached(self._font_btn, tr("CANCEL"), 49)
-    rl.draw_text_ex(self._font_btn, tr("CANCEL"), rl.Vector2(round(c_face_x + (button_width - cts.x) / 2), round(c_face_y + (button_height - cts.y) / 2)), 49, 0, rl.WHITE)
-
-    # OK Button
-    o_face_x = self._ok_rect.x
-    o_face_y = self._ok_rect.y + min(1.0, GEOMETRY_OFFSET * self._ok_offset * 0.1)
-    o_face = snap_rect(rl.Rectangle(o_face_x, o_face_y, button_width, button_height))
-    draw_rounded_fill(o_face, self._color, radius_px=41)
-    draw_rounded_stroke(o_face, with_alpha(self._color, 150), radius_px=41)
-    ots = measure_text_cached(self._font_btn, tr("OK"), 49)
-    rl.draw_text_ex(self._font_btn, tr("OK"), rl.Vector2(round(o_face_x + (button_width - ots.x) / 2), round(o_face_y + (button_height - ots.y) / 2)), 49, 0, rl.WHITE)
+    # Presets use a separate band, and only appear when it fits above the slider.
+    if self._presets and slider_y - (box.y + 150) >= 62:
+      gap = 8
+      chip_w = (width - pad * 2 - gap * (len(self._presets) - 1)) / len(self._presets)
+      for index, value in enumerate(self._presets):
+        chip = rl.Rectangle(box.x + pad + index * (chip_w + gap), box.y + 158, chip_w, 48)
+        self._preset_rects.append((value, chip))
+        label = format_adjustor_value(value, step=self.step, unit=self._unit, labels=self._labels)
+        style.button(chip, label, abs(self._current_val - value) <= .5 * self.step, 22)
     return DialogResult.NO_ACTION
 
 

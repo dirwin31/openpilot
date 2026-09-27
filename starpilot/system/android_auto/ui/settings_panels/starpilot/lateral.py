@@ -22,7 +22,7 @@ def _confirm_reboot_toggle(params, key, state):
   params.put_bool(key, state)
   from openpilot.selfdrive.ui.ui_state import ui_state
   if ui_state.started:
-    from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+    from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog
     gui_app.push_widget(ConfirmDialog(
       tr("Reboot required. Reboot now?"), tr("Reboot"), tr("Cancel"),
       callback=lambda res: HARDWARE.reboot() if res == DialogResult.CONFIRM else None,

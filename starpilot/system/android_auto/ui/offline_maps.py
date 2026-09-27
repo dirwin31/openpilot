@@ -20,6 +20,7 @@ from dataclasses import replace
 from typing import Any
 
 import pyray as rl
+from openpilot.starpilot.system.android_auto.ui import settings_style as style
 
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import (
   AETHER_LIST_METRICS,
@@ -40,11 +41,10 @@ from openpilot.starpilot.navigation.destination_store import NavigationDestinati
 from openpilot.starpilot.navigation.offline_maps import AREA_PRESETS, OFFLINE_MAX_BYTES, OfflineMaps, estimate_area, format_bytes
 from openpilot.starpilot.system.android_auto.ui.navigation import CarMapboxSearchClient
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.ui.lib.application import FontWeight, gui_app
+from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import DialogResult
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog
 from openpilot.system.ui.widgets.keyboard import Keyboard
 
 PANEL_STYLE = DEFAULT_PANEL_STYLE
@@ -153,8 +153,8 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
                                               style=PANEL_STYLE, suppress_background=True)
     self._segments.render(rl.Rectangle(rect.x + INSET, rect.y, rect.width - INSET * 2, SEGMENT_HEIGHT))
     caption_y = rect.y + SEGMENT_HEIGHT + 8
-    font = gui_app.font(FontWeight.NORMAL)
-    rl.draw_text_ex(font, tr(SEGMENT_CAPTIONS[self.segment]), rl.Vector2(rect.x + INSET + 4, caption_y + 8), 26, 0, AetherListColors.SUBTEXT)
+    style.text(rl.Rectangle(rect.x + INSET + 4, caption_y, rect.width - INSET * 2 - 8, CAPTION_HEIGHT),
+               tr(SEGMENT_CAPTIONS[self.segment]), 24, style.MUTED)
     top = SEGMENT_HEIGHT + 8 + CAPTION_HEIGHT
     self._segment_view(self.segment).render(rl.Rectangle(rect.x, rect.y + top, rect.width, max(1.0, rect.height - top)))
 
@@ -490,15 +490,13 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
     )
 
   def _draw_storage(self, rect: rl.Rectangle) -> None:
-    bold, medium = gui_app.font(FontWeight.SEMI_BOLD), gui_app.font(FontWeight.MEDIUM)
     draw_list_group_shell(rect, style=PANEL_STYLE)
     x, width = rect.x + 30, rect.width - 60
     saved = [area for area in self.areas if not area.deleted]
     used = tr("{} of {} used").format(format_bytes(self.used_bytes), format_bytes(OFFLINE_MAX_BYTES))
     count = tr("{} saved map").format(len(saved)) if len(saved) == 1 else tr("{} saved maps").format(len(saved))
-    rl.draw_text_ex(bold, used, rl.Vector2(x, rect.y + 26), 38, 0, AetherListColors.HEADER)
-    count_w = measure_text_cached(medium, count, 28).x
-    rl.draw_text_ex(medium, count, rl.Vector2(x + width - count_w, rect.y + 32), 28, 0, AetherListColors.MUTED)
+    style.text(rl.Rectangle(x, rect.y + 14, width, 38), used, 30, bold=True)
+    style.text(rl.Rectangle(x, rect.y + 52, width, 28), count, 23, style.MUTED)
 
     bar = rl.Rectangle(x, rect.y + 86, width, 16)
     fraction = min(1.0, self.used_bytes / OFFLINE_MAX_BYTES)
@@ -509,7 +507,7 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
 
     text, color = self.connection_text()
     rl.draw_circle_v(rl.Vector2(x + 8, rect.y + 145), 7, color)
-    rl.draw_text_ex(medium, text, rl.Vector2(x + 28, rect.y + 131), 27, 0, AetherListColors.SUBTEXT)
+    style.text(rl.Rectangle(x + 28, rect.y + 126, width - 28, 40), text, 23, style.MUTED)
 
   def draw_rows(self, scroll_rect: rl.Rectangle, content_width: float, scroll_offset: float, manager) -> None:
     x = scroll_rect.x + INSET

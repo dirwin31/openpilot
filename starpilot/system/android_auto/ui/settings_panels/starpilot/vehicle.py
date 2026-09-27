@@ -11,8 +11,8 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import DialogResult, Widget
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
-from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog, alert_dialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOptionDialog
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import _SettingsPage
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import (
   AETHER_LIST_METRICS,
@@ -106,6 +106,16 @@ class VehicleSettingsManagerView(PanelManagerView):
     super().show_event()
     starpilot_state.update(force=True)
     self._rebuild_toggle_grid()
+
+  def _render(self, rect):
+    from openpilot.starpilot.system.android_auto.ui.settings_adapters import toggle_rows, render_existing
+    from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import SettingSection
+    self._check_rebuild_grid()
+    render_existing(self, rect, [
+      SettingSection("Vehicle", self._build_identity_rows()),
+      SettingSection("Steering Wheel Buttons", self._build_steering_rows()),
+      SettingSection("Vehicle Features", toggle_rows(self._build_driving_toggles())),
+    ])
 
   def _build_identity_rows(self) -> list[SettingRow]:
     cs = starpilot_state.car_state

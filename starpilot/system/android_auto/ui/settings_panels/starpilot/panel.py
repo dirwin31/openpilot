@@ -11,7 +11,7 @@ from openpilot.starpilot.common.starpilot_variables import update_starpilot_togg
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.widgets import DialogResult, Widget
-from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOptionDialog
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import TileGrid, HubTile, ToggleTile, ValueTile, SliderTile, SPACING, AetherSliderDialog, AetherListColors
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.sectioned_panel import SectionedTileLayout, TileSection
 

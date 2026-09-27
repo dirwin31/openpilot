@@ -51,10 +51,10 @@ def test_invalid_values_are_rejected_without_saving(monkeypatch, tmp_path):
   assert not path.exists()
 
 
-def test_car_screen_settings_live_under_vehicle_toggle():
+def test_car_screen_settings_have_a_dedicated_android_auto_section():
   settings = (JS_ROOT / "views" / "Settings.js").read_text()
   panel = (JS_ROOT / "components" / "AndroidAutoCarScreenPanel.js").read_text()
-  assert "AndroidAutoCarScreenPanel" in settings and "activeSection.name === 'Vehicle' && values.AndroidAutoEnabled" in settings
+  assert "AndroidAutoCarScreenPanel" in settings and "activeSection.name === 'Android Auto' && values.AndroidAutoEnabled" in settings
   assert 'title="Android Auto"' in settings and 'p.key === "AndroidAutoEnabled"' in settings
   assert 'v-else-if="error"' in panel and "attempt < 3" in panel and "@click=\"load\"" in panel
   for value in ('"split"', '"driving"', '"map"', "map_side", "map_orientation", "north_up", "heading_up", "camera",
