@@ -105,6 +105,10 @@ def test_logical_size_fills_car_viewport():
   assert logical_size(FrameRequest(1280, 720, 0, 240, 33333)) == (2880, 1080, 1280 / 2880, 480 / 1080)
   width, height, _, _ = logical_size(FrameRequest(800, 480, 0, 0, 33333))
   assert (width, height) == (1800, 1080)
+  # Narrower screens keep the minimum width and grow taller rather than stretching sideways.
+  assert logical_size(FrameRequest(800, 600, 0, 0, 33333)) == (1600, 1200, 0.5, 0.5)
+  width, height, scale_x, scale_y = logical_size(FrameRequest(1080, 1920, 0, 0, 33333))
+  assert width == 1600 and abs(scale_x - scale_y) < 1e-3
 
 
 # --------------------------------------------------------------- view source

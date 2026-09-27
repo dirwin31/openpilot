@@ -25,6 +25,7 @@ from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import _SettingsPage
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.scribble import draw_custom_icon
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import (
+  text_y,
   AETHER_LIST_METRICS,
   AetherAdjustorRow,
   AetherSegmentedControl,
@@ -793,7 +794,7 @@ class AetherBackupsCareDialog(Widget):
       draw_text_fit_common(
         self._font_btn,
         btn["text"],
-        rl.Vector2(btn_rect.x + 16, btn_rect.y + (btn_rect.height - font_size) / 2),
+        rl.Vector2(btn_rect.x + 16, text_y(btn_rect.y, btn_rect.height, font_size)),
         btn_rect.width - 32,
         font_size,
         align_center=True,

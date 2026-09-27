@@ -44,7 +44,8 @@ class SettingsDialog(Widget):
     margin, pad, button_h = px(12), px(24), px(56)
     width, height = min(px(1100), rect.width - 2 * margin), rect.height - 2 * margin
     box = rl.Rectangle(rect.x + (rect.width - width) / 2, rect.y + margin, width, height)
-    rl.draw_rectangle_rounded(box, .04, 16, style.BG)
+    style.rounded(box, px(24), style.BG)
+    style.outline(box, px(24), style.BORDER)
     style.text(rl.Rectangle(box.x + pad, box.y + margin, box.width - 2 * pad, px(52)), self.title, px(30), bold=True)
     body_top = px(76)
     footer_y = box.y + box.height - button_h - px(16)

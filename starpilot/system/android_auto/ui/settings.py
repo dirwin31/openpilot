@@ -12,7 +12,6 @@ from openpilot.starpilot.system.android_auto.ui.settings_panels.device import De
 from openpilot.starpilot.system.android_auto.ui.settings_panels.network import NetworkUI
 from openpilot.starpilot.system.android_auto.ui.settings_panels.software import SoftwareLayout
 from openpilot.starpilot.system.android_auto.ui.settings_panels.toggles import TogglesLayout
-from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import AetherSettingsView, SettingRow, SettingSection
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import StarPilotPanel, StarPilotPanelType
 from openpilot.starpilot.system.android_auto.ui.starpilot_settings import CarStarPilotLayout
 from openpilot.system.ui.lib.application import gui_app, FontWeight
@@ -46,7 +45,6 @@ class CarSettingsLayout(Widget):
     self._close_callback = None
     self._active = False
     self._drawer = False
-    self._page_list = False
     self._targets = {}
     self._pressed = None
     self._nav_scroll = GuiScrollPanel2(horizontal=False)
@@ -58,7 +56,6 @@ class CarSettingsLayout(Widget):
     self._remembered = {}
     self._hub = CarStarPilotLayout()
     self._build_pages()
-    self._picker = AetherSettingsView(self, [])
 
   def _add(self, key, title, section, widget, subpanel='', scope=''):
     self._pages[key] = SettingsPage(key, title, section, widget, subpanel, scope)
@@ -122,7 +119,7 @@ class CarSettingsLayout(Widget):
     pass
 
   def get_panel_depth(self):
-    return len(self._history) + int(self._page_list)
+    return len(self._history)
 
   def set_current_panel(self, panel_type):
     pages = {PanelType.DEVICE: 'device', PanelType.NETWORK: 'wifi', PanelType.BLUETOOTH: 'bluetooth',
@@ -142,8 +139,7 @@ class CarSettingsLayout(Widget):
 
   def open_page(self, key):
     if self._active:
-      (self._picker if self._page_list else self._current.widget).hide_event()
-    self._page_list = False
+      self._current.widget.hide_event()
     self._drawer = False
     self._page = key
     self._section = self._current.section
@@ -174,10 +170,6 @@ class CarSettingsLayout(Widget):
   def _back(self):
     if self._drawer:
       self._drawer = False
-    elif self._page_list:
-      self._picker.hide_event()
-      self._page_list = False
-      self._current.widget.show_event()
     elif hasattr(self._current.widget, 'back') and self._current.widget.back():
       pass
     elif hasattr(getattr(self._current.widget, '_scroller', None), 'back') and self._current.widget._scroller.back():
@@ -189,21 +181,6 @@ class CarSettingsLayout(Widget):
       self._current.widget.show_event()
     elif self._close_callback:
       self._close_callback()
-
-  def _show_pages(self):
-    if self._page_list:
-      self._back()
-      return
-    self._current.widget.hide_event()
-    self._picker._header_title = self._section
-    self._picker._header_subtitle = 'Choose a page'
-    self._picker._sections = [SettingSection('', [
-      SettingRow(page.key, 'value', page.title, page.scope, on_click=lambda key=page.key: self.open_page(key))
-      for page in self._pages.values() if page.section == self._section
-    ])]
-    self._picker._scroll_panel.set_offset(0)
-    self._picker.show_event()
-    self._page_list = True
 
   def _target(self, point):
     return next((key for key, rect in self._targets.items() if rl.check_collision_point_rec(point, rect)), None)
@@ -222,8 +199,6 @@ class CarSettingsLayout(Widget):
         self._back()
       elif target == 'sections':
         self._drawer = not self._drawer
-      elif target == 'pages':
-        self._show_pages()
       elif target.startswith('section:'):
         section = target[8:]
         key = self._remembered.get(section) or next(key for key, page in self._pages.items() if page.section == section)
@@ -266,13 +241,19 @@ class CarSettingsLayout(Widget):
       style.text(rl.Rectangle(text_x, rect.y, max(0, rect.x + rect.width - inset - text_x), rect.height), label, size)
     else:
       style.button(rect, label, selected, size, align)
+      if selected and key.startswith('section:'):
+        # The selected section carries the accent bar at its left edge, as the old settings did.
+        bar_h = rect.height * .5
+        style.rounded(rl.Rectangle(rect.x + style.px(6), rect.y + (rect.height - bar_h) / 2, style.px(4), bar_h), style.px(2), style.ACCENT)
     bounds = rl.get_collision_rec(rect, clip) if clip else rect
     if bounds.width > 0 and bounds.height > 0:
       self._targets[key] = bounds
 
   def _draw_navigation(self, rect, back=True):
-    """Back, then one row per section, all the same width."""
-    rl.draw_rectangle_rec(rect, style.BG)
+    """Back, then one row per section, all the same width, on the sidebar's own panel."""
+    rl.draw_rectangle_rec(rect, style.SIDEBAR)
+    edge = style.hairline()
+    rl.draw_rectangle_rec(rl.Rectangle(rect.x + rect.width - edge, rect.y, edge, rect.height), style.SELECTED)
     gap, margin = style.px(8), style.px(12)
     area = rl.Rectangle(rect.x + margin, rect.y + margin, rect.width - 2 * margin, max(1, rect.height - 2 * margin))
     rows = (['back'] if back else []) + [f'section:{section}' for section in SECTIONS]
@@ -303,17 +284,15 @@ class CarSettingsLayout(Widget):
     gap = style.px(16) if width else style.px(8)
     margin = style.px(12)
     content = rl.Rectangle(rect.x + width + gap, rect.y + margin, max(1, rect.width - width - gap * 2), rect.height - 2 * margin)
-    # The header row: section title and All Pages. Without the sidebar, Back and Sections lead it.
+    # The header row: the section title. Without the sidebar, Back and Sections lead it.
     head_h, font = style.px(52), style.px(24)
     title_x = content.x + style.px(16)
     if not width:
       self._button('back', rl.Rectangle(content.x, content.y, style.px(120), head_h), 'Back', size=font)
       self._button('sections', rl.Rectangle(content.x + style.px(128), content.y, style.px(140), head_h), 'Sections', size=font)
       title_x = content.x + style.px(284)
-    pages_w = style.px(144)
-    title_w = max(0, content.x + content.width - title_x - pages_w - style.px(8))
+    title_w = max(0, content.x + content.width - title_x)
     style.text(rl.Rectangle(title_x, content.y, title_w, head_h), self._section, style.px(28), bold=True)
-    self._button('pages', rl.Rectangle(content.x + content.width - pages_w, content.y, pages_w, head_h), 'All Pages', self._page_list, size=font)
     pages = [page for page in self._pages.values() if page.section == self._section]
     tab_font, tab_h, tab_gap, inset, arrow = style.px(25), style.px(54), style.px(8), style.px(16), style.px(44)
     widths = [max(style.px(130), measure_text_cached(gui_app.font(FontWeight.NORMAL), page.title, tab_font).x + style.px(40)) for page in pages]
@@ -340,7 +319,7 @@ class CarSettingsLayout(Widget):
     if overflow:
       self._button('previous', rl.Rectangle(content.x, tabs.y, arrow, tab_h), '‹')
       self._button('next', rl.Rectangle(content.x + content.width - arrow, tabs.y, arrow, tab_h), '›')
-    scope_h = style.px(32) if self._current.scope and not self._page_list else 0
+    scope_h = style.px(32) if self._current.scope else 0
     if scope_h:
       style.text(rl.Rectangle(content.x + inset, tabs_y + tab_h + style.px(8), content.width - 2 * inset, scope_h),
                  self._current.scope, style.px(22), style.MUTED)
@@ -350,7 +329,7 @@ class CarSettingsLayout(Widget):
       self._targets = {key: value for key, value in self._targets.items() if key in ('back', 'sections')}
       self._draw_navigation(body, back=False)
     else:
-      widget = self._picker if self._page_list else self._current.widget
+      widget = self._current.widget
       widget.set_parent_rect(body)
       view = getattr(widget, '_sub_panels', {}).get(getattr(widget, '_current_sub_panel', ''), getattr(widget, '_manager_view', widget))
       if view is not None:
@@ -366,10 +345,10 @@ class CarSettingsLayout(Widget):
   def show_event(self):
     super().show_event()
     self._active = True
-    (self._picker if self._page_list else self._current.widget).show_event()
+    self._current.widget.show_event()
 
   def hide_event(self):
-    (self._picker if self._page_list else self._current.widget).hide_event()
+    self._current.widget.hide_event()
     self._active = False
     self._pressed = None
     super().hide_event()
