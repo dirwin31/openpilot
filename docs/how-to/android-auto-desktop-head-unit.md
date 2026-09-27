@@ -151,6 +151,25 @@ Worth checking after changes to Android Auto code:
   should report `suspended`, then `streaming` again, still in `car` view.
 - **Touch:** tap something; the UI responds and `input_events` in the log goes up by 2 per tap.
 
+## Testing the onroad view
+
+The car view's onroad state is `ui_state.started`, i.e. `deviceState.started`, with `ForceOnroad`
+ORed in and `ForceOffroad` masked out (`selfdrive/ui/ui_state.py`). To exercise the onroad layouts
+on a bench, set `ForceOnroad`. Use System → Drive State → **Onroad** in the car view, the same
+control on the comma, or set it directly:
+
+```bash
+ssh comma 'echo -n 1 > /data/params/d/ForceOnroad'   # 0 to clear
+```
+
+`ForceOnroad` is `CLEAR_ON_MANAGER_START`.
+
+Onroad, `OnroadControls` drops touches on the driving view, and only the quick-menu button
+receives input. Its **Go offroad** row is gated on Park. **Resume Onroad** on the home screen
+clears both force params. Under the DHU (`STARPILOT_ANDROID_AUTO_DHU=1`), `vehicle_parked()`
+returns true and `navigation_speed()` returns 0, so neither Go offroad nor the Navigate speed
+lock needs a `carState`.
+
 ## Protocol check without a comma
 
 `tools/android_auto/dhu_test.py` runs the phone side on your computer with a test
@@ -216,8 +235,8 @@ Things that trip people and agents up:
 - **One car-view session at a time.** The car layout has one renderer on the comma; a second
   car-view session (another port) takes it over and the first falls back to mirror. Extra
   sessions should use `--view mirror`. The launcher refuses a second car-view session.
-- **Leave the comma offroad.** Car-view touch is ignored onroad. If the comma was forced onroad
-  (Settings → System → **Onroad**), touch in the DHU cannot undo it; set it back to **Auto** on the comma.
+- **Onroad, only the quick menu takes touch.** Leave a forced onroad state with its
+  **Go offroad** row or by clearing `ForceOnroad` ([Testing the onroad view](#testing-the-onroad-view)).
 - **Don't stop DHU instances you didn't start.** Someone may have one open for a phone
   (it listens for adb on port 5277).
 - **Ask before changing files on someone's comma.** Running `dhu_device.py` changes nothing;
@@ -242,7 +261,7 @@ Things that trip people and agents up:
 | `Android Auto is projecting to a car` | Stop it in the comma's settings, or add `--stop-android-auto`. |
 | `Android Auto identity missing` / `AuthenticationRejected … (status -3)` | Install the identity in The Galaxy → Vehicle Controls → Android Auto Identity. A self-signed test identity is rejected. |
 | `another car-view session is running on the comma` | Close the other DHU first, or use `--view mirror`. |
-| DHU shows "openpilot Unavailable" and taps do nothing | The comma is onroad, possibly forced; set Settings → System to **Auto** on the comma. |
+| DHU shows "openpilot Unavailable" and taps do nothing | Onroad, likely via `ForceOnroad`. Use quick menu → **Go offroad**, or clear the param. |
 | View says `mirror (car view failed: …)` | See `/data/android_auto/logs/car_ui.log` on the comma. `renderer exited with 3` means another session changed the screen size (one car view at a time). |
 | Session ends with `Video acknowledgement older than 1.5 s` | The DHU stopped confirming frames (network hiccup, or the DHU restarting its video, which has been seen right after clicking into its window). Run the launcher again. |
 | DHU console: `Failed to read from transport - disconnect` | The comma side ended; the launcher prints why. |
