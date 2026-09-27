@@ -79,6 +79,7 @@ def main():
 
   try:
     ui_state.ui_params.start()
+    ui_state.live_params.start()
     gui_app.init_window("UI")
     stall_monitor.progress("ui.after_init_window")
     gui_app.set_progress_hook(stall_monitor.progress)
@@ -154,6 +155,7 @@ def main():
     except Exception as exc:
       cloudlog.error(f"UI streamer state publish failed: {exc}")
     gui_app.set_progress_hook(None)
+    ui_state.live_params.stop()
     ui_state.ui_params.stop()
     stall_monitor.stop()
 

@@ -223,6 +223,7 @@ def test_aa_sleep_fails_awake(aa_sleep_device, monkeypatch, reason):
   assert not s.device.awake
   if reason == "stale_or_unfocused":
     s.streaming[0] = False
+    s.clock[0] += ui_state_module.AA_SLEEP_STALE_GRACE
   elif reason == "toggle_off":
     s.setting[0] = False
   elif reason == "aa_disabled":
@@ -238,10 +239,37 @@ def test_aa_sleep_fails_awake(aa_sleep_device, monkeypatch, reason):
   assert s.power == [False, True] and s.rendering == [False, True]
 
 
-def test_critical_alert_keeps_aa_sleeping_screen_awake(aa_sleep_device):
+def test_brief_frame_gap_keeps_aa_screen_asleep(aa_sleep_device):
   s = aa_sleep_device
   s.device._update_wakefulness()
-  s.device._active_standby_alerts = lambda: {"StandbyWakeCriticalAlert"}
+  assert not s.device.awake
+  s.streaming[0] = False
+  s.clock[0] = 111.0 + ui_state_module.AA_SLEEP_STALE_GRACE - 0.1
+  s.device._update_wakefulness()
+  s.streaming[0] = True
+  s.clock[0] += 0.05
+  s.device._update_wakefulness()
+  assert not s.device.awake and s.power == [False] and s.device._interaction_time == 110.0
+
+
+def test_aa_sleep_ignores_standby_wake_selections(aa_sleep_device):
+  s = aa_sleep_device
+  s.device._standby_mode = True
+  s.device._wake_keys = ui_state_module.enabled_wake_keys(ui_state_module.ui_state.ui_params) | {"StandbyWakeTurnSignal"}
+  s.device._update_wakefulness()
+  assert not s.device.awake
+  s.device._active_standby_alerts = lambda: {"StandbyWakeInfoAlert"}  # e.g. "Turning Left", speed limit changed
+  s.state.status = ui_state_module.UIStatus.ENGAGED
+  s.clock[0] = 112.0
+  s.device._update_wakefulness()
+  assert not s.device.awake and s.power == [False]
+
+
+@pytest.mark.parametrize("alert", ["StandbyWakeWarningAlert", "StandbyWakeCriticalAlert"])
+def test_driver_alert_keeps_aa_sleeping_screen_awake(aa_sleep_device, alert):
+  s = aa_sleep_device
+  s.device._update_wakefulness()
+  s.device._active_standby_alerts = lambda: {alert}
   for now in (112.0, 125.0, 140.0):
     s.clock[0] = now
     s.device._update_wakefulness()

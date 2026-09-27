@@ -6,17 +6,23 @@ const VIEWS = [
   { value: "map", label: "Map Only", desc: "The map fills the screen, with the status border, your speed and alerts on top." },
 ]
 
+const MAP_ORIENTATIONS = [
+  { value: "north_up", label: "North Up", desc: "Keeps street names upright and rotates only the vehicle marker. Uses no extra rendering work." },
+  { value: "heading_up", label: "Heading Up", desc: "Keeps the direction of travel toward the top; raster street names rotate with the map." },
+]
+
 export const AndroidAutoCarScreenPanel = {
   name: "AndroidAutoCarScreenPanel",
   props: {
     isMetric: { type: Boolean, default: false },
   },
   data() {
-    return { settings: null, statusMetrics: [], loading: false, error: "", saving: false, views: VIEWS }
+    return { settings: null, statusMetrics: [], loading: false, error: "", saving: false, views: VIEWS, mapOrientations: MAP_ORIENTATIONS }
   },
   created() { this.load() },
   computed: {
     showsDriving() { return this.settings && this.settings.onroad_view !== "map" },
+    showsMap() { return this.settings && this.settings.onroad_view !== "driving" },
     isSplit() { return this.settings && this.settings.onroad_view === "split" },
     blindSpotEnabled() { return this.settings?.blind_spot_monitors !== false },
     speedFactor() { return this.isMetric ? 3.6 : 2.2369362921 },
@@ -110,6 +116,19 @@ export const AndroidAutoCarScreenPanel = {
           </div>
         </div>
 
+        <div style="display:grid; gap:6px; border-top:1px solid var(--glass-border, rgba(127,127,127,.2)); padding-top:10px;" :style="showsMap ? '' : 'opacity:.5;'">
+          <div class="gx-row__label">Map Orientation</div>
+          <label v-for="orientation in mapOrientations" :key="orientation.value" class="gx-row" style="border:none; cursor:pointer; gap:10px;">
+            <input type="radio" name="car-screen-map-orientation" :checked="settings.map_orientation === orientation.value"
+              :disabled="!showsMap || saving" @change="update({ map_orientation: orientation.value })"
+              style="accent-color:var(--primary); width:18px; height:18px; flex:none;" />
+            <div class="gx-row__info">
+              <span class="gx-row__label">{{ orientation.label }}</span>
+              <span class="gx-row__desc">{{ orientation.desc }}</span>
+            </div>
+          </label>
+        </div>
+
         <div class="gx-row" style="display:block; border-top:1px solid var(--glass-border, rgba(127,127,127,.2));">
           <div class="gx-row__label">Status Column</div>
           <div class="gx-row__desc">Choose the six stats shown on the right side of the driving view. The same stat can fill more than one slot.</div>
@@ -127,7 +146,7 @@ export const AndroidAutoCarScreenPanel = {
         <label class="gx-row" style="gap:10px; cursor:pointer;">
           <div class="gx-row__info">
             <span class="gx-row__label">Sleep C4 Screen During Android Auto</span>
-            <span class="gx-row__desc">Turn off the comma four display and pause its drawing after the screen timeout while the car view is streaming. AA rendering is unchanged. Tap the comma to wake it; connection loss or a critical alert wakes it automatically. Mirror mode is unchanged. A Live UI viewer keeps native rendering active.</span>
+            <span class="gx-row__desc">Turn off the comma four display and pause its drawing after the screen timeout while the car view is streaming. AA rendering is unchanged. Tap the comma to wake it; connection loss, warnings (like Pay Attention) and critical alerts (like Take Control) wake it automatically. Standby wake choices do not apply. Mirror mode is unchanged. A Live UI viewer keeps native rendering active.</span>
           </div>
           <input type="checkbox" :checked="settings.sleep_device_screen" :disabled="saving"
             @change="update({ sleep_device_screen: $event.target.checked })" style="accent-color:var(--primary); width:20px; height:20px; flex:none;" />

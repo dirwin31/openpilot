@@ -10,7 +10,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.lib.prime_state import PrimeState
-from openpilot.selfdrive.ui.lib.ui_param_cache import shared_ui_params
+from openpilot.selfdrive.ui.lib.ui_param_cache import UIParamCache, shared_ui_params
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.starpilot.common.lateral_only_experimental import lateral_only_experimental_available
 from openpilot.starpilot.common.car_params_capability import capability_car_params_bytes
@@ -29,6 +29,14 @@ BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
 # off and the ignition is off. Bounds battery drain from a browser tab left
 # open on a parked car; with ignition on there is no cap.
 STREAM_OFFROAD_HOLD_MAX = 600.0
+
+# While the C4 screen sleeps for Android Auto, only alerts that need the driver
+# (e.g. "Pay Attention", faults, "TAKE CONTROL") wake it; the car screen already
+# shows engagement, turn and informational alerts. Standby wake selections do not apply.
+AA_SLEEP_WAKE_KEYS = frozenset({"StandbyWakeWarningAlert", "StandbyWakeCriticalAlert"})
+# A car-view frame gap shorter than this (an encoder reopen, a heavy map/route
+# frame) keeps the screen asleep instead of waking it for a full timeout.
+AA_SLEEP_STALE_GRACE = 3.0
 
 
 def _noop_progress(_phase: str) -> None:
@@ -54,6 +62,11 @@ class UIState:
     self.params = Params()
     self.ui_params = shared_ui_params()
     self.params_memory = Params(memory=True)
+    # Display-only values other processes publish every frame or so (CEStatus, VisionSpeedLimit, VASM*).
+    # Reading them uncached cost several file reads per frame; once started, refreshes happen off the
+    # render thread. Use params_memory for anything that is read, then written back or acted on once.
+    # A key not read for over a second (e.g. CEStatus while offroad) is read fresh, not from a past drive.
+    self.live_params = UIParamCache(self.params_memory, ttl=0.05, max_stale=1.0)
     self.sm = messaging.SubMaster(
       [
         "modelV2",
@@ -243,8 +256,8 @@ class UIState:
     self.usbgpu_compiled = params.get_bool("UsbGpuCompiled")
     self.usbgpu_active = params.get_bool("UsbGpuActive")
     self.usbgpu_loading = params.get_bool("UsbGpuLoading")
-    self.switchback_mode_enabled = self.params_memory.get_bool("SwitchbackModeEnabled") if self.started else False
-    self.conditional_status = self.params_memory.get_int("CEStatus", default=0) if self.started else 0
+    self.switchback_mode_enabled = self.live_params.get_bool("SwitchbackModeEnabled") if self.started else False
+    self.conditional_status = self.live_params.get_int("CEStatus", default=0) if self.started else 0
     mark_progress("ui.update.after_state_params")
     if self.sm.valid.get("starpilotCarState", False):
       starpilot_car_state = self.sm["starpilotCarState"]
@@ -345,6 +358,7 @@ class Device:
     self._awake: bool = True
     self._render_awake: bool = True
     self._aa_screen_sleep = False
+    self._aa_last_streaming = 0.0
     self._aa_screen_settings = CarScreenSettings()
     self._aa_car_frames = FrameProducer(CAR_FRAME_PATH) if HARDWARE.get_device_type() == "mici" else None
     self._stream_hold_since: float = 0.0
@@ -505,10 +519,15 @@ class Device:
 
   def _update_wakefulness(self):
     # Dedicated AA car view renders independently. Never sleep for mirror mode,
-    # startup, lost focus or a stalled connection; stale heartbeats fail awake.
-    aa_sleep = bool(self._aa_car_frames is not None and not ui_state.android_auto_car_view and ui_state.started and
-                    gui_app.android_auto_enabled and self._aa_screen_settings.poll()["sleep_device_screen"] and
-                    self._aa_car_frames.recently_sent())
+    # startup, lost focus or a stalled connection; stale heartbeats fail awake
+    # once they outlast the grace period.
+    now = time.monotonic()
+    aa_eligible = bool(self._aa_car_frames is not None and not ui_state.android_auto_car_view and ui_state.started and
+                       gui_app.android_auto_enabled and self._aa_screen_settings.poll()["sleep_device_screen"])
+    aa_streaming = aa_eligible and self._aa_car_frames.recently_sent()
+    if aa_streaming:
+      self._aa_last_streaming = now
+    aa_sleep = aa_streaming or (aa_eligible and self._aa_screen_sleep and now - self._aa_last_streaming < AA_SLEEP_STALE_GRACE)
     if aa_sleep != self._aa_screen_sleep:
       self._aa_screen_sleep = aa_sleep
       self._reset_interactive_timeout()
@@ -521,12 +540,15 @@ class Device:
     self._last_status = ui_state.status
     status_key = "StandbyWakeEngage" if ui_state.status == UIStatus.ENGAGED else "StandbyWakeDisengage"
     input_events = self._wake_input_events()
+    active_alerts = self._active_standby_alerts()
     selected_status_change = status_changed and status_key in self._wake_keys
     selected_turn_signal = bool(input_events & self._wake_keys)
-    button_pressed = (self._standby_mode and (ui_state.started or ui_state.ignition) and
+    # AA sleep replaces the Standby wake selections with AA_SLEEP_WAKE_KEYS.
+    button_pressed = (not aa_sleep and self._standby_mode and (ui_state.started or ui_state.ignition) and
                       "StandbyWakeButton" in self._wake_keys and "button" in input_events)
-    wake_for_onroad_event = (ui_state.started and self._standby_mode and self._screen_brightness_onroad != 0 and
-                             (selected_status_change or self._visible_onroad_alert() or selected_turn_signal))
+    wake_for_onroad_event = (not aa_sleep and ui_state.started and self._standby_mode and self._screen_brightness_onroad != 0 and
+                             (selected_status_change or bool(active_alerts & self._wake_keys) or selected_turn_signal))
+    aa_alert = aa_sleep and bool(active_alerts & AA_SLEEP_WAKE_KEYS)
 
     counter = screen_off_toggle_counter(ui_state.params_memory)
     presses = counter - self._screen_off_counter
@@ -534,18 +556,19 @@ class Device:
     road_changed = ui_state.started != self._screen_off_started
     self._screen_off_started = ui_state.started
     touched = any(ev.left_down for ev in gui_app.mouse_events)
-    critical_alert = "StandbyWakeCriticalAlert" in self._active_standby_alerts()
+    critical_alert = "StandbyWakeCriticalAlert" in active_alerts
     was_screen_off = self._screen_off
     if not ui_state.started or road_changed or ignition_state_changed:
       self._screen_off = False
     elif presses > 0:
       if presses % 2:
         self._screen_off = not self._screen_off
-    elif touched or wake_for_onroad_event or critical_alert:
+    elif touched or wake_for_onroad_event or critical_alert or aa_alert:
       self._screen_off = False
 
+    # Resetting every frame holds the screen awake while the alert is shown.
     if (ignition_state_changed or touched or button_pressed or wake_for_onroad_event or presses > 0 or
-        (was_screen_off and not self._screen_off) or (aa_sleep and critical_alert)):
+        (was_screen_off and not self._screen_off) or aa_alert):
       self._reset_interactive_timeout()
 
     interaction_timeout = time.monotonic() > self._interaction_time
@@ -608,9 +631,6 @@ class Device:
     except Exception:
       pass
     return set()
-
-  def _visible_onroad_alert(self):
-    return bool(self._active_standby_alerts() & self._wake_keys)
 
   def _stream_holds_render(self, display_awake: bool) -> bool:
     """Keep rendering for a watching browser while the display sleeps.

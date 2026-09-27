@@ -165,13 +165,16 @@ possible stutter.
 The Galaxy's AA Layout panel now offers `sleep_device_screen`, off by default.
 It reuses the native screen timeout and tap-to-wake path, suspending drawing
 without stopping UI state updates, watchdog servicing, driver monitoring or
-AA's separate car renderer. Critical alerts hold the native display awake.
+AA's separate car renderer. Warning and critical alerts hold the native display awake;
+other Standby wake events (engagement, informational alerts, turn signals, buttons) do not.
 Native Live UI viewers still keep drawing active; C3X and mirror mode are unchanged.
 
 The supervisor records the source timestamp only after sending a real car-view
 frame. The native UI checks that heartbeat and focused demand from shared-memory
 header bytes, without copying frame pixels or polling a control socket. Startup,
-lost focus, or a sent frame at least one second old cannot keep the screen asleep.
+lost focus, or a sent frame at least one second old cannot put the screen to sleep; once
+asleep, a gap has to outlast a 3 s grace to wake it, so a single slow frame does not
+relight the panel for a full timeout.
 Session initialization clears the heartbeat. This uses existing settings storage
 and unused frame-header space, with no Params/schema build or new background worker.
 
