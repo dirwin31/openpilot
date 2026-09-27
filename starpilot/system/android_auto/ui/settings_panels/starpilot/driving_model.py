@@ -30,9 +30,9 @@ from openpilot.system.ui.lib.application import FontWeight, MouseEvent, MousePos
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.scroll_panel2 import GuiScrollPanel2
 from openpilot.system.ui.widgets import DialogResult, Widget
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog, alert_dialog
 from openpilot.system.ui.widgets.label import gui_label
-from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOptionDialog
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import _SettingsPage
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import (
   AETHER_LIST_METRICS,
@@ -281,44 +281,65 @@ class DrivingModelManagerView(AetherInteractiveMixin, Widget):
       return
 
   def _render(self, rect: rl.Rectangle):
-    self.set_rect(rect)
-    self._interactive_rects.clear()
+    from openpilot.starpilot.system.android_auto.ui.settings_adapters import render_existing
+    from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import SettingRow, SettingSection
+    controller = self._controller
+    current = controller.current_entry()
+    sections = [SettingSection("Current Model", [SettingRow(
+      "current", "value", current.name if current else "Loading model catalog",
+      get_value=lambda: controller.download_progress_text() if controller._is_download_active() else "Active",
+      on_click=lambda: self._model_actions(current) if current else None,
+    )])]
+    controls = [
+      SettingRow("download", "value", controller.primary_header_button_state()[0],
+                 enabled=lambda: controller.primary_header_button_state()[1],
+                 on_click=lambda: controller.cancel_active_download() if controller._is_download_active() else controller.download_all_missing()),
+      SettingRow("refresh", "value", controller.secondary_header_button_state()[0],
+                 enabled=lambda: controller.secondary_header_button_state()[1], on_click=controller.refresh_manifest),
+      SettingRow("random", "toggle", "Randomize Driving Model", get_state=lambda: controller._params.get_bool("ModelRandomizer"),
+                 set_state=lambda _: controller.toggle_model_randomizer()),
+      SettingRow("sort", "value", "Sort Models", get_value=lambda: _SORT_LABELS.get(controller._get_sort_mode(), "Alphabetical"), on_click=self._choose_sort),
+      SettingRow("blacklist", "value", "Manage Blacklist", on_click=controller._on_blacklist_clicked),
+      SettingRow("ratings", "value", "Model Ratings", on_click=controller._on_scores_clicked),
+    ]
+    sections.append(SettingSection("Manage Models", controls))
+    for title, entries in self._get_sections():
+      sections.append(SettingSection(title, [SettingRow(entry.key, "value", entry.name,
+        " - ".join(filter(None, [entry.series, entry.released, "GPU required" if entry.requires_external_gpu else ""])),
+        get_value=lambda entry=entry: "Downloaded" if entry.installed else "Download",
+        on_click=lambda entry=entry: self._model_actions(entry)) for entry in entries]))
+    render_existing(self, rect, sections)
 
-    frame, scroll_rect, content_width = init_list_panel(rect, PANEL_STYLE, metrics=DRIVING_MODEL_METRICS)
-    self._shell_rect = frame.shell
+  def _choose_sort(self):
+    labels = list(_SORT_LABELS.values())
+    def apply(result):
+      if result == DialogResult.CONFIRM:
+        self._controller._params.put("ModelSortMode", next(key for key, label in _SORT_LABELS.items() if label == dialog.selection))
+    dialog = MultiOptionDialog("Sort Models", labels, _SORT_LABELS.get(self._controller._get_sort_mode(), labels[0]), callback=apply)
+    gui_app.push_widget(dialog)
 
-    current_entry = self._controller.current_entry()
-    if current_entry is not None:
-      banner_rect = rl.Rectangle(scroll_rect.x, scroll_rect.y, scroll_rect.width, BANNER_HEIGHT)
-      scroll_rect = rl.Rectangle(scroll_rect.x, scroll_rect.y + BANNER_HEIGHT + BANNER_GAP,
-                                 scroll_rect.width, scroll_rect.height - BANNER_HEIGHT - BANNER_GAP)
-      self._draw_current_banner(banner_rect, current_entry)
-
-    header_y = scroll_rect.y
-    self._draw_relocated_header(scroll_rect.x, header_y, content_width)
-    scroll_rect = rl.Rectangle(scroll_rect.x, scroll_rect.y + HEADER_BUTTON_HEIGHT + HEADER_BUTTON_GAP_Y,
-                               scroll_rect.width, scroll_rect.height - HEADER_BUTTON_HEIGHT - HEADER_BUTTON_GAP_Y)
-
-    randomizer_on = self._controller._params.get_bool("ModelRandomizer")
-    mgmt_y = scroll_rect.y
-    self._draw_sort_strip(scroll_rect.x, mgmt_y, content_width, randomizer_on)
-    scroll_rect = rl.Rectangle(scroll_rect.x, scroll_rect.y + MANAGEMENT_STRIP_HEIGHT,
-                               scroll_rect.width, scroll_rect.height - MANAGEMENT_STRIP_HEIGHT)
-
-    self._scroll_rect = scroll_rect
-
-    self._content_height = self._measure_content_height(content_width)
-    self._scroll_panel.set_enabled(lambda: not self._controller._is_download_active())
-    self._scroll_offset = self._scroll_panel.update(scroll_rect, max(self._content_height, scroll_rect.height))
-
-    aether_begin_scissor_mode(int(scroll_rect.x), int(scroll_rect.y), int(scroll_rect.width), int(scroll_rect.height))
-    self._draw_scroll_content(scroll_rect, content_width)
-    aether_end_scissor_mode()
-
-    if self._content_height > scroll_rect.height:
-      self._draw_scrollbar(scroll_rect)
-
-    draw_list_scroll_fades(scroll_rect, self._content_height, self._scroll_offset, AetherListColors.PANEL_BG, fade_height=FADE_HEIGHT)
+  def _model_actions(self, entry):
+    controller = self._controller
+    if not entry.installed:
+      controller.start_download(entry.key)
+      return
+    options = []
+    if not controller._params.get_bool("ModelRandomizer"):
+      options.append("Use Model")
+    options.append("Remove Favorite" if entry.user_favorite else "Add Favorite")
+    if controller.is_model_removable(entry.key):
+      options.append("Delete Model")
+    def apply(result):
+      if result != DialogResult.CONFIRM:
+        return
+      if dialog.selection == "Use Model":
+        controller.select_model(entry.key)
+      elif dialog.selection == "Delete Model":
+        controller.delete_model(entry.key)
+      else:
+        controller.toggle_favorite(entry.key)
+    dialog = MultiOptionDialog(entry.name, options, options[0], callback=apply)
+    gui_app.push_widget(dialog)
 
   def _draw_current_banner(self, rect: rl.Rectangle, entry: ModelCatalogEntry):
     draw_list_row_shell(

@@ -5559,7 +5559,7 @@ def setup(app):
   def require_android_auto_enabled():
     # Offline map tiles are shared with native navigation and remain available.
     if (request.path.startswith("/api/android_auto/identity") or request.path == "/api/android_auto/car_screen") and not params.get_bool("AndroidAutoEnabled"):
-      return jsonify({"error": "Enable Android Auto under Toggles → Vehicle first."}), 403
+      return jsonify({"error": "Enable Android Auto under Toggles → Android Auto first."}), 403
 
   def _android_auto_identity_payload():
     return {
@@ -5626,7 +5626,9 @@ def setup(app):
     if aa_car_screen.normalize(merged) != {key: merged[key] for key in aa_car_screen.DEFAULTS}:
       return jsonify({"error": "Unknown car screen setting."}), 400
     try:
-      saved = aa_car_screen.save(merged)
+      saved = aa_car_screen.update(payload)
+    except ValueError as error:
+      return jsonify({"error": str(error)}), 400
     except OSError as error:
       return jsonify({"error": f"Could not save: {error}"}), 500
     return jsonify({"settings": saved}), 200

@@ -44,7 +44,7 @@ from openpilot.starpilot.navigation.destination_store import (
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import DialogResult
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog
 from openpilot.system.ui.widgets.keyboard import Keyboard
 
 

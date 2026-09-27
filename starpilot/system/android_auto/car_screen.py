@@ -8,6 +8,7 @@ connected and car_ui re-reads them within a second, so they apply live.
 from __future__ import annotations
 
 import json
+import fcntl
 import math
 import os
 import tempfile
@@ -122,6 +123,18 @@ def save(settings: dict, path: Path | None = None) -> dict:
       pass
     raise
   return clean
+
+
+def update(change: dict, path: Path | None = None) -> dict:
+  """Merge a change under a process-shared lock for Galaxy and the car UI."""
+  path = path or CAR_SCREEN_PATH
+  path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+  with path.with_suffix('.lock').open('a') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    merged = {**load(path), **change}
+    if set(change) - DEFAULTS.keys() or normalize(merged) != merged:
+      raise ValueError('Unknown or invalid car screen setting.')
+    return save(merged, path)
 
 
 class CarScreenSettings:

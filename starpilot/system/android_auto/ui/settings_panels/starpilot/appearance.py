@@ -4,7 +4,7 @@ import re
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult
-from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOptionDialog
 
 from openpilot.selfdrive.ui.lib.starpilot_state import starpilot_state
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import _SettingsPage

@@ -3,8 +3,8 @@ from openpilot.selfdrive.ui.widgets.ssh_key import ssh_key_item
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.list_view import toggle_item
-from openpilot.system.ui.widgets.scroller_tici import Scroller
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+from openpilot.starpilot.system.android_auto.ui.settings_adapters import ResponsiveScroller as Scroller
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult
@@ -84,6 +84,7 @@ class DeveloperLayout(Widget):
       self._alpha_long_toggle,
       self._ui_debug_toggle,
     ], line_separator=True, spacing=0)
+    self._child(self._scroller)
 
     # Toggles should be not available to change in onroad state
     ui_state.add_offroad_transition_callback(self._update_toggles)

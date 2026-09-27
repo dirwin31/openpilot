@@ -178,6 +178,16 @@ class SoundsManagerView(AdjustorTogglesPanelView):
       )
     )
 
+  def _render(self, rect):
+    from openpilot.starpilot.system.android_auto.ui.settings_adapters import adjustor_rows, toggle_rows, render_existing
+    from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import SettingSection, SettingRow
+    definitions = [item for page in self._toggle_pages for item in page]
+    render_existing(self, rect, [
+      SettingSection("Volume", adjustor_rows(self._adjustor_rows)),
+      SettingSection("Alerts", toggle_rows(definitions)),
+      SettingSection("", [SettingRow("reset", "value", "Reset Sound Settings", on_click=self._controller._restore_defaults)]),
+    ])
+
   def _target_at(self, mouse_pos: MousePos) -> str | None:
     if point_hits(mouse_pos, self._reset_rect, None, pad_x=6, pad_y=0):
       return "action:restore_defaults"

@@ -3,16 +3,17 @@ from functools import partial
 from typing import cast
 
 import pyray as rl
+from openpilot.starpilot.system.android_auto.ui import settings_style as style
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.scroll_panel import GuiScrollPanel
 from openpilot.system.ui.lib.wifi_manager import WifiManager, SecurityType, Network, MeteredType, normalize_ssid
 from openpilot.system.ui.widgets import DialogResult, Widget
-from openpilot.system.ui.widgets.button import ButtonStyle, Button
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+from openpilot.system.ui.widgets.button import ButtonStyle
+from openpilot.starpilot.system.android_auto.ui.settings_controls import Button
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog
 from openpilot.system.ui.widgets.keyboard import Keyboard
-from openpilot.system.ui.widgets.label import gui_label
-from openpilot.system.ui.widgets.scroller_tici import Scroller
+from openpilot.starpilot.system.android_auto.ui.settings_adapters import ResponsiveScroller as Scroller
 from openpilot.system.ui.widgets.list_view import ButtonAction, ListItem, MultipleButtonAction, ToggleAction, button_item, text_item
 
 # These are only used for AdvancedNetworkSettings, standalone apps just need WifiManagerUI
@@ -28,7 +29,7 @@ except Exception:
 NM_DEVICE_STATE_NEED_AUTH = 60
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 64
-ITEM_HEIGHT = 160
+ITEM_HEIGHT = 132
 ICON_SIZE = 50
 
 STRENGTH_ICONS = [
@@ -56,12 +57,10 @@ class NavButton(Widget):
   def __init__(self, text: str):
     super().__init__()
     self.text = text
-    self.set_rect(rl.Rectangle(0, 0, 400, 100))
+    self.set_rect(rl.Rectangle(0, 0, 170, 56))
 
-  def _render(self, _):
-    color = rl.Color(74, 74, 74, 255) if self.is_pressed else rl.Color(57, 57, 57, 255)
-    rl.draw_rectangle_rounded(self._rect, 0.6, 10, color)
-    gui_label(self.rect, self.text, font_size=60, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
+  def _render(self, rect):
+    style.button(rect, self.text, self.is_pressed, 25)
 
 
 class NetworkUI(Widget):
@@ -84,23 +83,23 @@ class NetworkUI(Widget):
     else:
       self._set_current_panel(PanelType.WIFI)
 
-  def _render(self, _):
-    # subtract button
-    content_rect = rl.Rectangle(self._rect.x, self._rect.y + self._nav_button.rect.height + 40,
-                                self._rect.width, self._rect.height - self._nav_button.rect.height - 40)
-    if self._current_panel == PanelType.WIFI:
-      self._nav_button.text = tr("Advanced")
-      self._nav_button.set_position(self._rect.x + self._rect.width - self._nav_button.rect.width, self._rect.y + 20)
-      self._wifi_panel.render(content_rect)
-    else:
-      self._nav_button.text = tr("Back")
-      self._nav_button.set_position(self._rect.x, self._rect.y + 20)
-      self._advanced_panel.render(content_rect)
+  def hide_event(self):
+    self._wifi_manager.set_active(False)
+    super().hide_event()
 
+  def _render(self, rect):
+    style.text(rl.Rectangle(rect.x + 16, rect.y + 8, max(1, rect.width - 210), 56), tr("Wi-Fi"), 32, bold=True)
+    self._nav_button.set_rect(rl.Rectangle(rect.x + rect.width - 186, rect.y + 8, 170, 56))
+    self._nav_button.text = tr("Advanced") if self._current_panel == PanelType.WIFI else tr("Networks")
     self._nav_button.render()
+    content_rect = rl.Rectangle(rect.x, rect.y + 80, rect.width, max(1, rect.height - 80))
+    panel = self._wifi_panel if self._current_panel == PanelType.WIFI else self._advanced_panel
+    panel.set_parent_rect(content_rect)
+    panel.render(content_rect)
 
   def _set_current_panel(self, panel: PanelType):
     self._current_panel = panel
+    self._wifi_manager.set_active(True)
 
 
 class AdvancedNetworkSettings(Widget):
@@ -153,6 +152,7 @@ class AdvancedNetworkSettings(Widget):
     ]
 
     self._scroller = Scroller(items, line_separator=True, spacing=0)
+    self._child(self._scroller)
 
     # Set initial config
     metered = self._params.get_bool("GsmMetered")
@@ -313,7 +313,7 @@ class WifiManagerUI(Widget):
 
   def _render(self, rect: rl.Rectangle):
     if not self._networks:
-      gui_label(rect, tr("Scanning Wi-Fi networks..."), 72, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
+      style.message(rect, tr("Scanning Wi-Fi networks..."))
       return
 
     if self.state == UIState.NEEDS_AUTH and self._state_network:
@@ -359,48 +359,35 @@ class WifiManagerUI(Widget):
       self._draw_network_item(item_rect, network)
       if i < len(self._networks) - 1:
         line_y = int(item_rect.y + item_rect.height - 1)
-        rl.draw_line(int(item_rect.x), int(line_y), int(item_rect.x + item_rect.width), line_y, rl.LIGHTGRAY)
+        rl.draw_line(int(item_rect.x), int(line_y), int(item_rect.x + item_rect.width), line_y, style.BORDER)
 
     rl.end_scissor_mode()
 
   def _draw_network_item(self, rect, network: Network):
-    spacing = 50
-    ssid_rect = rl.Rectangle(rect.x, rect.y, rect.width - self.btn_width * 2, ITEM_HEIGHT)
-    signal_icon_rect = rl.Rectangle(rect.x + rect.width - ICON_SIZE, rect.y + (ITEM_HEIGHT - ICON_SIZE) / 2, ICON_SIZE, ICON_SIZE)
-    security_icon_rect = rl.Rectangle(signal_icon_rect.x - spacing - ICON_SIZE, rect.y + (ITEM_HEIGHT - ICON_SIZE) / 2, ICON_SIZE, ICON_SIZE)
-
-    status_text = ""
-    if self.state == UIState.CONNECTING and self._state_network:
-      if self._state_network.ssid == network.ssid:
-        self._networks_buttons[network.ssid].set_enabled(False)
-        status_text = tr("CONNECTING...")
-    elif self.state == UIState.FORGETTING and self._state_network:
-      if self._state_network.ssid == network.ssid:
-        self._networks_buttons[network.ssid].set_enabled(False)
-        status_text = tr("FORGETTING...")
-    elif network.security_type == SecurityType.UNSUPPORTED:
-      self._networks_buttons[network.ssid].set_enabled(False)
+    # Reserve the action rail first so long SSIDs cannot run underneath it.
+    narrow = rect.width < 750
+    rail_width = 120 if narrow else 280
+    ssid_rect = rl.Rectangle(rect.x + 12, rect.y + 10, max(1, rect.width - rail_width - 36), 64)
+    busy = self._state_network is not None and self._state_network.ssid == network.ssid and self.state in (UIState.CONNECTING, UIState.FORGETTING)
+    connect = self._networks_buttons[network.ssid]
+    connect.set_enabled(not busy and network.security_type != SecurityType.UNSUPPORTED)
+    connect.set_parent_rect(self._rect)
+    connect.render(ssid_rect)
+    if busy:
+      status = tr("Connecting...") if self.state == UIState.CONNECTING else tr("Forgetting...")
     else:
-      self._networks_buttons[network.ssid].set_enabled(True)
-
-    self._networks_buttons[network.ssid].render(ssid_rect)
-
-    if status_text:
-      status_text_rect = rl.Rectangle(security_icon_rect.x - 410, rect.y, 410, ITEM_HEIGHT)
-      gui_label(status_text_rect, status_text, font_size=48, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
-    else:
-      # If the network is saved, show the "Forget" button
-      if self._wifi_manager.is_connection_saved(network.ssid):
-        forget_btn_rect = rl.Rectangle(
-          security_icon_rect.x - self.btn_width - spacing,
-          rect.y + (ITEM_HEIGHT - 80) / 2,
-          self.btn_width,
-          80,
-        )
-        self._forget_networks_buttons[network.ssid].render(forget_btn_rect)
-
-    self._draw_status_icon(security_icon_rect, network)
-    self._draw_signal_strength_icon(signal_icon_rect, network)
+      status = tr("Connected") if self._wifi_manager.connected_ssid == network.ssid else tr("Tap to connect")
+    style.text(rl.Rectangle(rect.x + 28, rect.y + 78, max(1, rect.width - rail_width - 50), 40), status, 24, style.MUTED)
+    if not busy and self._wifi_manager.is_connection_saved(network.ssid):
+      forget = self._forget_networks_buttons[network.ssid]
+      forget.set_parent_rect(self._rect)
+      forget.render(rl.Rectangle(rect.x + rect.width - 132, rect.y + (rect.height - 56) / 2, 120, 56))
+    if not narrow:
+      icon_y = rect.y + (rect.height - ICON_SIZE) / 2
+      signal_icon_rect = rl.Rectangle(rect.x + rect.width - 270, icon_y, ICON_SIZE, ICON_SIZE)
+      security_icon_rect = rl.Rectangle(rect.x + rect.width - 210, icon_y, ICON_SIZE, ICON_SIZE)
+      self._draw_status_icon(security_icon_rect, network)
+      self._draw_signal_strength_icon(signal_icon_rect, network)
 
   def _networks_buttons_callback(self, network):
     if not self._wifi_manager.is_connection_saved(network.ssid) and network.security_type != SecurityType.OPEN:
@@ -452,11 +439,11 @@ class WifiManagerUI(Widget):
   def _on_network_updated(self, networks: list[Network]):
     self._networks = networks
     for n in self._networks:
-      self._networks_buttons[n.ssid] = Button(normalize_ssid(n.ssid), partial(self._networks_buttons_callback, n), font_size=55,
+      self._networks_buttons[n.ssid] = Button(normalize_ssid(n.ssid), partial(self._networks_buttons_callback, n), font_size=32,
                                               text_alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT, button_style=ButtonStyle.TRANSPARENT_WHITE_TEXT)
       self._networks_buttons[n.ssid].set_touch_valid_callback(lambda: self.scroll_panel.is_touch_valid())
       self._forget_networks_buttons[n.ssid] = Button(tr("Forget"), partial(self._forget_networks_buttons_callback, n), button_style=ButtonStyle.FORGET_WIFI,
-                                                     font_size=45)
+                                                     font_size=27)
       self._forget_networks_buttons[n.ssid].set_touch_valid_callback(lambda: self.scroll_panel.is_touch_valid())
 
   def _on_need_auth(self, ssid):

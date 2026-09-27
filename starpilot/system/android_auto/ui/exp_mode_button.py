@@ -2,10 +2,25 @@ import pyray as rl
 from openpilot.system.ui.lib.application import gui_app, FontWeight, FONT_SCALE
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
+from openpilot.system.ui.lib.vector_icon import Pen, draw_vector_icon
 from openpilot.system.ui.widgets import Widget
 from openpilot.selfdrive.ui.lib.mode_banner import ModeBannerVariant, draw_mode_banner_gradient, get_mode_banner_variant
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.starpilot.common.experimental_state import requested_experimental_mode
+
+CORNER_RADIUS = 18
+BACKGROUND = rl.Color(6, 6, 15, 255)  # the car home screen behind the button
+
+
+def _draw_corner_mask(corner: int, p: Pen) -> None:
+  """The area outside a quarter circle on a 64x64 canvas; corner 0-3 is top-left, top-right, bottom-right, bottom-left."""
+  tip = ((0.0, 0.0), (64.0, 0.0), (64.0, 64.0), (0.0, 64.0))[corner]
+  center = (64.0 - tip[0], 64.0 - tip[1])  # the arc's centre is the opposite corner
+  start = 180.0 + 90.0 * corner
+  arc = Pen.ellipse(center[0], center[1], 64.0, 64.0, start, start + 90.0, n=48)
+  # A fan from the square's corner point covers everything between it and the arc.
+  for a, b in zip(arc, arc[1:], strict=False):
+    p.fill([tip, a, b])
 
 
 class ExperimentalModeButton(Widget):
@@ -28,10 +43,15 @@ class ExperimentalModeButton(Widget):
     self.mode_variant = get_mode_banner_variant(self.params, ui_state.params_memory)
 
   def _render(self, rect):
-    rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
     draw_mode_banner_gradient(rect, self.mode_variant, 0xCC if self.is_pressed else 0xFF)
-    rl.draw_rectangle_rounded_lines_ex(self._rect, 0.19, 10, 2, rl.Color(30, 30, 62, 255))
-    rl.end_scissor_mode()
+    # The gradient is square. Round it by covering each corner with a cached, supersampled
+    # mask in the background colour; the car renderer has no MSAA, so plain arcs are jagged.
+    x0, y0 = int(rect.x), int(rect.y)
+    x1, y1 = x0 + int(rect.width) - CORNER_RADIUS, y0 + int(rect.height) - CORNER_RADIUS
+    for corner, (x, y) in enumerate(((x0, y0), (x1, y0), (x1, y1), (x0, y1))):
+      draw_vector_icon(f"exp-mode-corner:{corner}", x, y, CORNER_RADIUS / 64.0, BACKGROUND,
+                       lambda px, py, scale, color, corner=corner: _draw_corner_mask(corner, Pen(px, py, scale, color)),
+                       canvas=64.0, padding=1)
 
     # Draw vertical separator line
     line_x = rect.x + rect.width - self.img_width - (2 * self.horizontal_padding)

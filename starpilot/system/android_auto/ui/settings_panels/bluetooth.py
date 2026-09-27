@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import partial
 
 import pyray as rl
+from openpilot.starpilot.system.android_auto.ui import settings_style as style
 
 from openpilot.starpilot.system.bluetooth.protocol import BluetoothDevice, BluetoothStatus
 from openpilot.system.ui.lib.application import FontWeight, MousePos, gui_app
@@ -11,25 +12,28 @@ from openpilot.system.ui.lib.bluetooth_manager import BluetoothManager
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.scroll_panel import GuiScrollPanel
 from openpilot.system.ui.widgets import DialogResult, Widget
-from openpilot.system.ui.widgets.button import Button, ButtonStyle
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
+from openpilot.system.ui.widgets.button import ButtonStyle
+from openpilot.starpilot.system.android_auto.ui.settings_controls import Button
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog, alert_dialog
 from openpilot.system.ui.widgets.keyboard import Keyboard
 from openpilot.system.ui.widgets.label import gui_label
-from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOptionDialog
 from openpilot.system.ui.widgets.toggle import Toggle
 
 
-HEADER_HEIGHT = 180
-ITEM_HEIGHT = 160
-HEADER_PADDING = 40
+HEADER_HEIGHT = 100
+NARROW_HEADER_HEIGHT = 156
+NARROW_HEADER_WIDTH = 460
+ITEM_HEIGHT = 120
+HEADER_PADDING = 20
 SCAN_BUTTON_WIDTH = 260
-FORGET_BUTTON_WIDTH = 180
-ACTION_GAP = 35
+FORGET_BUTTON_WIDTH = 128
+ACTION_GAP = 16
 
 # Match the Network panel: the Settings surface stays pure black and list rows are transparent over it.
-PANEL_BACKGROUND = rl.BLACK
+PANEL_BACKGROUND = style.BG
 DIALOG_BACKGROUND = rl.Color(27, 27, 27, 255)
-ROW_BORDER = rl.LIGHTGRAY
+ROW_BORDER = style.BORDER
 TEXT_SECONDARY = rl.Color(170, 170, 170, 255)
 TEXT_DISABLED = rl.Color(150, 150, 150, 255)
 TEXT_CONNECTED = rl.Color(113, 209, 135, 255)
@@ -71,6 +75,14 @@ class _DeviceViewState:
   offroad: bool
 
 
+class GalaxyBluetoothToggle(Toggle):
+  def set_rect(self, rect):
+    Widget.set_rect(self, rect)
+
+  def _render(self, rect):
+    style.switch(rect, self.get_state(), self.enabled)
+
+
 class BluetoothDeviceRow(Widget):
   """A Wi-Fi-style, scroll-safe row with a primary device action and optional forget button."""
   def __init__(self, address: str, on_select, on_forget):
@@ -79,7 +91,7 @@ class BluetoothDeviceRow(Widget):
     self._on_select = on_select
     self._on_forget = on_forget
     self._state: _DeviceViewState | None = None
-    self._forget_button = Button(tr("Forget"), on_forget, button_style=ButtonStyle.FORGET_WIFI, font_size=42)
+    self._forget_button = Button(tr("Forget"), on_forget, button_style=ButtonStyle.FORGET_WIFI, font_size=28)
     self._forget_rect = rl.Rectangle(0, 0, 0, 0)
 
   def update(self, state: _DeviceViewState) -> None:
@@ -120,16 +132,18 @@ class BluetoothDeviceRow(Widget):
     rl.draw_rectangle_rec(rect, PANEL_BACKGROUND)
 
     right_padding = FORGET_BUTTON_WIDTH + ACTION_GAP if self._show_forget() else HEADER_PADDING
-    text_rect = rl.Rectangle(rect.x + HEADER_PADDING, rect.y + 18, rect.width - HEADER_PADDING - right_padding, 62)
+    # Name and status are centered as one block on the row's midline, level with Forget.
+    top = rect.y + (rect.height - 76) / 2
+    text_rect = rl.Rectangle(rect.x + HEADER_PADDING, top, rect.width - HEADER_PADDING - right_padding, 40)
     text_color = rl.WHITE if enabled else TEXT_DISABLED
-    gui_label(text_rect, state.device.name, font_size=54, color=text_color, font_weight=FontWeight.MEDIUM)
+    style.text(text_rect, state.device.name, 30, text_color, bold=True)
 
-    status_rect = rl.Rectangle(text_rect.x, rect.y + 82, text_rect.width, 52)
+    status_rect = rl.Rectangle(text_rect.x, top + 44, text_rect.width, 32)
     status = device_status_text(state.device, state.operation, state.selected_audio)
     status_color = TEXT_CONNECTED if state.device.connected and not state.operation else TEXT_SECONDARY
     if not enabled:
       status_color = TEXT_DISABLED
-    gui_label(status_rect, status, font_size=39, color=status_color)
+    style.text(status_rect, status, 23, status_color)
 
     if self._show_forget():
       self._forget_button.set_enabled(enabled)
@@ -181,8 +195,8 @@ class BluetoothManagerUI(Widget):
     super().__init__()
     self._manager = manager
     self._scroll_panel = GuiScrollPanel()
-    self._power_toggle = Toggle(initial_state=False, callback=self._toggle_power)
-    self._scan_button = Button(tr("Scan"), self._scan, button_style=ButtonStyle.NORMAL, font_size=42)
+    self._power_toggle = GalaxyBluetoothToggle(initial_state=False, callback=self._toggle_power)
+    self._scan_button = Button(tr("Scan"), self._scan, button_style=ButtonStyle.NORMAL, font_size=28)
     self._device_rows: dict[str, BluetoothDeviceRow] = {}
     self._pending_power: bool | None = None
     self._scan_pending = False
@@ -375,40 +389,40 @@ class BluetoothManagerUI(Widget):
 
   def _render(self, rect: rl.Rectangle):
     status = self._manager.status
-    header_rect = rl.Rectangle(rect.x, rect.y, rect.width, HEADER_HEIGHT)
+    header_height = NARROW_HEADER_HEIGHT if rect.width < NARROW_HEADER_WIDTH else HEADER_HEIGHT
+    header_rect = rl.Rectangle(rect.x, rect.y, rect.width, header_height)
     self._render_header(header_rect, status)
 
-    content_rect = rl.Rectangle(rect.x, rect.y + HEADER_HEIGHT, rect.width, rect.height - HEADER_HEIGHT)
+    content_rect = rl.Rectangle(rect.x, rect.y + header_height, rect.width, rect.height - header_height)
     if not status.available:
-      gui_label(content_rect, tr("Bluetooth is not available on this device."), font_size=62,
-                color=TEXT_SECONDARY, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
+      style.message(content_rect, tr("Bluetooth is not available on this device."), color=TEXT_SECONDARY)
       return
     if not status.enabled:
-      gui_label(content_rect, tr("Bluetooth is off."), font_size=62, color=TEXT_SECONDARY,
-                alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
+      style.message(content_rect, tr("Bluetooth is off."), color=TEXT_SECONDARY)
       return
 
     rows = self._sync_rows(status)
     if not rows:
       message = tr("Scanning for Bluetooth devices...") if status.discovering else tr("No Bluetooth devices found.")
-      gui_label(content_rect, message, font_size=62, color=TEXT_SECONDARY, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
+      style.message(content_rect, message, color=TEXT_SECONDARY)
       return
     self._render_device_list(content_rect, rows)
 
   def _render_header(self, rect: rl.Rectangle, status: BluetoothStatus):
     rl.draw_rectangle_rec(rect, PANEL_BACKGROUND)
-    line_y = int(rect.y + rect.height - 1)
-    rl.draw_line(int(rect.x), line_y, int(rect.x + rect.width), line_y, ROW_BORDER)
-
-    gui_label(rl.Rectangle(rect.x + HEADER_PADDING, rect.y + 26, 500, 68), tr("Bluetooth"), font_size=64, font_weight=FontWeight.BOLD)
+    # The controls share the title's midline; only very narrow screens move them below it.
+    narrow = rect.width < NARROW_HEADER_WIDTH
+    controls_y = rect.y + 94 if narrow else rect.y + 24
+    text_width = rect.width - 40 if narrow else max(80, rect.width - 310)
+    style.text(rl.Rectangle(rect.x + 20, rect.y + 12, text_width, 40), tr("Bluetooth"), 32, bold=True)
     subtitle = tr("On") if status.enabled else tr("Off")
     if status.enabled and not status.offroad:
-      subtitle += " - " + tr("Limited while driving")
-    gui_label(rl.Rectangle(rect.x + HEADER_PADDING, rect.y + 104, 650, 44), subtitle, font_size=40, color=TEXT_SECONDARY)
-
-    toggle_rect = rl.Rectangle(rect.x + rect.width - HEADER_PADDING - 160, rect.y + (rect.height - 80) / 2, 160, 80)
+      subtitle += " · " + tr("Limited while driving")
+    style.text(rl.Rectangle(rect.x + 20, rect.y + 52, text_width, 28), subtitle, 23, style.MUTED)
+    toggle_rect = rl.Rectangle(rect.x + rect.width - 108, controls_y, 88, 44)
+    # Preserve the existing toggle's input handling while drawing a clean switch.
     self._power_toggle.render(toggle_rect)
-    scan_rect = rl.Rectangle(toggle_rect.x - ACTION_GAP - SCAN_BUTTON_WIDTH, rect.y + (rect.height - 100) / 2, SCAN_BUTTON_WIDTH, 100)
+    scan_rect = rl.Rectangle(toggle_rect.x - 156, controls_y - 4, 140, 52)
     self._scan_button.render(scan_rect)
 
   def _render_device_list(self, rect: rl.Rectangle, rows: list[BluetoothDeviceRow]):

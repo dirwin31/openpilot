@@ -16,9 +16,9 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import DialogResult, Widget
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog, alert_dialog
 from openpilot.system.ui.widgets.keyboard import Keyboard
-from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOptionDialog
 from openpilot.system.ui.widgets.label import gui_label
 
 from openpilot.selfdrive.ui.ui_state import device, ui_state
@@ -321,6 +321,30 @@ class SystemSettingsManagerView(PanelManagerView):
         suppress_background=True,
       )
     )
+
+  def _render(self, rect):
+    from openpilot.starpilot.system.android_auto.ui.settings_adapters import adjustor_rows, toggle_rows, render_existing
+    from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import SettingSection, SettingRow
+    mode_rows = [SettingRow(f"mode_{i}", "value", title,
+                           get_value=lambda i=i: "Selected" if self._get_drive_mode_index() == i else "",
+                           on_click=lambda i=i: self._on_drive_mode_change(i))
+                 for i, title in enumerate(("Automatic", "Onroad", "Offroad"))]
+    maintenance = [
+      ("ReportIssue", "Report an Issue"), ("FlashPanda", "Flash Panda"), ("Storage", "Clear Driving Data"),
+      ("ErrorLogs", "Clear Error Logs"), ("ResetDefaults", "Reset Settings"), ("ResetStock", "Reset to Stock"),
+    ]
+    render_existing(self, rect, [
+      SettingSection("Comma Display", adjustor_rows({key: self._adjustor_rows[key] for key in self._display_slider_keys})),
+      SettingSection("Power", adjustor_rows({key: self._adjustor_rows[key] for key in self._power_slider_keys})),
+      SettingSection("Preferences", toggle_rows(self._toggle_defs)),
+      SettingSection("Drive State", mode_rows),
+      SettingSection("Backups", [
+        SettingRow("system_backups", "value", "System Backups", on_click=lambda: self._controller.open_backup_manager("system")),
+        SettingRow("toggle_snapshots", "value", "Profiles & Snapshots", on_click=lambda: self._controller.open_backup_manager("toggle")),
+      ]),
+      SettingSection("Maintenance", [SettingRow(key, "value", title, on_click=lambda key=key: self._controller.handle_action(key))
+                                    for key, title in maintenance]),
+    ])
 
   def _tab_subtitle(self, tab_id: str) -> str:
     if tab_id == "basics":

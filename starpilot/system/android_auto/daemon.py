@@ -41,7 +41,7 @@ def handle(supervisor: Supervisor, request: dict[str, Any]) -> dict[str, Any]:
   if command not in {"status", "stop"}:
     from openpilot.common.params import Params
     if not Params().get_bool("AndroidAutoEnabled"):
-      raise RuntimeError("Enable Android Auto under Toggles → Vehicle first")
+      raise RuntimeError("Enable Android Auto under Toggles → Android Auto first")
   if command in PAIRING_COMMANDS and not _offroad():
     raise RuntimeError("Pair the car while parked (offroad)")
   if command == "status":

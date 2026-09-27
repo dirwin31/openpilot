@@ -21,4 +21,4 @@ class CarMainLayout(MainLayout):
 
   def open_starpilot_panel(self, panel_key: str):
     self.open_settings(PanelType.STARPILOT)
-    self._layouts[MainState.SETTINGS]._panels[PanelType.STARPILOT].instance.open_panel(panel_key)
+    self._layouts[MainState.SETTINGS].open_panel(panel_key)

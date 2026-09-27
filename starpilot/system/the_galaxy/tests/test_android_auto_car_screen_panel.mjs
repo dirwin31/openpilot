@@ -68,8 +68,8 @@ test("the panel template compiles with loading, error, and retry states", () => 
   assert.equal(typeof compile(panel.template), "function")
 })
 
-test("the Android Auto master toggle has its own section below the vehicle settings", () => {
-  assert.match(settingsSource, /s\.name === "Vehicle" && p\.key === "AndroidAutoEnabled"/)
+test("the Android Auto master toggle has a dedicated settings section", () => {
+  assert.match(settingsSource, /s\.name === "Android Auto" && p\.key === "AndroidAutoEnabled"/)
   const settingsTree = settingsSource.indexOf("<SettingTree")
   const androidAutoSection = settingsSource.indexOf('title="Android Auto"')
   assert.ok(settingsTree >= 0 && androidAutoSection > settingsTree)
@@ -101,6 +101,6 @@ test("C4 screen sleep uses the existing car-screen settings API", async () => {
   await state.update({ sleep_device_screen: true })
   assert.equal(state.settings.sleep_device_screen, true)
   assert.equal(state.settings.camera, true)
-  assert.match(panel.template, /Sleep C4 Screen During Android Auto/)
+  assert.match(panel.template, /Turn Off Comma Display/)
   assert.match(panel.template, /Tap the comma to wake/)
 })

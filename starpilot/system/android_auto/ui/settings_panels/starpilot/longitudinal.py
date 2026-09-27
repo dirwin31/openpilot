@@ -9,10 +9,10 @@ from openpilot.selfdrive.ui.lib.starpilot_state import starpilot_state
 from openpilot.system.ui.lib.application import FontWeight, MouseEvent, MousePos, gui_app
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog
 from openpilot.system.ui.widgets.keyboard import Keyboard
 from openpilot.system.ui.widgets.label import gui_label
-from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOptionDialog
 
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import _SettingsPage
 
@@ -171,6 +171,18 @@ class ConditionalDriveModeView(AdjustorTogglesPanelView):
     self._init_segmented_control()
     self._init_adjustors()
     self._init_toggles()
+
+  def _render(self, rect):
+    from openpilot.starpilot.system.android_auto.ui.settings_adapters import adjustor_rows, toggle_rows, render_existing
+    mode = self._get_drive_mode_index()
+    rows = [SettingRow(f"mode_{i}", "value", title, get_value=lambda i=i: "Selected" if self._get_drive_mode_index() == i else "",
+                       on_click=lambda i=i: self._on_drive_mode_change(i)) for i, title in enumerate(("Off", "Experimental", "Chill"))]
+    sections = [SettingSection("Conditional Drive Mode", rows)]
+    if mode:
+      keys = self._cem_keys if mode == 1 else self._ccm_keys
+      sections += [SettingSection("Speed Conditions", adjustor_rows({key: self._adjustor_rows[key] for key in keys})),
+                   SettingSection("Triggers", toggle_rows(self._cem_toggle_defs if mode == 1 else self._ccm_toggle_defs))]
+    render_existing(self, rect, sections)
 
   def _init_segmented_control(self):
     self._drive_mode_control = self._child(

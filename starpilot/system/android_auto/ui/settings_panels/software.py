@@ -13,10 +13,10 @@ from openpilot.system.hardware import HARDWARE
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr, trn
 from openpilot.system.ui.widgets import Widget, DialogResult
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog
 from openpilot.system.ui.widgets.list_view import button_item, text_item, toggle_item, ListItem
-from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
-from openpilot.system.ui.widgets.scroller_tici import Scroller
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import MultiOptionDialog
+from openpilot.starpilot.system.android_auto.ui.settings_adapters import ResponsiveScroller as Scroller
 
 # TODO: remove this. updater fails to respond on startup if time is not correct
 UPDATED_TIMEOUT = 10  # seconds to wait for updated to respond
@@ -147,6 +147,7 @@ class SoftwareLayout(Widget):
       line_separator=True,
       spacing=0,
     )
+    self._child(self._scroller)
 
   def show_event(self):
     self._scroller.show_event()
