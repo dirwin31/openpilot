@@ -21,7 +21,7 @@ from typing import Any
 
 import pyray as rl
 
-from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
+from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import (
   AETHER_LIST_METRICS,
   AetherListColors,
   AetherSegmentedControl,
@@ -34,10 +34,11 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   draw_selection_list_row,
   with_alpha,
 )
-from openpilot.selfdrive.ui.layouts.settings.starpilot.navigation import MapboxSearchClient, SearchResult
-from openpilot.selfdrive.ui.layouts.settings.starpilot.panel import FrameCachedParams, _SettingsPage
+from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.navigation import SearchResult
+from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import FrameCachedParams, _SettingsPage
 from openpilot.starpilot.navigation.destination_store import NavigationDestinationStore
 from openpilot.starpilot.navigation.offline_maps import AREA_PRESETS, OFFLINE_MAX_BYTES, OfflineMaps, estimate_area, format_bytes
+from openpilot.starpilot.system.android_auto.ui.navigation import CarMapboxSearchClient
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.multilang import tr
@@ -70,7 +71,7 @@ SEGMENT_CAPTIONS = (
 
 
 def _road_data_layout():
-  from openpilot.selfdrive.ui.layouts.settings.starpilot.maps import StarPilotMapsLayout
+  from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.maps import StarPilotMapsLayout
   return StarPilotMapsLayout()
 
 
@@ -103,7 +104,7 @@ class StarPilotOfflineMapsLayout(_SettingsPage):
     self._params = params or FrameCachedParams()
     self._store = NavigationDestinationStore(self._params)
     self._offline = offline or OfflineMaps()
-    self._search_client = MapboxSearchClient()
+    self._search_client = CarMapboxSearchClient()
     self._keyboard: Keyboard | None = None
     self._pending: queue.Queue[tuple[str, int, Any]] = queue.Queue()
     self._generation = 0

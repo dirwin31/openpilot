@@ -99,17 +99,17 @@ def _place_detail(place: dict, title: str) -> str:
 class CarNavigateScreen(Widget):
   """Full-screen destination picker for the car.
 
-  The settings Navigation page (StarPilotNavigationLayout) does the work: search,
+  The car's Navigation page (CarNavigationLayout) does the work: search,
   route previews, favorites and starting the route. This screen only draws it for a
   car screen and turns taps into the page's target ids.
   """
 
   def __init__(self, on_started: Callable[[], None], on_close: Callable[[], None], on_offline_maps: Callable[[], None]):
     super().__init__()
-    from openpilot.selfdrive.ui.layouts.settings.starpilot.navigation import StarPilotNavigationLayout
+    from openpilot.starpilot.system.android_auto.ui.navigation import CarNavigationLayout
     self._on_close = on_close
     self._on_offline_maps = on_offline_maps
-    self.page = StarPilotNavigationLayout(on_started=on_started)
+    self.page = CarNavigationLayout(on_started=on_started)
     self.scroll = 0.0
     self._content_height = 0.0
     self._list_rect = rl.Rectangle(0, 0, 0, 0)

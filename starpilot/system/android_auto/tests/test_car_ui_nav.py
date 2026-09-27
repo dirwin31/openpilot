@@ -260,25 +260,16 @@ def test_starting_a_route_returns_to_the_drive_even_from_the_home_screen(control
   assert not controls.nav_open and not controls.on_home(True)
 
 
-def test_home_screen_navigate_button_opens_the_same_screen():
+def test_home_screen_navigate_card_opens_the_same_screen():
   from openpilot.selfdrive.ui.layouts.main import MainState
 
-  class Home:
-    def __init__(self):
-      self.nav_card = None
-      self.callback = None
-
-    def set_navigate_callback(self, callback):
-      self.callback = callback
-
-  home = Home()
+  home = SimpleNamespace(nav_card=None)
   main_layout = SimpleNamespace(_layouts={MainState.HOME: home}, _current_mode=MainState.HOME)
   controls = car_ui.OnroadControls(main_layout, params=FakeParams({"MapboxSecretKey": "sk"}), params_memory=FakeParams(),
                                    navigate_screen_factory=FakeNavigateScreen)
-  assert home.callback == controls.open_navigate
   assert home.nav_card is controls.nav_card, "the Navigate card replaces Personal Records on the car"
   controls.update(False)
-  home.callback()
+  controls.nav_card.activate("other")
   assert controls.nav_open and controls.full_screen(False)
 
 
@@ -486,7 +477,7 @@ def test_android_auto_map_enables_navigation_waiting_state(monkeypatch):
     def show_event(self):
       pass
 
-  module = ModuleType("openpilot.selfdrive.ui.onroad.starpilot.nav_map")
+  module = ModuleType("openpilot.starpilot.system.android_auto.ui.nav_map")
   module.NavMapView = FakeMap
   monkeypatch.setitem(sys.modules, module.__name__, module)
 
@@ -630,9 +621,9 @@ class FakePage:
 
 @pytest.fixture
 def nav_screen(monkeypatch):
-  from openpilot.selfdrive.ui.layouts.settings.starpilot import navigation
   from openpilot.starpilot.system.android_auto.car_navigate import CarNavigateScreen
-  monkeypatch.setattr(navigation, "StarPilotNavigationLayout", FakePage)
+  from openpilot.starpilot.system.android_auto.ui import navigation
+  monkeypatch.setattr(navigation, "CarNavigationLayout", FakePage)
   closed = []
   screen = CarNavigateScreen(on_started=lambda: None, on_close=lambda: closed.append(True), on_offline_maps=lambda: closed.append("offline"))
   screen.closed = closed
@@ -640,7 +631,7 @@ def nav_screen(monkeypatch):
 
 
 def test_screen_lists_results_favorites_and_recents_with_full_addresses(nav_screen):
-  from openpilot.selfdrive.ui.layouts.settings.starpilot.navigation import SearchResult
+  from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.navigation import SearchResult
   page = nav_screen.page
   page._search_results = [SearchResult("Blue Bottle Coffee", "1 Ferry Building, San Francisco, CA 94111, United States", 37.8, -122.4)]
   page._favorites = [

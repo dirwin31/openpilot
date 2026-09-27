@@ -3,8 +3,8 @@ import time
 
 import pytest
 
-from openpilot.selfdrive.ui.layouts.settings.starpilot import offline_maps as page_module
-from openpilot.selfdrive.ui.layouts.settings.starpilot.navigation import SearchResult
+from openpilot.starpilot.system.android_auto.ui import offline_maps as page_module
+from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.navigation import SearchResult
 from openpilot.starpilot.navigation.offline_maps import AREA_PRESETS, OfflineMaps
 
 

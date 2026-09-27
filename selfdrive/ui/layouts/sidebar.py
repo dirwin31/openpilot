@@ -22,32 +22,21 @@ ThermalStatus = log.DeviceState.ThermalStatus
 NetworkType = log.DeviceState.NetworkType
 
 
-# Color scheme - Galaxy palette
+# Color scheme
 class Colors:
-  WHITE = rl.Color(240, 240, 248, 255)
-  WHITE_DIM = rl.Color(160, 160, 185, 200)
-  GRAY = rl.Color(38, 38, 58, 255)
+  WHITE = rl.WHITE
+  WHITE_DIM = rl.Color(255, 255, 255, 85)
+  GRAY = rl.Color(84, 84, 84, 255)
 
-  # Status colors (Galaxy palette)
-  GOOD = rl.Color(94, 200, 200, 255)      # Stellar Teal
-  WARNING = rl.Color(212, 160, 96, 255)   # Solar Amber
-  DANGER = rl.Color(224, 85, 119, 255)    # Nebula Rose
+  # Status colors
+  GOOD = rl.WHITE
+  WARNING = rl.Color(218, 202, 37, 255)
+  DANGER = rl.Color(201, 34, 49, 255)
 
-  # UI elements & Galaxy theme
-  SIDEBAR_BG = rl.Color(10, 10, 22, 255)        # Deep cosmic void (#0a0a16)
-  SIDEBAR_BORDER = rl.Color(30, 30, 62, 255)    # Subtle boundary line (#1e1e3e)
-  SIDEBAR_ACCENT = rl.Color(139, 92, 246, 50)   # Cosmic purple accent glow
-  CARD_BG = rl.Color(18, 18, 36, 255)           # Galaxy card plate (#121224)
-  CARD_BORDER = rl.Color(35, 35, 68, 255)       # Card border (#232344)
+  # UI elements
+  METRIC_BORDER = rl.Color(255, 255, 255, 85)
   BUTTON_NORMAL = rl.WHITE
-  BUTTON_PRESSED = rl.Color(200, 200, 220, 255)
-  BUTTON_BG = rl.Color(18, 18, 36, 220)
-  BUTTON_BORDER = rl.Color(35, 35, 68, 255)
-  BUTTON_ACTIVE_BG = rl.Color(139, 108, 197, 60)
-  BUTTON_ACTIVE_BORDER = rl.Color(139, 92, 246, 180)
-  TEXT_LABEL = rl.Color(128, 128, 168, 255)     # Muted lavender
-  TEXT_VALUE = rl.Color(240, 240, 248, 255)     # Bright cosmic white
-  METRIC_BORDER = rl.Color(35, 35, 68, 255)
+  BUTTON_PRESSED = rl.Color(255, 255, 255, 166)
 
 
 NETWORK_TYPES = {
@@ -84,17 +73,13 @@ class Sidebar(Widget):
     self._connect_status = MetricData(tr_noop("CONNECT"), tr_noop("OFFLINE"), Colors.WARNING)
     self._recording_audio = False
 
-    self._settings_btn_rect = rl.Rectangle(SETTINGS_BTN.x, SETTINGS_BTN.y, SETTINGS_BTN.width, SETTINGS_BTN.height)
-    self._home_btn_rect = rl.Rectangle(HOME_BTN.x, HOME_BTN.y, HOME_BTN.width, HOME_BTN.height)
-
     self._home_img = gui_app.texture("images/button_home.png", HOME_BTN.width, HOME_BTN.height)
     self._flag_img = gui_app.texture("images/button_flag.png", HOME_BTN.width, HOME_BTN.height)
     self._settings_img = gui_app.texture("images/button_settings.png", SETTINGS_BTN.width, SETTINGS_BTN.height)
     self._mic_img = gui_app.texture("icons/microphone.png", 30, 30)
     self._mic_indicator_rect = rl.Rectangle(0, 0, 0, 0)
     self._font_regular = gui_app.font(FontWeight.NORMAL)
-    self._font_medium = gui_app.font(FontWeight.MEDIUM)
-    self._font_bold = gui_app.font(FontWeight.BOLD)
+    self._font_bold = gui_app.font(FontWeight.SEMI_BOLD)
 
     # Callbacks
     self._on_settings_click: Callable | None = None
@@ -108,15 +93,8 @@ class Sidebar(Widget):
     self._open_settings_callback = open_settings
 
   def _render(self, rect: rl.Rectangle):
-    # Deep cosmic background
-    rl.draw_rectangle_rec(rect, Colors.SIDEBAR_BG)
-    # Right border divider with purple accent glow
-    rl.draw_line_ex(rl.Vector2(rect.x + rect.width - 1, rect.y),
-                    rl.Vector2(rect.x + rect.width - 1, rect.y + rect.height),
-                    2.0, Colors.SIDEBAR_BORDER)
-    rl.draw_line_ex(rl.Vector2(rect.x + rect.width - 1, rect.y),
-                    rl.Vector2(rect.x + rect.width - 1, rect.y + rect.height),
-                    1.0, Colors.SIDEBAR_ACCENT)
+    # Background
+    rl.draw_rectangle_rec(rect, rl.BLACK)
 
     self._draw_buttons(rect)
     self._draw_network_indicator(rect)
@@ -189,6 +167,7 @@ class Sidebar(Widget):
     # Home/Flag button
     flag_pressed = mouse_down and rl.check_collision_point_rec(mouse_pos, HOME_BTN)
     button_img = self._flag_img if ui_state.started else self._home_img
+
     tint = Colors.BUTTON_PRESSED if (ui_state.started and flag_pressed) else Colors.BUTTON_NORMAL
     rl.draw_texture(button_img, int(HOME_BTN.x), int(HOME_BTN.y), tint)
 
@@ -211,7 +190,7 @@ class Sidebar(Widget):
     dot_spacing = 37
 
     for i in range(5):
-      color = Colors.GOOD if i < self._net_strength else Colors.GRAY
+      color = Colors.WHITE if i < self._net_strength else Colors.GRAY
       x = int(x_start + i * dot_spacing + dot_size // 2)
       y = int(y_pos + dot_size // 2)
       rl.draw_circle(x, y, dot_size // 2, color)
@@ -229,10 +208,6 @@ class Sidebar(Widget):
 
   def _draw_metric(self, rect: rl.Rectangle, metric: MetricData, y: float):
     metric_rect = rl.Rectangle(rect.x + METRIC_MARGIN, y, METRIC_WIDTH, METRIC_HEIGHT)
-
-    # Galaxy card plate
-    rl.draw_rectangle_rounded(metric_rect, 0.3, 10, Colors.CARD_BG)
-
     # Draw colored left edge (clipped rounded rectangle)
     edge_rect = rl.Rectangle(metric_rect.x + 4, metric_rect.y + 4, 100, 118)
     rl.begin_scissor_mode(int(metric_rect.x + 4), int(metric_rect.y), 18, int(metric_rect.height))
@@ -242,7 +217,7 @@ class Sidebar(Widget):
     # Draw border
     rl.draw_rectangle_rounded_lines_ex(metric_rect, 0.3, 10, 2, Colors.METRIC_BORDER)
 
-    # Draw label and value - large bold high-contrast text
+    # Draw label and value
     labels = [tr(metric.label), tr(metric.value)]
     text_y = metric_rect.y + (metric_rect.height / 2 - len(labels) * FONT_SIZE * FONT_SCALE)
     for text in labels:

@@ -1,9 +1,10 @@
 """Car-sized StarPilot UI for Android Auto, rendered offscreen in its own process.
 
 The comma four's own screen uses the compact UI. For the car, this process
-renders the full landscape StarPilot interface (the comma 3X layout: road
-camera, path, HUD, alerts, sidebar, settings) at the car's resolution in an EGL
-pbuffer, without a window, display power, touch hardware or publishers. Frames
+renders the car's own landscape StarPilot interface (ui/: road camera, path, HUD,
+alerts, sidebar, settings; built on the comma 3X widgets but never changing the
+3X's own screens) at the car's resolution in an EGL pbuffer, without a window,
+display power, touch hardware or publishers. Frames
 go to android_autod through the same bounded shared-memory slot as mirroring,
 and car touches arrive as datagrams. Offroad every touch works. Onroad the driving
 view and map ignore touches; only the small quick-menu button (Navigate, end route,
@@ -294,7 +295,7 @@ class MapPane:
 
   def _ensure_map(self):
     if self._map is None:
-      from openpilot.selfdrive.ui.onroad.starpilot.nav_map import NavMapView
+      from openpilot.starpilot.system.android_auto.ui.nav_map import NavMapView
       self._map = NavMapView(show_guidance=True, clip=False, show_navigation_waiting=True)
       self._map.show_event()
     return self._map
@@ -302,7 +303,7 @@ class MapPane:
   def prepare(self, rect, scale_x: float, scale_y: float, now: float, *, heading_up: bool = True) -> None:
     """Advance motion every frame without increasing the expensive redraw rate."""
     import pyray as rl
-    from openpilot.selfdrive.ui.onroad.starpilot.nav_map import Camera
+    from openpilot.starpilot.system.android_auto.ui.nav_map import Camera
     nav_map = self._ensure_map()
     nav_map.set_heading_up(heading_up)
     geometry = rect.width, rect.height, scale_x, scale_y
@@ -360,7 +361,7 @@ class MapPane:
 
   def _render_layer(self, target, draw, transparent=False) -> None:
     import pyray as rl
-    from openpilot.selfdrive.ui.onroad.starpilot.nav_map import MAP_BACKGROUND
+    from openpilot.starpilot.system.android_auto.ui.nav_map import MAP_BACKGROUND
     rl.begin_texture_mode(self._msaa.render_texture if self._msaa is not None else target)
     rl.clear_background(rl.BLANK if transparent else MAP_BACKGROUND)
     # Keep the world opaque and overlays premultiplied; ordinary blending would
@@ -521,13 +522,12 @@ class OnroadControls:
     self._navigate_screen_factory = navigate_screen_factory
     self._navigate_screen = None
     # On the car's home screen the Navigate card (Home / Work, Start, Other destination)
-    # replaces the Navigate button and the Personal Records card.
+    # replaces the Personal Records card.
     self.nav_card = CarNavigateCard(start=self.start_favorite, open_other=self.open_navigate, end_route=self.cancel_navigation,
                                     drive=self.go_driving)
     home = getattr(main_layout, "_layouts", {}).get(MainState.HOME)
     self._home = home
     if home is not None:
-      home.set_navigate_callback(self.open_navigate)
       home.nav_card = self.nav_card
 
   @property
@@ -745,9 +745,9 @@ def run(frames_path: str, touch_path: str) -> int:
   ui_state.prime_state.start = lambda: None  # no second comma API poller
   ui_state.ui_params.start()
   ui_state.live_params.start()
-  from openpilot.selfdrive.ui.layouts.main import MainLayout
+  from openpilot.starpilot.system.android_auto.ui.main import CarMainLayout
   from openpilot.starpilot.system.android_auto.car_screen import STATUS_METRICS, CarScreenSettings, blind_spot_monitors_visible
-  main_layout = MainLayout()
+  main_layout = CarMainLayout()
   map_pane = MapPane()
   car_settings = CarScreenSettings()
   controls = OnroadControls(main_layout)

@@ -42,16 +42,9 @@ class SetupWidget(Widget):
       self._render_logo(rect)
 
   def _render_registration(self, rect: rl.Rectangle):
-    """Render registration prompt with Galaxy card plate and accent styling."""
+    """Render registration prompt."""
 
-    # Galaxy card plate with refined border
-    card_rect = rl.Rectangle(rect.x, rect.y, rect.width, rect.height)
-    rl.draw_rectangle_rounded(card_rect, 0.04, 16, rl.Color(18, 18, 36, 255))
-    rl.draw_rectangle_rounded_lines_ex(card_rect, 0.04, 16, 1.5, rl.Color(35, 35, 68, 255))
-
-    # Cosmic purple top accent bar
-    accent_rect = rl.Rectangle(rect.x + 24, rect.y + 12, rect.width - 48, 5)
-    rl.draw_rectangle_rounded(accent_rect, 1.0, 8, rl.Color(139, 108, 197, 255))
+    rl.draw_rectangle_rounded(rl.Rectangle(rect.x, rect.y, rect.width, rect.height), 0.03, 20, rl.Color(51, 51, 51, 255))
 
     x = rect.x + 64
     y = rect.y + 48
@@ -76,6 +69,9 @@ class SetupWidget(Widget):
   def _render_logo(self, rect: rl.Rectangle):
     self._logo_widget.render(rect)
 
+  def _create_pairing_dialog(self):
+    return PairingDialog()
+
   def _show_pairing(self):
     if not system_time_valid():
       dlg = alert_dialog(tr("Please connect to Wi-Fi to complete initial pairing"))
@@ -83,7 +79,7 @@ class SetupWidget(Widget):
       return
 
     if not self._pairing_dialog:
-      self._pairing_dialog = PairingDialog()
+      self._pairing_dialog = self._create_pairing_dialog()
     gui_app.push_widget(self._pairing_dialog)
 
   def __del__(self):

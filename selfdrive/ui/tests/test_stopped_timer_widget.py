@@ -11,8 +11,6 @@ def _load_stopped_timer(monkeypatch):
     Vector2=lambda x, y: SimpleNamespace(x=x, y=y),
     WHITE=SimpleNamespace(r=255, g=255, b=255, a=255),
     draw_text_ex=lambda *_args: None,
-    draw_rectangle_rounded=lambda *_args: None,
-    draw_rectangle_rounded_lines_ex=lambda *_args: None,
   )
   monkeypatch.setitem(sys.modules, "pyray", rl)
 
@@ -90,8 +88,6 @@ def test_stopped_timer_uses_text_contract(monkeypatch):
 
   assert stopped_timer.StoppedTimerWidget._format_duration_text(61) == ("1 minute", "1 second")
   assert stopped_timer.StoppedTimerWidget._format_duration_text(121) == ("2 minutes", "1 second")
-  assert stopped_timer.StoppedTimerWidget._format_car_duration(61) == ("Stopped", "01:01")
-  assert stopped_timer.StoppedTimerWidget._format_car_duration(12 * 60 + 5) == ("Stopped", "12:05")
 
 
 def test_stopped_timer_draws_positions_and_opaque_seconds(monkeypatch):
@@ -110,63 +106,3 @@ def test_stopped_timer_draws_positions_and_opaque_seconds(monkeypatch):
   assert draws[1][2].y == 270
   assert draws[1][3] == 66
   assert draws[1][5].a == 255
-
-
-def _render_sizes(monkeypatch, stopped_timer, width, beside_map, duration=61):
-  monkeypatch.setattr(stopped_timer, "ui_state", SimpleNamespace(nav_map_beside_road=beside_map))
-  # Width grows with the font size, like real text.
-  monkeypatch.setattr(stopped_timer, "measure_text_cached",
-                      lambda _font, text, size: SimpleNamespace(x=len(text) * size * 0.55, y=size * 0.8))
-  widget = stopped_timer.StoppedTimerWidget()
-  widget._duration = duration
-  draws = []
-  monkeypatch.setattr(stopped_timer.rl, "draw_text_ex", lambda *args: draws.append(args))
-  widget._render(stopped_timer.rl.Rectangle(0, 0, width, 1080))
-  return draws
-
-
-def test_stopped_timer_halves_beside_the_car_map(monkeypatch):
-  stopped_timer = _load_stopped_timer(monkeypatch)
-  full = _render_sizes(monkeypatch, stopped_timer, 2160, beside_map=False)
-  beside = _render_sizes(monkeypatch, stopped_timer, 2160, beside_map=True)
-  assert (full[0][3], full[1][3]) == (176, 66)
-  assert (beside[0][3], beside[1][3]) == (88, 33)
-  # Smaller text stays centred where the current speed is drawn (y = 180).
-  assert abs(beside[0][2].y + 88 * 0.8 / 2 - 180) < 1
-
-
-def test_stopped_timer_fits_a_narrow_driving_pane(monkeypatch):
-  stopped_timer = _load_stopped_timer(monkeypatch)
-  draws = _render_sizes(monkeypatch, stopped_timer, 700, beside_map=True, duration=12 * 60 + 5)
-  reserve = stopped_timer.StoppedTimerWidget.LEFT_CONTROLS_RESERVE
-  minute_width = len("12 minutes") * draws[0][3] * 0.55
-  assert minute_width <= 0.8 * (700 - reserve) + 1
-  assert draws[0][2].x >= reserve, "clear of the MAX / LIMIT column"
-  assert draws[0][2].x + minute_width <= 700
-
-
-def test_android_auto_timer_replaces_speed_in_full_and_split_camera_panes(monkeypatch):
-  stopped_timer = _load_stopped_timer(monkeypatch)
-  monkeypatch.setattr(stopped_timer, "ui_state", SimpleNamespace(android_auto_car_view=True, nav_map_beside_road=True))
-  monkeypatch.setattr(stopped_timer, "measure_text_cached",
-                      lambda _font, text, size: SimpleNamespace(x=len(text) * size * 0.55, y=size * 0.8))
-
-  for rect in (stopped_timer.rl.Rectangle(0, 0, 1920, 1080), stopped_timer.rl.Rectangle(806, 0, 1114, 1080)):
-    widget = stopped_timer.StoppedTimerWidget()
-    widget._duration = 61
-    backgrounds, outlines, draws = [], [], []
-    monkeypatch.setattr(stopped_timer.rl, "draw_rectangle_rounded",
-                        lambda *args, backgrounds=backgrounds: backgrounds.append(args))
-    monkeypatch.setattr(stopped_timer.rl, "draw_rectangle_rounded_lines_ex",
-                        lambda *args, outlines=outlines: outlines.append(args))
-    monkeypatch.setattr(stopped_timer.rl, "draw_text_ex", lambda *args, draws=draws: draws.append(args))
-    widget._render(rect)
-
-    assert backgrounds == []
-    assert outlines == []
-    assert len(draws) == 8  # three shadow layers and the foreground for each line
-    label, timer = draws[3], draws[7]
-    assert (label[1], timer[1]) == ("Stopped", "01:01")
-    assert label[2].y == rect.y + stopped_timer.StoppedTimerWidget.CAR_TEXT_TOP
-    assert abs(label[2].x + len("Stopped") * label[3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1
-    assert abs(timer[2].x + len("01:01") * timer[3] * 0.55 / 2 - (rect.x + rect.width / 2)) < 1

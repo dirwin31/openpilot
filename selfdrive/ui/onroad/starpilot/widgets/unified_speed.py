@@ -335,9 +335,7 @@ class UnifiedSpeedWidget(LayoutWidget):
     if state is None or presentation.confirmation_pending:
       drawer.reset()
     else:
-      # Beside the car view's map the per-source list is noise; the sign alone is enough.
-      show_sources = ui_state.ui_params.get_bool("SpeedLimitSources") and not getattr(ui_state, "nav_map_beside_road", False)
-      drawer.update(show_sources, rl.get_time())
+      drawer.update(ui_state.ui_params.get_bool("SpeedLimitSources"), rl.get_time())
     if drawer.width > 0:
       drawer.draw_frame(rect, (limit_bounds or rect).y, CONTROL_BG, UNIFIED_ACCENT)
     else:

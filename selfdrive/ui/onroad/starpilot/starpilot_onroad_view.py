@@ -13,10 +13,7 @@ from openpilot.selfdrive.ui.onroad.starpilot.widgets import (
   SteeringWheelWidget, StoppedTimerWidget, ModelSourceWidget
 )
 from openpilot.selfdrive.ui.onroad.starpilot.stopping_point import render_stopping_point
-from openpilot.selfdrive.ui.onroad.starpilot.pause_indicators import (
-  android_auto_lateral_pause_rect, render_android_auto_lateral_paused,
-  render_lateral_paused, render_longitudinal_paused,
-)
+from openpilot.selfdrive.ui.onroad.starpilot.pause_indicators import render_lateral_paused, render_longitudinal_paused
 from openpilot.selfdrive.ui.onroad.starpilot.pulse_glide import get_pulse_glide_border_color, render_pulse_glide
 from openpilot.selfdrive.ui.onroad.starpilot.pip_sidecam import PipSideCamera
 from openpilot.selfdrive.ui.onroad.starpilot.favorite_radial_menu import FavoriteRadialMenu
@@ -36,16 +33,6 @@ from openpilot.system.ui.lib.text_measure import draw_text_with_shadow, measure_
 from cereal import log
 AlertSize = log.SelfdriveState.AlertSize
 
-# The car screen's side-camera bubbles sit over the bottom alert band. They already show
-# the lane change, so these banners are dropped there when a bubble would cover their text.
-BUBBLE_REDUNDANT_ALERTS = frozenset({
-  "preLaneChangeLeft",
-  "preLaneChangeRight",
-  "laneChange",
-  "laneChangeBlocked",
-  "laneChangeBlockedLoud",
-})
-
 
 class StarPilotOnroadView(AugmentedRoadView):
   def __init__(self, stream_type: VisionStreamType = VisionStreamType.VISION_STREAM_ROAD):
@@ -59,16 +46,8 @@ class StarPilotOnroadView(AugmentedRoadView):
     self._max_fps = 0.0
     self._avg_fps = 0.0
 
-    self._pip_sidecam = self._child(PipSideCamera())
-    # Android Auto routes onroad touches to its own quick menu, never this
-    # radial menu. Skip the component there, including layout/Params reads and
-    # corner texture creation. The comma's own big UI keeps cached favorites.
-    self._favorite_radial_menu = None if ui_state.android_auto_car_view else FavoriteRadialMenu(
-      ui_state.ui_params,
-      ui_state.params_memory,
-      self._favorite_slot_options,
-      cache_render_texture=gui_app.cached_render_texture,
-    )
+    self._pip_sidecam = self._child(self._create_pip_sidecam())
+    self._favorite_radial_menu = self._create_favorite_menu()
     self._favorite_input_consumed = False
 
     self.layout_manager = WidgetLayoutManager(self._content_rect)
@@ -79,14 +58,14 @@ class StarPilotOnroadView(AugmentedRoadView):
     self._hud_renderer.draw_exp_button = False
 
     # Initialize layout widgets
-    self._unified_speed_widget = UnifiedSpeedWidget(self._hud_renderer)
+    self._unified_speed_widget = self._create_unified_speed_widget()
     self._aethergauge_widget = AetherGaugeWidget(self._hud_renderer)
     self._steering_wheel_widget = SteeringWheelWidget(self._hud_renderer._exp_button)
     self._pedals_widget = PedalIconsWidget()
     self._personality_button_widget = PersonalityButtonWidget()
     self._driver_monitor_widget = DriverMonitorWidget(self.driver_state_renderer)
     self._model_source_widget = ModelSourceWidget()
-    self._stopped_timer_widget = StoppedTimerWidget(self.is_in_reverse)
+    self._stopped_timer_widget = self._create_stopped_timer_widget()
 
     # Register to layout zones
     self.layout_manager.register_widget("left", self._unified_speed_widget)
@@ -107,6 +86,22 @@ class StarPilotOnroadView(AugmentedRoadView):
     self._child(self._model_source_widget)
     self._child(self._stopped_timer_widget)
 
+  def _create_pip_sidecam(self):
+    return PipSideCamera()
+
+  def _create_favorite_menu(self):
+    return FavoriteRadialMenu(ui_state.ui_params, ui_state.params_memory, self._favorite_slot_options,
+                              cache_render_texture=gui_app.cached_render_texture)
+
+  def _create_unified_speed_widget(self):
+    return UnifiedSpeedWidget(self._hud_renderer)
+
+  def _create_stopped_timer_widget(self):
+    return StoppedTimerWidget(self.is_in_reverse)
+
+  def _blind_spot_monitors_visible(self) -> bool:
+    return True
+
   def _update_state(self) -> None:
     rivian_lateral_mode.update()
     self._hud_renderer._exp_button.wheel_tint = rivian_lateral_mode.wheel_tint
@@ -119,7 +114,7 @@ class StarPilotOnroadView(AugmentedRoadView):
     # from also activating a background on-road control.
     original_events = list(gui_app.mouse_events)
     self._favorite_input_consumed = False
-    if ui_state.started and self._favorite_radial_menu is not None:
+    if ui_state.started:
       anticipated_content_rect = rl.Rectangle(
         rect.x + border_width,
         rect.y + border_width,
@@ -132,9 +127,6 @@ class StarPilotOnroadView(AugmentedRoadView):
       if self._favorite_input_consumed:
         gui_app.mouse_events[:] = []
 
-    # Keyed off the last frame's PiP: this frame's alert draws before the PiP decides.
-    alerts_over_side_camera = self._layout_alerts_around_side_camera()
-
     try:
       self._hud_renderer.draw_current_speed = (
         ui_state.started and not self._stopped_timer_widget.replaces_current_speed
@@ -143,8 +135,7 @@ class StarPilotOnroadView(AugmentedRoadView):
 
       if not ui_state.started:
         self._unified_speed_widget.collapse_sources()
-        if self._favorite_radial_menu is not None:
-          self._favorite_radial_menu.collapse()
+        self._favorite_radial_menu.collapse()
         return
 
       if self._draw_hud_controls:
@@ -157,19 +148,10 @@ class StarPilotOnroadView(AugmentedRoadView):
         self._unified_speed_widget.collapse_sources()
 
       self._pip_sidecam.render(self._content_rect)
-      if alerts_over_side_camera:
-        rl.begin_scissor_mode(
-          int(round(self._content_rect.x)), int(round(self._content_rect.y)),
-          int(round(self._content_rect.width)), int(round(self._content_rect.height)),
-        )
-        try:
-          self.alert_renderer.render(self._content_rect)
-        finally:
-          rl.end_scissor_mode()
 
       # The picker is an app-drawer modal, so it intentionally draws above
       # PiP and other on-road overlays while active.
-      if self._favorite_radial_menu is not None and self._draw_hud_controls and not self._full_alert_showing():
+      if self._draw_hud_controls and not self._full_alert_showing():
         rl.begin_scissor_mode(
           int(round(self._content_rect.x)), int(round(self._content_rect.y)),
           int(round(self._content_rect.width)), int(round(self._content_rect.height)),
@@ -178,34 +160,21 @@ class StarPilotOnroadView(AugmentedRoadView):
           self._favorite_radial_menu.render(self._content_rect)
         finally:
           rl.end_scissor_mode()
-      elif self._favorite_radial_menu is not None:
+      else:
         self._favorite_radial_menu.collapse()
     finally:
       gui_app.mouse_events[:] = original_events
 
-  def _layout_alerts_around_side_camera(self) -> bool:
-    """On the car screen, keep the side-camera bubbles from covering alert text.
-
-    The bubbles stay put so the eye knows where to find them; a lane-change banner they
-    make redundant is hidden only if a bubble would cover its text, and any other alert
-    is drawn above them. Returns whether alerts must be drawn after the PiP this frame.
-    """
-    bubbles_up = ui_state.android_auto_car_view and self._pip_sidecam.showing
-    self.alert_renderer.hidden_alert_names = BUBBLE_REDUNDANT_ALERTS if bubbles_up else frozenset()
-    self.alert_renderer.covers = self._pip_sidecam.covers if bubbles_up else None
-    self._draw_alerts = not bubbles_up
-    return bubbles_up
-
   def _draw_border(self, rect: rl.Rectangle):
     border_width = self._get_border_width()
-    if self._favorite_radial_menu is not None and self._draw_hud_controls and not self._full_alert_showing():
+    if self._draw_hud_controls and not self._full_alert_showing():
       self._favorite_radial_menu.render_corner_hint(self._content_rect)
     rl.draw_rectangle_lines_ex(rect, border_width, rl.BLACK)
     border_rect = rl.Rectangle(rect.x + border_width, rect.y + border_width,
                                 rect.width - 2 * border_width, rect.height - 2 * border_width)
     border_color = get_pulse_glide_border_color(ui_state.sm, get_screen_edge_color(ui_state))
     rl.draw_rectangle_rounded_lines_ex(border_rect, 0.12, 10, border_width, border_color)
-    render_background_effects(rect, border_width)
+    render_background_effects(rect, border_width, blind_spot_visible=self._blind_spot_monitors_visible())
     render_overlay(border_rect, border_width)
 
   def _render_speed_card(self):
@@ -252,7 +221,7 @@ class StarPilotOnroadView(AugmentedRoadView):
         render_path_edges(mr)
 
       # Render adjacent lanes (incorporates both adjacent path and blind spot warnings)
-      render_adjacent_lanes(mr)
+      render_adjacent_lanes(mr, blind_spot_visible=self._blind_spot_monitors_visible())
 
       # Render stopping point atop the path
       render_stopping_point(mr, self._font_bold)
@@ -265,7 +234,7 @@ class StarPilotOnroadView(AugmentedRoadView):
     return alert_showing is not None and alert_showing.size == AlertSize.full
 
   def _handle_mouse_press(self, mouse_pos: MousePos):
-    if self._favorite_input_consumed or (self._favorite_radial_menu is not None and self._favorite_radial_menu.blocks_pointer(mouse_pos)):
+    if self._favorite_input_consumed or self._favorite_radial_menu.blocks_pointer(mouse_pos):
       return
 
     # Check if click maps to any of the layout widgets
@@ -332,7 +301,7 @@ class StarPilotOnroadView(AugmentedRoadView):
     # Gather device stats
     device_state = ui_state.sm["deviceState"] if ui_state.sm.valid.get("deviceState", False) else None
     cpu_val = 0
-    gpu_val = -1
+    gpu_val = 0
     temp_val = 0
     mem_val = 0
     mem_gb = 0.0
@@ -359,7 +328,7 @@ class StarPilotOnroadView(AugmentedRoadView):
     if show_cpu:
       parts.append(f"CPU: {cpu_val}%")
     if show_gpu:
-      parts.append(f"GPU: {gpu_val}%" if gpu_val >= 0 else "GPU: N/A")
+      parts.append(f"GPU: {gpu_val}%")
     if show_temp:
       parts.append(f"TEMP: {temp_val}°C")
     if show_memory:
@@ -382,25 +351,21 @@ class StarPilotOnroadView(AugmentedRoadView):
     if alert_showing is not None:
       return
 
+    dm = self.driver_state_renderer
+    # Ensure DM position has been initialized/calculated
+    if not dm or dm.position_x == 0.0:
+      return
+
     # Check pause/CEM states
     starpilot_car_state = ui_state.sm["starpilotCarState"] if ui_state.sm.valid.get("starpilotCarState", False) else None
     plan = ui_state.sm["starpilotPlan"] if ui_state.sm.valid.get("starpilotPlan", False) else None
     lateral_paused = starpilot_car_state.pauseLateral if starpilot_car_state else False
     longitudinal_paused = (starpilot_car_state.pauseLongitudinal or starpilot_car_state.forceCoast) if starpilot_car_state else False
 
-    if lateral_paused and ui_state.android_auto_car_view:
-      pause_rect = android_auto_lateral_pause_rect(self._content_rect, gui_app.width)
-      render_android_auto_lateral_paused(pause_rect, self._font_bold)
-
-    dm = self.driver_state_renderer
-    # Ensure DM position has been initialized/calculated
-    if not dm or dm.position_x == 0.0:
-      return
-
     # Build the list of active left-side (DM-adjacent) badges in order of priority:
     # 1. Lateral Paused, 2. Longitudinal Paused
     active_badges = []
-    if lateral_paused and not ui_state.android_auto_car_view:
+    if lateral_paused:
       active_badges.append("lateral_paused")
     if longitudinal_paused:
       active_badges.append("longitudinal_paused")

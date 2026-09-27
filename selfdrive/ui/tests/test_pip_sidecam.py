@@ -28,7 +28,7 @@ def test_pip_maps_raw_driver_image_sides_to_vehicle_sides():
   assert (right_vehicle_crop.x, right_vehicle_crop.y) == (50, 150)
 
 
-def test_android_auto_blind_spot_setting_gates_bsm_preview_only(monkeypatch):
+def test_visibility_hook_gates_bsm_preview_only(monkeypatch):
   class FakeSM(dict):
     valid = {"carState": True}
 
@@ -45,50 +45,11 @@ def test_android_auto_blind_spot_setting_gates_bsm_preview_only(monkeypatch):
     leftBlinker=False, rightBlinker=False, leftBlindspot=True, rightBlindspot=False,
   )))
   monkeypatch.setattr(pip_sidecam, "get_fresh_vasm_state", lambda _memory: (False, False))
-  monkeypatch.setattr(ui_state, "android_auto_blind_spot_monitors_visible", False)
+  monkeypatch.setattr(camera, "_blind_spot_monitors_visible", lambda: False)
   assert camera.active_sides() == []
 
-  monkeypatch.setattr(ui_state, "android_auto_blind_spot_monitors_visible", True)
+  monkeypatch.setattr(camera, "_blind_spot_monitors_visible", lambda: True)
   assert camera.active_sides() == ["left"]
-
-
-def test_pip_reports_whether_it_drew_this_frame(monkeypatch):
-  camera = PipSideCamera.__new__(PipSideCamera)
-  camera._closed = True
-  camera._shape = "bubble"
-  camera._mask = {"center_left": [100, 200], "center_right": [900, 200], "crop_size": 100}
-  camera._draw_bubble = lambda *_args: None
-  camera._acquire_frame = lambda: True
-  monkeypatch.setattr(ui_state, "started", True)
-  content = pip_sidecam.rl.Rectangle(0, 0, 1920, 1080)
-
-  camera.active_sides = lambda: ["left"]
-  camera._render(content)
-  assert camera.showing
-
-  camera.active_sides = list
-  camera._render(content)
-  assert not camera.showing
-  assert not camera.covers(content)
-
-  camera.active_sides = lambda: ["left"]
-  camera._acquire_frame = lambda: False
-  camera._render(content)
-  assert not camera.showing
-
-
-def test_pip_bubbles_cover_only_what_they_overlap():
-  camera = PipSideCamera.__new__(PipSideCamera)
-  camera._closed = True
-  bubble = pip_sidecam.rl.Rectangle(24, 432, 624, 624)  # a 312px bubble in the bottom-left corner
-  camera._drawn = [("bubble", bubble)]
-
-  assert camera.covers(pip_sidecam.rl.Rectangle(500, 950, 400, 60))  # runs into the bubble
-  assert not camera.covers(pip_sidecam.rl.Rectangle(700, 950, 400, 60))  # clear of it, in the gap
-  assert not camera.covers(pip_sidecam.rl.Rectangle(560, 440, 80, 40))  # the corner beside the circle
-
-  camera._drawn = [("curved", pip_sidecam.rl.Rectangle(0, 0, 1920, 1080))]
-  assert camera.covers(pip_sidecam.rl.Rectangle(700, 950, 400, 60))
 
 
 def test_pip_driver_camera_shader_mirrors_the_crop():

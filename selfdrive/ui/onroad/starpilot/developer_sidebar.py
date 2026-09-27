@@ -90,8 +90,6 @@ class DeveloperSidebar:
     self.max_torque = 0
     self.torque_timer_start = 0.0
 
-    self.metric_override: list[int] | None = None
-
     self._visible = False
     self._metric_color = rl.WHITE
     self._active_ids: list[int] = []
@@ -192,20 +190,18 @@ class DeveloperSidebar:
     # ---- PC REPLAY FALLBACK (remove the next line when replay gets toggle bridge) ----
     # self._visible = ui_state.starpilot_toggles.get("developer_sidebar", False)
     # ---- replace the line below with the one above ---->
-    self._visible = self.metric_override is not None or self._params.get_bool("DeveloperSidebar") or ui_state.starpilot_toggles.get("developer_sidebar", False)
+    self._visible = self._params.get_bool("DeveloperSidebar") or ui_state.starpilot_toggles.get("developer_sidebar", False)
     if not self._visible:
       return
 
     if ui_state.sm.frame < ui_state.started_frame + 2:
       self.reset_variables()
 
-    assignments = self.metric_override
-    if assignments is None:
-      assignments = []
-      for i, val in enumerate(self._cached_metrics):
-        if val == 0:
-          val = ui_state.starpilot_toggles.get(f"developer_sidebar_metric{i + 1}", 0)
-        assignments.append(val)
+    assignments = []
+    for i, val in enumerate(self._cached_metrics):
+      if val == 0:
+        val = ui_state.starpilot_toggles.get(f"developer_sidebar_metric{i + 1}", 0)
+      assignments.append(val)
 
     color_str = ui_state.starpilot_toggles.get("sidebar_color1", "#FFFFFFFF")
     self._metric_color = parse_hex_color(color_str)
@@ -221,7 +217,6 @@ class DeveloperSidebar:
     live_delay = sm["liveDelay"] if sm.valid.get("liveDelay", False) else None
     live_parameters = sm["liveParameters"] if sm.valid.get("liveParameters", False) else None
     live_torque_parameters = sm["liveTorqueParameters"] if sm.valid.get("liveTorqueParameters", False) else None
-    device_state = sm["deviceState"] if sm.valid.get("deviceState", False) else None
 
     is_metric = ui_state.is_metric
     use_si = ui_state.starpilot_toggles.get("use_si_metrics", False)
@@ -369,18 +364,8 @@ class DeveloperSidebar:
       14: ("ACCEL JERK", f"{accel_jerk}"),
       15: ("DANGER JERK", f"{danger_jerk}"),
       16: ("SPEED JERK", f"{speed_jerk}"),
-      17: (model_name, ""),
+      17: (model_name, "")
     }
-    cpu_list = list(device_state.cpuUsagePercent) if device_state else []
-    cpu_pct = int(sum(cpu_list) / len(cpu_list)) if cpu_list else 0
-    gpu_pct = int(device_state.gpuUsagePercent) if device_state else -1
-    self._metrics.update({
-      18: ("CPU", f"{cpu_pct}%"),
-      19: ("GPU", f"{gpu_pct}%" if gpu_pct >= 0 else "N/A"),
-      20: ("TEMP", f"{int(device_state.maxTempC) if device_state else 0}°C"),
-      21: ("MEMORY", f"{int(device_state.memoryUsagePercent) if device_state else 0}%"),
-      22: ("STORAGE", f"{int(device_state.freeSpacePercent) if device_state else 0}% FREE"),
-    })
 
   def render(self, sidebar_rect: rl.Rectangle):
     if not self._visible:
