@@ -274,3 +274,24 @@ def test_cached_map_stays_idle_and_does_not_catch_up_after_a_stall(view):
   view._animating = True
   assert not view.needs_redraw(101.01)
   assert view.needs_redraw(101.07)
+
+
+def test_follow_zoom_ignores_speed_wobble_and_stops(view):
+  start = view._follow_zoom(20.0, 0.0)
+  now = 0.0
+  # Cruising with ordinary +/-3 m/s variation leaves the zoom alone.
+  for i in range(100):
+    now += 0.2
+    assert view._follow_zoom(20.0 + 3.0 * math.sin(i / 3.0), now) == start
+  # A brief stop, as at a light, does not dive the map in.
+  for _ in range(10):
+    now += 0.2
+    assert abs(view._follow_zoom(0.0, now) - start) <= nav_map.ZOOM_HOLD
+  # A lost fix holds the zoom instead of snapping elsewhere.
+  held = view._follow_zoom(None, now + 0.2)
+  assert view._follow_zoom(None, now + 5.0) == held
+  # A sustained change in speed still gets there.
+  for _ in range(200):
+    now += 0.2
+    zoom = view._follow_zoom(35.0, now)
+  assert abs(zoom - nav_map.FOLLOW_ZOOMS[-1]) < nav_map.ZOOM_HOLD
