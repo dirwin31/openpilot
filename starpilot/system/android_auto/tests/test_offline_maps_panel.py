@@ -113,6 +113,21 @@ def test_map_taps_convert_back_to_the_same_place():
   assert radius_label(radius_steps(False)[3], False) == "5 mi" and radius_label(10.0, True) == "10 km"
 
 
+def test_area_map_draws_with_the_base_maps_arguments(monkeypatch):
+  # NavMapView._render passes `now` to _draw_world; the editor's override must accept it ("Around me" crashed without it).
+  from openpilot.starpilot.system.android_auto.ui import offline_area_editor as editor
+  from openpilot.starpilot.system.android_auto.ui.nav_map import Camera, NavMapView
+  calls = []
+  monkeypatch.setattr(NavMapView, "_draw_world", lambda self, *args: calls.append(args))
+  monkeypatch.setattr(editor.rl, "draw_circle_v", lambda *args: None)
+  monkeypatch.setattr(editor.rl, "draw_ring", lambda *args: None)
+  view = object.__new__(editor.AreaMapView)
+  view._preview_destination, view.radius_km = (36.1, -115.2), 10.0
+  view._draw_destination = lambda *args: calls.append("pin")
+  view._draw_world(editor.rl.Rectangle(0, 0, 400, 300), Camera(), (200.0, 150.0), 1.0, 12.5)
+  assert calls[0][-1] == 12.5 and calls[-1] == "pin"
+
+
 def test_destination_button_and_current_route(page):
   page.params.values["NavDestination"] = DESTINATION
   assert [target for target, _ in page.add_buttons()] == ["add:here", "add:destination", "add:search"]

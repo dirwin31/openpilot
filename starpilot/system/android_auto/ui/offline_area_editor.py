@@ -76,8 +76,8 @@ class AreaMapView(NavMapView):
     self._anchor = super()._advance_camera(rect, now)
     return self._anchor
 
-  def _draw_world(self, rect, camera, anchor, tile_scale):
-    super()._draw_world(rect, camera, anchor, tile_scale)
+  def _draw_world(self, rect, camera, anchor, tile_scale, now: float | None = None):
+    super()._draw_world(rect, camera, anchor, tile_scale, now)
     if self._preview_destination is None:
       return
     x, y = camera.to_screen(*world_xy(*self._preview_destination), anchor, tile_scale)
