@@ -12,8 +12,9 @@ import { GalaxyToggleCard } from "../components/GalaxyToggleCard.js"
 import { GalaxySection } from "../components/GalaxySection.js"
 import { DevModeBanner } from "../components/DevModeBanner.js"
 import { LanguageSelector } from "../components/LanguageSelector.js"
+import { AndroidAutoConnectionPanel } from "../components/AndroidAutoConnectionPanel.js?v=aa-connection-1"
 import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
-import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-6"
+import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-7"
 import { AndroidAutoDiagnosticsPanel } from "../components/AndroidAutoDiagnosticsPanel.js?v=aa-diagnostics-2"
 import { languageState, setLanguage, t } from "../i18n.js"
 
@@ -30,7 +31,7 @@ const LANGUAGE_SECTION_SLUG = "language"
 export const Settings = {
   name: "Settings",
   components: { SettingTree, PersonalityProfiles, GalaxyToggleCard, GalaxySection, DevModeBanner, LongitudinalMode, LanguageSelector,
-    AndroidAutoIdentityPanel, AndroidAutoCarScreenPanel, AndroidAutoDiagnosticsPanel },
+    AndroidAutoConnectionPanel, AndroidAutoIdentityPanel, AndroidAutoCarScreenPanel, AndroidAutoDiagnosticsPanel },
   data() {
     return {
       layout: [],
@@ -217,8 +218,14 @@ export const Settings = {
                 :locked="lockReason(androidAutoParam(activeSection)) !== ''" @change="onParamChange" />
             </GalaxySection>
             <template v-if="activeSection.name === 'Android Auto' && values.AndroidAutoEnabled">
-              <GalaxySection title="Car Display" icon="bi-display">
-                <AndroidAutoCarScreenPanel :is-metric="!!values.IsMetric" />
+              <GalaxySection title="Connection" icon="bi-link-45deg">
+                <AndroidAutoConnectionPanel />
+              </GalaxySection>
+              <GalaxySection title="Layout" icon="bi-layout-split">
+                <AndroidAutoCarScreenPanel section="layout" :is-metric="!!values.IsMetric" />
+              </GalaxySection>
+              <GalaxySection title="Status Widgets" icon="bi-speedometer2">
+                <AndroidAutoCarScreenPanel section="widgets" :is-metric="!!values.IsMetric" />
               </GalaxySection>
               <GalaxySection title="Android Auto Certificate" icon="bi-key">
                 <AndroidAutoIdentityPanel />

@@ -86,7 +86,7 @@ def connection_value(status: dict) -> str:
 
 
 def auto_connect_title(enable: bool) -> str:
-  return f"Slide for\nAuto Connect {'On' if enable else 'Off'}"
+  return f"Slide for Auto\nConnect {'On' if enable else 'Off'}"
 
 
 def auto_connect_value(enabled: bool) -> str:

@@ -15,10 +15,13 @@ or detail page before closing Settings.
 | Vehicle | Vehicle identity and supported vehicle preferences |
 | System | Device information, preferences, power, backups, maintenance, software and developer tools |
 
-Galaxy exposes the Android Auto enable switch, Car Display controls and
-certificate setup at `/#/settings/android-auto`. Layout and Status Widgets
-use the same labels and settings as the car UI. Controls that do not apply
-to the selected layout are hidden.
+Galaxy exposes the Android Auto enable switch, live connection controls, Layout
+and Status Widgets controls, certificate setup and diagnostics at
+`/#/settings/android-auto`. The Connection section uses `android_autod` for the
+same Connect status, Car, Auto Connect, Link Type, Display, pairing, Setup Help
+and Last Error settings as the comma menu. Layout and Status Widgets use the
+same labels and settings as the car UI. Controls that do not apply to the
+selected layout are hidden.
 
 Car-only display preferences live in the existing `car_screen.json`, separate
 from comma display preferences. Both interfaces merge partial updates under a
@@ -43,7 +46,9 @@ Run native checks through the isolated host runtime on macOS:
   starpilot/system/android_auto/tests/test_ui_ownership.py \
   starpilot/system/android_auto/tests/test_offline_maps_panel.py \
   starpilot/system/android_auto/tests/test_car_ui_nav.py
-node --test starpilot/system/the_galaxy/tests/test_android_auto_car_screen_panel.mjs
+node --test \
+  starpilot/system/the_galaxy/tests/test_android_auto_connection_panel.mjs \
+  starpilot/system/the_galaxy/tests/test_android_auto_car_screen_panel.mjs
 ```
 
 Run the Galaxy API tests in a separate Python process: their existing import

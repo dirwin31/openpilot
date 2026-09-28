@@ -24,7 +24,8 @@ untested.
 
 1. Enable **Android Auto** and **Bluetooth** on the comma. Install the certificate
    in **Galaxy → Toggles → Android Auto → Android Auto Certificate**.
-2. Open **Settings → Bluetooth → Android Auto** on the comma and choose the link:
+2. Open **Settings → Bluetooth → Android Auto** on the comma, or
+   **Galaxy → Toggles → Android Auto → Connection**, and choose the link:
    - **Wireless:** pair the car once while parked/offroad, confirm both codes and
      allow Android Auto on the car. Choose the car if it was not selected automatically.
      Keep Wi-Fi enabled; the comma obtains the car's network details itself.
@@ -35,10 +36,11 @@ untested.
    when the selected car connects over Bluetooth. **Connect** allows a parked test;
    **Disconnect** pauses automatic starting until the next drive or a manual Connect.
 
-**Setup Help** on the comma and car display explains these steps for the selected
-connection. **Last Error** includes a next action. Most temporary interruptions
-retry automatically; repeated failures can be exported from Galaxy's Android Auto
-diagnostics. Bluetooth audio support alone does not imply wireless Android Auto.
+**Setup Help** on the comma, car display and Galaxy explains these steps for the
+selected connection. **Last Error** includes a next action. Most temporary
+interruptions retry automatically; repeated failures can be exported from Galaxy's
+Android Auto diagnostics. Bluetooth audio support alone does not imply wireless
+Android Auto.
 
 ## 1. Install the phone identity
 

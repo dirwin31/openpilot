@@ -75,6 +75,19 @@ test("the Android Auto master toggle has a dedicated settings section", () => {
   assert.ok(settingsTree >= 0 && androidAutoSection > settingsTree)
   assert.match(settingsSource.slice(settingsTree, androidAutoSection), /<\/div>\s*<GalaxySection/)
   assert.match(settingsSource.slice(androidAutoSection), /:param="androidAutoParam\(activeSection\)"/)
+  assert.match(settingsSource, /<GalaxySection title="Layout"/)
+  assert.match(settingsSource, /<AndroidAutoCarScreenPanel section="layout"/)
+  assert.match(settingsSource, /<GalaxySection title="Status Widgets"/)
+  assert.match(settingsSource, /<AndroidAutoCarScreenPanel section="widgets"/)
+  assert.doesNotMatch(settingsSource, /<GalaxySection title="Car Display"/)
+})
+
+test("embedded sections hide the internal tabs while standalone use keeps them", () => {
+  assert.deepEqual(panel.props.section.validator("layout"), true)
+  assert.deepEqual(panel.props.section.validator("widgets"), true)
+  assert.deepEqual(panel.props.section.validator("other"), false)
+  assert.match(panel.template, /v-if="!section" class="gx-car-display__tabs"/)
+  assert.match(panel.template, /\(section \|\| tab\) === 'layout'/)
 })
 
 test("blind-spot controls convert the displayed unit back to metres per second", () => {

@@ -1,6 +1,7 @@
 import os
 import subprocess
 import tty
+from pathlib import Path
 
 import pytest
 
@@ -33,7 +34,7 @@ def fake_configfs(tmp_path):
     command, rest, data = args[2], args[3:], kwargs.get("input") or ""
     calls.append((command, *rest, data.strip()))
     if command == "tee":
-      open(rest[0], "w").write(data)
+      Path(rest[0]).write_text(data)
     elif command == "mkdir":
       os.makedirs(rest[-1], exist_ok=True)
     elif command == "rmdir":

@@ -185,6 +185,8 @@ export const api = {
 
   getBluetoothStatus() { return request("/api/bluetooth/status") },
   bluetoothOp(operation, body = {}) { return request(`/api/bluetooth/${operation}`, { method: "POST", data: body }) },
+  getAndroidAutoConnection() { return request("/api/android_auto/connection", { cache: "no-store", timeout: 20000 }) },
+  androidAutoConnectionOp(operation, body = {}) { return request(`/api/android_auto/connection/${operation}`, { method: "POST", data: body, timeout: 25000 }) },
   getAndroidAutoIdentity() { return request("/api/android_auto/identity", { cache: "no-store" }) },
   downloadAndroidAutoApk(url) { return request("/api/android_auto/identity/download", { method: "POST", data: { url } }) },
   removeAndroidAutoIdentity() { return request("/api/android_auto/identity", { method: "DELETE" }) },

@@ -15,6 +15,7 @@ export const AndroidAutoCarScreenPanel = {
   name: "AndroidAutoCarScreenPanel",
   props: {
     isMetric: { type: Boolean, default: false },
+    section: { type: String, default: "", validator: value => ["", "layout", "widgets"].includes(value) },
   },
   data() {
     return { settings: null, statusMetrics: [], tab: "layout", loading: false, error: "", saving: false, views: VIEWS, mapOrientations: MAP_ORIENTATIONS }
@@ -86,8 +87,8 @@ export const AndroidAutoCarScreenPanel = {
   },
   template: `
     <div class="gx-car-display">
-      <p class="gx-row__desc">Car display only. These are the same settings as Car Display on your car screen.</p>
-      <div class="gx-car-display__tabs" role="tablist" aria-label="Car Display">
+      <p class="gx-row__desc">Car screen only. These settings control the Android Auto view in your Car.</p>
+      <div v-if="!section" class="gx-car-display__tabs" role="tablist" aria-label="Car Display">
         <button type="button" role="tab" class="gx-btn" :class="tab === 'layout' ? '' : 'gx-btn--tonal'"
           :aria-selected="tab === 'layout'" @click="tab = 'layout'">Layout</button>
         <button type="button" role="tab" class="gx-btn" :class="tab === 'widgets' ? '' : 'gx-btn--tonal'"
@@ -95,11 +96,11 @@ export const AndroidAutoCarScreenPanel = {
       </div>
       <div v-if="loading" class="gx-loading">Loading...</div>
       <div v-else-if="error" class="gx-row">
-        <div class="gx-row__info"><span class="gx-row__label">Could not load the layout</span><span class="gx-row__desc">{{ error }}</span></div>
+        <div class="gx-row__info"><span class="gx-row__label">Could not load settings</span><span class="gx-row__desc">{{ error }}</span></div>
         <button type="button" class="gx-btn gx-btn--tonal" @click="load">Retry</button>
       </div>
       <template v-else-if="settings">
-        <template v-if="tab === 'layout'">
+        <template v-if="(section || tab) === 'layout'">
           <div class="gx-row">
             <div class="gx-row__info"><span class="gx-row__label">Driving Layout</span><span class="gx-row__desc">{{ selectedView.desc }}</span></div>
             <div class="gx-car-display__tabs"><button v-for="view in views" :key="view.value" type="button" class="gx-btn"
