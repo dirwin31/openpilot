@@ -56,22 +56,21 @@ class AndroidAutoLayoutMici(NavScroller):
     self._icon = icon
     self._pending: dict[str, tuple[object, float]] = {}
 
-    self._status_card = GreyBigButton(TITLE, "starting", icon)
-    self._connect_btn = BigButton("connect")
+    self._connect_btn = BigButton("Connect", "starting")
     self._connect_btn.set_click_callback(self._connect_tapped)
-    self._car_btn = BigButton("car", "")
+    self._car_btn = BigButton("Car", "")
     self._car_btn.set_click_callback(self._choose_car)
-    self._auto_toggle = BigToggle("auto-connect", "every drive", toggle_callback=self._auto_tapped)
+    self._auto_toggle = BigToggle("Auto\nConnect", "On", toggle_callback=self._auto_tapped)
     # Short titles: a multi-toggle's title shares its width with the pills.
-    self._connection_toggle = BigMultiToggle("link", ["wireless", "usb"], select_callback=self._connection_tapped)
+    self._connection_toggle = BigMultiToggle("Link Type", ["wireless", "usb"], select_callback=self._connection_tapped)
     self._view_toggle = BigMultiToggle("display", ["car layout", "mirror"], select_callback=self._view_tapped)
-    self._pair_btn = BigButton("pair new car")
+    self._pair_btn = BigButton("Pair New Car", "pair while parked")
     self._pair_btn.set_click_callback(self._pair)
-    self._setup_btn = BigButton("setup help", "tap to read")
+    self._setup_btn = BigButton("Setup Help", "tap to read")
     self._setup_btn.set_click_callback(self._show_setup)
-    self._error_btn = BigButton("last error", "tap to read")
+    self._error_btn = BigButton("Last Error", "tap to read")
     self._error_btn.set_click_callback(self._show_error)
-    self._scroller.add_widgets([self._status_card, self._connect_btn, self._car_btn, self._auto_toggle, self._connection_toggle,
+    self._scroller.add_widgets([self._connect_btn, self._car_btn, self._auto_toggle, self._connection_toggle,
                                 self._view_toggle, self._pair_btn, self._setup_btn, self._error_btn])
     self._refresh()
 
@@ -107,20 +106,22 @@ class AndroidAutoLayoutMici(NavScroller):
     status = manager.status
     busy = manager.busy
     idle_ok = state.can_change_while(status) and not busy
-    _set_value(self._status_card, state.status_value(status))
     if self._connect_btn.get_text() != state.connect_label(status):
       self._connect_btn.set_text(state.connect_label(status))
+    _set_value(self._connect_btn, state.connect_status_value(status))
     self._connect_btn.set_enabled(state.can_connect(status) and not busy)
-    _set_value(self._car_btn, status.get("receiver_name") or "choose a car")
+    _set_value(self._car_btn, status.get("receiver_name") or "Choose a Car")
     self._car_btn.set_enabled(idle_ok)
-    self._auto_toggle.set_checked(self._shown("auto", bool(status.get("auto_connect", True))))
+    auto_connect = self._shown("auto", bool(status.get("auto_connect", True)))
+    self._auto_toggle.set_checked(auto_connect)
+    _set_value(self._auto_toggle, state.auto_connect_value(auto_connect))
     self._auto_toggle.set_enabled(bool(status) and not busy)
     _set_value(self._connection_toggle, self._shown("connection", state.connection_value(status)))
     self._connection_toggle.set_enabled(idle_ok)
     _set_value(self._view_toggle, self._shown("view", state.view_value(status)))
     self._view_toggle.set_enabled(bool(status) and not busy)
     self._pair_btn.set_enabled(not busy)
-    items = [self._status_card, self._connect_btn]
+    items = [self._connect_btn]
     if state.show_car(status):
       items.append(self._car_btn)
     items += [self._auto_toggle, self._connection_toggle, self._view_toggle]
