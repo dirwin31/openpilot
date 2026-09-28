@@ -56,6 +56,7 @@ SECURITY_OPEN = 1
 SECURITY_NAMES = {0: "unknown", 1: "open", 2: "wep64", 3: "wep128", 4: "wpa", 8: "wpa2", 12: "wpa/wpa2",
                   20: "wpa-enterprise", 24: "wpa2-enterprise", 28: "wpa/wpa2-enterprise", 32: "wpa3", 40: "wpa2/wpa3"}
 
+INITIAL_KICK_SECONDS = 2.5
 MAX_FRAME = 4096
 JOIN_PING_INTERVAL = 2.0  # phone-side WifiPing while joining the car's Wi-Fi; impatient receivers drop an idle RFCOMM link
 MAX_FRAMES = 64
@@ -66,6 +67,10 @@ class BootstrapError(RuntimeError):
   def __init__(self, stage: str, message: str):
     super().__init__(f"{stage}: {message}")
     self.stage = stage
+
+
+class BootstrapTimeout(BootstrapError):
+  pass
 
 
 @dataclass(frozen=True)
@@ -215,9 +220,11 @@ class WirelessBootstrap:
 
   def __init__(self, sock, log: Callable[..., None], *, device_serial: str = "starpilot",
                version_status: int = STATUS_SUCCESS, stage_timeout: float = 20.0, start_request_delay: float = 5.0,
-               join_ping_interval: float = JOIN_PING_INTERVAL):
+               join_ping_interval: float = JOIN_PING_INTERVAL, initial_kick_delay: float = INITIAL_KICK_SECONDS):
     self.sock = sock
     self.join_ping_interval = join_ping_interval
+    self.initial_kick_delay = initial_kick_delay
+    self.peer_uses_pings = False
     self.start_request_delay = start_request_delay
     self.log = log
     self.device_serial = device_serial
@@ -241,7 +248,7 @@ class WirelessBootstrap:
     while not self.queue:
       remaining = deadline - time.monotonic()
       if remaining <= 0:
-        raise BootstrapError(self.stage, "head unit did not answer in time")
+        raise BootstrapTimeout(self.stage, "head unit did not answer in time")
       if self.cancelled():
         raise BootstrapError(self.stage, "cancelled")
       # Short slices keep Stop responsive even where closing a socket from
@@ -266,6 +273,7 @@ class WirelessBootstrap:
   def service(self, message_id: int, payload: bytes) -> bool:
     """Handle stage-independent frames; returns True when consumed."""
     if message_id == WIFI_PING_REQUEST:
+      self.peer_uses_pings = True
       self.send(WIFI_PING_RESPONSE, payload)
       return True
     if message_id == WIFI_PING_RESPONSE:
@@ -288,21 +296,33 @@ class WirelessBootstrap:
     # Android Auto 17.6 asks the car to start projection 5 s after the version
     # exchange if the car has not started it; newer head units (2025 Honda) wait for it.
     start_request_at: float | None = None
+    deadline = time.monotonic() + self.stage_timeout
+    initial_kick_at: float | None = time.monotonic() + self.initial_kick_delay
+    hint_ready_at: float | None = None
     while endpoint is None:
-      wait = 3.0 if hinted is not None else self.stage_timeout
-      if start_request_at is not None:
-        wait = min(wait, max(0.01, start_request_at - time.monotonic()))
-      try:
-        message_id, payload = self.next_frame(wait)
-      except BootstrapError:
-        if start_request_at is not None and time.monotonic() >= start_request_at:
-          start_request_at = None
-          self.send(WIFI_START_REQUEST)
-          continue
-        if hinted is None:
-          raise
-        endpoint = hinted  # the receiver sent its endpoint only with the version exchange
+      if cancelled():
+        raise BootstrapError(self.stage, "cancelled")
+      now = time.monotonic()
+      # An endpoint hint gets a short grace period for the normal StartRequest.
+      # Pings must not keep extending that grace period (or either stage).
+      if hinted is not None and hint_ready_at is not None and now >= hint_ready_at:
+        endpoint = hinted
         break
+      if now >= deadline:
+        raise BootstrapTimeout(self.stage, "head unit did not answer in time")
+      if initial_kick_at is not None and now >= initial_kick_at:
+        initial_kick_at = None
+        self.log("bootstrap_initial_kick")
+        self.send(WIFI_START_REQUEST)
+      if start_request_at is not None and now >= start_request_at:
+        start_request_at = None
+        self.send(WIFI_START_REQUEST)
+      wake_at = min(t for t in (deadline, initial_kick_at, start_request_at, hint_ready_at) if t is not None)
+      try:
+        message_id, payload = self.next_frame(max(0.001, wake_at - time.monotonic()))
+      except BootstrapTimeout:
+        continue  # only an actual read timeout advances timers; EOF/cancellation must fail
+      initial_kick_at = None  # a speaking peer drives its own setup
       if cancelled():
         raise BootstrapError(self.stage, "cancelled")
       if self.service(message_id, payload):
@@ -315,6 +335,8 @@ class WirelessBootstrap:
         self.send(WIFI_VERSION_RESPONSE, field(1, major) + field(2, minor) + field(3, self.device_serial) +
                   field(4, self.version_status))
         hinted = version_endpoint or hinted
+        if hinted is not None and hint_ready_at is None:
+          hint_ready_at = time.monotonic() + 3.0
         start_request_at = time.monotonic() + self.start_request_delay
       elif message_id == WIFI_START_REQUEST:
         parsed = parse_endpoint(payload)
@@ -324,6 +346,8 @@ class WirelessBootstrap:
       elif message_id == WIFI_SETUP_INFO:
         setup_endpoint, setup_credentials = parse_setup_info(payload)
         hinted = setup_endpoint or hinted
+        if hinted is not None and hint_ready_at is None:
+          hint_ready_at = time.monotonic() + 3.0
         credentials = setup_credentials or credentials
         self.log("bootstrap_setup_info", endpoint=setup_endpoint.__dict__ if setup_endpoint else None,
                  credentials=credentials.describe() if credentials else None)
@@ -336,8 +360,12 @@ class WirelessBootstrap:
     if credentials is None:
       self.stage = "wifi_info"
       self.send(WIFI_INFO_REQUEST)
+      info_deadline = time.monotonic() + self.stage_timeout
       while credentials is None:
-        message_id, payload = self.next_frame(self.stage_timeout)
+        remaining = info_deadline - time.monotonic()
+        if remaining <= 0:
+          raise BootstrapTimeout(self.stage, "head unit did not answer in time")
+        message_id, payload = self.next_frame(remaining)
         if cancelled():
           raise BootstrapError(self.stage, "cancelled")
         if self.service(message_id, payload):
@@ -366,11 +394,14 @@ class WirelessBootstrap:
 
     thread = threading.Thread(target=worker, name="aa_wifi_join", daemon=True)
     thread.start()
+    # Simple DIY launchers consume exactly StartResponse then ConnectStatus.
+    # An unsolicited ping occupies their status slot and can abort a slow join.
+    # Negotiating receivers or peers already sending pings use the richer flow.
     next_ping = time.monotonic() + self.join_ping_interval
     while thread.is_alive():
       if cancelled():
         raise BootstrapError(self.stage, "cancelled")
-      if self.join_ping_interval > 0 and time.monotonic() >= next_ping:
+      if self.join_ping_interval > 0 and (version is not None or self.peer_uses_pings) and time.monotonic() >= next_ping:
         # Joining and DHCP can take 10+ s; a phone keeps the RFCOMM link visibly alive meanwhile.
         next_ping = time.monotonic() + self.join_ping_interval
         self.send(WIFI_PING_REQUEST, field(1, time.monotonic_ns() // 1_000_000))

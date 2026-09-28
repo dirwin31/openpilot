@@ -252,3 +252,38 @@ def test_no_accessory_start_falls_back_to_direct(tmp_path, monkeypatch):
   assert time.monotonic() - started >= 0.65
   assert sup._await_usb_configured(ScriptedListener([(0.05, CONFIGURED)]), 1.0)
   assert not sup._await_usb_configured(ScriptedListener([]), 0.2)
+
+
+def test_gadget_detach_settles_for_switch_restore_and_crash_recovery(tmp_path, monkeypatch):
+  configfs, adb, calls, run = fake_configfs(tmp_path)
+  device = tmp_path / "usb_accessory"
+  device.write_text("")
+  monkeypatch.setattr(usb, "ACCESSORY_DEVICE", str(device))
+  monkeypatch.setattr(usb.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
+  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run)
+  gadget.prepare()
+  root = gadget.root
+  gadget.switch_to_accessory()
+  # Simulate a crashed daemon: a fresh owner must detach before editing configfs.
+  recovered = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run)
+  before = len(calls)
+  recovered.prepare()
+  assert calls[before:before + 2] == [("tee", str(root / "UDC"), ""), ("sleep", usb.UDC_SETTLE_SECONDS)]
+  gadget.restore()
+  after = len(calls)
+  gadget.restore()
+  assert len(calls) == after, "restoring twice must not rebind an already-bound ADB gadget"
+  assert udc_writes(calls, adb) == ["", usb.UDC_NAME]
+  detaches = [i for i, call in enumerate(calls) if call[0] == "tee" and call[1].endswith("/UDC") and call[-1] == ""]
+  assert len(detaches) == 4
+  for i in detaches:
+    assert calls[i + 1] == ("sleep", usb.UDC_SETTLE_SECONDS)
+
+
+def test_stale_accessory_detection_follows_symlink_target(tmp_path):
+  configfs, adb, calls, run = fake_configfs(tmp_path)
+  (adb / usb.CONFIG / "alternate-name").symlink_to("../../functions/" + usb.ACCESSORY_FUNCTION)
+  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run)
+  gadget._remove_stale_accessories(configfs / "usb_gadget")
+  assert (adb / "functions" / usb.ACCESSORY_FUNCTION).exists()
+  assert not any(call[0] == "rmdir" for call in calls)

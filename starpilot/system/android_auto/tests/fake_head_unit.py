@@ -293,7 +293,7 @@ class FakeHeadUnit:
 
 def rfcomm_head_unit(sock: socket.socket, endpoint: tuple[str, int], *, version_first: bool = False, oaa_layout: bool = False,
                      setup_info_only: bool = False, pings: bool = True, byte_by_byte: bool = False,
-                     wait_for_phone_start: bool = False) -> dict:
+                     wait_for_phone_start: bool = False, strict_legacy: bool = False) -> dict:
   """Car side of the RFCOMM bootstrap; returns what the phone sent."""
   seen: dict = {"messages": []}
   reader = bs.FrameReader()
@@ -331,10 +331,10 @@ def rfcomm_head_unit(sock: socket.socket, endpoint: tuple[str, int], *, version_
       message_id, payload = receive()
       assert message_id == bs.WIFI_VERSION_RESPONSE
       seen["version_response"] = parse_fields(payload)
-      if wait_for_phone_start:  # 2025 Honda: projection starts only when the phone asks
-        message_id, payload = receive()
-        assert message_id == bs.WIFI_START_REQUEST, message_id
-        seen["phone_start_request"] = payload
+    if wait_for_phone_start:  # passive peers, with or without a version exchange
+      message_id, payload = receive()
+      assert message_id == bs.WIFI_START_REQUEST, message_id
+      seen["phone_start_request"] = payload
     if pings:
       send(bs.WIFI_PING_REQUEST, field(1, 123))
     send(bs.WIFI_START_REQUEST, field(1, ip) + field(2, port))
@@ -358,6 +358,7 @@ def rfcomm_head_unit(sock: socket.socket, endpoint: tuple[str, int], *, version_
       seen["connect_status"] = parse_fields(payload)
       return seen
     elif message_id == bs.WIFI_PING_REQUEST:  # the phone keeping the link alive while it joins
+      assert not strict_legacy, "Legacy dongle consumed a ping where ConnectStatus was required"
       seen["phone_pings"] = seen.get("phone_pings", 0) + 1
       send(bs.WIFI_PING_RESPONSE, payload)
     elif message_id != bs.WIFI_PING_RESPONSE:

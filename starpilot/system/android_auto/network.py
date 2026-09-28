@@ -11,6 +11,7 @@ cellular default route and DNS are left alone (``never-default``,
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import uuid
@@ -36,7 +37,7 @@ ACTIVE_STATE_ACTIVATED = 2
 ACTIVE_STATE_DEACTIVATED = 4
 CONNECTION_ID = "starpilot-android-auto"
 SECURITY_WPA3 = (32,)
-SECURITY_WPA2_WPA3 = (40,)  # transition mode: a WPA2 client joins; PMF where the car offers it
+SECURITY_WPA2_WPA3 = (40,)  # NetworkManager wpa-psk permits WPA2 + WPA3; sae is WPA3-only
 SECURITY_UNSUPPORTED = {2: "WEP", 3: "WEP", 20: "WPA enterprise", 24: "WPA2 enterprise", 28: "WPA/WPA2 enterprise"}
 PMF_OPTIONAL, PMF_REQUIRED = 2, 3  # NetworkManager 802-11-wireless-security.pmf
 
@@ -45,14 +46,24 @@ class NetworkError(RuntimeError):
   pass
 
 
+def normalized_bssid(value: str) -> str:
+  """Ignore placeholder/multicast addresses; accept colon or hyphen notation."""
+  if not re.fullmatch(r"(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}", value):
+    return ""
+  address = bytes.fromhex(value.replace(":", "").replace("-", ""))
+  if not any(address) or address[0] & 1:
+    return ""
+  return ":".join(f"{byte:02X}" for byte in address)
+
+
 def connection_settings(credentials: WifiCredentials, interface: str) -> dict:
   wireless = {
     "ssid": ("ay", credentials.ssid.encode("utf-8")),
     "mode": ("s", "infrastructure"),
     "hidden": ("b", True),  # projection networks are often hidden; harmless when broadcast
   }
-  if credentials.bssid:
-    wireless["bssid"] = ("ay", bytes.fromhex(credentials.bssid.replace(":", "")))
+  if bssid := normalized_bssid(credentials.bssid):
+    wireless["bssid"] = ("ay", bytes.fromhex(bssid.replace(":", "")))
   settings = {
     "connection": {
       "type": ("s", "802-11-wireless"),
@@ -138,11 +149,14 @@ class NetworkLease:
     attempt fails, one retry matches the SSID alone in case the reported BSSID
     belongs to a different radio of the head unit.
     """
+    credentials = replace(credentials, bssid=normalized_bssid(credentials.bssid))
     attempts = [credentials]
     if credentials.bssid:
       attempts.append(replace(credentials, bssid=""))
     last_error: NetworkError | None = None
     for index, attempt in enumerate(attempts):
+      if cancelled():
+        raise NetworkError("cancelled")
       try:
         return self._acquire_once(attempt, timeout / len(attempts), cancelled)
       except NetworkError as error:
