@@ -24,6 +24,7 @@ Approach adapted from yummydirtx/openpilot ``tools/android_auto/native_renderer.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import signal
@@ -33,6 +34,7 @@ import time
 from openpilot.starpilot.system.android_auto.frame_source import (FLAG_ASYNC_READBACK, FLAG_NV12, FORMAT_NV12, FORMAT_RGBA,
                                                                   FrameProducer, FrameRequest, frame_bytes)
 from openpilot.starpilot.system.android_auto.gpu_nv12 import compose_rgba
+from openpilot.starpilot.system.android_auto.placement import RendererPlacement
 from openpilot.starpilot.system.android_auto.touch import DEFAULT_TOUCH_SOCKET, TouchEvent, TouchReceiver
 
 LOGICAL_HEIGHT = 1080  # the landscape UI's design height
@@ -46,6 +48,7 @@ HOME_ONROAD_TIMEOUT = 45.0  # back to the drive after this long untouched on the
 # Drive view is tapped, a critical alert shows, or the car is past the Navigate speed lock.
 STATE_REFRESH = 5.0
 MAP_ONLY_BORDER = 14.0
+STATUS_COLUMN_WIDTH = 300  # the comma's developer sidebar width
 COMPASS_SIZE = 96.0
 COMPASS_MARGIN = 24.0
 COMPASS_TRIP_BAR_CLEARANCE = 44 + 96 + 20  # the trip bar's bottom gap, height, and a gap above it
@@ -56,7 +59,7 @@ CAMERA_MAX_GAP = 0.1       # s; a shown camera silent this long stops pacing (th
 
 # Per-frame averages in render_stats. Wall-clock milliseconds except cpu_ms, the
 # renderer thread's own CPU time: frame_ms well above cpu_ms means it was waiting
-# (for a CPU core, it runs at nice 10, or for the GPU driver), not working.
+# (for its core, where it runs at SCHED_IDLE, or for the GPU driver), not working.
 # gpu_ms, when explicitly enabled on every GPU_SAMPLE_EVERY-th frame, is how long the GPU
 # still had to go after the CPU finished that frame.
 STAT_KEYS = ("update_ms", "map_ms", "layout_ms", "map_draw_ms", "menu_ms", "compose_ms", "cache_ms", "convert_ms",
@@ -281,6 +284,30 @@ def car_layout(settings: dict, started: bool, on_home: bool, width: int, height:
   return rl.Rectangle(0, 0, width - map_w, height), rl.Rectangle(width - map_w, 0, map_w, height)
 
 
+def status_layout(settings: dict, main_rect, map_rect):
+  """(main rect or None, map rect or None, status column) with the column carved out of the drive.
+
+  The column sits at either edge, or in the split view between the driving view and the
+  map. It takes its width from the driving view, or from the map when that is shown alone.
+  """
+  import pyray as rl
+  panes = sorted(((name, rect) for name, rect in (("main", main_rect), ("map", map_rect)) if rect is not None),
+                 key=lambda pane: pane[1].x)
+  view = "split" if len(panes) == 2 else "driving" if main_rect is not None else "map"
+  position = settings.get(f"status_position_{view}", "right")
+  names = [name for name, _ in panes]
+  index = {"left": 0, "center": 1}.get(position, len(names))
+  widths = {name: rect.width for name, rect in panes}
+  widths["main" if main_rect is not None else "map"] -= STATUS_COLUMN_WIDTH
+  widths["status"] = STATUS_COLUMN_WIDTH
+  first = panes[0][1]
+  x, placed = first.x, {}
+  for name in names[:index] + ["status"] + names[index:]:
+    placed[name] = rl.Rectangle(x, first.y, widths[name], first.height)
+    x += widths[name]
+  return placed.get("main"), placed.get("map"), placed["status"]
+
+
 def compass_rect(map_rect):
   """The map's orientation button: bottom-right of the map, clear of the centred trip bar."""
   import pyray as rl
@@ -310,6 +337,9 @@ def _draw_compass_needle(x: float, y: float, bearing: float) -> None:
   rl.draw_circle_v(rl.Vector2(x, y), 4.0, rl.Color(10, 13, 20, 255))
 
 
+STALE_OVERLAY = object()  # never equal to a map's overlay content, so the overlay is drawn
+
+
 class MapPane:
   """Redraw the world at 15 Hz; move its cached image on every car frame."""
 
@@ -318,7 +348,7 @@ class MapPane:
     self._shown = False
     self._texture = None
     self._overlay = None
-    self._overlay_key = None
+    self._overlay_key = STALE_OVERLAY
     self._msaa = None
     self._texture_valid = False
     self._cached_camera = None
@@ -353,7 +383,7 @@ class MapPane:
     geometry = rect.width, rect.height, scale_x, scale_y
     if geometry != self._geometry:
       self._texture_valid = False
-      self._overlay_key = None
+      self._overlay_key = STALE_OVERLAY
       self._geometry = geometry
     self._scale = scale_x, scale_y
     width, height = max(1, round(rect.width * scale_x)) + 2 * MAP_BORDER, max(1, round(rect.height * scale_y)) + 2 * MAP_BORDER
@@ -386,9 +416,9 @@ class MapPane:
       # turn a GPS jump into unbounded extra GPU renders.
       self._camera, self._anchor = self._cached_camera, self._cached_anchor
 
-    # Guidance changes with messages; the one-second tick also refreshes ETA,
-    # token/offline status and expiry without baking text into the moving world.
-    overlay_key = (nav_map._overlay_state, nav_map._center_message(), nav_map._nav_active(now), int(now))
+    # The overlay's text (guidance, ETA, status badges) is its key, so it redraws only when
+    # something on it changes, not for every resent instruction or on a clock tick.
+    overlay_key = nav_map._overlay_state
     if overlay_key != self._overlay_key:
       self._render_layer(self._overlay, lambda: nav_map._draw_overlays(local, now), transparent=True)
       self._overlay_key = overlay_key
@@ -482,7 +512,7 @@ class MapPane:
     if self._overlay is not None:
       rl.unload_render_texture(self._overlay)
       self._overlay = None
-    self._overlay_key = None
+    self._overlay_key = STALE_OVERLAY
     self._texture_valid = False
     if self._msaa is not None:
       self._msaa.unload()
@@ -798,10 +828,9 @@ def run(frames_path: str, touch_path: str) -> int:
   if os.geteuid() == 0:
     raise RuntimeError("The car UI must run as the comma user, not root")
   parent = os.getppid()
-  try:
-    os.nice(10)  # never compete with openpilot's own processes
-  except OSError:
-    pass
+  # Core 6 at SCHED_IDLE: never compete with openpilot's own processes (see placement.py)
+  placement = RendererPlacement(report=lambda event: print(json.dumps(event), flush=True))
+  placement.start()
   neutralize_side_effects()
   producer = FrameProducer(frames_path)
   request = wait_for_request(producer)
@@ -834,6 +863,11 @@ def run(frames_path: str, touch_path: str) -> int:
   car_settings = CarScreenSettings()
   controls = OnroadControls(main_layout)
   map_status: MapOnlyStatus | None = None
+
+  # Everything built so far lives for the whole session. Frozen, it is never rescanned by the
+  # collector, whose full passes over the UI's objects stalled a frame every few seconds.
+  gc.collect()
+  gc.freeze()
 
   def toggle_map_orientation() -> None:
     from openpilot.starpilot.system.android_auto import car_screen
@@ -904,6 +938,7 @@ def run(frames_path: str, touch_path: str) -> int:
   try:
     while not stop["flag"] and os.getppid() == parent:
       now = time.monotonic()
+      placement.maintain(now)
       pending = producer.pending_request(now)
       if pending is None:
         # Stay warm while the head unit shows its own screen, without rendering
@@ -961,6 +996,10 @@ def run(frames_path: str, touch_path: str) -> int:
       settings = car_settings.poll()
       main_layout._dev_sidebar.metric_override = [STATUS_METRICS[slot][0] for slot in settings["status_slots"]]
       main_rect, map_rect = car_layout(settings, started, controls.full_screen(started), logical_w, logical_h)
+      status_rect = None
+      if started and not controls.full_screen(started) and any(slot != "blank" for slot in settings["status_slots"]):
+        main_rect, map_rect, status_rect = status_layout(settings, main_rect, map_rect)
+      ui_state.car_show_current_speed = settings["show_current_speed"]
       ui_state.nav_map_beside_road = main_rect is not None and map_rect is not None
       ui_state.car_camera_off = started and not settings["camera"]
       onroad_view = main_layout._layouts.get(controls._MainState.ONROAD)
@@ -1007,6 +1046,8 @@ def run(frames_path: str, touch_path: str) -> int:
               map_status = map_status or MapOnlyStatus()
               map_status.render(map_rect)
             map_draw += time.monotonic() - map_began
+          if status_rect is not None:
+            widget.render_status(status_rect)
         else:
           widget.render(viewport)
       menu_began = time.monotonic()

@@ -19,6 +19,7 @@ from openpilot.selfdrive.ui.onroad.alert_renderer import (
   AlertRenderer,
 )
 from openpilot.selfdrive.ui.onroad.hud_renderer import COLORS, CRUISE_DISABLED_CHAR, FONT_SIZES, HudRenderer
+from openpilot.selfdrive.ui.onroad.starpilot.compass import get_compass_text
 from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import NavigationCardRenderer
 from openpilot.selfdrive.ui.onroad.starpilot.pip_sidecam import PipSideCamera
 from openpilot.selfdrive.ui.onroad.starpilot import slc_speed_limit as slc
@@ -52,6 +53,8 @@ TORQUE_BAR_GAP = 24
 EXP_BUTTON_SIZE = 160
 EXP_ICON_SIZE = 120
 RIGHT_COLUMN_ANCHOR = 130  # column centre, from the camera pane's right edge (the comma uses 146)
+CONTROL_TOP = 45  # the MAX card's and the steering wheel's top edge, below the pane's top (widget_layout_manager)
+SPEED_UNIT_GAP = 22  # between the speed's ink and the unit's
 # MAX and LIMIT cards are laid out by glyph ink, not line boxes: a line box carries ~19%
 # empty space above digits, which left a gap under the label and the value off centre.
 CARD_INK_MARGIN = 16        # card edge to the label's ink; the value's space ends as far from the bottom
@@ -248,8 +251,9 @@ class CarPipSideCamera(PipSideCamera):
 class CarStoppedTimerWidget(StoppedTimerWidget):
   """A compact "Stopped" label and mm:ss timer in place of the speed readout.
 
-  Centred on the pane, where the speed it replaces sits, and sized to stay clear of
-  the wider of the MAX / LIMIT column and the steering-wheel column.
+  Centred on the pane, where the speed it replaces sits, with the label's ink level with
+  the top of the MAX card and the steering wheel, and sized to stay clear of the wider of
+  the MAX / LIMIT column and the steering-wheel column.
   """
 
   LEFT_CONTROLS_RESERVE = 290  # MAX / LIMIT column
@@ -257,8 +261,8 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
   LABEL_FONT = 104
   TIMER_FONT = 88
   HORIZONTAL_MARGIN = 38
-  TEXT_TOP = 92
-  LINE_GAP = 8
+  TEXT_TOP = CONTROL_TOP  # the label's ink, not its line box
+  LINE_GAP = 18           # between the label's ink and the timer's
 
   def _render(self, rect: rl.Rectangle) -> None:
     duration = self._duration
@@ -272,11 +276,13 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
     timer_font = max(1, int(self.TIMER_FONT * scale))
     label_size = measure_text_cached(self._font_bold, label_text, label_font)
     timer_size = measure_text_cached(self._font_normal, timer_text, timer_font)
+    label_ink = text_ink(self._font_bold, label_text, label_font)
+    timer_ink = text_ink(self._font_normal, timer_text, timer_font)
 
     duration_color = self._duration_color()
     center_x = rect.x + rect.width / 2
-    label_y = rect.y + self.TEXT_TOP
-    timer_y = label_y + label_size.y + self.LINE_GAP
+    label_y = rect.y + self.TEXT_TOP - label_ink.y
+    timer_y = rect.y + self.TEXT_TOP + label_ink.height + self.LINE_GAP - timer_ink.y
     self._draw_text(self._font_bold, label_text, rl.Vector2(center_x - label_size.x / 2, label_y), label_font, duration_color)
     self._draw_text(self._font_normal, timer_text, rl.Vector2(center_x - timer_size.x / 2, timer_y), timer_font, rl.WHITE)
 
@@ -366,6 +372,21 @@ class CarHudRenderer(HudRenderer):
 
   def _create_navigation_card(self):
     return CarNavigationCardRenderer()
+
+  def _draw_current_speed(self, rect: rl.Rectangle) -> None:
+    """The speed's ink level with the top of the MAX card and the steering wheel, the unit and
+    compass below it; off with the car's Show Current Speed setting."""
+    if not ui_state.car_show_current_speed:
+      return
+    center_x = rect.x + rect.width / 2
+    bottom = draw_ink(self._font_bold, str(round(self.speed)), FONT_SIZES.current_speed, center_x, rect.y + CONTROL_TOP,
+                      COLORS.WHITE)
+    unit = tr("km/h") if ui_state.is_metric else tr("mph")
+    bottom = draw_ink(self._font_medium, unit, FONT_SIZES.speed_unit, center_x, bottom + SPEED_UNIT_GAP, COLORS.WHITE_TRANSLUCENT)
+    compass_text = get_compass_text()
+    if compass_text:
+      size = measure_text_cached(self._font_bold, compass_text, 50)
+      draw_text_with_shadow(self._font_bold, compass_text, rl.Vector2(center_x - size.x / 2, bottom + SPEED_UNIT_GAP), 50, rl.WHITE)
 
 
 class NoFavoriteMenu:

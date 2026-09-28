@@ -172,7 +172,12 @@ def test_stopped_timer_replaces_speed_in_full_and_split_camera_panes(monkeypatch
     assert len(draws) == 8  # three shadow layers and the foreground for each line
     label, timer = draws[3], draws[7]
     assert (label[1], timer[1]) == ("Stopped", "01:01")
-    assert label[2].y == rect.y + CarStoppedTimerWidget.TEXT_TOP
+    # The label's ink starts level with the top of the MAX card and the steering wheel.
+    label_ink = onroad_widgets.text_ink(None, "Stopped", label[3])
+    assert label[2].y + label_ink.y == rect.y + onroad_widgets.CONTROL_TOP
+    timer_ink = onroad_widgets.text_ink(None, "01:01", timer[3])
+    assert timer[2].y + timer_ink.y == pytest.approx(rect.y + onroad_widgets.CONTROL_TOP + label_ink.height +
+                                                     CarStoppedTimerWidget.LINE_GAP)
     # Centred on the pane, where the speed it replaces sits, clear of both control columns.
     center = rect.x + rect.width / 2
     assert abs(label[2].x + len("Stopped") * label[3] * 0.55 / 2 - center) < 1
@@ -509,3 +514,41 @@ def test_route_choices_sit_between_summary_and_actions(monkeypatch):
                       lambda self, x, y, w, m: calls.append(("actions", y)) or 78.0)
   assert page._draw_action_buttons(0, 100, 500, None) == 378.0
   assert calls == [("routes", 100), ("actions", 400)]
+
+
+# ── status column and current speed ─────────────────────────────────────────
+
+def test_car_layout_leaves_the_status_column_to_car_ui():
+  from openpilot.selfdrive.ui.layouts.main import MainState
+  from openpilot.starpilot.system.android_auto.ui.main import CarMainLayout
+  calls = []
+  layout = CarMainLayout.__new__(CarMainLayout)
+  layout._rect = rl.Rectangle(0, 0, 1500, 1080)
+  layout._current_mode = MainState.ONROAD
+  layout._sidebar = SimpleNamespace(is_visible=False, render=lambda rect: calls.append("sidebar"))
+  layout._dev_sidebar = SimpleNamespace(visible=True, update=lambda: calls.append("update"),
+                                        render=lambda rect: calls.append(("status", rect.x)))
+  layout._layouts = {MainState.ONROAD: SimpleNamespace(render=lambda rect: calls.append(("onroad", rect.width)))}
+  layout._render_main_content()
+  assert calls == [("onroad", 1500)], "the driving view keeps its whole rect and draws no column of its own"
+  layout.render_status(rl.Rectangle(1500, 0, 300, 1080))
+  assert calls[1:] == ["update", ("status", 1500)]
+
+
+def test_current_speed_sits_level_with_the_controls_and_can_be_hidden(monkeypatch):
+  hud = onroad_widgets.CarHudRenderer.__new__(onroad_widgets.CarHudRenderer)
+  hud._font_bold = hud._font_medium = None
+  hud.speed = 42.4
+  tops = []
+  monkeypatch.setattr(onroad_widgets, "draw_ink", lambda font, text, size, x, top, color: tops.append((text, top)) or top + 100)
+  monkeypatch.setattr(onroad_widgets, "get_compass_text", lambda: None)
+  monkeypatch.setattr(ui_state, "is_metric", False)
+  rect = rl.Rectangle(0, 30, 1200, 1000)
+  monkeypatch.setattr(ui_state, "car_show_current_speed", True)
+  hud._draw_current_speed(rect)
+  assert tops == [("42", rect.y + onroad_widgets.CONTROL_TOP), ("mph", rect.y + onroad_widgets.CONTROL_TOP + 100 +
+                                                                     onroad_widgets.SPEED_UNIT_GAP)]
+  tops.clear()
+  monkeypatch.setattr(ui_state, "car_show_current_speed", False)
+  hud._draw_current_speed(rect)
+  assert tops == []

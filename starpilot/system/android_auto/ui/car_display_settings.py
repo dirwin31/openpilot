@@ -3,10 +3,15 @@ from openpilot.starpilot.system.android_auto import car_screen
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import AetherSettingsView, SettingRow, SettingSection
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.panel import FrameCachedParams
 from openpilot.system.ui.lib.application import gui_app
-from openpilot.starpilot.system.android_auto.ui.settings_dialogs import alert_dialog
+from openpilot.starpilot.system.android_auto.ui.settings_dialogs import ConfirmDialog, alert_dialog
+from openpilot.system.ui.widgets import DialogResult
 
 LAYOUTS = [('split', 'Map + Driving'), ('driving', 'Driving View'), ('map', 'Map Only')]
 ORIENTATIONS = [('north_up', 'North Up'), ('heading_up', 'Heading Up')]
+POSITIONS = {'left': 'Left', 'center': 'Between', 'right': 'Right'}
+STATUS_POSITION_TITLES = {'split': 'Map + Driving', 'driving': 'Driving View', 'map': 'Map Only'}
+DISPLAY_ON_WARNING = ('Keep the comma display on while Android Auto is connected? The comma then draws its own screen ' +
+                      'as well as the car\'s, which uses additional CPU.')
 
 
 class CarDisplaySettings(AetherSettingsView):
@@ -22,21 +27,33 @@ class CarDisplaySettings(AetherSettingsView):
                   visible=lambda: self.current['onroad_view'] != 'driving'),
       self.toggle('camera', 'Show Road Camera', 'Keep speed, driving status and alerts visible when the camera is hidden.',
                   visible=lambda: self.current['onroad_view'] != 'map'),
+      self.toggle('show_current_speed', 'Show Current Speed', 'The speed readout at the top of the driving view.',
+                  visible=lambda: self.current['onroad_view'] != 'map'),
     ]), SettingSection('Blind Spots', [
       self.toggle('blind_spot_monitors', 'Show Blind Spot Monitors', 'Show blind-spot borders, lane warnings and configured side cameras.'),
       SettingRow('blind_spot_min_speed_ms', 'value', 'Blind Spot Minimum Speed',
                  'Set 0 to show monitors at every speed.',
                  visible=lambda: self.current['blind_spot_monitors'], get_value=self._speed_text, on_click=self._speed_picker),
     ]), SettingSection('Comma Display', [
-      self.toggle('sleep_device_screen', 'Turn Off Comma Display',
-                  'After the screen timeout while Android Auto is connected. Tap the comma to wake it; ' +
-                  'connection loss, warnings and critical alerts also wake it. Applies to comma four.'),
-    ])]
+      SettingRow('sleep_device_screen', 'toggle', 'Turn Off Comma Display',
+                 'After the screen timeout while Android Auto is connected. Tap the comma to wake it; ' +
+                 'connection loss and critical alerts always wake it. Applies to comma four.',
+                 get_state=lambda: self.current['sleep_device_screen'], set_state=self._set_sleep),
+    ]), SettingSection('Wake Comma Display For', [
+      SettingRow(f'wake_{key}', 'toggle', label, visible=lambda: self.current['sleep_device_screen'],
+                 get_state=lambda key=key: key in self.current['sleep_wake_events'],
+                 set_state=lambda value, key=key: self._set_wake(key, value))
+      for key, label in car_screen.SLEEP_WAKE_EVENTS.items()
+    ], visible=lambda: self.current['sleep_device_screen'])]
     if metrics:
       sections = [SettingSection('Status Column', [
         SettingRow(f'slot_{i}', 'value', f'Slot {i + 1}',
                    get_value=lambda i=i: car_screen.STATUS_METRICS[self.current['status_slots'][i]][1],
                    on_click=lambda i=i: self._slot_picker(i)) for i in range(car_screen.STATUS_SLOT_COUNT)
+      ]), SettingSection('Status Column Position', [
+        self.choice(f'status_position_{view}', STATUS_POSITION_TITLES[view], [(p, POSITIONS[p]) for p in positions],
+                    'Between puts it between the driving view and the map.' if 'center' in positions else '')
+        for view, positions in car_screen.STATUS_POSITIONS.items()
       ])]
     super().__init__(self, sections, header_title='Status Widgets' if metrics else 'Car Display',
                      header_subtitle='Car display only · Changes also appear in Galaxy.')
@@ -60,6 +77,22 @@ class CarDisplaySettings(AetherSettingsView):
     return SettingRow(key, 'value', title, subtitle, visible=visible,
                       get_value=lambda: dict(options)[self.current[key]],
                       on_click=lambda: self._pick(title, options, self.current[key], lambda value: self.update({key: value})))
+
+  def _set_sleep(self, value):
+    if value:
+      self.update({'sleep_device_screen': True})
+      return
+    def confirm(result):
+      if result == DialogResult.CONFIRM:
+        self.update({'sleep_device_screen': False})
+    gui_app.push_widget(ConfirmDialog(DISPLAY_ON_WARNING, 'Keep It On', callback=confirm))
+
+  def _set_wake(self, key, value):
+    # Read the latest version so another display's changes are preserved.
+    events = [event for event in car_screen.load()['sleep_wake_events'] if event != key]
+    if value:
+      events.append(key)
+    self.update({'sleep_wake_events': [event for event in car_screen.SLEEP_WAKE_EVENTS if event in events]})
 
   def _pick(self, title, options, current, apply):
     # Inline, scrollable choices fit short screens and retain a single Back path.

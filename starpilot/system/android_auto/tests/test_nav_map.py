@@ -40,7 +40,8 @@ def gps_state(latitude, longitude, bearing=0.0, speed=0.0, updated=None, has_fix
 
 def test_prepared_render_polls_once_and_next_frame_is_fresh(view, monkeypatch):
   calls = []
-  view._tiles = SimpleNamespace(upload=lambda: calls.append("upload"), service=SimpleNamespace(offline=False))
+  view._tiles = SimpleNamespace(upload=lambda: calls.append("upload"), service=SimpleNamespace(offline=False), has_token=True,
+                                offline_status=dict)
   view._sm = SimpleNamespace(update=lambda _: calls.append("poll"),
                              updated=dict.fromkeys(("navRoute", "navInstruction", "starpilotModelV2"), False))
   # Widget.render normally calls _update_state; exercise that call without GL.
@@ -223,7 +224,7 @@ class _FakeNavSM(dict):
 def test_ending_a_route_clears_the_line_before_navigationd_does(view, monkeypatch):
   monkeypatch.setattr(nav_map.ui_state, "started", False)
   sm = view._sm = _FakeNavSM()
-  view._tiles = SimpleNamespace(upload=lambda: 0, service=SimpleNamespace(offline=False))
+  view._tiles = SimpleNamespace(upload=lambda: 0, service=SimpleNamespace(offline=False), has_token=True, offline_status=dict)
   destination = json.dumps({"name": "Home", "latitude": 36.4, "longitude": -115.2})
   points = [(36.3, -115.3 + i * 0.001) for i in range(50)]
 
@@ -411,9 +412,9 @@ def test_route_splits_under_the_car_between_vertices(view, monkeypatch):
                       drawn.append((styles[-1][1], sx[start:end + 1].copy())))
   camera = nav_map.Camera(*world_xy(36.3, car_lon), 12.0, 0.0)
   view._draw_routes(nav_map.rl.Rectangle(-2000, -2000, 4000, 4000), camera, (0.0, 0.0), 1.0, 10.0)
-  traveled = [xs for color, xs in drawn if color == nav_map.ROUTE_TRAVELED]
   ahead = [xs for color, xs in drawn if color == nav_map.ROUTE_FILL]
-  assert math.isclose(traveled[0][-1], 0.0, abs_tol=1e-6) and math.isclose(ahead[0][0], 0.0, abs_tol=1e-6)
+  assert math.isclose(ahead[0][0], 0.0, abs_tol=1e-6)
+  assert all(xs.min() >= -1e-6 for _, xs in drawn), "nothing is drawn behind the car: no grey tail"
 
 
 def test_tile_textures_hold_what_the_map_shows(monkeypatch):
@@ -518,3 +519,87 @@ def test_finding_gps_shows_progress_onroad_only(view, monkeypatch):
   assert view._center_message() == ("Finding GPS", "3 satellites locked  •  1:15", 0.5)
   monkeypatch.setattr(nav_map.ui_state, "started", False)
   assert view._center_message() == ("Waiting for GPS", "The map appears once the car has a location.")
+
+
+def test_navigation_waiting_puts_satellites_on_their_own_line(view, monkeypatch):
+  monkeypatch.setattr(nav_map.ui_state, "started", True)
+  view._show_navigation_waiting = view._navigation_requested = True
+  view._acquire_state = (3, 75)
+  title, body, progress = view._center_message()
+  assert (title, progress) == ("Navigation active", 0.5)
+  assert body.split("\n") == ["Finding GPS to start your route", "3 satellites locked  •  1:15"]
+
+  drawn, cards = [], []
+  monkeypatch.setattr(view, "_text", lambda text, x, y, size, color, bold=False: drawn.append((text, y)))
+  monkeypatch.setattr(view, "_fit_text", lambda text, size, width, bold=False: text)
+  monkeypatch.setattr(view, "_card", cards.append)
+  monkeypatch.setattr(view, "_progress_bar", lambda x, y, width, height, progress: drawn.append(("bar", y)))
+  view._draw_center_message(nav_map.rl.Rectangle(0, 0, 1000, 1000), title, body, progress)
+  (_, title_y), (_, first_y), (_, second_y), (_, bar_y) = drawn
+  assert second_y - first_y == nav_map.CENTER_LINE_HEIGHT and bar_y > second_y
+  assert cards[0].height == 196 + nav_map.CENTER_LINE_HEIGHT
+
+
+def _lat_lon(x, y):
+  """Inverse of world_xy."""
+  lon = x / nav_map.TILE_SIZE * 360.0 - 180.0
+  lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / nav_map.TILE_SIZE))))
+  return lat, lon
+
+
+@pytest.mark.parametrize("turn_rate", [0.0, 12.0, -20.0])
+def test_dead_reckoning_follows_the_curve_between_one_hz_fixes(view, monkeypatch, turn_rate):
+  """Turning, the next fix lands where the car was drawn: no pull back once a second."""
+  monkeypatch.setattr(nav_map.ui_state, "android_auto_car_view", True)
+  speed, heading = 20.0, 90.0
+  x, y = world_xy(36.3, -115.3)
+  scale = speed / nav_map.meters_per_world_unit(36.3) / 30
+  corrections, headings = [], []
+  for frame in range(4 * 30 + 1):
+    now = 100.0 + frame / 30
+    if frame % 30 == 0:
+      view.memory.values["LastGPSPosition"] = gps_state(*_lat_lon(x, y), bearing=heading % 360, speed=speed, updated=now)
+      view._poll_gps(now)
+      if frame >= 90:  # the turn rate needs two fixes, and the first estimate's correction a second to settle
+        corrections.append(math.hypot(*view._correction) * nav_map.meters_per_world_unit(36.3))
+    headings.append(view._heading(now))
+    # The true path, integrated finely.
+    for _ in range(10):
+      heading += turn_rate / 300
+      x += math.sin(math.radians(heading)) * scale / 10
+      y -= math.cos(math.radians(heading)) * scale / 10
+  assert max(corrections) < 0.1, corrections
+  steps = [abs(nav_map._angle_delta(b, a)) for a, b in zip(headings[90:], headings[91:], strict=False)]
+  assert max(steps) <= abs(turn_rate) / 30 + 0.05, "the heading turns smoothly instead of snapping once a second"
+
+
+def test_turn_rate_is_ignored_when_slow_or_after_a_gap(view, monkeypatch):
+  monkeypatch.setattr(nav_map.ui_state, "android_auto_car_view", True)
+  view.memory.values["LastGPSPosition"] = gps_state(36.3, -115.3, bearing=0, speed=1.0, updated=100.0)
+  view._poll_gps(100.0)
+  view.memory.values["LastGPSPosition"] = gps_state(36.30001, -115.3, bearing=90, speed=1.0, updated=101.0)
+  view._poll_gps(101.0)
+  assert view._gps.turn_rate == 0.0, "walking pace bearings are noise"
+  view.memory.values["LastGPSPosition"] = gps_state(36.3002, -115.3, bearing=0, speed=20.0, updated=104.0)
+  view._poll_gps(104.0)
+  assert view._gps.turn_rate == 0.0, "fixes too far apart say nothing about this turn"
+  view.memory.values["LastGPSPosition"] = gps_state(36.3004, -115.3, bearing=170, speed=20.0, updated=105.0)
+  view._poll_gps(105.0)
+  assert view._gps.turn_rate == pytest.approx(nav_map.TURN_RATE_MAX), "clamped"
+
+
+def test_resent_instruction_with_the_same_words_keeps_the_overlay(view, monkeypatch):
+  monkeypatch.setattr(nav_map.ui_state, "started", True)
+  monkeypatch.setattr(nav_map.ui_state, "is_metric", False)
+  monkeypatch.setattr(view, "_status_badges", lambda: ((), None))
+
+  def instruction(distance):
+    return {"primary": "Main St", "secondary": "", "distance": distance, "type": "turn", "modifier": "left",
+            "remaining_distance": 5000.0, "remaining_time": 600.0, "next_type": "", "next_modifier": ""}
+
+  view._nav, view._nav_received = instruction(804.0), 100.0
+  first = view._overlay_content(100.0)
+  view._nav, view._nav_received = instruction(803.0), 101.0  # navigationd's next copy, same words on screen
+  assert view._overlay_content(101.0) == first
+  view._nav, view._nav_received = instruction(300.0), 102.0
+  assert view._overlay_content(102.0) != first

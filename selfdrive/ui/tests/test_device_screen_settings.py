@@ -312,3 +312,36 @@ def test_sleeping_render_loop_skips_gpu_work_but_keeps_yielding(monkeypatch):
     assert progress.count(("stream", False)) == 60
   finally:
     loop.close()
+
+
+def test_aa_sleep_wakes_for_the_car_screen_choices(aa_sleep_device):
+  s = aa_sleep_device
+  choices = {"sleep_device_screen": True, "sleep_wake_events": []}
+  s.device._aa_screen_settings = SimpleNamespace(poll=lambda: choices)
+  s.device._update_wakefulness()
+  assert not s.device.awake
+  s.device._active_standby_alerts = lambda: {"StandbyWakeWarningAlert"}
+  s.clock[0] = 112.0
+  s.device._update_wakefulness()
+  assert not s.device.awake, "warnings were deselected"
+
+  s.device._active_standby_alerts = lambda: {"StandbyWakeCriticalAlert"}
+  s.device._update_wakefulness()
+  assert s.device.awake and s.device._interaction_time == 122.0, "critical alerts always wake"
+  s.device._active_standby_alerts = lambda: set()
+  s.clock[0] = 123.0
+  s.device._update_wakefulness()
+  assert not s.device.awake
+
+  choices["sleep_wake_events"] = ["StandbyWakeEngage", "StandbyWakeInfoAlert"]
+  s.state.status = ui_state_module.UIStatus.ENGAGED
+  s.clock[0] = 124.0
+  s.device._update_wakefulness()
+  assert s.device.awake and s.device._interaction_time == 134.0, "engaging wakes once, then the timeout applies"
+  s.clock[0] = 135.0
+  s.device._update_wakefulness()
+  assert not s.device.awake
+  s.device._active_standby_alerts = lambda: {"StandbyWakeInfoAlert"}
+  s.clock[0] = 136.0
+  s.device._update_wakefulness()
+  assert s.device.awake

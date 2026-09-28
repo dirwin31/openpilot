@@ -57,13 +57,15 @@ from openpilot.system.ui.widgets import Widget
 
 MAX_TEXTURES = 40  # 512x512 RGBA tiles, 1 MB each on the GPU
 MIN_TEXTURES = 16  # otherwise twice what the map shows: this zoom level and the last one, to fall back on
-UPLOADS_PER_FRAME = 2
+UPLOADS_PER_FRAME = 1  # a 512x512 upload costs a few ms on the comma; two in one frame showed as a hitch
 MAX_FALLBACK_LEVELS = 6
 GPS_POLL_SECONDS = 0.2
 GPS_STALE_SECONDS = 3.0
 DEAD_RECKON_LIMIT = 1.6    # s; covers a late 1 Hz fix without running away when fixes stop
 CORRECTION_TAU = 0.35      # s; how quickly a new fix's disagreement with dead reckoning is eased out
 CORRECTION_MAX_METERS = 60.0  # larger disagreements snap: a GPS jump, not drift
+TURN_RATE_MIN_SPEED = 3.0  # m/s; below this the GPS bearing is too noisy to estimate a turn from
+TURN_RATE_MAX = 40.0       # deg/s; tighter than any turn taken at TURN_RATE_MIN_SPEED or above
 ROUTE_SNAP_METERS = 15.0          # GPS error and lane offset: the marker sits on the route line within this
 ROUTE_SNAP_RELEASE_METERS = 35.0  # the pull fades out by here, so leaving the route never jumps
 ACQUIRE_POLL_SECONDS = 1.0
@@ -90,7 +92,6 @@ MAP_BACKGROUND = rl.Color(20, 26, 38, 255)
 MAP_BACKGROUND_LIGHT = rl.Color(238, 236, 230, 255)  # behind streets-v12 while tiles load
 ROUTE_CASING = rl.Color(12, 40, 92, 255)
 ROUTE_FILL = rl.Color(64, 150, 255, 255)
-ROUTE_TRAVELED = rl.Color(120, 130, 150, 200)
 ROUTE_ALTERNATE = rl.Color(130, 145, 170, 190)
 ROUTE_ALTERNATE_CASING = rl.Color(40, 48, 64, 230)
 CAR_FILL = rl.Color(255, 255, 255, 255)
@@ -115,6 +116,7 @@ DESIRE_NAMES = {
   5: "Keep left",
   6: "Keep right",
 }
+CENTER_LINE_HEIGHT = 40
 TURN_HINT_DISTANCE = 160.0
 KEEP_HINT_DISTANCE = 400.0
 
@@ -437,6 +439,7 @@ class GpsFix:
   received: float  # local monotonic time of the fix (dead reckoning starts here)
   fresh: bool
   published: float = 0.0  # when the planner last republished it (freshness)
+  turn_rate: float = 0.0  # deg/s, from the last two fixes; dead reckoning follows the curve
 
 
 class NavMapView(Widget):
@@ -471,6 +474,7 @@ class NavMapView(Widget):
     self._last_gps_raw = ""
     self._fix_key: tuple | None = None
     self._correction = (0.0, 0.0)  # world units, eased to zero from _correction_at
+    self._bearing_correction = 0.0  # degrees, eased out alongside the position correction
     self._correction_at = -math.inf
     self._acquisition = GpsAcquisition()
     self._acquire_polled = -math.inf
@@ -640,12 +644,21 @@ class NavMapView(Widget):
 
     self._update_acquisition(now)
 
-    overlay = (id(self._nav), self._desire, self._nav_desire, ui_state.started, self._route_key,
-               self._gps is not None and self._gps.fresh, self._navigation_requested, self.offline,
-               self._acquire_state)
+    overlay = self._overlay_content(now)
     if overlay != self._overlay_state:
       self._overlay_state = overlay
       self._dirty = True
+
+  def _overlay_content(self, now: float) -> tuple:
+    """Everything the overlays show, as text. navigationd resends its instruction every second
+    with the same words; redrawing the cached overlay for each copy cost the car view a frame."""
+    nav = self._nav if self._nav_active(now) else None
+    guidance = None
+    if nav is not None:
+      guidance = (nav["primary"], nav["secondary"], nav["type"], nav["modifier"], nav["next_type"], nav["next_modifier"],
+                  _format_distance(nav["distance"], ui_state.is_metric), self._trip_texts(nav))
+    return (self._route_key, self._gps is not None and self._gps.fresh, self._center_message(), self._status_badges(),
+            guidance, desire_line(ui_state.started, self._desire, self._nav_desire, nav), self._preview_active)
 
   def _acquiring(self) -> bool:
     """Onroad without a fresh fix. Offroad the GPS receiver is not running at all."""
@@ -717,15 +730,24 @@ class NavMapView(Widget):
       self._gps.speed, self._gps.fresh, self._gps.published = speed, fresh, published
       return
 
-    before = self._car_world(published) if self._gps is not None and self._gps.fresh and fresh else None
+    previous = self._gps if self._gps is not None and self._gps.fresh and fresh else None
+    before = self._car_world(published) if previous is not None else None
+    before_heading = self._heading(published) if previous is not None else None
+    turn_rate = 0.0
+    if previous is not None and speed >= TURN_RATE_MIN_SPEED and 0.2 <= published - previous.received <= DEAD_RECKON_LIMIT:
+      # Heading changes once a second while turning; following that curve between fixes keeps
+      # the car off the tangent, whose error the next fix had to pull back each second.
+      turn_rate = _angle_delta(bearing, previous.bearing) / (published - previous.received)
+      turn_rate = max(-TURN_RATE_MAX, min(TURN_RATE_MAX, turn_rate))
     self._fix_key = fix_key
-    self._gps = GpsFix(latitude, longitude, bearing, speed, published, fresh, published)
-    self._correction, self._correction_at = (0.0, 0.0), -math.inf
+    self._gps = GpsFix(latitude, longitude, bearing, speed, published, fresh, published, turn_rate)
+    self._correction, self._correction_at, self._bearing_correction = (0.0, 0.0), -math.inf, 0.0
     if before is not None:
       after = self._car_world(published)
       dx, dy = before[0] - after[0], before[1] - after[1]
       if math.hypot(dx, dy) * meters_per_world_unit(latitude) <= CORRECTION_MAX_METERS:
         self._correction, self._correction_at = (dx, dy), published
+        self._bearing_correction = _angle_delta(before_heading, bearing)
     self._update_route_progress()
 
   def _car_world(self, now: float) -> tuple[float, float] | None:
@@ -736,16 +758,34 @@ class NavMapView(Widget):
     if gps.fresh and gps.speed > 0.5:
       # Move along the heading between fixes so the map glides instead of stepping once a second.
       dt = max(0.0, min(DEAD_RECKON_LIMIT, now - gps.received))
-      meters = gps.speed * dt
-      units = meters / meters_per_world_unit(gps.latitude)
-      x += math.sin(math.radians(gps.bearing)) * units
-      y -= math.cos(math.radians(gps.bearing)) * units
+      scale = gps.speed / meters_per_world_unit(gps.latitude)
+      start = math.radians(gps.bearing)
+      rate = math.radians(gps.turn_rate)
+      if abs(rate) < 1e-4:
+        x += math.sin(start) * scale * dt
+        y -= math.cos(start) * scale * dt
+      else:  # along the arc the car is turning on
+        end = start + rate * dt
+        x += (math.cos(start) - math.cos(end)) * scale / rate
+        y -= (math.sin(end) - math.sin(start)) * scale / rate
     if gps.fresh and now >= self._correction_at:
       # Ease out the gap between where dead reckoning had the car and the new fix.
       fade = math.exp(-(now - self._correction_at) / CORRECTION_TAU)
       x += self._correction[0] * fade
       y += self._correction[1] * fade
     return x, y
+
+  def _heading(self, now: float) -> float:
+    """The fix's bearing, turned on at its turn rate and with a new fix's disagreement eased in."""
+    gps = self._gps
+    if gps is None:
+      return 0.0
+    heading = gps.bearing
+    if gps.fresh:
+      heading += gps.turn_rate * max(0.0, min(DEAD_RECKON_LIMIT, now - gps.received))
+      if now >= self._correction_at:
+        heading += self._bearing_correction * math.exp(-(now - self._correction_at) / CORRECTION_TAU)
+    return heading % 360.0
 
   def _end_route(self) -> None:
     """Drop the route as soon as its destination is removed.
@@ -853,7 +893,7 @@ class NavMapView(Widget):
 
     gps = self._gps
     if gps is not None and gps.fresh and gps.speed > 1.5:
-      self._display_bearing = gps.bearing
+      self._display_bearing = self._heading(now)
     zoom = self._follow_zoom(gps.speed if gps is not None and gps.fresh else None, now)
     # Raster-tile labels rotate with the map. North-up keeps them readable and
     # centers the car so every travel direction has equal look-ahead room.
@@ -1037,9 +1077,8 @@ class NavMapView(Widget):
         split, last = local + 1, last + 1
       else:
         split = local + 1
+    # Only the road ahead is drawn: the part already driven trailed behind the marker as a grey tail.
     for start, end in _visible_runs(sx, sy, rect, margin):
-      if start < split:
-        _draw_polyline(sx, sy, start, min(end, split), ((9.0, ROUTE_TRAVELED),))
       if end > split:
         begin = max(start, split)
         _draw_polyline(sx, sy, begin, end, ((18.0, ROUTE_CASING), (11.0, ROUTE_FILL)), caps=(begin == split, end == last))
@@ -1155,14 +1194,17 @@ class NavMapView(Widget):
     rl.draw_rectangle_rounded(fill, 1.0, 8, PROGRESS_FILL)
 
   def _draw_center_message(self, rect: rl.Rectangle, title: str, body: str, progress: float | None = None) -> None:
+    lines = body.split("\n")
+    extra = CENTER_LINE_HEIGHT * (len(lines) - 1)
     width = min(rect.width - 80, 720)
-    height = 160 if progress is None else 196
+    height = (160 if progress is None else 196) + extra
     card = rl.Rectangle(rect.x + (rect.width - width) / 2, rect.y + rect.height / 2 - height / 2, width, height)
     self._card(card)
     self._text(title, card.x + 36, card.y + 30, 44, TEXT, bold=True)
-    self._text(self._fit_text(body, 30, width - 72), card.x + 36, card.y + 94, 30, SUBTEXT)
+    for index, line in enumerate(lines):
+      self._text(self._fit_text(line, 30, width - 72), card.x + 36, card.y + 94 + index * CENTER_LINE_HEIGHT, 30, SUBTEXT)
     if progress is not None:
-      self._progress_bar(card.x + 36, card.y + 146, width - 72, 14, progress)
+      self._progress_bar(card.x + 36, card.y + 146 + extra, width - 72, 14, progress)
 
   def _center_message(self) -> tuple[str, str] | tuple[str, str, float] | None:
     """(title, body), plus a progress fraction while the GPS is being acquired."""
@@ -1173,7 +1215,7 @@ class NavMapView(Widget):
     detail, progress = self._acquisition_text() if acquiring else ("", None)
     if self._show_navigation_waiting and self._navigation_requested and not has_fresh_gps:
       if acquiring:
-        return "Navigation active", f"Finding GPS to start your route  •  {detail}", progress
+        return "Navigation active", f"Finding GPS to start your route\n{detail}", progress
       return "Navigation active", "Waiting for GPS to start your route."
     if self._gps is None:
       if acquiring:
@@ -1181,7 +1223,8 @@ class NavMapView(Widget):
       return "Waiting for GPS", "The map appears once the car has a location."
     return None
 
-  def _draw_status(self, rect: rl.Rectangle) -> None:
+  def _status_badges(self) -> tuple[tuple[tuple[str, rl.Color], ...], float | None]:
+    """(badges, progress of the last badge's bar or None) for the top-right corner."""
     badges = []
     if self._tiles is not None and not self._tiles.has_token:
       badges.append(("Add a Mapbox key in The Galaxy", BADGE_WARN))
@@ -1201,6 +1244,10 @@ class NavMapView(Widget):
         badges.append((label, BADGE_WARN))
       else:
         badges.append(("No GPS fix", BADGE_WARN))
+    return tuple(badges), progress
+
+  def _draw_status(self, rect: rl.Rectangle) -> None:
+    badges, progress = self._status_badges()
     x = rect.x + rect.width - 24
     y = rect.y + 24
     for index, (label, color) in enumerate(badges):
@@ -1264,19 +1311,22 @@ class NavMapView(Widget):
     if nav is not None:
       self._draw_trip_bar(rect, nav)
 
-  def _draw_trip_bar(self, rect: rl.Rectangle, nav: dict) -> None:
+  @staticmethod
+  def _trip_texts(nav: dict) -> tuple[str, str]:
+    """(arrival time, "duration  •  distance") for the trip bar."""
     remaining_time = max(0.0, nav["remaining_time"])
     arrival = datetime.datetime.now() + datetime.timedelta(seconds=remaining_time)
     arrival_text = arrival.strftime("%H:%M") if ui_state.is_metric else arrival.strftime("%I:%M %p").lstrip("0")
     minutes = int(round(remaining_time / 60.0))
     duration = f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{max(1, minutes)} min"
-    distance = _format_distance(nav["remaining_distance"], ui_state.is_metric)
+    return arrival_text, f"{duration}  •  {_format_distance(nav['remaining_distance'], ui_state.is_metric)}"
 
+  def _draw_trip_bar(self, rect: rl.Rectangle, nav: dict) -> None:
+    arrival_text, detail = self._trip_texts(nav)
     height = 96.0
     width = min(rect.width - 48, 640.0)
     bar = rl.Rectangle(rect.x + (rect.width - width) / 2, rect.y + rect.height - height - 44, width, height)
     self._card(bar)
     self._text(arrival_text, bar.x + 32, bar.y + 22, 50, DESIRE_ROUTE, bold=True)
-    detail = f"{duration}  •  {distance}"
     detail_width = self._text_width(detail, 36)
     self._text(detail, bar.x + bar.width - detail_width - 32, bar.y + 30, 36, TEXT)

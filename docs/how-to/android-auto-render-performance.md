@@ -162,11 +162,11 @@ possible stutter.
 
 ### Optional C4 native-screen sleep
 
-The Galaxy's AA Layout panel now offers `sleep_device_screen`, off by default.
+The Galaxy's AA Layout panel offers `sleep_device_screen`, on by default.
 It reuses the native screen timeout and tap-to-wake path, suspending drawing
 without stopping UI state updates, watchdog servicing, driver monitoring or
-AA's separate car renderer. Warning and critical alerts hold the native display awake;
-other Standby wake events (engagement, informational alerts, turn signals, buttons) do not.
+AA's separate car renderer. Critical alerts always hold the native display awake;
+`sleep_wake_events` adds any of the other Standby wake events (warnings by default).
 Native Live UI viewers still keep drawing active; C3X and mirror mode are unchanged.
 
 The supervisor records the source timestamp only after sending a real car-view
@@ -225,3 +225,23 @@ resolution. Check produced and sent FPS, frame age, driverStateV2 and
 driverMonitoringState frequency/validity, and communication alerts. The target is
 20 Hz driver monitoring with no loss of delivered UI FPS; isolated benchmarks
 cannot prove that outcome. Do not weaken safety checks to suppress the warning.
+
+### Map hitches between smooth stretches
+
+Four sources of a periodic stall in the cached map, addressed together:
+
+- **Turning at 1 Hz.** Fixes arrive once a second, and dead reckoning ran each one
+  along a straight tangent. In a curve the next fix landed inside it, and easing
+  that correction out read as a slow-down once a second; the bearing, and so the
+  marker and a heading-up map, also snapped once a second. The map now estimates
+  a turn rate from the last two fixes (above 3 m/s, clamped to 40°/s), dead reckons
+  along that arc, and turns the heading continuously, easing a new fix's bearing in
+  like its position.
+- **Overlay redraws.** The cached guidance overlay was redrawn once a second and for
+  every copy of navigationd's instruction. It now redraws only when its text changes.
+- **Tile uploads.** At most one 512×512 texture upload per car frame instead of two.
+- **Garbage collection.** Full collections walked every object the car UI built at
+  startup. The renderer now `gc.freeze()`s them once the UI is constructed.
+
+These are host-tested (arc prediction leaves under 0.1 m for the next fix at
+20 m/s and 12–20°/s); an on-device render_stats comparison has not been done yet.

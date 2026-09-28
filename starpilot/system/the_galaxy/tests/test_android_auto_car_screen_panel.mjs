@@ -117,3 +117,48 @@ test("C4 screen sleep uses the existing car-screen settings API", async () => {
   assert.match(panel.template, /Turn Off Comma Display/)
   assert.match(panel.template, /Tap the comma to wake/)
 })
+
+test("turning the C4 screen sleep off warns about CPU and cancelling keeps it on", async () => {
+  const state = instance()
+  state.settings = { sleep_device_screen: true, sleep_wake_events: ["StandbyWakeWarningAlert"] }
+  const changes = []
+  state.update = (change) => { changes.push(change) }
+  const prompts = []
+  const originalWindow = globalThis.window
+  try {
+    globalThis.window = { confirm: (message) => { prompts.push(message); return false } }
+    const target = { checked: false }
+    state.updateSleep({ target })
+    assert.equal(target.checked, true, "a cancelled warning snaps the switch back")
+    assert.deepEqual(changes, [])
+    assert.match(prompts[0], /additional CPU/)
+
+    globalThis.window.confirm = () => true
+    state.updateSleep({ target: { checked: false } })
+    assert.deepEqual(changes, [{ sleep_device_screen: false }])
+
+    prompts.length = 0
+    state.updateSleep({ target: { checked: true } })
+    assert.deepEqual(changes.at(-1), { sleep_device_screen: true })
+    assert.equal(prompts.length, 0, "turning it back off needs no warning")
+  } finally {
+    globalThis.window = originalWindow
+  }
+})
+
+test("wake choices save in a stable order and the status column position per layout", () => {
+  const state = instance()
+  state.settings = { sleep_wake_events: ["StandbyWakeWarningAlert"] }
+  let change
+  state.update = (value) => { change = value }
+  state.updateWakeEvent("StandbyWakeTurnSignal", { target: { checked: true } })
+  assert.deepEqual(change, { sleep_wake_events: ["StandbyWakeWarningAlert", "StandbyWakeTurnSignal"] })
+  state.updateWakeEvent("StandbyWakeWarningAlert", { target: { checked: false } })
+  assert.deepEqual(change, { sleep_wake_events: [] })
+  assert.ok(!state.wakeEvents.some(item => item.value === "StandbyWakeCriticalAlert"), "critical alerts always wake")
+  assert.deepEqual(state.statusPositions.map(item => [item.view, item.positions]),
+    [["split", ["left", "center", "right"]], ["driving", ["left", "right"]], ["map", ["left", "right"]]])
+  assert.match(panel.template, /Show Current Speed/)
+  assert.match(panel.template, /status_position_/)
+  assert.doesNotThrow(() => compile(panel.template))
+})

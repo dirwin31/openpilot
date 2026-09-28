@@ -50,6 +50,23 @@ STATUS_METRICS = {
   "blank": (-1, "Blank"),  # keeps its place in the column, draws nothing
 }
 STATUS_SLOT_COUNT = 7
+# Where the status column goes in each driving layout. In the split view "center" puts it
+# between the driving view and the map; it always takes its width from the driving view.
+STATUS_POSITIONS = {
+  "split": ("left", "center", "right"),
+  "driving": ("left", "right"),
+  "map": ("left", "right"),
+}
+# What wakes the comma's display while it sleeps for Android Auto (the Standby wake keys).
+# Critical / takeover alerts always wake it and are not listed.
+SLEEP_WAKE_EVENTS = {
+  "StandbyWakeWarningAlert": "Warning alerts",
+  "StandbyWakeInfoAlert": "Informational alerts",
+  "StandbyWakeEngage": "Engagement",
+  "StandbyWakeDisengage": "Disengagement",
+  "StandbyWakeTurnSignal": "Turn signals",
+  "StandbyWakeButton": "Steering wheel or Bluetooth button",
+}
 DEFAULTS = {
   "onroad_view": "split",
   "map_side": "right",
@@ -57,8 +74,13 @@ DEFAULTS = {
   "camera": True,
   "blind_spot_monitors": True,
   "blind_spot_min_speed_ms": 0.0,
-  "sleep_device_screen": False,
+  "sleep_device_screen": True,
+  "sleep_wake_events": ["StandbyWakeWarningAlert"],
+  "show_current_speed": True,
   "status_slots": ["steer_delay", "friction", "cpu", "gpu", "temperature", "memory", "starpilot_logo"],
+  "status_position_split": "right",
+  "status_position_driving": "right",
+  "status_position_map": "right",
 }
 RELOAD_SECONDS = 1.0
 # Set by tools/android_auto/dhu_device.py for a Desktop Head Unit session; the car view
@@ -68,7 +90,7 @@ DHU_ENV = "STARPILOT_ANDROID_AUTO_DHU"
 
 def default_settings() -> dict:
   """Return settings whose mutable values are independent of ``DEFAULTS``."""
-  return {**DEFAULTS, "status_slots": list(DEFAULTS["status_slots"])}
+  return {**DEFAULTS, "status_slots": list(DEFAULTS["status_slots"]), "sleep_wake_events": list(DEFAULTS["sleep_wake_events"])}
 
 
 def normalize(raw: object) -> dict:
@@ -84,8 +106,18 @@ def normalize(raw: object) -> dict:
       settings["camera"] = raw["camera"]
     if isinstance(raw.get("blind_spot_monitors"), bool):
       settings["blind_spot_monitors"] = raw["blind_spot_monitors"]
-    if isinstance(raw.get("sleep_device_screen"), bool):
+    # Files saved before the wake choices existed stored the old default (awake); sleeping is the default now.
+    if isinstance(raw.get("sleep_device_screen"), bool) and "sleep_wake_events" in raw:
       settings["sleep_device_screen"] = raw["sleep_device_screen"]
+    wake_events = raw.get("sleep_wake_events")
+    if isinstance(wake_events, list) and all(isinstance(event, str) and event in SLEEP_WAKE_EVENTS for event in wake_events) and \
+       len(set(wake_events)) == len(wake_events):
+      settings["sleep_wake_events"] = list(wake_events)
+    if isinstance(raw.get("show_current_speed"), bool):
+      settings["show_current_speed"] = raw["show_current_speed"]
+    for view, positions in STATUS_POSITIONS.items():
+      if raw.get(f"status_position_{view}") in positions:
+        settings[f"status_position_{view}"] = raw[f"status_position_{view}"]
     status_slots = raw.get("status_slots")
     if isinstance(status_slots, list) and len(status_slots) == STATUS_SLOT_COUNT - 1:
       # Saved before the seventh slot existed: keep the six, add the default seventh.
