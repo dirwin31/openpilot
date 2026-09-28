@@ -293,8 +293,15 @@ class FakeHeadUnit:
 
 def rfcomm_head_unit(sock: socket.socket, endpoint: tuple[str, int], *, version_first: bool = False, oaa_layout: bool = False,
                      setup_info_only: bool = False, pings: bool = True, byte_by_byte: bool = False,
-                     wait_for_phone_start: bool = False, strict_legacy: bool = False) -> dict:
-  """Car side of the RFCOMM bootstrap; returns what the phone sent."""
+                     wait_for_phone_start: bool = False, strict_legacy: bool = False,
+                     answer_start: bool = False, busy_replies: int = 0, busy_follow_up: bool = False) -> dict:
+  """Car side of the RFCOMM bootstrap; returns what the phone sent.
+
+  ``answer_start`` models a 2025 Honda: it answers the phone's WifiStartRequest with
+  WifiStartResponse(ip, port, status) instead of sending its own request, after
+  ``busy_replies`` "not ready" answers (status alone). With ``busy_follow_up`` it sends
+  the endpoint unprompted after the busy answer; otherwise it waits to be asked again.
+  """
   seen: dict = {"messages": []}
   reader = bs.FrameReader()
   queue: list[tuple[int, bytes]] = []
@@ -337,7 +344,17 @@ def rfcomm_head_unit(sock: socket.socket, endpoint: tuple[str, int], *, version_
       seen["phone_start_request"] = payload
     if pings:
       send(bs.WIFI_PING_REQUEST, field(1, 123))
-    send(bs.WIFI_START_REQUEST, field(1, ip) + field(2, port))
+    if answer_start:
+      for _ in range(busy_replies):
+        send(bs.WIFI_START_RESPONSE, field(3, -1))
+        if not busy_follow_up:
+          message_id, _ = receive()
+          while message_id == bs.WIFI_PING_RESPONSE:
+            message_id, _ = receive()
+          assert message_id == bs.WIFI_START_REQUEST, message_id
+      send(bs.WIFI_START_RESPONSE, field(1, ip) + field(2, port) + field(3, 0))
+    else:
+      send(bs.WIFI_START_REQUEST, field(1, ip) + field(2, port))
     message_id, payload = receive()
     while message_id == bs.WIFI_PING_RESPONSE:
       message_id, payload = receive()

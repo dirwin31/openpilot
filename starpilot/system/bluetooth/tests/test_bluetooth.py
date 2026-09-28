@@ -38,9 +38,13 @@ class FakeParams:
 class FakeAgent:
   def __init__(self):
     self.responses = []
+    self.head_units: set[str] = set()
 
   def set_auto_accept_incoming(self, _enabled):
     pass
+
+  def set_auto_accept_head_units(self, paths):
+    self.head_units = set(paths)
 
   def respond(self, prompt_id, accepted, value):
     self.responses.append((prompt_id, accepted, value))
@@ -252,6 +256,31 @@ def test_pairing_agent_accept_reject_and_timeout():
   worker.join(timeout=1.0)
   assert result == [(True, "")]
   assert agent.request("pin", "/device", timeout=0.01) == (False, "")
+
+
+def test_pairing_agent_accepts_known_head_unit_onroad():
+  agent = PairingAgent()
+  agent.set_auto_accept_head_units({"/car"})
+  assert agent.request("confirmation", "/car", "123456") == (True, "")
+  assert agent.request("authorization", "/car") == (True, "")
+  assert agent.request("pin", "/car", timeout=0.01) == (False, ""), "a PIN still needs the user"
+  assert agent.request("confirmation", "/stranger", "123456", timeout=0.01) == (False, "")
+  agent.set_auto_accept_head_units(set())
+  assert agent.request("confirmation", "/car", "123456", timeout=0.01) == (False, "")
+
+
+def test_status_auto_accepts_only_paired_trusted_android_auto_head_units():
+  params = FakeParams(IsOffroad=False, BluetoothEnabled=True)
+  bluez = FakeBlueZ()
+  car = dict(bluez.device, path="/car", address="C4:B7:57:6E:AC:E2", name="Honda CIVIC", audio=False,
+             uuids=["0000111e-0000-1000-8000-00805f9b34fb", "4de17a00-52cb-11e6-bdf4-0800200c9a66"])
+  untrusted_car = dict(car, path="/other-car", address="C4:B7:57:6E:AC:E3", trusted=False)
+  bluez.status = lambda: {"powered": True, "discovering": False, "devices": [dict(bluez.device), car, untrusted_car], "prompt": None}
+  controller = BluetoothController(params, lambda: bluez, FakeRadio())
+
+  controller.status()
+
+  assert bluez.agent.head_units == {"/car"}
 
 
 def test_disabled_status_does_not_start_radio_or_bluez():

@@ -2,7 +2,9 @@
 
 The head unit is the RFCOMM server; StarPilot connects as the phone and runs:
 
-  HU -> WifiStartRequest(ip, port)          [some receivers first send WifiVersionRequest]
+  HU -> WifiStartRequest(ip, port)          [some receivers first send WifiVersionRequest; others wait
+                                             for the phone's WifiStartRequest and answer with
+                                             WifiStartResponse(ip, port, status)]
   ph -> WifiInfoRequest()
   HU -> WifiInfoResponse(ssid, key, bssid, security, ap_type)
   ph -> WifiStartResponse(status=0)
@@ -349,6 +351,16 @@ class WirelessBootstrap:
         if parsed is None:
           raise BootstrapError(self.stage, "WifiStartRequest has no valid IPv4 endpoint")
         endpoint = parsed
+      elif message_id == WIFI_START_RESPONSE:
+        # The car's answer to our WifiStartRequest (2025 Honda): ip=1, port=2, status=3 once it is
+        # ready, or a negative status alone before then (it may follow up on its own; ask again anyway).
+        status = signed(one(parse_fields(payload), 3, STATUS_SUCCESS))
+        parsed = parse_endpoint(payload)
+        if parsed is not None and status == STATUS_SUCCESS:
+          endpoint = parsed
+        else:
+          self.log("bootstrap_start_refused", status=status, endpoint=parsed is not None)
+          start_request_at = time.monotonic() + self.start_request_delay
       elif message_id == WIFI_SETUP_INFO:
         setup_endpoint, setup_credentials = parse_setup_info(payload)
         hinted = setup_endpoint or hinted
