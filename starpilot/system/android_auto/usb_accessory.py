@@ -236,14 +236,27 @@ class AccessoryGadget:
       time.sleep(0.1)
     self._sudo("chown", f"{os.getuid()}:{os.getgid()}", ACCESSORY_DEVICE)
 
+  def connection_state(self) -> str:
+    """Read the current controller state as a fallback for missing/coalesced uevents."""
+    state = self._read(Path("/sys/class/udc") / self.udc / "state")
+    if state == "configured":
+      return "CONFIGURED"
+    if state in ("attached", "powered", "default", "addressed", "suspended"):
+      return "CONNECTED"
+    return "DISCONNECTED" if state == "not attached" else ""
+
+  def detach(self) -> None:
+    """Cancel pending accessory I/O before closing the bridge or restoring ADB."""
+    if self.root is not None and self._read(self.root / "UDC"):
+      self._write(self.root / "UDC", "")
+      time.sleep(UDC_SETTLE_SECONDS)
+
   def restore(self) -> None:
     """Let go of the controller and give it back to the gadget that had it; the car sees the cable drop."""
     if self.root is None:
       return
     try:
-      if self._read(self.root / "UDC"):
-        self._write(self.root / "UDC", "")
-        time.sleep(UDC_SETTLE_SECONDS)
+      self.detach()
       if self.released is not None:
         self._write(self.released / "UDC", self.udc)
       self.log("usb_gadget_restored", rebound=self.released.name if self.released else "")
@@ -261,6 +274,8 @@ class AccessoryBridge:
     self.strings = read_accessory_strings(self.fd)
     self.session_sock, self.bridge_sock = socket.socketpair()
     self.closed = threading.Event()
+    self._close_lock = threading.Lock()
+    self._cleanup_thread: threading.Thread | None = None
     self.error = ""
     self.threads = [threading.Thread(target=self._usb_to_socket, name="aa_usb_rx", daemon=True),
                     threading.Thread(target=self._socket_to_usb, name="aa_usb_tx", daemon=True)]
@@ -315,20 +330,42 @@ class AccessoryBridge:
         if not data:
           break
         view = memoryview(data)
-        while view:
-          view = view[os.write(self.fd, view):]
+        while view and not self.closed.is_set():
+          written = os.write(self.fd, view)
+          if written <= 0:
+            raise OSError(errno.EIO, "USB write made no progress")
+          view = view[written:]
     except OSError as error:
       self._finish(str(error))
     self._finish(self.error or "session closed")
 
   def close(self) -> None:
+    """Call after detaching the gadget: Linux close alone cannot wake accessory I/O."""
+    with self._close_lock:
+      self._close()
+
+  def _close(self) -> None:
+    if self.fd < 0 or self._cleanup_thread is not None:
+      return
     self._finish(self.error or "closed")
     for sock in (self.session_sock, self.bridge_sock):
       try:
         sock.close()
       except OSError:
         pass
-    try:
-      os.close(self.fd)  # unblocks a pending read with an error on disconnect
-    except OSError:
-      pass
+    for thread in self.threads:
+      thread.join(timeout=2.0)
+    if any(thread.is_alive() for thread in self.threads):
+      # Keep ownership of the fd; reusing its number while a worker still runs is unsafe.
+      self._cleanup_thread = threading.Thread(target=self._finish_close, name="aa_usb_cleanup", daemon=True)
+      self._cleanup_thread.start()
+      raise RuntimeError("USB I/O did not stop after detach")
+    os.close(self.fd)
+    self.fd = -1
+
+  def _finish_close(self) -> None:
+    for thread in self.threads:
+      thread.join()
+    with self._close_lock:
+      os.close(self.fd)
+      self.fd = -1

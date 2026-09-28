@@ -1,4 +1,4 @@
-# Wireless Android Auto
+# Wired and wireless Android Auto
 
 The comma presents itself to the car as an Android phone and projects wireless
 Android Auto onto the car's screen. The car shows either a car-sized StarPilot
@@ -20,13 +20,33 @@ untested.
   Make sure you get the app itself; some mirrors' big download buttons hand you
   their own store installer instead.
 
+## Quick setup
+
+1. Enable **Android Auto** and **Bluetooth** on the comma. Install the certificate
+   in **Galaxy → Toggles → Android Auto → Android Auto Certificate**.
+2. Open **Settings → Bluetooth → Android Auto** on the comma and choose the link:
+   - **Wireless:** pair the car once while parked/offroad, confirm both codes and
+     allow Android Auto on the car. Choose the car if it was not selected automatically.
+     Keep Wi-Fi enabled; the comma obtains the car's network details itself.
+   - **USB:** connect the comma to the car's Android Auto **data** port with a short,
+     data-capable cable. No pairing is required. A charging port alone will not work.
+3. Leave **auto-connect** on and restore **Settings → System → Auto** after setup.
+   Wired startup remains tied to the comma going **onroad**. Wireless also starts
+   when the selected car connects over Bluetooth. **Connect** allows a parked test;
+   **Disconnect** pauses automatic starting until the next drive or a manual Connect.
+
+**Setup Help** on the comma and car display explains these steps for the selected
+connection. **Last Error** includes a next action. Most temporary interruptions
+retry automatically; repeated failures can be exported from Galaxy's Android Auto
+diagnostics. Bluetooth audio support alone does not imply wireless Android Auto.
+
 ## 1. Install the phone identity
 
 The car only accepts a phone that presents Google's Android Auto phone
 certificate and its key. They are embedded in the Android Auto app, so each user
 extracts them from their own copy. The comma does this itself:
 
-1. Open The Galaxy and go to **Vehicle Controls → Android Auto Identity**.
+1. Open The Galaxy and go to **Toggles → Android Auto → Android Auto Certificate**.
 2. Tap **Install from File** and pick the Android Auto file you downloaded.
 
 The comma finds the certificate and the encrypted key in the app's code,
@@ -82,7 +102,7 @@ onroad. Force it offroad while parked:
 
 1. Car on, parked. On the comma: **Settings → System**, set to **Offroad**.
 2. **Settings → Bluetooth → android auto → pair a new car.**
-3. On the car: Bluetooth / phone settings → add a new device. Pick the comma in the comma's list and confirm the code on both screens.
+3. On the car: Bluetooth / phone settings → add a new device. Select the car in the comma's list and confirm the code on both screens.
 
 A car that advertises wireless Android Auto and pairs during this window becomes
 the Android Auto car automatically. Otherwise use **android auto → choose car**;
@@ -333,3 +353,49 @@ setup has bounded deadlines even if the peer sends pings continuously.
 Invalid/placeholder BSSIDs are ignored, and valid BSSIDs retain the SSID fallback.
 Wired enumeration now includes a 500 ms detach interval before rebinding.
 
+### Reconnect behavior and validation
+
+Retries start at 2 seconds, increase to 4, 8, 15 and 30 seconds, and reset after
+30 seconds of projection. A slow failed setup does not reset the backoff. The
+status displays the remaining wait. The existing onroad/car-presence policy and
+manual-disconnect hold are unchanged.
+
+Wireless setup cancels and joins its Wi-Fi worker before releasing the network
+or starting another attempt. Stopping during backoff restores the previous
+Wi-Fi unless the user chose another network. Projection profiles use a consistent
+hardware MAC address and disable Wi-Fi power saving only for that profile.
+Pings alone cannot suppress the start prompt, and credentials are accepted
+before or after the projection endpoint. A secured network missing its password
+reports an error instead of being treated as an open network.
+
+Wired setup checks the controller state as well as uevents. After switching to
+accessory mode it waits up to 15 seconds for configuration; it does not start
+blocking accessory I/O against an unconfigured device. Cleanup detaches the
+controller, waits for the bridge workers, then restores the previous gadget.
+
+Automated coverage includes reordered bootstrap messages, strict legacy dongles,
+fragmentation, old TLS cipher offers, multiple displays, interrupted Wi-Fi joins,
+stop during backoff, missing/stale USB events, and simulated wired projection.
+These checks do **not** establish compatibility with additional physical cars.
+For each receiver, record make/model/year and firmware and test:
+
+- Cold boot with the car already on, then a normal offroad-to-onroad transition.
+- Wireless: previously paired reconnect, delayed hotspot startup, and a temporary
+  Wi-Fi interruption without removing the pairing.
+- Wired: cable attached before boot, unplug/replug during the drive, and a car
+  that keeps the USB port powered after switching off.
+- Disconnect/Connect, the next drive, returning from the car's own screen, and
+  at least 30 minutes of continuous projection. Export logs for each failure.
+
+### Protocol references
+
+- [Android Open Accessory](https://source.android.com/docs/core/interaction/accessories/aoa):
+  host/device roles, START and re-enumeration, accessory interface and configuration.
+- [Android accessory gadget driver](https://android.googlesource.com/kernel/common/+/6be064d42c55/drivers/usb/gadget/function/f_accessory.c):
+  blocking reads and disconnect handling; [Linux close semantics](https://man7.org/linux/man-pages/man2/close.2.html)
+  explain why closing a descriptor from another thread is insufficient.
+- [aa-proxy-rs Bluetooth implementation](https://github.com/aa-proxy/aa-proxy-rs/blob/main/src/bluetooth.rs):
+  receiver interoperability reference for SDP and wireless bootstrap; this is not
+  an official Android Auto specification.
+- [NetworkManager Wi-Fi settings](https://www.networkmanager.dev/docs/api/latest/settings-802-11-wireless.html):
+  D-Bus `assigned-mac-address`, `powersave` and BSSID behavior.

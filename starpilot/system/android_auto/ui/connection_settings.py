@@ -1,5 +1,6 @@
 """Android Auto connection controls; Bluetooth keeps ownership of pairing prompts."""
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.starpilot.system.android_auto.connection_help import recovery_hint, setup_instructions
 from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.aethergrid import AetherSettingsView, SettingRow, SettingSection
 from openpilot.system.ui.lib.android_auto_manager import AndroidAutoManager
 from openpilot.system.ui.lib.application import gui_app
@@ -31,8 +32,10 @@ class AndroidAutoSettings(AetherSettingsView):
                  set_state=lambda value: self._manager.set_auto_connect(value), enabled=ready),
       SettingRow('pair', 'value', 'Pair a New Car', 'Pair while parked. Confirm the code on both displays.',
                  on_click=self._pair, enabled=lambda: ready() and not ui_state.started,
-                 disabled_label='Park and go offroad to pair a new car.'),
+                 disabled_label='Park and go offroad to pair a new car.', visible=lambda: self.status.get('connection') != 'wired'),
     ]), SettingSection('Setup & Advanced', [
+      SettingRow('setup', 'value', 'Setup Help', 'First connection, automatic reconnect and cable requirements.',
+                 on_click=lambda: gui_app.push_widget(alert_dialog(setup_instructions(self.status)))),
       SettingRow('transport', 'value', 'Connection Type', get_value=lambda: 'USB' if self.status.get('connection') == 'wired' else 'Wireless',
                  enabled=stopped, disabled_label='Disconnect before changing the connection type.',
                  on_click=lambda: self._manager.set_connection('wireless' if self.status.get('connection') == 'wired' else 'wired')),
@@ -42,7 +45,7 @@ class AndroidAutoSettings(AetherSettingsView):
       SettingRow('certificate', 'value', 'Certificate Setup',
                  'In Galaxy, open Toggles → Android Auto → Android Auto Certificate to install or renew your certificate.'),
       SettingRow('error', 'value', 'Last Connection Error', visible=lambda: bool(self.status.get('error')),
-                 on_click=lambda: gui_app.push_widget(alert_dialog(str(self.status.get('error', ''))))),
+                 on_click=lambda: gui_app.push_widget(alert_dialog(recovery_hint(self.status) + '\n\n' + str(self.status.get('error', ''))))),
     ])]
     self._root_sections = sections
     super().__init__(self, sections, header_title='Android Auto', header_subtitle='Connection and pairing · Display options are under Car Display.')

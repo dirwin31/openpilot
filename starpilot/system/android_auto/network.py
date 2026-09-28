@@ -61,6 +61,8 @@ def connection_settings(credentials: WifiCredentials, interface: str) -> dict:
     "ssid": ("ay", credentials.ssid.encode("utf-8")),
     "mode": ("s", "infrastructure"),
     "hidden": ("b", True),  # projection networks are often hidden; harmless when broadcast
+    "assigned-mac-address": ("s", "permanent"),  # a fresh volatile UUID must not change the phone's Wi-Fi identity
+    "powersave": ("u", 2),  # disable power saving for latency-sensitive projection, only on this profile
   }
   if bssid := normalized_bssid(credentials.bssid):
     wireless["bssid"] = ("ay", bytes.fromhex(bssid.replace(":", "")))
@@ -85,6 +87,8 @@ def connection_settings(credentials: WifiCredentials, interface: str) -> dict:
   if not credentials.open:
     if credentials.security in SECURITY_UNSUPPORTED:
       raise NetworkError(f"The car's Wi-Fi uses {SECURITY_UNSUPPORTED[credentials.security]}, which Android Auto phones do not join")
+    if not credentials.key:
+      raise NetworkError("The car did not provide a password for its secured Wi-Fi network; restart Android Auto on the car")
     security = {
       "key-mgmt": ("s", "sae" if credentials.security in SECURITY_WPA3 else "wpa-psk"),
       "psk": ("s", credentials.key),
@@ -183,6 +187,8 @@ class NetworkLease:
 
   def _acquire_once(self, credentials: WifiCredentials, timeout: float, cancelled: Callable[[], bool]) -> str:
     with self._lock:
+      if cancelled():
+        raise NetworkError("cancelled")
       if not self._get(NM_PATH, NM_IFACE, "WirelessEnabled"):
         raise NetworkError("Wi-Fi is turned off on the comma")
       self.device_path = self._wifi_device()
@@ -195,6 +201,8 @@ class NetworkLease:
         except NetworkError:
           pass
       self._delete_stale_profiles()
+      if cancelled():
+        raise NetworkError("cancelled")
       self.log("wifi_joining", interface=self.interface, **{k: v for k, v in credentials.describe().items() if k != "key_length"},
                had_previous=bool(self.previous_connection))
       body = self._call(NM_PATH, NM_IFACE, "AddAndActivateConnection2", "a{sa{sv}}ooa{sv}",
@@ -266,7 +274,7 @@ class NetworkLease:
     reactivated only when the session finally stops, avoiding churn between attempts.
     """
     with self._lock:
-      if self.router is None:
+      if self.router is None and not (restore and self.previous_connection):
         return
       ours_active = False
       try:
@@ -295,6 +303,7 @@ class NetworkLease:
       if restore:
         self.previous_connection = ""
       try:
-        self.router.close()
+        if self.router is not None:
+          self.router.close()
       finally:
         self.router = None
