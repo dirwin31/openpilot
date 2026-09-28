@@ -78,7 +78,7 @@ def test_motion_on_every_car_frame_without_more_world_redraws(scene, fps):
   # At 60 FPS the existing jitter allowance can bring the boundary redraw
   # forward by one car frame; it does not change the average 15 Hz schedule.
   assert 30 <= scene.pane.redraws <= 31
-  assert len(scene.overlays) == 2
+  assert len(scene.overlays) == 1, "the overlay redraws when its content changes, not on a clock tick"
 
 
 def test_stationary_map_remains_idle(scene):
@@ -139,11 +139,11 @@ def test_scaled_split_map_does_not_bleed_into_driving_view(scene):
 
 def test_translucent_route_does_not_make_world_cache_transparent(scene, monkeypatch):
   monkeypatch.setattr(scene.view, "_draw_world", lambda *args: scene.rl.draw_rectangle(-1000, -1000, 2000, 2000,
-                                                                                     nav_map.ROUTE_TRAVELED))
+                                                                                     nav_map.ROUTE_ALTERNATE))
   pixels = scene.frame(100.0)
   assert np.all(pixels[:, :, 3] == 255)
-  alpha = nav_map.ROUTE_TRAVELED.a / 255
-  expected = [round(alpha * getattr(nav_map.ROUTE_TRAVELED, c) + (1 - alpha) * getattr(nav_map.MAP_BACKGROUND, c)) for c in "rgb"]
+  alpha = nav_map.ROUTE_ALTERNATE.a / 255
+  expected = [round(alpha * getattr(nav_map.ROUTE_ALTERNATE, c) + (1 - alpha) * getattr(nav_map.MAP_BACKGROUND, c)) for c in "rgb"]
   assert np.max(np.abs(pixels[100, 160, :3].astype(float) - expected)) <= 1
 
 

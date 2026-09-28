@@ -75,6 +75,49 @@ def test_car_display_hides_irrelevant_controls_and_applies_same_keys(fonts, tmp_
   assert view._choices is None
 
 
+def test_car_display_warns_before_keeping_the_comma_display_on(fonts, tmp_path, monkeypatch):
+  from openpilot.starpilot.system.android_auto.ui import car_display_settings
+  monkeypatch.setattr(car_screen, 'CAR_SCREEN_PATH', tmp_path / 'car_screen.json')
+  pushed = []
+  monkeypatch.setattr(car_display_settings.gui_app, 'push_widget', pushed.append)
+  view = CarDisplaySettings()
+  rows = {row.id: row for section in view._sections for row in section.rows}
+  assert view.current['sleep_device_screen'] and rows['show_current_speed'].get_state()
+  assert 'wake_StandbyWakeCriticalAlert' not in rows, 'critical alerts always wake the display'
+
+  rows['sleep_device_screen'].set_state(False)
+  assert isinstance(pushed[-1], ConfirmDialog) and 'additional CPU' in pushed[-1]._view._sections[0].rows[0].subtitle
+  assert car_screen.load()['sleep_device_screen'], 'nothing changes until confirmed'
+  pushed[-1]._callback(DialogResult.CANCEL)
+  assert car_screen.load()['sleep_device_screen']
+  pushed[-1]._callback(DialogResult.CONFIRM)
+  assert not car_screen.load()['sleep_device_screen']
+  ids = {row.id for section in view._sections if not section.visible or section.visible()
+         for row in view._visible_rows(section)}
+  assert not any(key.startswith('wake_') for key in ids), 'wake choices hide while the display stays on'
+
+  rows['sleep_device_screen'].set_state(True)
+  assert car_screen.load()['sleep_device_screen'] and len(pushed) == 1
+  rows['wake_StandbyWakeTurnSignal'].set_state(True)
+  rows['wake_StandbyWakeWarningAlert'].set_state(False)
+  assert car_screen.load()['sleep_wake_events'] == ['StandbyWakeTurnSignal']
+  rows['show_current_speed'].set_state(False)
+  assert not car_screen.load()['show_current_speed']
+
+
+def test_status_widgets_choose_the_column_position_per_layout(fonts, tmp_path, monkeypatch):
+  monkeypatch.setattr(car_screen, 'CAR_SCREEN_PATH', tmp_path / 'car_screen.json')
+  view = CarDisplaySettings(metrics=True)
+  rows = {row.id: row for section in view._sections for row in section.rows}
+  assert rows['status_position_split'].get_value() == 'Right'
+  rows['status_position_split'].on_click()
+  assert [row.title for row in view._sections[0].rows] == ['Left', 'Between', 'Right']
+  view._activate_target('value:1')
+  assert car_screen.load()['status_position_split'] == 'center'
+  rows['status_position_map'].on_click()
+  assert [row.title for row in view._sections[0].rows] == ['Left', 'Right']
+
+
 class PageSpy(Widget):
   def __init__(self):
     super().__init__()

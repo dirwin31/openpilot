@@ -11,6 +11,26 @@ const MAP_ORIENTATIONS = [
   { value: "heading_up", label: "Heading Up", desc: "Keeps the direction of travel toward the top; raster street names rotate with the map." },
 ]
 
+const STATUS_POSITIONS = [
+  { view: "split", label: "Split", positions: ["left", "center", "right"] },
+  { view: "driving", label: "Driving", positions: ["left", "right"] },
+  { view: "map", label: "Map", positions: ["left", "right"] },
+]
+
+const POSITION_LABELS = { left: "Left", center: "Between", right: "Right" }
+
+// Critical / takeover alerts always wake the comma display and are not a choice.
+const WAKE_EVENTS = [
+  { value: "StandbyWakeWarningAlert", label: "Warning alerts" },
+  { value: "StandbyWakeInfoAlert", label: "Informational alerts" },
+  { value: "StandbyWakeEngage", label: "Engagement" },
+  { value: "StandbyWakeDisengage", label: "Disengagement" },
+  { value: "StandbyWakeTurnSignal", label: "Turn signals" },
+  { value: "StandbyWakeButton", label: "Steering wheel or Bluetooth button" },
+]
+
+const DISPLAY_ON_WARNING = "Keep the comma display on while Android Auto is connected? The comma then draws its own screen as well as the car's, which uses additional CPU."
+
 export const AndroidAutoCarScreenPanel = {
   name: "AndroidAutoCarScreenPanel",
   props: {
@@ -18,7 +38,8 @@ export const AndroidAutoCarScreenPanel = {
     section: { type: String, default: "", validator: value => ["", "layout", "widgets"].includes(value) },
   },
   data() {
-    return { settings: null, statusMetrics: [], tab: "layout", loading: false, error: "", saving: false, views: VIEWS, mapOrientations: MAP_ORIENTATIONS }
+    return { settings: null, statusMetrics: [], tab: "layout", loading: false, error: "", saving: false, views: VIEWS, mapOrientations: MAP_ORIENTATIONS,
+      statusPositions: STATUS_POSITIONS, positionLabels: POSITION_LABELS, wakeEvents: WAKE_EVENTS }
   },
   created() { this.load() },
   computed: {
@@ -79,6 +100,19 @@ export const AndroidAutoCarScreenPanel = {
         this.update({ blind_spot_min_speed_ms: Math.min(maximum, Math.max(0, value)) / this.speedFactor })
       }
     },
+    updateSleep(event) {
+      if (!event.target.checked && !window.confirm(DISPLAY_ON_WARNING)) {
+        event.target.checked = true
+        return
+      }
+      this.update({ sleep_device_screen: event.target.checked })
+    },
+    wakes(value) { return (this.settings?.sleep_wake_events || []).includes(value) },
+    updateWakeEvent(value, event) {
+      const chosen = new Set((this.settings.sleep_wake_events || []).filter(item => item !== value))
+      if (event.target.checked) chosen.add(value)
+      this.update({ sleep_wake_events: this.wakeEvents.map(item => item.value).filter(item => chosen.has(item)) })
+    },
     updateStatusSlot(index, event) {
       const status_slots = [...this.settings.status_slots]
       status_slots[index] = event.target.value
@@ -124,6 +158,11 @@ export const AndroidAutoCarScreenPanel = {
             <span class="gx-switch"><input type="checkbox" :checked="settings.camera" :disabled="saving" @change="update({ camera: $event.target.checked })" />
               <span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></span>
           </label>
+          <label v-if="showsDriving" class="gx-row">
+            <div class="gx-row__info"><span class="gx-row__label">Show Current Speed</span><span class="gx-row__desc">The speed readout at the top of the driving view.</span></div>
+            <span class="gx-switch"><input type="checkbox" :checked="settings.show_current_speed !== false" :disabled="saving" @change="update({ show_current_speed: $event.target.checked })" />
+              <span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></span>
+          </label>
           <div class="gx-row__label gx-car-display__heading">Blind Spots</div>
           <label class="gx-row">
             <div class="gx-row__info"><span class="gx-row__label">Show Blind Spot Monitors</span><span class="gx-row__desc">Show blind-spot borders, lane warnings and configured side cameras.</span></div>
@@ -137,14 +176,28 @@ export const AndroidAutoCarScreenPanel = {
           </label>
           <div class="gx-row__label gx-car-display__heading">Comma Display</div>
           <label class="gx-row">
-            <div class="gx-row__info"><span class="gx-row__label">Turn Off Comma Display</span><span class="gx-row__desc">After the screen timeout while Android Auto is connected. Tap the comma to wake it; connection loss, warnings and critical alerts also wake it. Applies to the independent car view on comma four.</span></div>
-            <span class="gx-switch"><input type="checkbox" :checked="settings.sleep_device_screen" :disabled="saving" @change="update({ sleep_device_screen: $event.target.checked })" />
+            <div class="gx-row__info"><span class="gx-row__label">Turn Off Comma Display</span><span class="gx-row__desc">After the screen timeout while Android Auto is connected. Tap the comma to wake it; connection loss and critical alerts always wake it. Keeping it on uses additional CPU. Applies to the independent car view on comma four.</span></div>
+            <span class="gx-switch"><input type="checkbox" :checked="settings.sleep_device_screen" :disabled="saving" @change="updateSleep" />
               <span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></span>
           </label>
+          <template v-if="settings.sleep_device_screen">
+            <div class="gx-row__label gx-car-display__heading">Wake Comma Display For</div>
+            <label v-for="wake in wakeEvents" :key="wake.value" class="gx-row">
+              <div class="gx-row__info"><span class="gx-row__label">{{ wake.label }}</span></div>
+              <span class="gx-switch"><input type="checkbox" :checked="wakes(wake.value)" :disabled="saving" @change="updateWakeEvent(wake.value, $event)" />
+                <span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></span>
+            </label>
+          </template>
         </template>
         <template v-else>
           <div class="gx-row__label">Status Column</div>
-          <p class="gx-row__desc">Choose the seven stats on the right side of the driving view. A slot can also show the StarPilot logo or stay blank.</p>
+          <p class="gx-row__desc">Choose the seven stats in the status column. A slot can also show the StarPilot logo or stay blank.</p>
+          <div v-for="layout in statusPositions" :key="layout.view" class="gx-row">
+            <div class="gx-row__info"><span class="gx-row__label">{{ layout.label }} Position</span><span v-if="layout.positions.includes('center')" class="gx-row__desc">Between puts it between the driving view and the map.</span></div>
+            <div class="gx-car-display__tabs"><button v-for="position in layout.positions" :key="position" type="button" class="gx-btn"
+              :class="settings['status_position_' + layout.view] === position ? '' : 'gx-btn--tonal'" :aria-pressed="settings['status_position_' + layout.view] === position" :disabled="saving"
+              @click="update({ ['status_position_' + layout.view]: position })">{{ positionLabels[position] }}</button></div>
+          </div>
           <label v-for="(metric, index) in settings.status_slots" :key="index" class="gx-row">
             <span class="gx-row__label">Slot {{ index + 1 }}</span>
             <GalaxySelect class="gx-field gx-car-display__metric" :value="metric" :disabled="saving"

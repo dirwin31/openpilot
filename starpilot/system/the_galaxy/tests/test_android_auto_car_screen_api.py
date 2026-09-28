@@ -30,9 +30,14 @@ def test_defaults_then_partial_updates_are_saved_for_car_ui(monkeypatch, tmp_pat
                    "blind_spot_monitors": False, "blind_spot_min_speed_ms": 8.0}, "earlier changes are kept"
   assert json.loads(path.read_text()) == saved
   assert car_screen.load(path) == saved
-  sleeping = client.post("/api/android_auto/car_screen", json={"sleep_device_screen": True}).get_json()["settings"]
-  assert sleeping == {**saved, "sleep_device_screen": True}
-  assert car_screen.load(path) == sleeping
+  awake = client.post("/api/android_auto/car_screen", json={"sleep_device_screen": False}).get_json()["settings"]
+  assert awake == {**saved, "sleep_device_screen": False}, "sleeping is the default; staying on is the choice"
+  assert car_screen.load(path) == awake
+  placed = client.post("/api/android_auto/car_screen", json={
+    "sleep_wake_events": ["StandbyWakeTurnSignal"], "show_current_speed": False,
+    "status_position_split": "center", "status_position_driving": "left", "status_position_map": "left"}).get_json()["settings"]
+  assert placed == {**awake, "sleep_wake_events": ["StandbyWakeTurnSignal"], "show_current_speed": False,
+                    "status_position_split": "center", "status_position_driving": "left", "status_position_map": "left"}
   slots = ["cpu", "cpu", "memory", "temperature", "friction", "steer_delay", "blank"]
   assert client.post("/api/android_auto/car_screen", json={"status_slots": slots}).get_json()["settings"]["status_slots"] == slots
 
@@ -45,6 +50,9 @@ def test_invalid_values_are_rejected_without_saving(monkeypatch, tmp_path):
   assert client.post("/api/android_auto/car_screen", json={"blind_spot_monitors": "off"}).status_code == 400
   assert client.post("/api/android_auto/car_screen", json={"blind_spot_min_speed_ms": -1}).status_code == 400
   assert client.post("/api/android_auto/car_screen", json={"sleep_device_screen": "true"}).status_code == 400
+  assert client.post("/api/android_auto/car_screen", json={"sleep_wake_events": ["StandbyWakeCriticalAlert"]}).status_code == 400
+  assert client.post("/api/android_auto/car_screen", json={"show_current_speed": "no"}).status_code == 400
+  assert client.post("/api/android_auto/car_screen", json={"status_position_driving": "center"}).status_code == 400
   assert client.post("/api/android_auto/car_screen", json={"status_slots": ["cpu"] * 5}).status_code == 400
   assert client.post("/api/android_auto/car_screen", json={"status_slots": ["cpu"] * 5 + ["unknown"]}).status_code == 400
   assert client.post("/api/android_auto/car_screen", json={"status_slots": ["cpu"] * 6}).status_code == 400

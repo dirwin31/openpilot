@@ -15,7 +15,7 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.starpilot.common.lateral_only_experimental import lateral_only_experimental_available
 from openpilot.starpilot.common.car_params_capability import capability_car_params_bytes
 from openpilot.system.hardware import HARDWARE, PC
-from openpilot.starpilot.system.android_auto.car_screen import CarScreenSettings
+from openpilot.starpilot.system.android_auto.car_screen import DEFAULTS as CAR_SCREEN_DEFAULTS, CarScreenSettings
 from openpilot.starpilot.system.android_auto.frame_source import FrameProducer
 from openpilot.starpilot.system.android_auto.view import CAR_FRAME_PATH
 from openpilot.starpilot.common.screen_settings import (
@@ -30,10 +30,10 @@ BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
 # open on a parked car; with ignition on there is no cap.
 STREAM_OFFROAD_HOLD_MAX = 600.0
 
-# While the C4 screen sleeps for Android Auto, only alerts that need the driver
-# (e.g. "Pay Attention", faults, "TAKE CONTROL") wake it; the car screen already
-# shows engagement, turn and informational alerts. Standby wake selections do not apply.
-AA_SLEEP_WAKE_KEYS = frozenset({"StandbyWakeWarningAlert", "StandbyWakeCriticalAlert"})
+# While the C4 screen sleeps for Android Auto, critical / takeover alerts always wake it;
+# the car screen's "sleep_wake_events" setting adds more (warnings by default). The car
+# screen already shows everything else. Standby wake selections do not apply.
+AA_SLEEP_WAKE_KEYS = frozenset({"StandbyWakeCriticalAlert"})
 # A car-view frame gap shorter than this (an encoder reopen, a heavy map/route
 # frame) keeps the screen asleep instead of waking it for a full timeout.
 AA_SLEEP_STALE_GRACE = 3.0
@@ -132,6 +132,8 @@ class UIState:
     # Set by the car view when its camera is turned off in The Galaxy: the driving view keeps
     # its border, HUD and alerts over black, and the video stream isn't fetched at all.
     self.car_camera_off: bool = False
+    # The car view's "Show Current Speed" setting; the comma's own display always shows it.
+    self.car_show_current_speed: bool = True
     self.ignition: bool = False
     self.recording_audio: bool = False
     self.panda_type: log.PandaState.PandaType = log.PandaState.PandaType.unknown
@@ -522,8 +524,9 @@ class Device:
     # startup, lost focus or a stalled connection; stale heartbeats fail awake
     # once they outlast the grace period.
     now = time.monotonic()
-    aa_eligible = bool(self._aa_car_frames is not None and not ui_state.android_auto_car_view and ui_state.started and
-                       gui_app.android_auto_enabled and self._aa_screen_settings.poll()["sleep_device_screen"])
+    aa_settings = (self._aa_screen_settings.poll() if self._aa_car_frames is not None and not ui_state.android_auto_car_view and
+                   ui_state.started and gui_app.android_auto_enabled else None)
+    aa_eligible = bool(aa_settings and aa_settings["sleep_device_screen"])
     aa_streaming = aa_eligible and self._aa_car_frames.recently_sent()
     if aa_streaming:
       self._aa_last_streaming = now
@@ -543,12 +546,15 @@ class Device:
     active_alerts = self._active_standby_alerts()
     selected_status_change = status_changed and status_key in self._wake_keys
     selected_turn_signal = bool(input_events & self._wake_keys)
-    # AA sleep replaces the Standby wake selections with AA_SLEEP_WAKE_KEYS.
+    # AA sleep replaces the Standby wake selections with AA_SLEEP_WAKE_KEYS and the car screen's choices.
     button_pressed = (not aa_sleep and self._standby_mode and (ui_state.started or ui_state.ignition) and
                       "StandbyWakeButton" in self._wake_keys and "button" in input_events)
     wake_for_onroad_event = (not aa_sleep and ui_state.started and self._standby_mode and self._screen_brightness_onroad != 0 and
                              (selected_status_change or bool(active_alerts & self._wake_keys) or selected_turn_signal))
-    aa_alert = aa_sleep and bool(active_alerts & AA_SLEEP_WAKE_KEYS)
+    aa_wake_keys = AA_SLEEP_WAKE_KEYS | frozenset(aa_settings.get("sleep_wake_events", CAR_SCREEN_DEFAULTS["sleep_wake_events"])
+                                                  if aa_settings else ())
+    aa_alert = aa_sleep and (bool(active_alerts & aa_wake_keys) or (status_changed and status_key in aa_wake_keys) or
+                             bool(input_events & aa_wake_keys) or ("button" in input_events and "StandbyWakeButton" in aa_wake_keys))
 
     counter = screen_off_toggle_counter(ui_state.params_memory)
     presses = counter - self._screen_off_counter

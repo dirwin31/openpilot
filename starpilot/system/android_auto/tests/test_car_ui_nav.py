@@ -31,11 +31,68 @@ def test_default_status_slots_are_not_shared_between_settings(tmp_path):
   assert car_screen.DEFAULTS["status_slots"][0] == "steer_delay"
 
 
-def test_device_screen_sleep_is_opt_in_and_strictly_boolean(tmp_path):
-  assert not car_screen.DEFAULTS["sleep_device_screen"]
-  assert car_screen.save({"sleep_device_screen": True}, tmp_path / "car_screen.json")["sleep_device_screen"]
+def test_device_screen_sleep_is_on_by_default_and_strictly_boolean(tmp_path):
+  assert car_screen.DEFAULTS["sleep_device_screen"]
+  path = tmp_path / "car_screen.json"
+  assert not car_screen.save({"sleep_device_screen": False, "sleep_wake_events": []}, path)["sleep_device_screen"]
+  assert not car_screen.load(path)["sleep_device_screen"], "a choice made with the wake settings is kept"
   for invalid in ("true", "false", 1, None):
-    assert not car_screen.normalize({"sleep_device_screen": invalid})["sleep_device_screen"]
+    assert car_screen.normalize({"sleep_device_screen": invalid, "sleep_wake_events": []})["sleep_device_screen"]
+  # Saved before sleeping became the default, the stored value was the old default.
+  old = {**car_screen.DEFAULTS, "sleep_device_screen": False}
+  del old["sleep_wake_events"]
+  path.write_text(json.dumps(old))
+  assert car_screen.load(path)["sleep_device_screen"]
+
+
+def test_wake_events_speed_and_status_positions_validate(tmp_path):
+  assert car_screen.DEFAULTS["sleep_wake_events"] == ["StandbyWakeWarningAlert"]
+  assert "StandbyWakeCriticalAlert" not in car_screen.SLEEP_WAKE_EVENTS, "critical alerts are not optional"
+  path = tmp_path / "car_screen.json"
+  saved = car_screen.update({"sleep_wake_events": ["StandbyWakeTurnSignal", "StandbyWakeEngage"], "show_current_speed": False,
+                             "status_position_split": "center", "status_position_driving": "left",
+                             "status_position_map": "left"}, path)
+  assert saved["sleep_wake_events"] == ["StandbyWakeTurnSignal", "StandbyWakeEngage"]
+  assert not saved["show_current_speed"]
+  assert (saved["status_position_split"], saved["status_position_driving"], saved["status_position_map"]) == ("center", "left", "left")
+  for bad in ({"sleep_wake_events": ["StandbyWakeCriticalAlert"]}, {"sleep_wake_events": ["StandbyWakeEngage"] * 2},
+              {"sleep_wake_events": "StandbyWakeEngage"}, {"show_current_speed": "no"},
+              {"status_position_driving": "center"}, {"status_position_map": "center"}, {"status_position_split": "top"}):
+    with pytest.raises(ValueError):
+      car_screen.update(bad, path)
+  assert car_screen.load(tmp_path / "missing.json")["sleep_wake_events"] is not car_screen.DEFAULTS["sleep_wake_events"]
+
+
+@pytest.mark.parametrize("map_side", ["right", "left"])
+@pytest.mark.parametrize("position", ["left", "center", "right"])
+def test_status_column_in_the_split_view(map_side, position):
+  settings = {**car_screen.DEFAULTS, "map_side": map_side, "status_position_split": position}
+  main, map_rect = car_ui.car_layout(settings, True, False, 1920, 1080)
+  new_main, new_map, status = car_ui.status_layout(settings, main, map_rect)
+  assert (new_map.width, status.width) == (map_rect.width, car_ui.STATUS_COLUMN_WIDTH)
+  assert new_main.width == main.width - car_ui.STATUS_COLUMN_WIDTH
+  order = [name for _, name in sorted(((new_main.x, "main"), (new_map.x, "map"), (status.x, "status")))]
+  expected = ["main", "map"] if map_side == "right" else ["map", "main"]
+  expected.insert({"left": 0, "center": 1, "right": 2}[position], "status")
+  assert order == expected
+  # Side by side, covering the screen exactly.
+  rects = sorted((new_main, new_map, status), key=lambda rect: rect.x)
+  assert rects[0].x == 0 and rects[-1].x + rects[-1].width == 1920
+  assert all(a.x + a.width == b.x for a, b in zip(rects, rects[1:], strict=False))
+  assert all(rect.y == 0 and rect.height == 1080 for rect in rects)
+
+
+@pytest.mark.parametrize("view", ["driving", "map"])
+@pytest.mark.parametrize("position", ["left", "right"])
+def test_status_column_beside_a_single_view(view, position):
+  settings = {**car_screen.DEFAULTS, "onroad_view": view, f"status_position_{view}": position}
+  main, map_rect = car_ui.car_layout(settings, True, False, 1920, 1080)
+  new_main, new_map, status = car_ui.status_layout(settings, main, map_rect)
+  shown = new_main if view == "driving" else new_map
+  assert (new_map if view == "driving" else new_main) is None
+  assert shown.width == 1920 - car_ui.STATUS_COLUMN_WIDTH and status.width == car_ui.STATUS_COLUMN_WIDTH
+  assert status.x == (0 if position == "left" else 1920 - car_ui.STATUS_COLUMN_WIDTH)
+  assert shown.x == (car_ui.STATUS_COLUMN_WIDTH if position == "left" else 0)
 
 
 def test_map_orientation_defaults_north_up_and_accepts_heading_up(tmp_path):

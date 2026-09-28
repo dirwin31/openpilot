@@ -160,15 +160,19 @@ C3X's own display keeps its cached corner hint and radial favorites; C4's
 separate favorites overlay is unchanged. Navigation destination favorites are
 unaffected. Mirror view has no touch and still shows the device's own UI.
 
-**C4 screen sleep.** In The Galaxy → Toggles → Vehicle → Android Auto Layout,
-enable **Sleep C4 Screen During Android Auto** (off by default). Onroad, the
+**C4 screen sleep.** In The Galaxy → Android Auto → Layout (or the car's
+Settings → Car Display), **Turn Off Comma Display** is on by default. Onroad, the
 comma four display and native drawing sleep after the existing screen timeout
 while fresh car-view frames are being sent. AA's camera, path, HUD and map settings
 are unchanged. Tap the comma once to wake it for another timeout period. Lost
 focus or video stalled for over 3 s, disconnect/fallback, disabling the toggle, and
-warning or critical alerts (Pay Attention, faults, Take Control) wake it
-automatically and hold it awake while shown. Engagement, turn and informational
-alerts, turn signals and wheel buttons do not; Standby wake choices do not apply. C3X and mirror mode are unchanged. A native Live UI viewer
+critical alerts (Take Control) always wake it and hold it awake while shown.
+**Wake Comma Display For** chooses what else does: warning alerts (Pay Attention,
+faults; the default), informational alerts, engagement, disengagement, turn signals,
+and steering wheel or Bluetooth buttons. Alerts hold it awake while shown; the other
+events wake it for one timeout. Standby wake choices do not apply. Turning the setting
+off asks first: two screens drawing at once uses additional CPU. Settings saved before
+the wake choices existed stored the old default, so they start asleep. C3X and mirror mode are unchanged. A native Live UI viewer
 keeps native drawing active even with the physical panel off. The setting lives
 in `car_screen.json`; it can be configured without a connected car.
 
@@ -214,7 +218,12 @@ UI pass and, for RGBA fallback, placing the picture in the car's frame), `cache_
 frame), `publish_ms` (copying it to android_autod), and `frame_ms` for the whole
 frame. `draw_ms` is the sum of the drawing sections, comparable with older logs.
 `cpu_ms` is the renderer's own CPU time: `frame_ms` well above `cpu_ms` means it was
-waiting for a CPU core (it runs at nice 10) or the GPU driver rather than working.
+waiting for a CPU core or the GPU driver rather than working. The renderer runs on
+core 6 at `SCHED_IDLE`, so camerad, which shares that core without realtime
+priority, always runs first. Startup logs a `cpu_placement` line with the policy and the
+cores it inherited. Later lines report when the pin to core 6 is applied again,
+for example after offroad power saving took the big cores offline
+(`starpilot/system/android_auto/placement.py` explains the choice).
 The `pipeline` line at startup says whether frames are NV12 or RGBA and read back
 asynchronously. The car renderer uses single-sample rendering (`msaa: 0`) to reduce
 GPU and memory traffic shared with driver monitoring. This makes polygon edges
