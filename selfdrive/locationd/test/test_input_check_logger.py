@@ -93,3 +93,16 @@ def test_silent_until_every_input_has_arrived(monkeypatch):
   sm.seen['carState'] = True
   logger.update(sm, 100.25)
   assert events[0][1]['not_alive'] == ['carState']
+
+
+def test_context_is_logged_but_not_a_failure(monkeypatch):
+  events = capture(monkeypatch)
+  logger, sm = InputCheckLogger('torquedInputsInvalid'), fake_sm(100.)
+  logger.update(sm, 100., context={'max_loop_gap_ms': 52.0})
+  assert events == [], "context alone never logs"
+
+  sm.alive['carState'] = False
+  logger.update(sm, 100.25, context={'max_loop_gap_ms': 104.3})
+  logger.update(sm, 100.5, context={'max_loop_gap_ms': 51.0})  # same failure, new context: no repeat
+  assert len(events) == 1
+  assert events[0][1]['max_loop_gap_ms'] == 104.3 and events[0][1]['not_alive'] == ['carState']

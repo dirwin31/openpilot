@@ -201,7 +201,8 @@ class InputCheckLogger:
   def _hz(average_dt: float) -> float | None:
     return round(1.0 / average_dt, 1) if average_dt > 0 else None
 
-  def update(self, sm, cur_time: float, extra: dict | None = None) -> None:
+  def update(self, sm, cur_time: float, extra: dict | None = None, context: dict | None = None) -> None:
+    """``extra`` adds failure reasons; ``context`` is logged with a failure but never counts as one."""
     if not all(sm.seen.values()):
       return  # still starting up; a service that never arrives is selfdrived's commIssue
     extra = extra or {}
@@ -229,5 +230,5 @@ class InputCheckLogger:
           'min_hz': round(tracker.min_freq, 1),
           'max_hz': round(tracker.max_freq, 1),
         }
-      cloudlog.event(self.event, error=True, details=details, **{k: v for k, v in failures.items() if v})
+      cloudlog.event(self.event, error=True, details=details, **(context or {}), **{k: v for k, v in failures.items() if v})
     self.logged = key
