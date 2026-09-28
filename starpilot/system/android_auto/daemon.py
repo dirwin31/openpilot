@@ -123,6 +123,7 @@ def main() -> int:
   except FileNotFoundError:
     pass
   supervisor = Supervisor()
+  supervisor.recover_usb()
   exit_event = threading.Event()
 
   def housekeeping():

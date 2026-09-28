@@ -43,6 +43,8 @@ def fake_configfs(tmp_path):
       os.symlink(rest[1], rest[2])
     elif command == "rm":
       os.unlink(rest[1])
+    elif command == "mount":
+      (Path(rest[-1]) / "usb_gadget").mkdir(parents=True, exist_ok=True)  # configfs with libcomposite
     return subprocess.CompletedProcess(args, 0, "", "")
   return configfs, adb, calls, run
 
@@ -57,7 +59,7 @@ def test_accessory_gadget_takes_the_controller_and_gives_it_back(tmp_path, monke
   device = tmp_path / "usb_accessory"
   device.write_text("")
   monkeypatch.setattr(usb, "ACCESSORY_DEVICE", str(device))
-  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run)
+  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run, adb_wanted=lambda: None)
   gadget.prepare(direct=direct)
   ours = configfs / "usb_gadget" / usb.GADGET_NAME
   assert not (adb / "functions" / usb.ACCESSORY_FUNCTION).exists(), "f_accessory allows one instance: the stale one goes"
@@ -83,7 +85,7 @@ def test_accessory_gadget_without_adb_leaves_nothing_to_rebind(tmp_path, monkeyp
   device = tmp_path / "usb_accessory"
   device.write_text("")
   monkeypatch.setattr(usb, "ACCESSORY_DEVICE", str(device))
-  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run)
+  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run, adb_wanted=lambda: None)
   gadget.prepare()
   gadget.restore()
   assert udc_writes(calls, adb) == []
@@ -269,12 +271,12 @@ def test_gadget_detach_settles_for_switch_restore_and_crash_recovery(tmp_path, m
   device.write_text("")
   monkeypatch.setattr(usb, "ACCESSORY_DEVICE", str(device))
   monkeypatch.setattr(usb.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
-  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run)
+  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run, adb_wanted=lambda: None)
   gadget.prepare()
   root = gadget.root
   gadget.switch_to_accessory()
   # Simulate a crashed daemon: a fresh owner must detach before editing configfs.
-  recovered = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run)
+  recovered = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run, adb_wanted=lambda: None)
   before = len(calls)
   recovered.prepare()
   assert calls[before:before + 2] == [("tee", str(root / "UDC"), ""), ("sleep", usb.UDC_SETTLE_SECONDS)]
@@ -292,7 +294,184 @@ def test_gadget_detach_settles_for_switch_restore_and_crash_recovery(tmp_path, m
 def test_stale_accessory_detection_follows_symlink_target(tmp_path):
   configfs, adb, calls, run = fake_configfs(tmp_path)
   (adb / usb.CONFIG / "alternate-name").symlink_to("../../functions/" + usb.ACCESSORY_FUNCTION)
-  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run)
+  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run, adb_wanted=lambda: None)
   gadget._remove_stale_accessories(configfs / "usb_gadget")
   assert (adb / "functions" / usb.ACCESSORY_FUNCTION).exists()
   assert not any(call[0] == "rmdir" for call in calls)
+
+
+def _session(tmp_path, monkeypatch, adb_wanted, *, adb_bound=True):
+  configfs, adb, calls, run = fake_configfs(tmp_path)
+  if not adb_bound:
+    (adb / "UDC").write_text("\n")
+  device = tmp_path / "usb_accessory"
+  device.write_text("")
+  monkeypatch.setattr(usb, "ACCESSORY_DEVICE", str(device))
+  monkeypatch.setattr(usb.time, "sleep", lambda seconds: None)
+  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run, adb_wanted=adb_wanted)
+  return configfs, adb, calls, run, gadget
+
+
+def test_adb_turned_off_mid_session_stays_off(tmp_path, monkeypatch):
+  _, adb, calls, _, gadget = _session(tmp_path, monkeypatch, lambda: False)
+  gadget.prepare()
+  gadget.restore()
+  assert udc_writes(calls, adb) == [""], "ADB was on at the start, but the setting is off now"
+
+
+def test_adb_turned_on_mid_session_comes_up_afterwards(tmp_path, monkeypatch):
+  _, adb, calls, _, gadget = _session(tmp_path, monkeypatch, lambda: True, adb_bound=False)
+  gadget.prepare()
+  assert gadget.released is None, "ADB was off: nothing to release"
+  gadget.restore()
+  assert udc_writes(calls, adb) == [usb.UDC_NAME], "set_adb.sh could not bind while we held the port; we bind it for it"
+
+
+def test_restore_leaves_a_controller_someone_else_took(tmp_path, monkeypatch):
+  configfs, adb, calls, _, gadget = _session(tmp_path, monkeypatch, lambda: True)
+  gadget.prepare()
+  other = configfs / "usb_gadget" / "other"
+  other.mkdir()
+  (other / "UDC").write_text(usb.UDC_NAME + "\n")
+  gadget.detach = lambda: (gadget.root / "UDC").write_text("\n")
+  gadget.restore()
+  assert udc_writes(calls, adb) == [""]
+
+
+def test_recover_after_a_crash_follows_the_adb_setting(tmp_path, monkeypatch):
+  configfs, adb, calls, run, gadget = _session(tmp_path, monkeypatch, lambda: True)
+  gadget.prepare()  # then the daemon dies: nothing restores
+  ours = configfs / "usb_gadget" / usb.GADGET_NAME
+  assert (ours / "UDC").read_text().strip() == usb.UDC_NAME
+
+  for wanted, expected in ((False, []), (True, [usb.UDC_NAME])):
+    (ours / "UDC").write_text(usb.UDC_NAME + "\n")
+    (adb / "UDC").write_text("\n")
+    calls.clear()
+    fresh = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run, adb_wanted=lambda wanted=wanted: wanted)
+    assert fresh.recover()
+    assert (ours / "UDC").read_text().strip() == ""
+    assert udc_writes(calls, adb) == expected, f"ADB setting {wanted}"
+
+  calls.clear()
+  assert not usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=run, adb_wanted=lambda: True).recover()
+  assert calls == [], "no leftover gadget: recovery touches nothing"
+
+
+def test_recover_never_mounts_configfs(tmp_path, monkeypatch):
+  monkeypatch.setattr(usb, "configfs_mount", lambda: None)
+  calls = []
+  gadget = usb.AccessoryGadget(lambda *a, **k: None, run=lambda args, **k: calls.append(args), adb_wanted=lambda: True)
+  assert not gadget.recover()
+  assert calls == []
+
+
+def test_prepare_without_adb_mounts_configfs_itself(tmp_path, monkeypatch):
+  """ADB never turned on since boot: nothing has mounted configfs yet."""
+  _, _, calls, run = fake_configfs(tmp_path)
+  primary, fallback = tmp_path / "missing-root" / "config", tmp_path / "sys_kernel_config"
+  fallback.mkdir()
+  monkeypatch.setattr(usb, "configfs_mount", lambda: None)
+  monkeypatch.setattr(usb, "CONFIGFS_MOUNT", primary)
+  monkeypatch.setattr(usb, "CONFIGFS_FALLBACK_MOUNT", fallback)
+  monkeypatch.setattr(usb.time, "sleep", lambda seconds: None)
+  device = tmp_path / "usb_accessory"
+  device.write_text("")
+  monkeypatch.setattr(usb, "ACCESSORY_DEVICE", str(device))
+
+  def read_only_root(args, **kwargs):
+    if args[2] == "mkdir" and args[-1] == str(primary):
+      return subprocess.CompletedProcess(args, 1, "", "mkdir: cannot create directory: Read-only file system")
+    return run(args, **kwargs)
+
+  events = []
+  gadget = usb.AccessoryGadget(lambda name, **k: events.append(name), run=read_only_root, adb_wanted=lambda: None)
+  gadget.prepare()
+  assert ("mount", "-t", "configfs", "none", str(fallback), "") in calls
+  assert gadget.root == fallback / "usb_gadget" / usb.GADGET_NAME
+  assert (gadget.root / "UDC").read_text().strip() == usb.UDC_NAME
+  assert "usb_configfs_mounted" in events
+  gadget.restore()
+  assert gadget.root is None
+
+
+def test_prepare_explains_missing_kernel_support(tmp_path, monkeypatch):
+  configfs = tmp_path / "config"
+  configfs.mkdir()  # configfs mounted, but no usb_gadget directory: no libcomposite
+  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=configfs, run=lambda *a, **k: None, adb_wanted=lambda: None)
+  with pytest.raises(RuntimeError, match="no USB gadget support"):
+    gadget.prepare()
+
+  _, _, _, run = fake_configfs(tmp_path / "second")
+
+  def no_accessory(args, **kwargs):
+    if args[2] == "mkdir" and args[-1].endswith(usb.ACCESSORY_FUNCTION):
+      return subprocess.CompletedProcess(args, 1, "", "mkdir: No such file or directory")
+    return run(args, **kwargs)
+
+  gadget = usb.AccessoryGadget(lambda *a, **k: None, configfs=tmp_path / "second" / "config", run=no_accessory, adb_wanted=lambda: None)
+  with pytest.raises(RuntimeError, match="does not support USB accessory mode"):
+    gadget.prepare()
+
+
+def test_usb_cleanup_error_never_hides_why_the_session_ended():
+  from openpilot.starpilot.system.android_auto import supervisor as supervisor_module
+  sup = supervisor_module.Supervisor.__new__(supervisor_module.Supervisor)
+  events, steps = [], []
+  sup.log = lambda name, **values: events.append((name, values))
+
+  class Part:
+    def __init__(self, name, fails=False):
+      self.name, self.fails = name, fails
+
+    def run(self):
+      steps.append(self.name)
+      if self.fails:
+        raise RuntimeError("USB I/O did not stop after detach")
+
+  gadget = type("Gadget", (), {})()
+  gadget.detach, gadget.restore = Part("detach").run, Part("restore").run
+  bridge = type("Bridge", (), {"close": Part("bridge", fails=True).run})()
+  listener = type("Listener", (), {"close": Part("listener").run})()
+
+  sup._release_usb(gadget, bridge, listener, failed=True)  # e.g. the car asked to stop: that reason must survive
+  assert steps == ["detach", "bridge", "listener", "restore"], "every step runs even after one fails"
+  assert ("usb_cleanup_failed", {"step": "bridge", "error": "USB I/O did not stop after detach"}) in events
+
+  steps.clear()
+  with pytest.raises(RuntimeError, match="did not stop"):
+    sup._release_usb(gadget, bridge, listener, failed=False)  # a clean end still reports the stuck USB I/O
+  assert steps == ["detach", "bridge", "listener", "restore"]
+
+
+def test_usb_attempt_keeps_a_car_requested_stop(monkeypatch):
+  from openpilot.starpilot.system.android_auto import identity as identity_store, supervisor as supervisor_module
+  from openpilot.starpilot.system.android_auto.session import PeerRequestedStop
+  sup = supervisor_module.Supervisor.__new__(supervisor_module.Supervisor)
+  sup.log = lambda *a, **k: None
+  sup.config = {"usb_mode": "direct"}
+  sup._stage = lambda *a, **k: None
+  sup._await_usb_configured = lambda *a, **k: True
+  monkeypatch.setattr(identity_store, "load_identity", lambda: None)
+
+  class Gadget:
+    def __init__(self, log): pass
+    def prepare(self, direct=False): pass
+    def connection_state(self): return "CONFIGURED"
+    def detach(self): pass
+    def restore(self): pass
+
+  class Bridge:
+    socket = None
+    def __init__(self, log=None): pass
+    def close(self): raise RuntimeError("USB I/O did not stop after detach")
+
+  monkeypatch.setattr(usb, "AccessoryGadget", Gadget)
+  monkeypatch.setattr(usb, "UeventListener", lambda: type("L", (), {"close": lambda self: None})())
+  monkeypatch.setattr(usb, "AccessoryBridge", Bridge)
+
+  def project(*args, **kwargs):
+    raise PeerRequestedStop("Head unit ended projection (reason 1)")
+  sup._project = project
+  with pytest.raises(PeerRequestedStop):
+    sup._attempt_usb()

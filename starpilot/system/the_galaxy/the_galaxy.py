@@ -5552,8 +5552,9 @@ def setup(app):
     if protected and not params.get_bool("AndroidAutoEnabled"):
       return jsonify({"error": "Enable Android Auto under Toggles → Android Auto first."}), 403
 
-  def _android_auto_connection_payload(client=None):
-    client = client or AndroidAutoClient(timeout=12.0)
+  ANDROID_AUTO_SERVICE_OFF = "Android Auto service is not running. Turn on Bluetooth and try again."
+
+  def _android_auto_connection_payload(client):
     status = client.status()
     devices = []
     devices_error = ""
@@ -5575,8 +5576,13 @@ def setup(app):
 
   @app.route("/api/android_auto/connection", methods=["GET"])
   def android_auto_connection():
+    # The page polls this: a short status timeout keeps a stalled daemon from holding a request
+    # thread for long (the Bluetooth car list keeps its own, longer timeout).
+    client = AndroidAutoClient(timeout=4.0)
+    if not client.available:
+      return jsonify({"error": ANDROID_AUTO_SERVICE_OFF}), 503
     try:
-      return jsonify(_android_auto_connection_payload()), 200
+      return jsonify(_android_auto_connection_payload(client)), 200
     except Exception as error:
       return jsonify({"error": str(error)}), 503
 
@@ -5603,7 +5609,7 @@ def setup(app):
     try:
       client = AndroidAutoClient(timeout=12.0)
       if not client.available:
-        return jsonify({"error": "Android Auto service is not running. Turn on Bluetooth and try again."}), 503
+        return jsonify({"error": ANDROID_AUTO_SERVICE_OFF}), 503
       if operation == "start":
         client.start()
       elif operation == "stop":

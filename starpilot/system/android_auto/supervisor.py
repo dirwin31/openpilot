@@ -665,6 +665,7 @@ class Supervisor:
     gadget = usb.AccessoryGadget(self.log)
     listener = usb.UeventListener()
     bridge = None
+    failed = False
     try:
       direct = mode == "direct"
       gadget.prepare(direct=direct)
@@ -681,18 +682,42 @@ class Supervisor:
       bridge = usb.AccessoryBridge(log=self.log)
       self.log("usb_accessory_ready", method=method, strings=getattr(bridge, "strings", {}))
       self._project(None, UsbLease(bridge), ident, connect=lambda: self._track(bridge.socket))
+    except BaseException:
+      failed = True
+      raise
     finally:
+      self._release_usb(gadget, bridge, listener, failed)
+
+  def _release_usb(self, gadget, bridge, listener, failed: bool) -> None:
+    """Undo a wired attempt, running every step even when one fails.
+
+    Closing an fd in another thread does not cancel a Linux blocking read, so the gadget
+    detaches first and the bridge workers are joined before the fd can be reused. A cleanup
+    error is logged, and raised only when the attempt itself ended cleanly: it must never
+    replace the real reason (a car-requested stop keeps its longer retry delay).
+    """
+    errors = []
+    steps = [("detach", gadget.detach), ("bridge", bridge.close if bridge is not None else None),
+             ("listener", listener.close), ("restore", gadget.restore)]
+    for name, step in steps:
+      if step is None:
+        continue
       try:
-        # Closing an fd in another thread does not cancel a Linux blocking read.
-        # Detach first, then join the bridge workers before the fd can be reused.
-        gadget.detach()
-      finally:
-        try:
-          if bridge is not None:
-            bridge.close()
-        finally:
-          listener.close()
-          gadget.restore()
+        step()
+      except Exception as error:
+        errors.append(error)
+        self.log("usb_cleanup_failed", step=name, error=str(error))
+    if errors and not failed:
+      raise errors[0]
+
+  def recover_usb(self) -> None:
+    """At startup: undo a wired session a crash interrupted, so the car stops seeing a dead accessory
+    and ADB comes back if it is on. Nothing happens unless our gadget was left holding the USB port."""
+    try:
+      from openpilot.starpilot.system.android_auto import usb_accessory as usb
+      usb.AccessoryGadget(self.log).recover()
+    except Exception as error:
+      self.log("usb_recover_failed", error=str(error))
 
   def _usb_event(self, listener) -> dict | None:
     self._check_cancel()

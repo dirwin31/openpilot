@@ -161,3 +161,17 @@ def test_car_inventory_failure_keeps_projection_status_available(monkeypatch):
   assert response.status_code == 200
   assert response.get_json()["devices"] == []
   assert response.get_json()["devices_error"] == "Bluetooth inventory unavailable"
+
+
+def test_connection_status_explains_a_stopped_service_and_polls_with_a_short_timeout(monkeypatch):
+  client = _client(monkeypatch)
+  FakeAndroidAutoClient.is_available = False
+  response = client.get("/api/android_auto/connection")
+  assert response.status_code == 503
+  assert "Turn on Bluetooth" in response.get_json()["error"]
+
+  timeouts = []
+  monkeypatch.setattr(nav.the_galaxy, "AndroidAutoClient", lambda timeout=0: timeouts.append(timeout) or FakeAndroidAutoClient(timeout))
+  FakeAndroidAutoClient.is_available = True
+  assert client.get("/api/android_auto/connection").status_code == 200
+  assert timeouts and max(timeouts) <= 5.0
