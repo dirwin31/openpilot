@@ -153,11 +153,12 @@ in `car_screen.json`; it can be configured without a connected car.
 ## Configuration
 
 `/data/android_auto/config.json`, written when you choose a car. Edit with the
-service idle; changes apply from the next session.
+service stopped, then restart `android_autod` to reload the file.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `connection` | `"wireless"` | `"wireless"`: Bluetooth + the car's Wi-Fi; `"wired"`: USB (experimental) |
+| `usb_mode` | `"auto"` | Wired: try AOA handshake, then direct accessory presentation if the connected host sends no START; `"handshake"` or `"direct"` forces one path. |
 | `view` | `"car"` | `"car"`: car-sized StarPilot UI; `"mirror"`: copy of the comma screen |
 | `encoder` | `"auto"` | `"auto"`: hardware H.264, falling back to libx264; `"hardware"` / `"software"` to force |
 | `fps` | `0` | `0` = automatic (30 hardware, 15 software); otherwise a cap, 5–30 |
@@ -316,3 +317,19 @@ It does not test Bluetooth pairing, the Wi-Fi handoff or car-specific behavior.
   on its own); with the Desktop Head Unit they run for 15+ minutes.
 - Tested on one car (2026 Honda Civic).
 - The identity comes from the Android Auto app and expires with it; renew it from a newer app version in The Galaxy.
+
+
+## Vehicle and DIY dongle compatibility
+
+For a DIY wireless adapter plugged into a wired-AA car, choose **Wireless** on
+the comma and pair/select the adapter. The adapter manages its own USB link to
+the car. A successful manual connection does not establish cold-boot or ignition
+reconnect compatibility; test both.
+
+Simple legacy dongles receive the original bootstrap sequence without extra
+phone pings during Wi-Fi join. Receivers that negotiate a version or send pings
+retain join keepalives. Silent peers receive one start prompt after 2.5 seconds;
+setup has bounded deadlines even if the peer sends pings continuously.
+Invalid/placeholder BSSIDs are ignored, and valid BSSIDs retain the SSID fallback.
+Wired enumeration now includes a 500 ms detach interval before rebinding.
+

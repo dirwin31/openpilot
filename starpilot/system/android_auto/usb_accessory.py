@@ -46,6 +46,7 @@ MAX_SPEED = "high-speed"               # head units are USB 2.0 hosts
 READ_SIZE = 16384  # f_accessory's bulk buffer; a read must cover a whole transfer
 MAX_EMPTY_READS = 64
 NETLINK_KOBJECT_UEVENT = 15
+UDC_SETTLE_SECONDS = 0.5  # allow the host to observe detach before descriptors/controller ownership change
 OPEN_BUSY_WAIT = 5.0  # /dev/usb_accessory stays busy until the previous session's descriptor is released
 # f_accessory's ACCESSORY_GET_STRING_* ioctls: _IOW('M', n, char[256]) for n = 1..6 in this order.
 ACCESSORY_STRINGS = ("manufacturer", "model", "description", "version", "uri", "serial")
@@ -168,12 +169,13 @@ class AccessoryGadget:
       if gadget != self.root and self._read(gadget / "UDC") == self.udc:
         self._write(gadget / "UDC", "")
         self.released = gadget
+        time.sleep(UDC_SETTLE_SECONDS)
 
   def _remove_stale_accessories(self, base: Path) -> None:
     """f_accessory allows one instance; earlier versions left an unlinked one in comma's ADB gadget."""
     for function in sorted(base.glob("*/functions/accessory.*")):
       gadget = function.parent.parent
-      if gadget == self.root or any(link.is_symlink() and link.name == function.name for link in gadget.glob("configs/*/*")):
+      if gadget == self.root or any(link.is_symlink() and link.resolve() == function.resolve() for link in gadget.glob("configs/*/*")):
         continue
       self._sudo("rmdir", str(function))
       self.log("usb_stale_accessory_removed", gadget=gadget.name)
@@ -182,6 +184,7 @@ class AccessoryGadget:
     assert self.root is not None
     if self._read(self.root / "UDC"):
       self._write(self.root / "UDC", "")
+      time.sleep(UDC_SETTLE_SECONDS)
     self._write(self.root / "idVendor", f"0x{vid:04x}")
     self._write(self.root / "idProduct", f"0x{pid:04x}")
     self._write(self.root / "UDC", self.udc)
@@ -191,6 +194,11 @@ class AccessoryGadget:
     base = self._base()
     self.root = base / GADGET_NAME
     config = self.root / CONFIG
+    # A daemon crash can leave our gadget bound; configfs descriptors/functions
+    # must only be edited while detached. The normal retry is already unbound.
+    if self._read(self.root / "UDC"):
+      self._write(self.root / "UDC", "")
+      time.sleep(UDC_SETTLE_SECONDS)
     self._remove_stale_accessories(base)
     for path in (self.root / "strings/0x409", config / "strings/0x409", self.root / "functions" / ACCESSORY_FUNCTION):
       if not path.is_dir():
@@ -235,9 +243,11 @@ class AccessoryGadget:
     try:
       if self._read(self.root / "UDC"):
         self._write(self.root / "UDC", "")
+        time.sleep(UDC_SETTLE_SECONDS)
       if self.released is not None:
         self._write(self.released / "UDC", self.udc)
       self.log("usb_gadget_restored", rebound=self.released.name if self.released else "")
+      self.root = self.released = None
     except Exception as error:
       self.log("usb_gadget_restore_failed", error=str(error))
 

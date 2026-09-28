@@ -103,7 +103,8 @@ def test_sdp_channel_encodings():
 
 # ----------------------------------------------------------------- bootstrap
 
-def run_bootstrap(start_request_delay=5.0, join_seconds=0.3, join_ping_interval=bs.JOIN_PING_INTERVAL, **hu_options):
+def run_bootstrap(start_request_delay=5.0, join_seconds=0.3, join_ping_interval=bs.JOIN_PING_INTERVAL,
+                  initial_kick_delay=bs.INITIAL_KICK_SECONDS, **hu_options):
   phone, car = socket.socketpair()
   joined = []
   result_holder = {}
@@ -118,7 +119,7 @@ def run_bootstrap(start_request_delay=5.0, join_seconds=0.3, join_ping_interval=
   thread.start()
   events = []
   boot = bs.WirelessBootstrap(phone, lambda name, **values: events.append((name, values)), stage_timeout=5.0,
-                              start_request_delay=start_request_delay, join_ping_interval=join_ping_interval)
+                              start_request_delay=start_request_delay, join_ping_interval=join_ping_interval, initial_kick_delay=initial_kick_delay)
 
   def join(credentials):
     time.sleep(join_seconds)  # the car pings while we join
@@ -853,3 +854,98 @@ def test_network_lease_retry_keeps_previous_for_final_stop():
   lease.acquire(credentials(), timeout=2.0)
   lease.release(restore=True)
   assert nm.calls.count("ActivateConnection") == 1
+
+
+def test_bootstrap_slow_join_preserves_strict_diy_dongle_sequence():
+  _, joined, seen, _ = run_bootstrap(join_seconds=0.75, join_ping_interval=0.1, pings=False, strict_legacy=True)
+  assert joined[0].ssid == "HondaAA"
+  assert seen["messages"] == [bs.WIFI_INFO_REQUEST, bs.WIFI_START_RESPONSE, bs.WIFI_CONNECT_STATUS]
+
+
+def test_bootstrap_negotiating_peer_still_gets_join_pings():
+  _, _, seen, _ = run_bootstrap(join_seconds=0.75, join_ping_interval=0.1, pings=False, version_first=True)
+  assert seen.get("phone_pings", 0) >= 2
+
+
+def test_bootstrap_silent_peer_receives_one_prompt():
+  _, joined, seen, events = run_bootstrap(initial_kick_delay=0.05, wait_for_phone_start=True, pings=False)
+  assert joined[0].ssid == "HondaAA"
+  assert seen["messages"].count(bs.WIFI_START_REQUEST) == 1
+  assert sum(name == "bootstrap_initial_kick" for name, _ in events) == 1
+
+
+def test_bootstrap_version_prompt_does_not_get_an_extra_initial_prompt():
+  _, _, seen, events = run_bootstrap(initial_kick_delay=0.05, start_request_delay=0.1,
+                                   version_first=True, wait_for_phone_start=True)
+  assert seen["messages"].count(bs.WIFI_START_REQUEST) == 1
+  assert not any(name == "bootstrap_initial_kick" for name, _ in events)
+
+
+@pytest.mark.parametrize("stage", ["wifi_start", "wifi_info"])
+def test_bootstrap_stage_deadline_survives_continuous_pings(monkeypatch, stage):
+  now = [0.0]
+  monkeypatch.setattr(bs.time, "monotonic", lambda: now[0])
+  boot = bs.WirelessBootstrap(None, lambda *a, **k: None, stage_timeout=1)
+  sent = []
+  monkeypatch.setattr(boot, "send", lambda message, payload=b"": sent.append(message))
+  first = [True]
+
+  def receive(timeout):
+    now[0] += 0.2
+    if first[0] and stage == "wifi_info":
+      first[0] = False
+      return bs.WIFI_START_REQUEST, field(1, "10.0.0.1") + field(2, 5288)
+    return bs.WIFI_PING_REQUEST, b""
+
+  monkeypatch.setattr(boot, "next_frame", receive)
+  with pytest.raises(bs.BootstrapTimeout) as error:
+    boot.run(lambda _: pytest.fail("Unexpected join"))
+  assert error.value.stage == stage and now[0] < 1.5
+  assert bs.WIFI_PING_RESPONSE in sent and bs.WIFI_START_REQUEST not in sent
+
+
+def test_bootstrap_hint_cannot_hide_disconnect():
+  phone, car = socket.socketpair()
+  try:
+    car.sendall(bs.encode_frame(bs.WIFI_SETUP_INFO, field(4, field(1, "10.0.0.1") + field(2, 5288))))
+    car.close()
+    with pytest.raises(bs.BootstrapError, match="closed"):
+      bs.WirelessBootstrap(phone, lambda *a, **k: None).run(lambda _: pytest.fail("Unexpected join"))
+  finally:
+    phone.close()
+    car.close()
+
+
+def test_bootstrap_hint_grace_is_not_extended_by_pings(monkeypatch):
+  now = [0.0]
+  monkeypatch.setattr(bs.time, "monotonic", lambda: now[0])
+  boot = bs.WirelessBootstrap(None, lambda *a, **k: None, stage_timeout=10)
+  monkeypatch.setattr(boot, "send", lambda *a: None)
+  payload = field(4, field(1, "10.0.0.1") + field(2, 5288)) + field(5, field(1, "test") + field(3, "secret-key") + field(4, 8))
+
+  def receive(timeout):
+    now[0] += 0.25
+    return (bs.WIFI_SETUP_INFO, payload) if now[0] == 0.25 else (bs.WIFI_PING_REQUEST, b"")
+
+  monkeypatch.setattr(boot, "next_frame", receive)
+  joined = []
+  result = boot.run(joined.append)
+  assert result.endpoint.ip == "10.0.0.1" and joined[0].ssid == "test"
+  assert 3 <= now[0] < 5
+
+
+@pytest.mark.parametrize("bssid", ["00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff", "01:00:00:00:00:01", "bad", ""])
+def test_network_placeholder_bssid_does_not_waste_retry(bssid):
+  from dataclasses import replace
+  nm = FakeNetworkManager(fail_with_bssid=True)
+  lease = make_lease(nm)
+  assert lease.acquire(replace(credentials(), bssid=bssid)) == "192.168.50.23"
+  assert len(nm.added) == 1 and "bssid" not in nm.added[0]["802-11-wireless"]
+  lease.release()
+
+
+def test_network_normalizes_hyphenated_bssid():
+  from dataclasses import replace
+  from openpilot.starpilot.system.android_auto.network import connection_settings
+  settings = connection_settings(replace(credentials(), bssid="aa-bb-cc-dd-ee-ff"), "wlan0")
+  assert settings["802-11-wireless"]["bssid"] == ("ay", bytes.fromhex("aabbccddeeff"))
