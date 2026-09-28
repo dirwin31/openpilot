@@ -44,6 +44,7 @@ test("the live payload drives connection status and car choices", async () => {
   assert.equal(state.statusText, "Ready · Starts automatically next drive")
   assert.equal(state.autoConnectText, "On")
   assert.equal(state.cars[0].name, "Family Car")
+  assert.equal(state.address(state.cars[0].address), "AA:BB:CC:DD:EE:FF")
   assert.equal(state.canConnect, true)
 })
 

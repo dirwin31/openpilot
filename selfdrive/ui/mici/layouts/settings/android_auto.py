@@ -62,8 +62,8 @@ class AndroidAutoLayoutMici(NavScroller):
     self._car_btn.set_click_callback(self._choose_car)
     self._auto_toggle = BigToggle("Auto\nConnect", "On", toggle_callback=self._auto_tapped)
     # Short titles: a multi-toggle's title shares its width with the pills.
-    self._connection_toggle = BigMultiToggle("Link Type", ["Wireless", "USB"], select_callback=self._connection_tapped)
-    self._view_toggle = BigMultiToggle("Display", ["Android Auto", "Screen Mirror"], select_callback=self._view_tapped)
+    self._connection_toggle = BigMultiToggle("Link Type", list(state.CONNECTION_OPTIONS), select_callback=self._connection_tapped)
+    self._view_toggle = BigMultiToggle("Display", list(state.VIEW_OPTIONS), select_callback=self._view_tapped)
     self._pair_btn = BigButton("Pair New Car", "Pair while parked")
     self._pair_btn.set_click_callback(self._pair)
     self._setup_btn = BigButton("Setup Help", "Tap to read")
@@ -160,12 +160,12 @@ class AndroidAutoLayoutMici(NavScroller):
     manager = self._manager()
     if manager is not None:
       self._confirm(state.connection_title(connection), "connection", connection,
-                    lambda: manager.set_connection("wired" if connection == "usb" else "wireless"))
+                    lambda: manager.set_connection("wired" if connection == state.CONNECTION_OPTIONS[1] else "wireless"))
 
   def _view_tapped(self, view: str) -> None:
     manager = self._manager()
     if manager is not None:
-      self._confirm(state.view_title(view), "view", view, lambda: manager.set_view("mirror" if view == "mirror" else "car"))
+      self._confirm(state.view_title(view), "view", view, lambda: manager.set_view("mirror" if view == state.VIEW_OPTIONS[1] else "car"))
 
   def _choose_car(self) -> None:
     cars = [device for device in self._bluetooth.status.devices if device.paired]

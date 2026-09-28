@@ -8,6 +8,8 @@ from __future__ import annotations
 
 TEXT_CARD_CHARS = 90  # a GreyBigButton card at 36 px holds about this much
 CONNECT_STATUS_CHARS = 36  # two short lines beneath Connect / Disconnect
+CONNECTION_OPTIONS = ("Wireless", "USB")
+VIEW_OPTIONS = ("Android Auto", "Screen Mirror")
 
 
 def is_wired(status: dict) -> bool:
@@ -78,11 +80,11 @@ def can_change_while(status: dict) -> bool:
 
 
 def view_value(status: dict) -> str:
-  return "mirror" if status.get("configured_view", "car") == "mirror" else "car layout"
+  return VIEW_OPTIONS[1] if status.get("configured_view", "car") == "mirror" else VIEW_OPTIONS[0]
 
 
 def connection_value(status: dict) -> str:
-  return "usb" if is_wired(status) else "wireless"
+  return CONNECTION_OPTIONS[1] if is_wired(status) else CONNECTION_OPTIONS[0]
 
 
 def auto_connect_title(enable: bool) -> str:
@@ -94,11 +96,11 @@ def auto_connect_value(enabled: bool) -> str:
 
 
 def connection_title(connection: str) -> str:
-  return "slide to\nuse usb" if connection == "usb" else "slide to\nuse wireless"
+  return "slide to\nuse USB" if connection == CONNECTION_OPTIONS[1] else "slide to\nuse Wireless"
 
 
 def view_title(view: str) -> str:
-  return "slide to\nmirror comma" if view == "mirror" else "slide to use\ncar layout"
+  return "slide to\nmirror comma" if view == VIEW_OPTIONS[1] else "slide to use\nAndroid Auto"
 
 
 def split_text(text: str, limit: int = TEXT_CARD_CHARS) -> list[str]:
