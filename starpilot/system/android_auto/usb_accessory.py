@@ -1,9 +1,11 @@
 """Wired Android Auto: the comma as an Android Open Accessory (AOA) USB device.
 
 The car's USB port is the host. ``AccessoryGadget`` binds a gadget of its own to
-the comma's USB controller (comma's ADB gadget, if bound, steps aside and comes
-back afterwards), with the accessory function as its only interface, so the car
-finds it at interface 0 as on a phone; head units built on aasdk open only that.
+the comma's USB controller, with the accessory function as its only interface, so
+the car finds it at interface 0 as on a phone; head units built on aasdk open only
+that. ADB is not needed: configfs is mounted here when nothing has. If comma's ADB
+gadget is bound it steps aside for the session and comes back afterwards,
+following the ADB setting at that moment; ``recover`` does the same after a crash.
 
 Two ways in, as head units differ:
 
@@ -34,6 +36,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 CONFIGFS_MOUNT = Path("/config")  # where /usr/comma/set_adb.sh mounts configfs when nothing has
+CONFIGFS_FALLBACK_MOUNT = Path("/sys/kernel/config")  # the kernel's own mount point, always present with configfs
+ADB_FUNCTION = "ffs.adb"
 GADGET_NAME = "starpilot_aa"
 CONFIG = "configs/c.1"
 UDC_NAME = "a600000.dwc3"
@@ -86,6 +90,15 @@ def configfs_mount(mounts: str = "/proc/mounts") -> Path | None:
   return None
 
 
+def adb_enabled() -> bool | None:
+  """The user's ADB setting, or None when it cannot be read (then the gadget we released is rebound)."""
+  try:
+    from openpilot.common.params import Params
+    return Params().get_bool("AdbEnabled")
+  except Exception:
+    return None
+
+
 def parse_uevent(data: bytes) -> dict[str, str]:
   """Parse one kernel uevent datagram (``action@path`` then ``KEY=value`` lines)."""
   parts = data.split(b"\0")
@@ -130,11 +143,13 @@ class AccessoryGadget:
   """A gadget of our own on the comma's USB controller: the accessory function alone, at interface 0."""
 
   def __init__(self, log: Callable[..., None], configfs: Path | None = None, udc: str = UDC_NAME,
-               run: Callable[..., subprocess.CompletedProcess] = subprocess.run):
+               run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+               adb_wanted: Callable[[], bool | None] = adb_enabled):
     self.log = log
     self.configfs = configfs
     self.udc = udc
     self.run = run
+    self.adb_wanted = adb_wanted
     self.root: Path | None = None
     self.released: Path | None = None  # the gadget that had the controller, rebound by restore()
 
@@ -154,13 +169,40 @@ class AccessoryGadget:
       return ""
 
   def _base(self) -> Path:
+    """configfs's gadget directory, mounting configfs first when ADB has never been on to do it."""
     if self.configfs is None:
       self.configfs = configfs_mount()
     if self.configfs is None:
-      self._sudo("mkdir", "-p", str(CONFIGFS_MOUNT))
-      self._sudo("mount", "-t", "configfs", "none", str(CONFIGFS_MOUNT))
-      self.configfs = CONFIGFS_MOUNT
-    return self.configfs / "usb_gadget"
+      self.configfs = self._mount_configfs()
+    base = self.configfs / "usb_gadget"
+    if not base.is_dir():
+      raise RuntimeError("This comma's kernel has no USB gadget support, so it cannot use a USB connection")
+    return base
+
+  def _mount_configfs(self) -> Path:
+    errors = []
+    for mount in (CONFIGFS_MOUNT, CONFIGFS_FALLBACK_MOUNT):  # /config may not exist on a read-only root
+      try:
+        if not mount.is_dir():
+          self._sudo("mkdir", "-p", str(mount))
+        self._sudo("mount", "-t", "configfs", "none", str(mount))
+      except RuntimeError as error:
+        errors.append(f"{mount}: {error}")
+        continue
+      self.log("usb_configfs_mounted", path=str(mount))
+      return mount
+    raise RuntimeError(f"Could not set up USB (configfs mount failed: {'; '.join(errors)})")
+
+  def _existing_base(self) -> Path | None:
+    """The gadget directory if configfs is already mounted; never mounts."""
+    configfs = self.configfs or configfs_mount()
+    return configfs / "usb_gadget" if configfs is not None else None
+
+  def _is_adb(self, gadget: Path) -> bool:
+    return any(link.is_symlink() and link.resolve().name == ADB_FUNCTION for link in gadget.glob("configs/*/*"))
+
+  def _controller_owner(self, base: Path) -> Path | None:
+    return next((gadget for gadget in sorted(base.glob("*")) if self._read(gadget / "UDC") == self.udc), None)
 
   def _release_controller(self, base: Path) -> None:
     """Unbind whichever other gadget holds the controller (comma's ADB gadget), to rebind it later."""
@@ -200,9 +242,15 @@ class AccessoryGadget:
       self._write(self.root / "UDC", "")
       time.sleep(UDC_SETTLE_SECONDS)
     self._remove_stale_accessories(base)
-    for path in (self.root / "strings/0x409", config / "strings/0x409", self.root / "functions" / ACCESSORY_FUNCTION):
+    for path in (self.root / "strings/0x409", config / "strings/0x409"):
       if not path.is_dir():
         self._sudo("mkdir", "-p", str(path))
+    function = self.root / "functions" / ACCESSORY_FUNCTION
+    if not function.is_dir():
+      try:
+        self._sudo("mkdir", "-p", str(function))
+      except RuntimeError as error:
+        raise RuntimeError(f"This comma's kernel does not support USB accessory mode ({error})") from error
     for name, value in (("strings/0x409/manufacturer", "comma.ai"), ("strings/0x409/product", "StarPilot"),
                         ("strings/0x409/serialnumber", "StarPilot"), (f"{CONFIG}/strings/0x409/configuration", "Android Auto"),
                         (f"{CONFIG}/MaxPower", "250")):
@@ -251,18 +299,48 @@ class AccessoryGadget:
       self._write(self.root / "UDC", "")
       time.sleep(UDC_SETTLE_SECONDS)
 
+  def _give_back(self, base: Path) -> Path | None:
+    """The gadget to rebind: the one we released, unless the ADB setting changed meanwhile.
+
+    ADB turned on mid-session could not bind (we held the controller), so its gadget is bound
+    now; ADB turned off mid-session stays off. None when the setting cannot be read.
+    """
+    target = self.released
+    wanted = self.adb_wanted()
+    if wanted is False and target is not None and self._is_adb(target):
+      target = None
+    elif wanted and target is None:
+      target = next((gadget for gadget in sorted(base.glob("*")) if gadget.name != GADGET_NAME and self._is_adb(gadget)), None)
+    if target is None or self._controller_owner(base) is not None:
+      return None
+    self._write(target / "UDC", self.udc)
+    return target
+
   def restore(self) -> None:
-    """Let go of the controller and give it back to the gadget that had it; the car sees the cable drop."""
+    """Let go of the controller and give it back as the ADB setting wants; the car sees the cable drop."""
     if self.root is None:
       return
     try:
       self.detach()
-      if self.released is not None:
-        self._write(self.released / "UDC", self.udc)
-      self.log("usb_gadget_restored", rebound=self.released.name if self.released else "")
+      rebound = self._give_back(self.root.parent)
+      self.log("usb_gadget_restored", rebound=rebound.name if rebound else "")
       self.root = self.released = None
     except Exception as error:
       self.log("usb_gadget_restore_failed", error=str(error))
+
+  def recover(self) -> bool:
+    """After a crash mid-session: drop our leftover gadget and hand the controller back. Never mounts configfs.
+
+    Without it, the car keeps seeing a dead accessory and ADB stays off until a reboot.
+    True when a leftover gadget was found.
+    """
+    base = self._existing_base()
+    if base is None or not self._read(base / GADGET_NAME / "UDC"):
+      return False
+    self.root = base / GADGET_NAME
+    self.log("usb_gadget_recovering")
+    self.restore()
+    return True
 
 
 class AccessoryBridge:

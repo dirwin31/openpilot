@@ -301,6 +301,8 @@ class BigToggle(BigButton):
 
 
 class BigMultiToggle(BigToggle):
+  _checked_index = 0  # the last option the value named; shown while a live value is momentarily unknown
+
   def __init__(self, text: str, options: list[str], toggle_callback: Callable | None = None,
                select_callback: Callable | None = None):
     super().__init__(text, "", toggle_callback=toggle_callback)
@@ -314,7 +316,9 @@ class BigMultiToggle(BigToggle):
     return int(self._rect.width - self.LABEL_HORIZONTAL_PADDING * 2 - self._txt_enabled_toggle.width)
 
   def _option_index(self) -> int:
-    return self._options.index(self.value) if self.value in self._options else 0
+    if self.value in self._options:
+      self._checked_index = self._options.index(self.value)
+    return self._checked_index
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
     super()._handle_mouse_release(mouse_pos)
@@ -328,8 +332,8 @@ class BigMultiToggle(BigToggle):
     # don't draw pill from BigToggle
     BigButton._draw_content(self, btn_y)
 
-    # A live setting may briefly lag a renamed display option. Keep rendering
-    # the control instead of terminating the entire UI process.
+    # A live setting may briefly lag a renamed display option: keep the last
+    # known selection rather than crash the UI or jump to the first option.
     checked_idx = self._option_index()
 
     x = self._rect.x + self._rect.width - self._txt_enabled_toggle.width

@@ -208,6 +208,7 @@ class Session:
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.maximum_version = ssl.TLSVersion.TLSv1_2
     context.set_ciphers(TLS12_CIPHERS)
+    context.options |= ssl.OP_CIPHER_SERVER_PREFERENCE  # our strongest-first order wins, not the head unit's
     context.load_cert_chain(cert, key)
     self.peer_verification_enabled = ca is not None
     if ca is not None:
@@ -563,23 +564,26 @@ class ProjectionSession(Session):
   def input_channel_for(self, video_channel: int) -> dict | None:
     """The input service of the display being projected to, matched by display id (unset means the main display).
 
-    A car with a second screen can list that screen's input first. With a single input
-    service and nothing to match it against, that one is used.
+    A car with a second screen can list that screen's input first. When no input names the
+    projected display, the first one not tied to another screen's video is used (else the
+    first of all): a guessed touch channel beats none.
     """
     inputs = [channel for channel in self.channels if channel.get("input")]
     video = next((channel for channel in self.channels if channel.get("id") == video_channel), {})
     display = video.get("display_id") or 0
     matched = next((channel for channel in inputs if (channel.get("display_id") or 0) == display), None)
-    return matched or (inputs[0] if len(inputs) == 1 else None)
+    if matched is not None or not inputs:
+      return matched
+    other_screens = {channel.get("display_id") or 0 for channel in self.channels
+                     if "video_configs" in channel and channel.get("id") != video_channel}
+    return next((channel for channel in inputs if (channel.get("display_id") or 0) not in other_screens), inputs[0])
 
   def open_input(self) -> None:
     """Open the touch/key channel so input is acknowledged; failures are not fatal."""
     assert self.mode is not None
     channel = self.input_channel_for(self.mode.channel)
     if channel is None:
-      if any(ch.get("input") for ch in self.channels):
-        self.event("input_unavailable", error="no input service for the projected display")
-      return
+      return  # the head unit has no input service at all
     try:
       self.send(channel["id"], MSG_CHANNEL_OPEN_REQUEST, field(1, 0) + field(2, channel["id"]), control=True)
       opened = parse_fields(self.wait_for(channel["id"], MSG_CHANNEL_OPEN_RESPONSE, timeout=3.0))
@@ -591,8 +595,10 @@ class ProjectionSession(Session):
       self.send(channel["id"], INPUT_BINDING_REQUEST, b"".join(field(1, code) for code in config.keycodes))
       if self.mode is not None:
         self.touch = TouchMapper(config, self.mode.width, self.mode.height, self.mode.margin_width, self.mode.margin_height)
+      video = next((ch for ch in self.channels if ch.get("id") == self.mode.channel), {})
       self.event("input_opened", channel=channel["id"], keycodes=len(config.keycodes),
-                 touch=f"{config.touch_width}x{config.touch_height}")
+                 touch=f"{config.touch_width}x{config.touch_height}",
+                 display_matched=(channel.get("display_id") or 0) == (video.get("display_id") or 0))
     except (TimeoutError, ValueError) as error:
       self.event("input_unavailable", error=str(error))
 

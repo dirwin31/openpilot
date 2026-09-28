@@ -379,6 +379,13 @@ def test_session_accepts_a_legacy_tls_only_head_unit(identity):
   assert hu.cipher == "AES128-SHA"
 
 
+def test_session_picks_the_strongest_shared_cipher_not_the_head_units_first(identity):
+  # A head unit listing a legacy suite first must not talk the comma down to it.
+  hu = FakeHeadUnit(identity, ciphers="AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:@SECLEVEL=0")
+  finish(run_until_streaming(hu, identity), hu)
+  assert "GCM" in hu.cipher and hu.cipher != "AES128-SHA"
+
+
 def test_session_answers_pings_during_the_handshake(identity):
   events = []
   hu = FakeHeadUnit(identity, ping_during_auth=True)
@@ -416,6 +423,11 @@ def test_input_channel_matches_display_or_falls_back_to_the_only_one():
   session.channels = [{"id": 3, "video_configs": []}, {"id": 1, "input": True, "display_id": 2}]
   assert session.input_channel_for(3)["id"] == 1, "a single input service is used even without a matching id"
   session.channels = [{"id": 3, "video_configs": []}, {"id": 1, "input": True, "display_id": 2}, {"id": 2, "input": True, "display_id": 1}]
+  assert session.input_channel_for(3)["id"] == 1, "no input names the projected display: a guess beats no touch"
+  session.channels = [{"id": 3, "video_configs": []}, {"id": 5, "video_configs": [], "display_id": 2},
+                      {"id": 1, "input": True, "display_id": 2}, {"id": 2, "input": True, "display_id": 1}]
+  assert session.input_channel_for(3)["id"] == 2, "the guess skips an input that belongs to another screen's video"
+  session.channels = [{"id": 3, "video_configs": []}]
   assert session.input_channel_for(3) is None
 
 def test_session_takes_a_1080p_only_head_unit(identity):

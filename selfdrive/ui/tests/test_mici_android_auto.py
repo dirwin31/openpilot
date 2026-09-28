@@ -49,6 +49,8 @@ def test_multi_toggle_survives_a_stale_display_value():
   assert toggle._option_index() == 0
   toggle.value = "USB"
   assert toggle._option_index() == 1
+  toggle.value = "usb"
+  assert toggle._option_index() == 1, "a stale value keeps the last selection instead of jumping to the first"
 
 
 def test_split_text_keeps_every_word_within_the_limit():

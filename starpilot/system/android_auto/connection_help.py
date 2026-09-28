@@ -10,8 +10,7 @@ def setup_instructions(status: dict) -> str:
       "to the comma. Charging-only ports and cables cannot project. No Bluetooth pairing is needed. " +
       "3. Allow Android Auto on the car screen. Leave auto-connect on; USB setup starts when the comma goes onroad " +
       "and reconnects after a cable interruption. Use Connect to test while parked. " +
-      "Disconnect pauses auto-connect until the next drive or until you tap Connect. " +
-      "Wired support still needs testing on physical car receivers.")
+      "Disconnect pauses auto-connect until the next drive or until you tap Connect.")
   return common + (
     "2. Your car must support wireless Android Auto; Bluetooth audio alone is not enough. " +
     "While parked, set the comma to Offroad in Settings > System, then select Pair a New Car. " +
