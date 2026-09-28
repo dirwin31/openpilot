@@ -7,6 +7,7 @@ and use plain ASCII: the comma four's font has no middle dot or dashes.
 from __future__ import annotations
 
 TEXT_CARD_CHARS = 90  # a GreyBigButton card at 36 px holds about this much
+CONNECT_STATUS_CHARS = 36  # two short lines beneath Connect / Disconnect
 
 
 def is_wired(status: dict) -> bool:
@@ -43,7 +44,16 @@ def running(status: dict) -> bool:
 
 
 def connect_label(status: dict) -> str:
-  return "disconnect" if running(status) else "connect"
+  return "Disconnect" if running(status) else "Connect"
+
+
+def connect_status_value(status: dict) -> str:
+  """Live state for the Connect card, with a compact excerpt of the real error."""
+  error = " ".join(str(status.get("error") or "").split())
+  value = f"Error: {error}" if error else status_value(status)
+  if len(value) > CONNECT_STATUS_CHARS:
+    value = value[:CONNECT_STATUS_CHARS - 3].rstrip() + "..."
+  return value
 
 
 def can_connect(status: dict) -> bool:
@@ -76,7 +86,11 @@ def connection_value(status: dict) -> str:
 
 
 def auto_connect_title(enable: bool) -> str:
-  return f"slide to turn\n{'on' if enable else 'off'} auto-connect"
+  return f"Slide for\nAuto Connect {'On' if enable else 'Off'}"
+
+
+def auto_connect_value(enabled: bool) -> str:
+  return "On" if enabled else "Off"
 
 
 def connection_title(connection: str) -> str:

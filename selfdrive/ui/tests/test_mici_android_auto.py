@@ -31,7 +31,7 @@ def test_cards_follow_the_connection_and_what_can_change():
   assert state.show_pairing(wireless, offroad=True) and not state.show_pairing(wireless, offroad=False) and not state.show_pairing(wired, True)
   assert state.can_connect(wireless) and state.can_connect(wired) and not state.can_connect({**wireless, "receiver_address": ""})
   assert state.can_change_while(wireless) and not state.can_change_while({**wireless, "running": True})
-  assert state.connect_label({"running": True}) == "disconnect" and state.connect_label(wireless) == "connect"
+  assert state.connect_label({"running": True}) == "Disconnect" and state.connect_label(wireless) == "Connect"
   assert state.connection_value(wired) == "usb" and state.view_value({"configured_view": "mirror"}) == "mirror"
 
 
@@ -84,7 +84,8 @@ def ui(monkeypatch):
 
 
 @pytest.mark.parametrize("tap,value,call,title", [
-  ("_auto_tapped", False, ("set_auto_connect", False), "slide to turn\noff auto-connect"),
+  ("_auto_tapped", False, ("set_auto_connect", False), "Slide for Auto\nConnect Off"),
+  ("_auto_tapped", True, ("set_auto_connect", True), "Slide for Auto\nConnect On"),
   ("_connection_tapped", "usb", ("set_connection", "wired"), "slide to\nuse usb"),
   ("_view_tapped", "mirror", ("set_view", "mirror"), "slide to\nmirror comma"),
   ("_view_tapped", "car layout", ("set_view", "car"), "slide to use\ncar layout"),
@@ -95,6 +96,18 @@ def test_changes_wait_for_a_slide_to_confirm(ui, tap, value, call, title):
   assert dialog.title == title and ui.manager.calls == [], "nothing changes until the slide"
   dialog.callback()
   assert ui.manager.calls == [call]
+
+
+def test_auto_connect_value_is_on_or_off():
+  assert state.auto_connect_value(True) == "On"
+  assert state.auto_connect_value(False) == "Off"
+
+
+def test_connect_card_shows_live_status_and_real_error_excerpt():
+  assert state.connect_status_value({"state": "streaming", "stats": {"fps": 30}}) == "projecting, 30 fps"
+  value = state.connect_status_value({"state": "idle", "error": "finding android auto: Could not find the car service"})
+  assert value.startswith("Error: finding android auto:") and value.endswith("...")
+  assert len(value) <= state.CONNECT_STATUS_CHARS
 
 
 def test_confirmed_value_shows_until_the_status_catches_up(ui):
