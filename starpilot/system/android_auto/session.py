@@ -25,7 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from openpilot.starpilot.system.android_auto.touch import InputConfig, TouchEvent, TouchMapper, parse_input_config
-from openpilot.starpilot.system.android_auto.wire import field, json_fields, one, parse_fields, signed
+from openpilot.starpilot.system.android_auto.wire import describe, describe_fields, field, json_fields, one, parse_fields, signed
 
 MAX_MESSAGE = 2 * 1024 * 1024
 PHONE_MAX_VERSION = (6, 1)  # protocol version Android Auto 17.6 reports to newer head units
@@ -76,6 +76,11 @@ FOCUS_REASON_USER_SELECTION = 4
 SHUTDOWN_REASON_USER_SELECTION = 1
 
 RESOLUTIONS = {1: (800, 480), 2: (1280, 720), 3: (1920, 1080)}
+# Named in errors and reports only: 1440p, 4K and portrait screens also offer 800x480, which is mandatory.
+RESOLUTION_NAMES = {**{index: f"{w}x{h}" for index, (w, h) in RESOLUTIONS.items()}, 4: "2560x1440", 5: "3840x2160",
+                    6: "720x1280", 7: "1080x1920", 8: "1440x2560", 9: "2160x3840"}
+CODEC_NAMES = {3: "H.264", 5: "VP9", 6: "AV1", 7: "H.265"}
+DISPLAY_MAIN = 0  # MediaSinkService.display_type; 1 is the instrument cluster, 2 an auxiliary screen
 FRAME_RATES = {1: 60, 2: 30}
 # Software H.264 on the comma is the constraint: prefer 720p, then 480p. 1080p
 # is accepted only when nothing smaller is offered.
@@ -84,6 +89,18 @@ RESOLUTION_PREFERENCE = (2, 1, 3)
 # A real phone pings periodically; answering pings is mandatory, sending them
 # is harmless and keeps impatient receivers from declaring the link idle.
 PING_INTERVAL = 2.0
+# Android's TLS 1.2 suites, strongest first. Python's defaults leave out the SHA-1 and static-RSA
+# suites that older head-unit stacks need (a Sony XAV-AX3200 offers only TLS_RSA_WITH_AES_128_CBC_SHA).
+TLS12_CIPHERS = ":".join((
+  "ECDHE-ECDSA-AES128-GCM-SHA256", "ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-ECDSA-AES256-GCM-SHA384",
+  "ECDHE-RSA-AES256-GCM-SHA384", "ECDHE-ECDSA-CHACHA20-POLY1305", "ECDHE-RSA-CHACHA20-POLY1305",
+  "ECDHE-ECDSA-AES128-SHA", "ECDHE-RSA-AES128-SHA", "ECDHE-ECDSA-AES256-SHA", "ECDHE-RSA-AES256-SHA",
+  "AES128-GCM-SHA256", "AES256-GCM-SHA384", "AES128-SHA", "AES256-SHA",
+)) + ":@SECLEVEL=1"
+# Messages we do not handle are logged with a readable body, but only the first few of each
+# kind and then every hundredth, so a head unit repeating one cannot flood the session log.
+IGNORED_LOG_FIRST = 5
+IGNORED_LOG_EVERY = 100
 
 
 class AuthenticationRejected(ValueError):
@@ -131,10 +148,31 @@ class VideoMode:
             "fps": self.fps, "margin_width": self.margin_width, "margin_height": self.margin_height}
 
 
+def describe_video_config(config: dict, display_type: int | None = None) -> str:
+  """One offered video configuration (parsed fields), e.g. "1280x720 H.264 margins 0x240 (display 1)"."""
+  resolution, codec = one(config, 1), one(config, 10, CODEC_H264_BP)
+  text = f"{RESOLUTION_NAMES.get(resolution, f'resolution {resolution}')} {CODEC_NAMES.get(codec, f'codec {codec}')}"
+  margin_width, margin_height = one(config, 3, 0) or 0, one(config, 4, 0) or 0
+  if margin_width or margin_height:
+    text += f" margins {margin_width}x{margin_height}"
+  if display_type:
+    text += f" (display {display_type})"
+  return text
+
+
+def describe_video_configs(channels: list[dict]) -> str:
+  """What the head unit offered, for an error a person can act on."""
+  offered = [describe_video_config(config, channel.get("display_type"))
+             for channel in channels for config in channel.get("video_configs", [])]
+  return ", ".join(offered) or "no video"
+
+
 def choose_video_mode(channels: list[dict]) -> VideoMode:
-  """Pick a negotiated H.264 mode the software encoder can sustain."""
+  """Pick a negotiated H.264 mode on the main display that the software encoder can sustain."""
   candidates = []
   for channel in channels:
+    if (channel.get("display_type") or DISPLAY_MAIN) != DISPLAY_MAIN:
+      continue  # an instrument-cluster or auxiliary screen, never the one the driver uses
     for index, config in enumerate(channel.get("video_configs", [])):
       resolution = one(config, 1)
       codec = one(config, 10, CODEC_H264_BP)
@@ -148,7 +186,7 @@ def choose_video_mode(channels: list[dict]) -> VideoMode:
       mode = VideoMode(int(channel["id"]), index, width, height, fps, margin_width, margin_height)
       candidates.append((RESOLUTION_PREFERENCE.index(resolution), fps != 30, index, mode))
   if not candidates:
-    raise ValueError("Head unit did not advertise a supported H.264 video mode")
+    raise ValueError(f"Head unit did not advertise a supported H.264 video mode (offered {describe_video_configs(channels)})")
   return min(candidates, key=lambda item: item[:3])[3]
 
 
@@ -169,6 +207,7 @@ class Session:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.maximum_version = ssl.TLSVersion.TLSv1_2
+    context.set_ciphers(TLS12_CIPHERS)
     context.load_cert_chain(cert, key)
     self.peer_verification_enabled = ca is not None
     if ca is not None:
@@ -176,6 +215,7 @@ class Session:
       context.verify_mode = ssl.CERT_REQUIRED
     self.tls = context.wrap_bio(self.incoming, self.outgoing, server_side=True)
     self.fragments: dict[int, tuple[int, int, bytearray]] = {}
+    self.ignored_counts: dict[tuple[str, int, int], int] = {}
     self.bytes_sent = 0
     self.bytes_received = 0
 
@@ -189,6 +229,13 @@ class Session:
   def event(self, name: str, **values) -> None:
     if self._log is not None:
       self._log(name, **values)
+
+  def ignored(self, name: str, channel: int, kind: int, data: bytes, **values) -> None:
+    """Log a message this side does not act on, rate-limited per (event, channel, kind)."""
+    key = (name, channel, kind)
+    count = self.ignored_counts[key] = self.ignored_counts.get(key, 0) + 1
+    if count <= IGNORED_LOG_FIRST or count % IGNORED_LOG_EVERY == 0:
+      self.event(name, channel=channel, kind=kind, count=count, bytes=len(data), message=describe(data), **values)
 
   # ----------------------------------------------------------------- framing
 
@@ -228,9 +275,14 @@ class Session:
       if timed_peer:
         self.peer.settimeout(previous_timeout)
 
-  def receive(self) -> tuple[int, int, bytes]:
-    """Read one complete message within one deadline, tolerating partial reads."""
-    deadline = time.monotonic() + (self.receive_timeout if self.authenticated else self.handshake_timeout)
+  def receive(self, timeout: float | None = None) -> tuple[int, int, bytes]:
+    """Read one complete message within one deadline, tolerating partial reads.
+
+    ``timeout`` overrides the default deadline: setup waits give a slow head unit longer than streaming does.
+    """
+    if timeout is None:
+      timeout = self.receive_timeout if self.authenticated else self.handshake_timeout
+    deadline = time.monotonic() + max(0.001, timeout)
     timed_peer = hasattr(self.peer, "gettimeout") and hasattr(self.peer, "settimeout")
     previous_timeout = self.peer.gettimeout() if timed_peer else None
 
@@ -309,10 +361,28 @@ class Session:
 
   # --------------------------------------------------------------- handshake
 
+  def _handshake_message(self, kinds: tuple[int, ...], expected: str) -> tuple[int, bytes]:
+    """The next control message of ``kinds``, answering pings and skipping strays within the handshake deadline.
+
+    Some head units ping, or send a message early, between the handshake steps.
+    """
+    deadline = time.monotonic() + self.handshake_timeout
+    while True:
+      remaining = deadline - time.monotonic()
+      if remaining <= 0:
+        raise TimeoutError(f"Head unit did not send {expected}")
+      channel, kind, data = self.receive(timeout=remaining)
+      if channel == 0 and kind in kinds:
+        return kind, data
+      if channel == 0 and kind == MSG_PING_REQUEST:
+        self.send(0, MSG_PING_RESPONSE, field(1, one(parse_fields(data), 1, 0)), encrypted=self.authenticated)
+      elif not (channel == 0 and kind == MSG_PING_RESPONSE):
+        self.ignored("handshake_ignored", channel, kind, data, expected=expected)
+
   def authenticate(self) -> None:
-    channel, kind, data = self.receive()
-    if channel != 0 or kind != MSG_VERSION_REQUEST or len(data) != 4:
-      raise ValueError(f"Expected version request; got {channel}/{kind:#x}")
+    _, data = self._handshake_message((MSG_VERSION_REQUEST,), "a version request")
+    if len(data) != 4:
+      raise ValueError(f"Invalid version request ({len(data)} bytes)")
     major, minor = struct.unpack(">HH", data)
     if major < 1:
       raise ValueError(f"Unsupported Android Auto protocol version {major}.{minor}")
@@ -322,9 +392,7 @@ class Session:
     self.event("version", major=major, minor=minor, reply=f"{reply[0]}.{reply[1]}")
     self.send(0, MSG_VERSION_RESPONSE, struct.pack(">HHH", *reply, 0), encrypted=False)
     while True:
-      channel, kind, data = self.receive()
-      if channel != 0 or kind != MSG_SSL_HANDSHAKE:
-        raise ValueError(f"Expected TLS handshake; got {channel}/{kind:#x}")
+      _, data = self._handshake_message((MSG_SSL_HANDSHAKE,), "the TLS handshake")
       self.incoming.write(data)
       done = False
       try:
@@ -332,6 +400,10 @@ class Session:
         done = True
       except ssl.SSLWantReadError:
         pass
+      except ssl.SSLError as error:
+        # e.g. NO_SHARED_CIPHER from an old head-unit TLS stack, or a certificate the root does not verify
+        self.event("tls_failed", reason=error.reason or "", library=error.library or "", error=str(error)[:200])
+        raise
       response = self.outgoing.read()
       if response:
         self.send(0, MSG_SSL_HANDSHAKE, response, encrypted=False)
@@ -345,9 +417,7 @@ class Session:
         raise ValueError("Head unit presented a phone or CA identity")
       self.head_unit_subject = ", ".join(f"{name}={value}" for rdn in peer_cert.get("subject", ()) for name, value in rdn)
       self.event("head_unit_verified", subject=self.head_unit_subject, expires=peer_cert.get("notAfter", ""))
-    channel, kind, data = self.receive()
-    if channel != 0 or kind != MSG_AUTH_COMPLETE:
-      raise ValueError(f"Expected authentication status; got {channel}/{kind:#x}")
+    _, data = self._handshake_message((MSG_AUTH_COMPLETE,), "the authentication status")
     status = signed(one(parse_fields(data), 1))
     if status is None or not isinstance(status, int):
       raise ValueError("Missing or invalid authentication status")
@@ -366,30 +436,36 @@ class Session:
       if not isinstance(descriptor, bytes):
         continue
       fields = parse_fields(descriptor)
-      item: dict = {"id": one(fields, 1), "services": sorted(number for number in fields if number != 1)}
+      item: dict = {"id": one(fields, 1), "services": sorted(number for number in fields if number != 1),
+                    "descriptor": describe_fields(fields)}
       av = one(fields, 3)
       if isinstance(av, bytes):
         media = parse_fields(av)
         item["media_type"] = one(media, 1)
+        item["display_id"], item["display_type"] = one(media, 6), one(media, 7)
         item["video_configs"] = [parse_fields(c) for c in media.get(4, []) if isinstance(c, bytes)]
       if isinstance(one(fields, 4), bytes):
         item["input"] = True
+        try:
+          item["display_id"] = one(parse_fields(one(fields, 4)), 5)  # the display this input belongs to
+        except ValueError:
+          pass
         try:
           item["input_config"] = parse_input_config(one(fields, 4))
         except ValueError:
           item["input_config"] = InputConfig()
       channels.append(item)
-    head_unit = {number: [value.decode("utf-8", "replace") for value in values if isinstance(value, bytes)]
-                 for number, values in response.items() if number in (2, 3, 4, 5, 6, 7, 8, 9)}
+    # Everything but the channel list: make, model, year, software and, on newer units, headunit_info.
+    head_unit = redact_head_unit(describe_fields({number: values for number, values in response.items() if number != 1}))
     self.event("discovered", channels=[{k: (json_fields_list(v) if k == "video_configs" else str(v) if k == "input_config" else v)
                                         for k, v in ch.items()} for ch in channels],
-               head_unit={k: v for k, v in head_unit.items() if v})
+               head_unit=head_unit)
     return channels
 
   def wait_for(self, channel: int, kind: int, timeout: float = 10.0) -> bytes:
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-      ch, message, data = self.receive()
+    while (remaining := deadline - time.monotonic()) > 0:
+      ch, message, data = self.receive(timeout=remaining)
       if ch == channel and message == kind:
         return data
       self.dispatch(ch, message, data, expected=f"{channel}/{kind:#x}")
@@ -400,7 +476,22 @@ class Session:
     if channel == 0 and kind == MSG_PING_REQUEST:
       self.send(0, MSG_PING_RESPONSE, field(1, one(parse_fields(data), 1, 0)))
     elif not (channel == 0 and kind == MSG_PING_RESPONSE):
-      self.event("unexpected_while_waiting", channel=channel, kind=kind, expected=expected, bytes=len(data))
+      self.ignored("unexpected_while_waiting", channel, kind, data, expected=expected)
+
+
+SDR_VEHICLE_ID = 5          # ServiceDiscoveryResponse.vehicle_id
+HEAD_UNIT_INFO = 17         # ServiceDiscoveryResponse.headunit_info
+HEAD_UNIT_INFO_VEHICLE_ID = 4
+
+
+def redact_head_unit(described: dict) -> dict:
+  """Drop the vehicle identifier from a described discovery response: logs are shared for diagnosis."""
+  if SDR_VEHICLE_ID in described:
+    described[SDR_VEHICLE_ID] = ["redacted"]
+  for info in described.get(HEAD_UNIT_INFO, []):
+    if isinstance(info, dict) and HEAD_UNIT_INFO_VEHICLE_ID in info:
+      info[HEAD_UNIT_INFO_VEHICLE_ID] = ["redacted"]
+  return described
 
 
 def json_fields_list(configs: list[dict]) -> list[dict]:
@@ -427,6 +518,8 @@ class ProjectionSession(Session):
     self.pending: deque[float] = deque()
     self.unacked = 0
     self.acked = 0
+    self.epoch_acked = 0
+    self.video_confirmed = False
     self.frames_sent = 0
     self.focus_epoch = 0
     self.max_ack_seconds = 0.0
@@ -467,10 +560,25 @@ class ProjectionSession(Session):
     self.window = min(window, self.MAX_WINDOW)
     self.event("video_setup", mode=mode.as_dict(), window=window, used_window=self.window)
 
+  def input_channel_for(self, video_channel: int) -> dict | None:
+    """The input service of the display being projected to, matched by display id (unset means the main display).
+
+    A car with a second screen can list that screen's input first. With a single input
+    service and nothing to match it against, that one is used.
+    """
+    inputs = [channel for channel in self.channels if channel.get("input")]
+    video = next((channel for channel in self.channels if channel.get("id") == video_channel), {})
+    display = video.get("display_id") or 0
+    matched = next((channel for channel in inputs if (channel.get("display_id") or 0) == display), None)
+    return matched or (inputs[0] if len(inputs) == 1 else None)
+
   def open_input(self) -> None:
     """Open the touch/key channel so input is acknowledged; failures are not fatal."""
-    channel = next((ch for ch in self.channels if ch.get("input")), None)
+    assert self.mode is not None
+    channel = self.input_channel_for(self.mode.channel)
     if channel is None:
+      if any(ch.get("input") for ch in self.channels):
+        self.event("input_unavailable", error="no input service for the projected display")
       return
     try:
       self.send(channel["id"], MSG_CHANNEL_OPEN_REQUEST, field(1, 0) + field(2, channel["id"]), control=True)
@@ -532,14 +640,14 @@ class ProjectionSession(Session):
         self.event("peer_requested_shutdown", reason=one(fields, 1))
         raise PeerRequestedStop(f"Head unit ended projection (reason {one(fields, 1)})")
       else:
-        self.event("control_ignored", kind=kind, fields=json_fields(fields))
+        self.ignored("control_ignored", channel, kind, data)
     elif mode is not None and channel == mode.channel:
       if kind == VIDEO_FOCUS_INDICATION:
         self._handle_focus(one(fields, 1), one(fields, 2, 0))
       elif kind == AV_MEDIA_ACK:
         self._handle_ack(one(fields, 1), int(one(fields, 2, 0) or 0))
       else:
-        self.event("video_ignored", kind=kind, fields=json_fields(fields))
+        self.ignored("video_ignored", channel, kind, data)
     elif channel == self.input_channel:
       if kind == INPUT_EVENT:
         self.input_events += 1
@@ -551,9 +659,9 @@ class ProjectionSession(Session):
       elif kind == INPUT_BINDING_RESPONSE:
         self.event("input_bound", status=signed(one(fields, 1, 0)))
       else:
-        self.event("input_ignored", kind=kind)
+        self.ignored("input_ignored", channel, kind, data)
     else:
-      self.event("channel_ignored", channel=channel, kind=kind, bytes=len(data))
+      self.ignored("channel_ignored", channel, kind, data)
 
   def _handle_focus(self, focus, unsolicited) -> None:
     was_focused = self.focused
@@ -572,6 +680,7 @@ class ProjectionSession(Session):
         self.unacked = 0
         self.pending.clear()
         self.config_ack_slack = 0
+        self.epoch_acked = 0
       self.media_started = True
       self.needs_keyframe = True
       self.focus_epoch += 1
@@ -584,12 +693,14 @@ class ProjectionSession(Session):
     # session (as an extra count) or, like the DHU, under session 0.
     if sid != self.session_id and 0 < count <= self.config_ack_slack:
       self.config_ack_slack -= count
+      self._confirm_video()
       return
     excess = count - self.unacked
     if sid == self.session_id and 0 < excess <= self.config_ack_slack:
       self.config_ack_slack -= excess
       count -= excess
       if count == 0:
+        self._confirm_video()
         return
     if sid != self.session_id or not 0 < count <= self.unacked or count > len(self.pending):
       raise ValueError(f"Invalid video acknowledgement session={sid} count={count} pending={self.unacked}")
@@ -598,6 +709,16 @@ class ProjectionSession(Session):
       self.max_ack_seconds = max(self.max_ack_seconds, now - self.pending.popleft())
     self.unacked -= count
     self.acked += count
+    self.epoch_acked += count
+    self._confirm_video()
+
+  def _confirm_video(self) -> None:
+    # Same-session ACKs do not distinguish configuration from frames. Until the
+    # optional configuration ACKs are accounted for, use the conservative lower
+    # bound on acknowledged frames without changing flow-control credit.
+    if not self.video_confirmed and self.epoch_acked > self.config_ack_slack:
+      self.video_confirmed = True
+      self.event("video_acknowledged", session=self.session_id, ack_ms=round(self.max_ack_seconds * 1000))
 
   def can_send(self) -> bool:
     return self.focused and self.unacked < self.window

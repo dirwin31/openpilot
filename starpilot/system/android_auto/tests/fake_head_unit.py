@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 import socket
+import time
 import ssl
 import struct
 import threading
@@ -62,20 +63,45 @@ def video_config(resolution: int, margin_w: int = 0, margin_h: int = 0) -> bytes
   return field(1, resolution) + field(2, 2) + field(3, margin_w) + field(4, margin_h) + field(5, 160)
 
 
-def discovery_response(video_channel: int = 3, input_channel: int = 1) -> bytes:
-  av = field(1, 3) + field(4, video_config(1)) + field(4, video_config(2, 0, 240))
+def discovery_response(video_channel: int = 3, input_channel: int = 1, *, resolutions: tuple[tuple[int, int, int], ...] = ((1, 0, 0), (2, 0, 240)),
+                       cluster_channel: int | None = None, cluster_input_channel: int | None = None, headunit_info: bool = False) -> bytes:
+  """The car's services. ``resolutions`` are (resolution index, margin width, margin height) on the main display;
+  ``cluster_channel`` adds an instrument-cluster video sink (display 1) listed first, and ``cluster_input_channel``
+  that display's own input, listed before the main one; ``headunit_info`` adds the newer
+  identity message (with a vehicle id that must never reach a log)."""
+  av = field(1, 3) + b"".join(field(4, video_config(*resolution)) for resolution in resolutions)
   video = field(1, video_channel) + field(3, av)
   audio = field(1, 4) + field(3, field(1, 1))
   touch = field(1, input_channel) + field(4, field(1, 84) + field(1, 4) + field(2, field(1, 1280) + field(2, 720)))
-  return field(1, video) + field(1, audio) + field(1, touch) + field(2, "Honda") + field(3, "Civic")
+  cluster = b""
+  if cluster_channel is not None:
+    cluster = field(1, field(1, cluster_channel) + field(3, field(1, 3) + field(4, video_config(2)) + field(6, 1) + field(7, 1)))
+  if cluster_input_channel is not None:
+    cluster = field(1, field(1, cluster_input_channel) + field(4, field(1, 19) + field(5, 1))) + cluster
+  info = b""
+  if headunit_info:
+    info = field(5, "VIN-SECRET") + field(17, field(1, "Hyundai") + field(2, "IONIQ 6") + field(3, "2023") + field(4, "VIN-SECRET")
+                                            + field(5, "Mobis") + field(6, "Gen5W"))
+  return cluster + field(1, video) + field(1, audio) + field(1, touch) + field(2, "Honda") + field(3, "Civic") + info
 
 
 class FakeHeadUnit:
   """Car side of one AA TCP session. Runs in a thread; records what the phone sent."""
 
   def __init__(self, identity: dict[str, Path], *, window: int = 4, reject_auth: bool = False, require_client_cert: bool = True,
-               unsolicited_focus: bool = False, version: tuple[int, int] = (1, 7), ack_codec_config: bool | int = True):
+               unsolicited_focus: bool = False, version: tuple[int, int] = (1, 7), ack_codec_config: bool | int = True,
+               ciphers: str | None = None, ping_during_auth: bool = False, discovery_delay: float = 0.0,
+               discovery: bytes | None = None, video_channel: int = 3, accepted_config: int = 1):
     self.unsolicited_focus = unsolicited_focus
+    self.ciphers = ciphers  # restrict the car's TLS offer, like an old head-unit stack
+    self.ping_during_auth = ping_during_auth
+    self.ping_replies = 0
+    self.discovery_delay = discovery_delay
+    self.discovery = discovery
+    self.video_channel = video_channel
+    self.accepted_config = accepted_config  # the video configuration index the car's AV setup response confirms
+    self.cipher = ""
+    self.opened: list[int] = []
     self.ack_codec_config = ack_codec_config
     self.codec_configs: list[tuple[int | None, bytes, int]] = []  # (session, SPS/PPS, frames received before it)
     self.version = version
@@ -153,9 +179,20 @@ class FakeHeadUnit:
         self.sock.close()
       self.listener.close()
 
+  def _receive_handshake(self) -> tuple[int, int, bytes]:
+    """The phone's next handshake message, counting its replies to our pings."""
+    while True:
+      channel, kind, data = self._receive()
+      if (channel, kind) == (0, 12):
+        self.ping_replies += 1
+        continue
+      return channel, kind, data
+
   def _session(self) -> None:
+    if self.ping_during_auth:
+      self._send(0, 11, field(1, 1), encrypted=False)  # a ping before anything else
     self._send(0, 1, struct.pack(">HH", *self.version), encrypted=False)
-    channel, kind, data = self._receive()
+    channel, kind, data = self._receive_handshake()
     assert (channel, kind) == (0, 2)
     self.version_reply = struct.unpack(">HHH", data)
     assert self.version_reply[2] == 0
@@ -164,6 +201,9 @@ class FakeHeadUnit:
     context.load_cert_chain(str(self.identity["hu_cert"]), str(self.identity["hu_key"]))
     context.load_verify_locations(cafile=str(self.identity["root"]))
     context.verify_mode = ssl.CERT_REQUIRED if self.require_client_cert else ssl.CERT_NONE
+    if self.ciphers is not None:
+      context.maximum_version = ssl.TLSVersion.TLSv1_2
+      context.set_ciphers(self.ciphers)
     self.incoming, self.outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
     self.tls = context.wrap_bio(self.incoming, self.outgoing, server_side=False)
     while True:
@@ -177,9 +217,12 @@ class FakeHeadUnit:
         self._send(0, 3, out, encrypted=False)
       if done:
         break
-      channel, kind, data = self._receive()
+      channel, kind, data = self._receive_handshake()
       assert (channel, kind) == (0, 3)
       self.incoming.write(data)
+    self.cipher = self.tls.cipher()[0]
+    if self.ping_during_auth:
+      self._send(0, 11, field(1, 2), encrypted=False)  # and one between the TLS handshake and its status
     self._send(0, 4, field(1, 1 if self.reject_auth else 0), encrypted=False)
     if self.reject_auth:
       return
@@ -192,37 +235,41 @@ class FakeHeadUnit:
       fields = parse_fields(data) if kind not in (0, 1) else {}
       if channel == 0 and kind == 5:
         self.device_name = one(fields, 4, b"").decode()
-        self._send(0, 6, discovery_response())
+        time.sleep(self.discovery_delay)  # a slow head unit, longer than the phone's streaming timeout
+        self._send(0, 6, self.discovery if self.discovery is not None else discovery_response(self.video_channel))
       elif channel == 0 and kind == 11:
         self._send(0, 12, data)
+      elif channel == 0 and kind == 12:
+        self.ping_replies += 1
       elif channel == 0 and kind == 15:
         self._send(0, 16)
         self.shutdown_received.set()
         return
       elif kind == 7:
+        self.opened.append(channel)
         self._send(channel, 8, field(1, 0), control=True)
-      elif channel == 3 and kind == 0x8000:
-        self._send(3, 0x8003, field(1, 2) + field(2, self.window) + field(3, 1))
+      elif channel == self.video_channel and kind == 0x8000:
+        self._send(channel, 0x8003, field(1, 2) + field(2, self.window) + field(3, self.accepted_config))
         if self.unsolicited_focus:  # like the DHU: grant focus before the phone asks
           focused = True
-          self._send(3, 0x8008, field(1, 1) + field(2, 1))
-      elif channel == 3 and kind == 0x8007:
+          self._send(channel, 0x8008, field(1, 1) + field(2, 1))
+      elif channel == self.video_channel and kind == 0x8007:
         if one(fields, 2) == 1 and not focused:
           focused = True
-          self._send(3, 0x8008, field(1, 1) + field(2, 0))
-      elif channel == 3 and kind == 0x8001:
+          self._send(channel, 0x8008, field(1, 1) + field(2, 0))
+      elif channel == self.video_channel and kind == 0x8001:
         session_id = one(fields, 1)
         self.start_indications.append(session_id)
-      elif channel == 3 and kind == 1:
+      elif channel == self.video_channel and kind == 1:
         self.codec_configs.append((session_id, data, len(self.frames)))
         if self.ack_codec_config is not False:  # True: current session; an int: that session id (the DHU uses 0)
           ack_session = session_id if self.ack_codec_config is True else self.ack_codec_config
-          self._send(3, 0x8004, field(1, ack_session) + field(2, 1))
-      elif channel == 3 and kind == 0:
+          self._send(channel, 0x8004, field(1, ack_session) + field(2, 1))
+      elif channel == self.video_channel and kind == 0:
         self.frames.append((session_id, data[8:]))
         unacked += 1
         self.streaming.set()
-        self._send(3, 0x8004, field(1, session_id) + field(2, 1))
+        self._send(channel, 0x8004, field(1, session_id) + field(2, 1))
         unacked -= 1
       elif channel == 1 and kind == 0x8002:
         self._send(1, 0x8003, field(1, 0))
@@ -232,7 +279,7 @@ class FakeHeadUnit:
     self._send(1, 0x8001, field(1, 123) + field(3, field(1, location) + field(2, 0) + field(3, action)))
 
   def set_focus(self, projected: bool) -> None:
-    self._send(3, 0x8008, field(1, 1 if projected else 2) + field(2, 1))
+    self._send(self.video_channel, 0x8008, field(1, 1 if projected else 2) + field(2, 1))
 
   def close(self) -> None:
     self.stop.set()
@@ -310,5 +357,8 @@ def rfcomm_head_unit(sock: socket.socket, endpoint: tuple[str, int], *, version_
     elif message_id == bs.WIFI_CONNECT_STATUS:
       seen["connect_status"] = parse_fields(payload)
       return seen
+    elif message_id == bs.WIFI_PING_REQUEST:  # the phone keeping the link alive while it joins
+      seen["phone_pings"] = seen.get("phone_pings", 0) + 1
+      send(bs.WIFI_PING_RESPONSE, payload)
     elif message_id != bs.WIFI_PING_RESPONSE:
       raise AssertionError(f"unexpected {message_id}")

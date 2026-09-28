@@ -13,7 +13,8 @@ import { GalaxySection } from "../components/GalaxySection.js"
 import { DevModeBanner } from "../components/DevModeBanner.js"
 import { LanguageSelector } from "../components/LanguageSelector.js"
 import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
-import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-5"
+import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-6"
+import { AndroidAutoDiagnosticsPanel } from "../components/AndroidAutoDiagnosticsPanel.js?v=aa-diagnostics-2"
 import { languageState, setLanguage, t } from "../i18n.js"
 
 const LEGACY_PERSONALITY_KEYS = new Set([
@@ -29,7 +30,7 @@ const LANGUAGE_SECTION_SLUG = "language"
 export const Settings = {
   name: "Settings",
   components: { SettingTree, PersonalityProfiles, GalaxyToggleCard, GalaxySection, DevModeBanner, LongitudinalMode, LanguageSelector,
-    AndroidAutoIdentityPanel, AndroidAutoCarScreenPanel },
+    AndroidAutoIdentityPanel, AndroidAutoCarScreenPanel, AndroidAutoDiagnosticsPanel },
   data() {
     return {
       layout: [],
@@ -221,6 +222,9 @@ export const Settings = {
               </GalaxySection>
               <GalaxySection title="Android Auto Certificate" icon="bi-key">
                 <AndroidAutoIdentityPanel />
+              </GalaxySection>
+              <GalaxySection title="Diagnostics" icon="bi-clipboard-data">
+                <AndroidAutoDiagnosticsPanel />
               </GalaxySection>
             </template>
           </div>

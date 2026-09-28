@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import socket
 import threading
 import time
@@ -48,6 +47,9 @@ MAX_LOG_FILES = 20
 ENCODER_RECOVERIES = 3       # hardware encoder reopens allowed per window before the session is torn down
 ENCODER_RECOVERY_WINDOW = 10.0
 CAR_LINK_HOLD = 10.0         # a hands-free connection from the car counts as "car present" this long
+USB_HANDSHAKE_WAIT = 10.0    # the car connected but sent no AOA START this long -> present as an accessory directly
+USB_CONFIGURE_WAIT = 5.0     # after re-enumerating as an accessory, wait this long for the car to configure it
+HFP_WAIT = 5.0               # after paging the car, wait this long for its hands-free link before the AA RFCOMM
 DHU_PID_GLOB = "dhu-*.pid"   # under DATA_DIR, one per running tools/android_auto/dhu_device.py
 
 STATE_LABELS = {
@@ -127,21 +129,13 @@ class EventLog:
     self.recent: deque[dict] = deque(maxlen=40)
     self.lock = threading.Lock()
 
-  @staticmethod
-  def _order(path: Path) -> tuple[int, str]:
-    # Files are numbered, because the clock can read a date from months ago until it syncs;
-    # pruning by the timestamp in the name deleted the newest session first.
-    # Unnumbered files are from before numbering, so they are the oldest.
-    match = re.fullmatch(r"session-(\d{6})-.*\.jsonl", path.name)
-    return (int(match[1]), path.name) if match else (-1, path.name)
-
   def open(self) -> None:
     try:
       self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-      logs = sorted(self.directory.glob("session-*.jsonl"), key=self._order)
+      logs = sorted(self.directory.glob("session-*.jsonl"), key=identity_store.session_log_order)
       for old in logs[:max(0, len(logs) - MAX_LOG_FILES + 1)]:
         old.unlink(missing_ok=True)
-      number = max([0, *(self._order(log)[0] for log in logs)]) + 1
+      number = max([0, *(identity_store.session_log_order(log)[0] for log in logs)]) + 1
       path = self.directory / f"session-{number:06d}-{identity_store.timestamp()}.jsonl"
       fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
       self.handle = os.fdopen(fd, "a")
@@ -186,6 +180,7 @@ class Supervisor:
     self._pairing_until = 0.0
     self._pairing_known: set[str] | None = None  # Android Auto cars already paired when the pairing window opened
     self._car_seen_at = -CAR_LINK_HOLD
+    self._hfp_link = threading.Event()  # set when the chosen car opens the hands-free link
     self.auto = AutoConnectPolicy()
     self.log = EventLog()
     self.config = identity_store.load_config()
@@ -341,22 +336,29 @@ class Supervisor:
   def _auto_connect(self, now: float) -> None:
     config = self.config
     address = config["receiver_address"]
-    if not (config["auto_connect"] and config["connection"] == "wireless" and address):
-      if self._bluez is not None and not self._session_alive() and not self._pairing_active():
-        self._release_phone()  # drop a standby gateway left from before auto-connect was turned off
+    wired = config["connection"] == "wired"
+    enabled = config["auto_connect"] and (wired or bool(address))
+    if (not enabled or wired) and self._bluez is not None and not self._session_alive() and not self._pairing_active():
+      self._release_phone()  # drop a standby gateway: auto-connect is off, or wired needs no Bluetooth
+    if not enabled:
       return
     running = self._session_alive()
-    try:
-      bluez = self._phone()
-      adapter_ready, device = bluez.snapshot(address)
-      if adapter_ready and config.get("phone_class", True):
-        bluez.register_hfp()  # standby: lets the car reach the comma when it powers on
-    except Exception:
-      adapter_ready, device = False, None  # Bluetooth still starting (or restarting)
-    car_link = bool(device and device["connected"]) or now - self._car_seen_at < CAR_LINK_HOLD
+    if wired:
+      # The drive is the only sign of the car: the session then waits for its USB handshake,
+      # whether the car was on before the comma booted or is switched on after.
+      ready, car_link = True, False
+    else:
+      try:
+        bluez = self._phone()
+        adapter_ready, device = bluez.snapshot(address)
+        if adapter_ready and config.get("phone_class", True):
+          bluez.register_hfp()  # standby: lets the car reach the comma when it powers on
+      except Exception:
+        adapter_ready, device = False, None  # Bluetooth still starting (or restarting)
+      car_link = bool(device and device["connected"]) or now - self._car_seen_at < CAR_LINK_HOLD
+      ready = adapter_ready and bool(device and device["paired"])
     onroad = self._onroad()
-    action = self.auto.decide(now, enabled=True, onroad=onroad, car_link=car_link,
-                              ready=adapter_ready and bool(device and device["paired"]), running=running)
+    action = self.auto.decide(now, enabled=True, onroad=onroad, car_link=car_link, ready=ready, running=running)
     if action == "start" and dhu_session_active():
       return
     if action == "start":
@@ -431,6 +433,7 @@ class Supervisor:
   def _hfp_connected(self, address: str) -> None:
     if address.upper() == self.config["receiver_address"].upper():
       self._car_seen_at = time.monotonic()
+      self._hfp_link.set()
 
   def _release_phone(self) -> None:
     """Stop looking like a phone; keep only the standby gateway auto-connect needs."""
@@ -584,8 +587,16 @@ class Supervisor:
     device = bluez.device(address)
     if device is None or not device["paired"]:
       raise RuntimeError("The car is not paired with this comma; pair it in Bluetooth settings")
+    self._hfp_link.clear()
     bluez.connect_device(address)
-    self._wait(1.0)
+    if config.get("phone_class", True) and not device["connected"]:
+      # Head units treat a device as a phone once hands-free is up, and some refuse wireless
+      # projection until then; wait for it rather than a fixed pause, but go on without it.
+      started = time.monotonic()
+      while not self._hfp_link.is_set() and time.monotonic() - started < HFP_WAIT:
+        self._wait(0.1)
+      self.log("hfp_wait", linked=self._hfp_link.is_set(), seconds=round(time.monotonic() - started, 1))
+    self._wait(1.0)  # the service-level AT exchange, and SDP settling on the new link
 
     from openpilot.starpilot.system.android_auto import bt_sockets
     channel = int(config.get("rfcomm_channel") or 0)
@@ -636,33 +647,72 @@ class Supervisor:
     raise RuntimeError(f"Could not find the car's Android Auto service: {last_error}")
 
   def _attempt_usb(self) -> None:
-    """Wired: wait for the car's accessory handshake on USB, then project over the cable."""
+    """Wired: wait for the car's accessory handshake on USB (or skip it), then project over the cable."""
     from openpilot.starpilot.system.android_auto import usb_accessory as usb
     ident = identity_store.load_identity()
+    mode = self.config["usb_mode"]
     gadget = usb.AccessoryGadget(self.log)
     listener = usb.UeventListener()
     bridge = None
     try:
-      gadget.prepare()
+      direct = mode == "direct"
+      gadget.prepare(direct=direct)
       self._stage("waiting_for_usb")
-      while True:
-        self._check_cancel()
-        event = listener.next(0.5)
-        if event is None:
-          continue
-        if "USB_STATE" in event:
-          self.log("usb_state", state=event["USB_STATE"])
-        if event.get("ACCESSORY") == "START":
-          break
-      self._stage("usb_accessory")
-      gadget.switch_to_accessory()
+      if direct:
+        self._await_usb_configured(listener, None)
+      else:
+        direct = self._await_accessory_start(listener, fallback=mode == "auto")
+        gadget.switch_to_accessory()
+        self._await_usb_configured(listener, USB_CONFIGURE_WAIT)
+      method = "direct" if direct else "handshake"
+      self._stage("usb_accessory", method)
       bridge = usb.AccessoryBridge(log=self.log)
+      self.log("usb_accessory_ready", method=method, strings=getattr(bridge, "strings", {}))
       self._project(None, UsbLease(bridge), ident, connect=lambda: self._track(bridge.socket))
     finally:
       if bridge is not None:
         bridge.close()
       listener.close()
-      gadget.restore()
+      gadget.restore()  # the car sees the cable drop, which re-arms head units that keep the port powered
+
+  def _usb_event(self, listener) -> dict | None:
+    self._check_cancel()
+    event = listener.next(0.5)
+    if event is not None and "USB_STATE" in event:
+      self.log("usb_state", state=event["USB_STATE"])
+    return event
+
+  def _await_accessory_start(self, listener, fallback: bool) -> bool:
+    """Wait for the car's AOA START; True when it never came and the comma should present as an accessory itself.
+
+    The wait starts when the car first connects, not when it configures the comma: a head unit
+    that reads the descriptors of a device it does not recognise may never configure it at all.
+    """
+    connected_at = None
+    while True:
+      event = self._usb_event(listener)
+      if event is not None:
+        if event.get("ACCESSORY") == "START":
+          return False
+        state = event.get("USB_STATE")
+        if state in ("CONNECTED", "CONFIGURED"):
+          connected_at = connected_at or time.monotonic()
+        elif state == "DISCONNECTED":
+          connected_at = None
+      if fallback and connected_at is not None and time.monotonic() - connected_at >= USB_HANDSHAKE_WAIT:
+        # Some head units only send the handshake to devices they recognise as phones.
+        self.log("usb_no_accessory_start", waited=USB_HANDSHAKE_WAIT)
+        return True
+
+  def _await_usb_configured(self, listener, timeout: float | None) -> bool:
+    """Wait until the car has configured the accessory, so reads do not fail on a link that is not up yet."""
+    started = time.monotonic()
+    while timeout is None or time.monotonic() - started < timeout:
+      event = self._usb_event(listener)
+      if event is not None and event.get("USB_STATE") == "CONFIGURED":
+        return True
+    self.log("usb_configure_timeout", waited=timeout)
+    return False
 
   def _bootstrap_log(self, name: str, **values) -> None:
     self.log(name, **values)

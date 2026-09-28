@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import ssl
 import stat
 import tempfile
@@ -94,6 +95,8 @@ DEFAULT_CONFIG = {
   "rfcomm_channel": 0,         # 0 = discover through SDP (normal); set only to work around a broken SDP record
   "verify_head_unit": True,    # verify the car's certificate against root-cert.pem when present
   "connection": "wireless",    # "wireless": Bluetooth + the car's Wi-Fi; "wired": USB cable from the car to the comma's USB-C port
+  "usb_mode": "auto",          # wired: "auto" waits for the car's accessory handshake, then presents as an accessory itself;
+                               # "handshake" / "direct" force one way
   "view": "car",               # "car": full StarPilot UI sized for the car; "mirror": copy of the comma screen
   "encoder": "auto",           # "auto": hardware H.264 at 30 fps, else libx264; "hardware" / "software" to force
   "fps": 0,                    # 0 = automatic (30 with hardware, 15 with software); otherwise a cap, 5-30
@@ -110,6 +113,17 @@ DEFAULT_CONFIG = {
   "auto_connect": True,        # start projection on its own when the chosen car is on (onroad, or it reaches the comma)
   "rfcomm_cache": {},          # car address -> Android Auto RFCOMM channel learned over SDP, to skip discovery next time
 }
+
+
+def session_log_order(path: Path) -> tuple[int, str]:
+  """Sort key for session logs, oldest first.
+
+  Files are numbered, because the clock can read a date from months ago until it syncs;
+  ordering by the timestamp in the name put the newest session first. Unnumbered files
+  are from before numbering, so they are the oldest.
+  """
+  match = re.fullmatch(r"session-(\d{6})-.*\.jsonl", path.name)
+  return (int(match[1]), path.name) if match else (-1, path.name)
 
 
 def load_config(path: Path | None = None) -> dict:
@@ -130,6 +144,8 @@ def load_config(path: Path | None = None) -> dict:
     config["view"] = "car"
   if config["connection"] not in ("wireless", "wired"):
     config["connection"] = "wireless"
+  if config["usb_mode"] not in ("auto", "handshake", "direct"):
+    config["usb_mode"] = "auto"
   config["bitrate_kbps"] = max(1000, min(12000, int(config["bitrate_kbps"])))
   if config["rate_control"] not in ("cbr", "vbr"):
     config["rate_control"] = "cbr"
