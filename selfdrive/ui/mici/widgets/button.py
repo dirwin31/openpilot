@@ -313,9 +313,12 @@ class BigMultiToggle(BigToggle):
   def _width_hint(self) -> int:
     return int(self._rect.width - self.LABEL_HORIZONTAL_PADDING * 2 - self._txt_enabled_toggle.width)
 
+  def _option_index(self) -> int:
+    return self._options.index(self.value) if self.value in self._options else 0
+
   def _handle_mouse_release(self, mouse_pos: MousePos):
     super()._handle_mouse_release(mouse_pos)
-    cur_idx = self._options.index(self.value)
+    cur_idx = self._option_index()
     new_idx = (cur_idx + 1) % len(self._options)
     self.set_value(self._options[new_idx])
     if self._select_callback:
@@ -325,7 +328,9 @@ class BigMultiToggle(BigToggle):
     # don't draw pill from BigToggle
     BigButton._draw_content(self, btn_y)
 
-    checked_idx = self._options.index(self.value)
+    # A live setting may briefly lag a renamed display option. Keep rendering
+    # the control instead of terminating the entire UI process.
+    checked_idx = self._option_index()
 
     x = self._rect.x + self._rect.width - self._txt_enabled_toggle.width
     y = btn_y

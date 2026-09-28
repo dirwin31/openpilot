@@ -32,7 +32,23 @@ def test_cards_follow_the_connection_and_what_can_change():
   assert state.can_connect(wireless) and state.can_connect(wired) and not state.can_connect({**wireless, "receiver_address": ""})
   assert state.can_change_while(wireless) and not state.can_change_while({**wireless, "running": True})
   assert state.connect_label({"running": True}) == "Disconnect" and state.connect_label(wireless) == "Connect"
-  assert state.connection_value(wired) == "usb" and state.view_value({"configured_view": "mirror"}) == "mirror"
+  assert state.connection_value(wired) == "USB" and state.view_value({"configured_view": "mirror"}) == "Screen Mirror"
+
+
+def test_daemon_values_always_match_the_rendered_toggle_options():
+  for connection in ("wireless", "wired"):
+    assert state.connection_value({"connection": connection}) in state.CONNECTION_OPTIONS
+  for view in ("car", "mirror"):
+    assert state.view_value({"configured_view": view}) in state.VIEW_OPTIONS
+
+
+def test_multi_toggle_survives_a_stale_display_value():
+  toggle = android_auto.BigMultiToggle.__new__(android_auto.BigMultiToggle)
+  toggle._options = ["Wireless", "USB"]
+  toggle.value = "wireless"
+  assert toggle._option_index() == 0
+  toggle.value = "USB"
+  assert toggle._option_index() == 1
 
 
 def test_split_text_keeps_every_word_within_the_limit():
@@ -86,9 +102,9 @@ def ui(monkeypatch):
 @pytest.mark.parametrize("tap,value,call,title", [
   ("_auto_tapped", False, ("set_auto_connect", False), "Slide for Auto\nConnect Off"),
   ("_auto_tapped", True, ("set_auto_connect", True), "Slide for Auto\nConnect On"),
-  ("_connection_tapped", "usb", ("set_connection", "wired"), "slide to\nuse usb"),
-  ("_view_tapped", "mirror", ("set_view", "mirror"), "slide to\nmirror comma"),
-  ("_view_tapped", "car layout", ("set_view", "car"), "slide to use\ncar layout"),
+  ("_connection_tapped", "USB", ("set_connection", "wired"), "slide to\nuse USB"),
+  ("_view_tapped", "Screen Mirror", ("set_view", "mirror"), "slide to\nmirror comma"),
+  ("_view_tapped", "Android Auto", ("set_view", "car"), "slide to use\nAndroid Auto"),
 ])
 def test_changes_wait_for_a_slide_to_confirm(ui, tap, value, call, title):
   getattr(ui.page, tap)(value)
@@ -115,8 +131,8 @@ def test_confirmed_value_shows_until_the_status_catches_up(ui):
   ui.pushed[0].callback()
   assert ui.page._shown("auto", True) is False, "the daemon has not caught up yet"
   assert ui.page._shown("auto", False) is False and "auto" not in ui.page._pending
-  ui.page._pending["view"] = ("mirror", time.monotonic() - 1)
-  assert ui.page._shown("view", "car layout") == "car layout", "a change that never lands stops showing"
+  ui.page._pending["view"] = ("Screen Mirror", time.monotonic() - 1)
+  assert ui.page._shown("view", "Android Auto") == "Android Auto", "a change that never lands stops showing"
 
 
 def test_changing_the_car_confirms_but_the_first_car_does_not(ui):

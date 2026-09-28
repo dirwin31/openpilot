@@ -49,6 +49,7 @@ export const AndroidAutoConnectionPanel = {
     autoConnectText() { return this.status?.auto_connect ? "On" : "Off" },
   },
   methods: {
+    address,
     apply(payload) {
       this.status = payload?.status || null
       this.devices = Array.isArray(payload?.devices) ? payload.devices : []
