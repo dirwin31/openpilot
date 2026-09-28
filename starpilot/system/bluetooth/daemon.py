@@ -117,6 +117,10 @@ class BluetoothController:
         result.update(self._client().status())
         result["available"] = True
         self._bluez.agent.set_auto_accept_incoming(result["offroad"])
+        self._bluez.agent.set_auto_accept_head_units({
+          device["path"] for device in result["devices"]
+          if device.get("path") and device["paired"] and device["trusted"] and ANDROID_AUTO_WIRELESS_UUID in device.get("uuids", [])
+        })
         prompt = result.get("prompt")
         if prompt is not None and self._pairing_address:
           prompt["address"] = self._pairing_address

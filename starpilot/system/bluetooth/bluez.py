@@ -39,6 +39,7 @@ class PairingAgent:
     self._generation = 0
     self._auto_accept_paths: set[str] = set()
     self._auto_accept_incoming = False
+    self._head_unit_paths: set[str] = set()
 
   @property
   def prompt(self) -> dict[str, Any] | None:
@@ -99,9 +100,15 @@ class PairingAgent:
     with self._condition:
       self._auto_accept_incoming = enabled
 
+  def set_auto_accept_head_units(self, device_paths: set[str]) -> None:
+    """Paired, trusted Android Auto head units: the car re-confirms the bond onroad while nobody is in settings."""
+    with self._condition:
+      self._head_unit_paths = set(device_paths)
+
   def auto_accept(self, kind: str, device_path: str) -> bool:
     with self._condition:
-      return kind in {"confirmation", "authorization"} and (self._auto_accept_incoming or device_path in self._auto_accept_paths)
+      return kind in {"confirmation", "authorization"} and (self._auto_accept_incoming or device_path in self._auto_accept_paths or
+                                                             device_path in self._head_unit_paths)
 
 class BlueZClient:
   def __init__(self):

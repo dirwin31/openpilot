@@ -170,6 +170,50 @@ def test_bootstrap_asks_car_to_start_projection():
   assert ("bootstrap_tx", {"message": "WifiStartRequest", "bytes": 0}) in events
 
 
+def test_bootstrap_takes_endpoint_from_start_response():
+  # 2025 Honda (session 25): version exchange, phone asks, car answers with a StartResponse.
+  result, joined, seen, events = run_bootstrap(start_request_delay=0.1, version_first=True, wait_for_phone_start=True,
+                                               answer_start=True)
+  assert (result.endpoint.ip, result.endpoint.port) == ("192.168.50.1", 5288) and joined[0].ssid == "HondaAA"
+  assert seen["messages"].count(bs.WIFI_START_REQUEST) == 1
+  assert not any(name == "bootstrap_ignored" for name, _ in events)
+
+
+def test_bootstrap_waits_out_a_busy_start_response():
+  # The car says "not ready" (status alone), then sends the endpoint on its own.
+  result, joined, _, events = run_bootstrap(start_request_delay=0.1, version_first=True, wait_for_phone_start=True,
+                                            answer_start=True, busy_replies=1, busy_follow_up=True)
+  assert result.endpoint.port == 5288 and joined[0].ssid == "HondaAA"
+  assert ("bootstrap_start_refused", {"status": -1, "endpoint": False}) in events
+
+
+def test_bootstrap_asks_again_after_a_busy_start_response():
+  result, joined, seen, _ = run_bootstrap(start_request_delay=0.1, version_first=True, wait_for_phone_start=True,
+                                          answer_start=True, busy_replies=2)
+  assert result.endpoint.port == 5288 and joined[0].ssid == "HondaAA"
+  assert seen["messages"].count(bs.WIFI_START_REQUEST) == 3
+
+
+def test_bootstrap_start_response_without_endpoint_is_not_an_endpoint(monkeypatch):
+  now = [0.0]
+  monkeypatch.setattr(bs.time, "monotonic", lambda: now[0])
+  boot = bs.WirelessBootstrap(None, lambda *a, **k: None, stage_timeout=1, start_request_delay=0.3)
+  sent = []
+  monkeypatch.setattr(boot, "send", lambda message, payload=b"": sent.append(message))
+  replies = [(bs.WIFI_START_RESPONSE, field(3, 0)), (bs.WIFI_START_RESPONSE, field(1, "10.0.0.1") + field(2, 5288) + field(3, -3))]
+
+  def receive(timeout):
+    now[0] += 0.2
+    if replies:
+      return replies.pop(0)
+    raise bs.BootstrapTimeout("wifi_start", "head unit did not answer in time")
+
+  monkeypatch.setattr(boot, "next_frame", receive)
+  with pytest.raises(bs.BootstrapTimeout):
+    boot.run(lambda _: pytest.fail("Unexpected join"))
+  assert bs.WIFI_START_REQUEST in sent, "a refused start is asked again"
+
+
 def test_bootstrap_detects_alternate_info_layout():
   _, joined, _, _ = run_bootstrap(oaa_layout=True)
   assert joined[0].key == "secret-key" and joined[0].bssid == "AA:BB:CC:DD:EE:FF"
