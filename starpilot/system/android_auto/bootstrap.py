@@ -89,7 +89,7 @@ class WifiCredentials:
 
   @property
   def open(self) -> bool:
-    return self.security == SECURITY_OPEN or not self.key
+    return self.security == SECURITY_OPEN or (self.security == 0 and not self.key)
 
   def describe(self) -> dict:
     """Loggable summary; never includes the key."""
@@ -236,6 +236,11 @@ class WirelessBootstrap:
     self.send_lock = threading.Lock()
     self.frames_seen = 0
     self.cancelled: Callable[[], bool] = lambda: False
+    self.join_cancelled = threading.Event()
+
+  def join_is_cancelled(self) -> bool:
+    """The Wi-Fi worker must stop on either user cancellation or RFCOMM failure."""
+    return self.join_cancelled.is_set() or self.cancelled()
 
   def send(self, message_id: int, payload: bytes = b"") -> None:
     with self.send_lock:
@@ -322,11 +327,11 @@ class WirelessBootstrap:
         message_id, payload = self.next_frame(max(0.001, wake_at - time.monotonic()))
       except BootstrapTimeout:
         continue  # only an actual read timeout advances timers; EOF/cancellation must fail
-      initial_kick_at = None  # a speaking peer drives its own setup
       if cancelled():
         raise BootstrapError(self.stage, "cancelled")
       if self.service(message_id, payload):
         continue
+      initial_kick_at = None  # setup messages drive the exchange; pings alone do not
       if message_id == WIFI_VERSION_REQUEST:
         major, minor, version_endpoint, info = parse_version_request(payload)
         version, head_unit = (major, minor), {**head_unit, **info}
@@ -337,7 +342,8 @@ class WirelessBootstrap:
         hinted = version_endpoint or hinted
         if hinted is not None and hint_ready_at is None:
           hint_ready_at = time.monotonic() + 3.0
-        start_request_at = time.monotonic() + self.start_request_delay
+        if start_request_at is None:
+          start_request_at = time.monotonic() + self.start_request_delay
       elif message_id == WIFI_START_REQUEST:
         parsed = parse_endpoint(payload)
         if parsed is None:
@@ -351,6 +357,8 @@ class WirelessBootstrap:
         credentials = setup_credentials or credentials
         self.log("bootstrap_setup_info", endpoint=setup_endpoint.__dict__ if setup_endpoint else None,
                  credentials=credentials.describe() if credentials else None)
+      elif message_id == WIFI_INFO_RESPONSE:
+        credentials = parse_info_response(payload)  # some receivers send credentials before the endpoint
       else:
         self.log("bootstrap_ignored", message=NAMES.get(message_id, message_id))
     assert endpoint is not None
@@ -375,14 +383,29 @@ class WirelessBootstrap:
             credentials = parse_info_response(payload)
           except ValueError as error:
             raise BootstrapError(self.stage, str(error)) from error
+        elif message_id == WIFI_SETUP_INFO:
+          setup_endpoint, credentials = parse_setup_info(payload)
+          endpoint = setup_endpoint or endpoint
+        elif message_id == WIFI_START_REQUEST:
+          endpoint = parse_endpoint(payload) or endpoint
         else:
           self.log("bootstrap_ignored", message=NAMES.get(message_id, message_id))
     self.log("bootstrap_credentials", **credentials.describe())
     # Status is field 3 (fields 1/2 are ip/port); aa-proxy sends status alone to real head units.
     self.send(WIFI_START_RESPONSE, field(3, STATUS_SUCCESS))
 
-    # Stage 3: join Wi-Fi while continuing to answer RFCOMM pings.
+    self._join_network(credentials, join_wifi, version is not None)
+    self.stage = "connecting_tcp"
+    return BootstrapResult(endpoint, credentials, head_unit, version)
+
+  def _join_network(self, credentials: WifiCredentials, join_wifi: Callable[[WifiCredentials], None], negotiated: bool) -> None:
+    """Service Bluetooth while joining; never let a failed attempt's worker outlive cleanup.
+
+    join_wifi must use join_is_cancelled and bounded I/O (NetworkLease does).
+    Otherwise a late activation can steal Wi-Fi from the next attempt or from the user.
+    """
     self.stage = "joining_wifi"
+    self.join_cancelled.clear()
     outcome: dict = {}
 
     def worker():
@@ -394,25 +417,11 @@ class WirelessBootstrap:
 
     thread = threading.Thread(target=worker, name="aa_wifi_join", daemon=True)
     thread.start()
-    # Simple DIY launchers consume exactly StartResponse then ConnectStatus.
-    # An unsolicited ping occupies their status slot and can abort a slow join.
-    # Negotiating receivers or peers already sending pings use the richer flow.
-    next_ping = time.monotonic() + self.join_ping_interval
-    while thread.is_alive():
-      if cancelled():
-        raise BootstrapError(self.stage, "cancelled")
-      if self.join_ping_interval > 0 and (version is not None or self.peer_uses_pings) and time.monotonic() >= next_ping:
-        # Joining and DHCP can take 10+ s; a phone keeps the RFCOMM link visibly alive meanwhile.
-        next_ping = time.monotonic() + self.join_ping_interval
-        self.send(WIFI_PING_REQUEST, field(1, time.monotonic_ns() // 1_000_000))
-      try:
-        message_id, payload = self.next_frame(0.25)
-      except BootstrapError as error:
-        if "did not answer" in str(error):
-          continue
-        raise
-      if not self.service(message_id, payload):
-        self.log("bootstrap_ignored", message=NAMES.get(message_id, message_id))
+    try:
+      self._wait_for_join(thread, negotiated)
+    finally:
+      self.join_cancelled.set()
+      thread.join()  # bounded by the lease's D-Bus timeouts and cancellation checks
     if "error" in outcome:
       try:
         self.send(WIFI_CONNECT_STATUS, field(1, STATUS_NETWORK_UNAVAILABLE))
@@ -420,9 +429,28 @@ class WirelessBootstrap:
         pass
       error = outcome["error"]
       raise BootstrapError(self.stage, str(error)) from error
+    if self.cancelled():
+      raise BootstrapError(self.stage, "cancelled")
     self.send(WIFI_CONNECT_STATUS, field(1, STATUS_SUCCESS))
-    self.stage = "connecting_tcp"
-    return BootstrapResult(endpoint, credentials, head_unit, version)
+
+  def _wait_for_join(self, thread: threading.Thread, negotiated: bool) -> None:
+    # Simple DIY launchers consume exactly StartResponse then ConnectStatus.
+    # An unsolicited ping occupies their status slot and can abort a slow join.
+    # Negotiating receivers or peers already sending pings use the richer flow.
+    next_ping = time.monotonic() + self.join_ping_interval
+    while thread.is_alive():
+      if self.cancelled():
+        raise BootstrapError(self.stage, "cancelled")
+      if self.join_ping_interval > 0 and (negotiated or self.peer_uses_pings) and time.monotonic() >= next_ping:
+        # Joining and DHCP can take 10+ s; a phone keeps the RFCOMM link visibly alive meanwhile.
+        next_ping = time.monotonic() + self.join_ping_interval
+        self.send(WIFI_PING_REQUEST, field(1, time.monotonic_ns() // 1_000_000))
+      try:
+        message_id, payload = self.next_frame(0.25)
+      except BootstrapTimeout:
+        continue
+      if not self.service(message_id, payload):
+        self.log("bootstrap_ignored", message=NAMES.get(message_id, message_id))
 
   def keepalive(self, stop: threading.Event) -> None:
     """Keep the RFCOMM link serviced for the life of the projection session."""

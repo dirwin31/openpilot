@@ -16,6 +16,7 @@ from openpilot.selfdrive.ui.mici.layouts.settings import android_auto_state as s
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigMultiToggle, BigToggle, GreyBigButton
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationDialog, BigDialog, BigMultiOptionDialog
 from openpilot.starpilot.system.android_auto.sdp import AA_WIRELESS_UUID
+from openpilot.starpilot.system.android_auto.connection_help import recovery_hint, setup_instructions
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.widgets.scroller import NavScroller
 
@@ -66,10 +67,12 @@ class AndroidAutoLayoutMici(NavScroller):
     self._view_toggle = BigMultiToggle("display", ["car layout", "mirror"], select_callback=self._view_tapped)
     self._pair_btn = BigButton("pair new car")
     self._pair_btn.set_click_callback(self._pair)
+    self._setup_btn = BigButton("setup help", "tap to read")
+    self._setup_btn.set_click_callback(self._show_setup)
     self._error_btn = BigButton("last error", "tap to read")
     self._error_btn.set_click_callback(self._show_error)
     self._scroller.add_widgets([self._status_card, self._connect_btn, self._car_btn, self._auto_toggle, self._connection_toggle,
-                                self._view_toggle, self._pair_btn, self._error_btn])
+                                self._view_toggle, self._pair_btn, self._setup_btn, self._error_btn])
     self._refresh()
 
   def show_event(self):
@@ -123,6 +126,7 @@ class AndroidAutoLayoutMici(NavScroller):
     items += [self._auto_toggle, self._connection_toggle, self._view_toggle]
     if state.show_pairing(status, self._bluetooth.status.offroad):
       items.append(self._pair_btn)
+    items.append(self._setup_btn)
     if state.show_error(status):
       items.append(self._error_btn)
     if self._scroller.items != items:
@@ -207,4 +211,9 @@ class AndroidAutoLayoutMici(NavScroller):
   def _show_error(self) -> None:
     manager = self._manager()
     if manager is not None and manager.status.get("error"):
-      show_text(TITLE, str(manager.status["error"]), self._icon)
+      show_text(TITLE, recovery_hint(manager.status) + " " + str(manager.status["error"]), self._icon)
+
+  def _show_setup(self) -> None:
+    manager = self._manager()
+    if manager is not None:
+      show_text("setup help", setup_instructions(manager.status), self._icon)

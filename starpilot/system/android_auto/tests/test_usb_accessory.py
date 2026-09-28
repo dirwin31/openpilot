@@ -163,6 +163,12 @@ def test_supervisor_wired_session_end_to_end(tmp_path, monkeypatch):
     def switch_to_accessory(self):
       calls.append("switch")
 
+    def connection_state(self):
+      return ""
+
+    def detach(self):
+      calls.append("detach")
+
     def restore(self):
       calls.append("restore")
 
@@ -185,6 +191,7 @@ def test_supervisor_wired_session_end_to_end(tmp_path, monkeypatch):
     def close(self):
       self.closed.set()
       self.socket.close()
+      calls.append("close_bridge")
 
   monkeypatch.setattr(usb, "AccessoryGadget", FakeGadget)
   monkeypatch.setattr(usb, "UeventListener", FakeListener)
@@ -208,6 +215,7 @@ def test_supervisor_wired_session_end_to_end(tmp_path, monkeypatch):
     sup.stop()
     hu.close()
   assert calls[:2] == ["prepare", "switch"] and "restore" in calls
+  assert calls[-3:] == ["detach", "close_bridge", "restore"]
   assert identity_store.load_config()["connection"] == "wired"
 
 

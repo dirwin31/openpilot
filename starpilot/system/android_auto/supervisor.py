@@ -48,7 +48,7 @@ ENCODER_RECOVERIES = 3       # hardware encoder reopens allowed per window befor
 ENCODER_RECOVERY_WINDOW = 10.0
 CAR_LINK_HOLD = 10.0         # a hands-free connection from the car counts as "car present" this long
 USB_HANDSHAKE_WAIT = 10.0    # the car connected but sent no AOA START this long -> present as an accessory directly
-USB_CONFIGURE_WAIT = 5.0     # after re-enumerating as an accessory, wait this long for the car to configure it
+USB_CONFIGURE_WAIT = 15.0    # slower receivers need time to enumerate after the AOA switch
 HFP_WAIT = 5.0               # after paging the car, wait this long for its hands-free link before the AA RFCOMM
 DHU_PID_GLOB = "dhu-*.pid"   # under DATA_DIR, one per running tools/android_auto/dhu_device.py
 
@@ -175,6 +175,8 @@ class Supervisor:
     self._stop = threading.Event()
     self._thread: threading.Thread | None = None
     self._generation = 0
+    self._stream_started: float | None = None
+    self._retry_at = 0.0
     self._sockets: set[socket.socket] = set()
     self._bluez: Any = None
     self._pairing_until = 0.0
@@ -196,6 +198,8 @@ class Supervisor:
 
   def _stage(self, state: str, detail: str = "") -> None:
     self._check_cancel()
+    if state == "streaming":
+      self._stream_started = time.monotonic()
     self._set(state=state, detail=detail, last_stage=state)
     self.log("stage", state=state, detail=detail)
 
@@ -206,6 +210,8 @@ class Supervisor:
   def status(self) -> dict:
     with self._lock:
       status = dict(self._status)
+    if status["state"] == "backoff":
+      status["retry_in"] = max(0.0, self._retry_at - time.monotonic())
     status["label"] = STATE_LABELS.get(status["state"], status["state"])
     status["receiver_address"] = self.config["receiver_address"]
     status["receiver_name"] = self.config["receiver_name"]
@@ -245,7 +251,8 @@ class Supervisor:
       identity = identity_store.load_identity()  # fail fast with a clear message
       self._stop.clear()
       self._generation += 1
-      self._set(state="connecting_bluetooth", detail="", error="", attempt=0, retry_in=0.0, running=True,
+      self._set(state="waiting_for_usb" if self.config["connection"] == "wired" else "connecting_bluetooth",
+                detail="", error="", attempt=0, retry_in=0.0, running=True,
                 identity=identity_store.expiry_warning(identity))
       self._thread = threading.Thread(target=self._run, args=(self._generation, trigger), name="android_auto_session", daemon=True)
       self._thread.start()
@@ -514,7 +521,8 @@ class Supervisor:
     attempt = 0
     try:
       while not self._stop.is_set():
-        started = time.monotonic()
+        self._stream_started = None
+        self._set(stats={}, mode=None)
         peer_stopped = False
         try:
           self._attempt(lease)
@@ -540,10 +548,12 @@ class Supervisor:
             self.log("wifi_release_failed", error=str(error))
         if self._stop.is_set():
           break
-        attempt = 0 if time.monotonic() - started > STABLE_SESSION_SECONDS else attempt + 1
-        delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)]
+        stable = self._stream_started is not None and time.monotonic() - self._stream_started >= STABLE_SESSION_SECONDS
+        attempt = 0 if stable else attempt + 1
+        delay = BACKOFF_SECONDS[min(max(0, attempt - 1), len(BACKOFF_SECONDS) - 1)]
         if peer_stopped:
           delay = max(delay, PEER_STOP_RETRY_SECONDS)  # the car ended projection itself; do not bounce straight back
+        self._retry_at = time.monotonic() + delay
         self._set(state="backoff", attempt=attempt, retry_in=delay, mode=None)
         try:
           self._wait(delay)
@@ -566,10 +576,10 @@ class Supervisor:
   @staticmethod
   def _describe_error(stage: str, error: Exception) -> str:
     if isinstance(error, AuthenticationRejected):
-      return "The car rejected the Android Auto identity; it may have expired"
+      return "The car rejected the Android Auto identity; check or renew the certificate in Galaxy > Toggles > Android Auto"
     text = str(error) or type(error).__name__
     if stage == "authenticating" and "certificate" in text.lower():
-      text += " (set verify_head_unit false in config.json to test without verifying the car)"
+      text += " (check the comma's date/time and the certificate in Galaxy > Toggles > Android Auto)"
     return f"{STATE_LABELS.get(stage, stage)}: {text}"[:300]
 
   def _attempt(self, lease) -> None:
@@ -613,10 +623,11 @@ class Supervisor:
       rfcomm = self._track(bt_sockets.connect_rfcomm(address, channel))
       boot = WirelessBootstrap(rfcomm, self._bootstrap_log, device_serial=config["device_name"],
                                version_status=int(config.get("version_status", 0)))
-      self._set(state="wifi_start")
-      result = boot.run(lambda credentials: lease.acquire(credentials, cancelled=self._stop.is_set), cancelled=self._stop.is_set)
-    except Exception:
-      if source == "cache" and not self._stop.is_set() and self._status["last_stage"] in ("rfcomm", "wifi_start"):
+      self._stage("wifi_start")
+      result = boot.run(lambda credentials: lease.acquire(credentials, cancelled=boot.join_is_cancelled), cancelled=self._stop.is_set)
+    except Exception as error:
+      failed_stage = getattr(error, "stage", self._status["last_stage"])
+      if source == "cache" and not self._stop.is_set() and failed_stage in ("rfcomm", "wifi_start"):
         self._remember_channel(address, None)  # the car never answered there; ask it over SDP next time
         self.log("rfcomm_cache_dropped", channel=channel)
       raise
@@ -659,21 +670,29 @@ class Supervisor:
       gadget.prepare(direct=direct)
       self._stage("waiting_for_usb")
       if direct:
-        self._await_usb_configured(listener, None)
+        self._await_usb_configured(listener, None, gadget.connection_state)
       else:
-        direct = self._await_accessory_start(listener, fallback=mode == "auto")
+        direct = self._await_accessory_start(listener, fallback=mode == "auto", state_reader=gadget.connection_state)
         gadget.switch_to_accessory()
-        self._await_usb_configured(listener, USB_CONFIGURE_WAIT)
+        if not self._await_usb_configured(listener, USB_CONFIGURE_WAIT, gadget.connection_state):
+          raise RuntimeError("The car did not finish USB setup. Use its Android Auto data port and a data-capable cable")
       method = "direct" if direct else "handshake"
       self._stage("usb_accessory", method)
       bridge = usb.AccessoryBridge(log=self.log)
       self.log("usb_accessory_ready", method=method, strings=getattr(bridge, "strings", {}))
       self._project(None, UsbLease(bridge), ident, connect=lambda: self._track(bridge.socket))
     finally:
-      if bridge is not None:
-        bridge.close()
-      listener.close()
-      gadget.restore()  # the car sees the cable drop, which re-arms head units that keep the port powered
+      try:
+        # Closing an fd in another thread does not cancel a Linux blocking read.
+        # Detach first, then join the bridge workers before the fd can be reused.
+        gadget.detach()
+      finally:
+        try:
+          if bridge is not None:
+            bridge.close()
+        finally:
+          listener.close()
+          gadget.restore()
 
   def _usb_event(self, listener) -> dict | None:
     self._check_cancel()
@@ -682,7 +701,7 @@ class Supervisor:
       self.log("usb_state", state=event["USB_STATE"])
     return event
 
-  def _await_accessory_start(self, listener, fallback: bool) -> bool:
+  def _await_accessory_start(self, listener, fallback: bool, state_reader=lambda: "") -> bool:
     """Wait for the car's AOA START; True when it never came and the comma should present as an accessory itself.
 
     The wait starts when the car first connects, not when it configures the comma: a head unit
@@ -699,17 +718,25 @@ class Supervisor:
           connected_at = connected_at or time.monotonic()
         elif state == "DISCONNECTED":
           connected_at = None
+      state = state_reader()
+      if state in ("CONNECTED", "CONFIGURED") and connected_at is None:
+        connected_at = time.monotonic()
+      elif state == "DISCONNECTED":
+        connected_at = None
       if fallback and connected_at is not None and time.monotonic() - connected_at >= USB_HANDSHAKE_WAIT:
         # Some head units only send the handshake to devices they recognise as phones.
         self.log("usb_no_accessory_start", waited=USB_HANDSHAKE_WAIT)
         return True
 
-  def _await_usb_configured(self, listener, timeout: float | None) -> bool:
+  def _await_usb_configured(self, listener, timeout: float | None, state_reader=lambda: "") -> bool:
     """Wait until the car has configured the accessory, so reads do not fail on a link that is not up yet."""
     started = time.monotonic()
     while timeout is None or time.monotonic() - started < timeout:
+      self._check_cancel()
+      if state_reader() == "CONFIGURED":
+        return True  # kernels may coalesce or omit the android_usb state uevent
       event = self._usb_event(listener)
-      if event is not None and event.get("USB_STATE") == "CONFIGURED":
+      if event is not None and event.get("USB_STATE") == "CONFIGURED" and state_reader() in ("", "CONFIGURED"):
         return True
     self.log("usb_configure_timeout", waited=timeout)
     return False
