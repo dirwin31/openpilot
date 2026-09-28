@@ -14,7 +14,7 @@ def setup_instructions(status: dict) -> str:
       "Wired support still needs testing on physical car receivers.")
   return common + (
     "2. Your car must support wireless Android Auto; Bluetooth audio alone is not enough. " +
-    "While parked, set the comma to Offroad in Settings > System, then select Pair New Car. " +
+    "While parked, set the comma to Offroad in Settings > System, then select Pair a New Car. " +
     "Add a device on the car, select the car in the comma's list, and confirm the code on both screens. " +
     "Allow Android Auto on the car. If needed, select Choose Car after pairing. " +
     "3. Set the comma back to Auto in Settings > System and leave auto-connect on. " +

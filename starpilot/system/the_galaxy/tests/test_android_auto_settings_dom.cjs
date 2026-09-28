@@ -20,6 +20,8 @@ api.setCarScreen=async(change)=>{window.writes.push(change);if(window.failWrite)
 api.getLayout=async()=>[{name:'Vehicle',params:[{key:'AndroidAutoEnabled',label:'Enable Android Auto',ui_type:'toggle',settings_tier:'simple'},
   {key:'ExampleVehicleSetting',label:'Example Vehicle Setting',ui_type:'toggle',settings_tier:'simple'}]}];
 api.getParams=async()=>({AndroidAutoEnabled:true,ExampleVehicleSetting:false});api.getDefaults=async()=>({});
+api.getAndroidAutoConnection=async()=>({status:{state:'idle',running:false,receiver_address:'AA:BB:CC:DD:EE:FF',receiver_name:'Family Car',configured_view:'car',connection:'wireless',auto_connect:true,auto_paused:false,error:'',stats:{}},devices:[{address:'AA:BB:CC:DD:EE:FF',name:'Family Car',paired:true,android_auto:true}],offroad:true,setup_help:'Pair the Car while parked.',recovery_hint:'',devices_error:''});
+api.androidAutoConnectionOp=async()=>api.getAndroidAutoConnection();api.bluetoothOp=async()=>({});
 api.getAndroidAutoIdentity=async()=>({});api.updateParam=async({key,value})=>({[key]:value});
 const fullSettings=new URLSearchParams(location.search).has('settings');
 store.route='/settings/android-auto';
@@ -80,7 +82,9 @@ createApp({components:{AndroidAutoCarScreenPanel,Settings},template:fullSettings
     await page.getByText('Enable Android Auto',{exact:true}).waitFor({timeout:10000}).catch(async error=>{
       throw new Error(`${error.message}\nPage errors: ${errors}\n${await page.locator('body').innerText()}`)
     })
-    assert.equal(await page.getByText('Car Display',{exact:true}).count(),1)
+    assert.equal(await page.getByText('Connection',{exact:true}).count(),1)
+    assert.equal(await page.getByText('Layout',{exact:true}).count(),1)
+    assert.equal(await page.getByText('Status Widgets',{exact:true}).count(),1)
     assert.equal(await page.getByText('Android Auto Certificate',{exact:true}).count(),1)
     for(const width of [320,800,1920]) {
       await page.setViewportSize({width,height:900})
@@ -91,7 +95,9 @@ createApp({components:{AndroidAutoCarScreenPanel,Settings},template:fullSettings
     assert.equal(await page.getByText('Enable Android Auto',{exact:true}).count(),0)
     await page.getByRole('button',{name:'Android Auto',exact:true}).click()
     await page.getByText('Enable Android Auto',{exact:true}).waitFor()
-    assert.equal(await page.getByText('Car Display',{exact:true}).count(),1)
+    assert.equal(await page.getByText('Connection',{exact:true}).count(),1)
+    assert.equal(await page.getByText('Layout',{exact:true}).count(),1)
+    assert.equal(await page.getByText('Status Widgets',{exact:true}).count(),1)
     assert.deepEqual(errors,[])
     console.log('Android Auto controls: six widths, dependencies, switches, selection, save rollback, and Settings navigation passed.')
   } finally { await browser.close() }

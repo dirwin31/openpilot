@@ -190,6 +190,8 @@ from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interr
 from openpilot.starpilot.system.android_auto import apk_identity
 from openpilot.starpilot.system.android_auto import car_screen as aa_car_screen
 from openpilot.starpilot.system.android_auto import compat_report as aa_compat_report
+from openpilot.starpilot.system.android_auto import connection_help as aa_connection_help
+from openpilot.starpilot.system.android_auto.protocol import AndroidAutoClient
 from openpilot.starpilot.system.bluetooth import BluetoothClient
 from openpilot.starpilot.system.wheel_controls import (
   CONTROLLER_ACTION_OPTIONS,
@@ -5560,8 +5562,82 @@ def setup(app):
   @app.before_request
   def require_android_auto_enabled():
     # Offline map tiles are shared with native navigation and remain available.
-    if (request.path.startswith("/api/android_auto/identity") or request.path == "/api/android_auto/car_screen") and not params.get_bool("AndroidAutoEnabled"):
+    protected = (
+      request.path.startswith(("/api/android_auto/connection", "/api/android_auto/identity")) or
+      request.path == "/api/android_auto/car_screen"
+    )
+    if protected and not params.get_bool("AndroidAutoEnabled"):
       return jsonify({"error": "Enable Android Auto under Toggles → Android Auto first."}), 403
+
+  def _android_auto_connection_payload(client=None):
+    client = client or AndroidAutoClient(timeout=12.0)
+    status = client.status()
+    devices = []
+    devices_error = ""
+    if status.get("connection") != "wired":
+      try:
+        devices = client.devices()
+      except Exception as error:
+        # A Bluetooth inventory failure should not hide projection status or
+        # prevent wired controls from remaining useful.
+        devices_error = str(error)
+    return {
+      "status": status,
+      "devices": devices,
+      "devices_error": devices_error,
+      "offroad": params.get_bool("IsOffroad"),
+      "setup_help": aa_connection_help.setup_instructions(status),
+      "recovery_hint": aa_connection_help.recovery_hint(status) if status.get("error") else "",
+    }
+
+  @app.route("/api/android_auto/connection", methods=["GET"])
+  def android_auto_connection():
+    try:
+      return jsonify(_android_auto_connection_payload()), 200
+    except Exception as error:
+      return jsonify({"error": str(error)}), 503
+
+  @app.route("/api/android_auto/connection/<operation>", methods=["POST"])
+  def android_auto_connection_operation(operation):
+    allowed = {"start", "stop", "set_auto_connect", "select_receiver", "set_view", "set_connection", "prepare_pairing"}
+    if operation not in allowed:
+      return jsonify({"error": "Unknown Android Auto operation."}), 404
+    if operation == "prepare_pairing" and not params.get_bool("IsOffroad"):
+      return jsonify({"error": "Pair the car while parked (offroad)."}), 409
+
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+      return jsonify({"error": "Send the Android Auto setting as JSON."}), 400
+    if operation == "set_auto_connect" and not isinstance(data.get("enabled"), bool):
+      return jsonify({"error": "Auto Connect must be on or off."}), 400
+    if operation == "set_connection" and data.get("connection") not in ("wireless", "wired"):
+      return jsonify({"error": "Link Type must be Wireless or USB."}), 400
+    if operation == "set_view" and data.get("view") not in ("car", "mirror"):
+      return jsonify({"error": "Display must be Car Layout or Mirror."}), 400
+    if operation == "select_receiver" and not str(data.get("address", "")).strip():
+      return jsonify({"error": "Choose a Car first."}), 400
+
+    try:
+      client = AndroidAutoClient(timeout=12.0)
+      if not client.available:
+        return jsonify({"error": "Android Auto service is not running. Turn on Bluetooth and try again."}), 503
+      if operation == "start":
+        client.start()
+      elif operation == "stop":
+        client.stop()
+      elif operation == "set_auto_connect":
+        client.set_auto_connect(data["enabled"])
+      elif operation == "select_receiver":
+        client.select_receiver(str(data["address"]).strip(), str(data.get("name", "")).strip())
+      elif operation == "set_view":
+        client.set_view(data["view"])
+      elif operation == "set_connection":
+        client.set_connection(data["connection"])
+      elif operation == "prepare_pairing":
+        client.prepare_pairing()
+      return jsonify(_android_auto_connection_payload(client)), 200
+    except Exception as error:
+      return jsonify({"error": str(error)}), 409
 
   def _android_auto_identity_payload():
     return {

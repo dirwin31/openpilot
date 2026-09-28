@@ -57,6 +57,9 @@ def test_car_screen_settings_have_a_dedicated_android_auto_section():
   settings = (JS_ROOT / "views" / "Settings.js").read_text()
   panel = (JS_ROOT / "components" / "AndroidAutoCarScreenPanel.js").read_text()
   assert "AndroidAutoCarScreenPanel" in settings and "activeSection.name === 'Android Auto' && values.AndroidAutoEnabled" in settings
+  assert 'title="Layout"' in settings and 'section="layout"' in settings
+  assert 'title="Status Widgets"' in settings and 'section="widgets"' in settings
+  assert 'title="Car Display"' not in settings
   assert 'title="Android Auto"' in settings and 'p.key === "AndroidAutoEnabled"' in settings
   assert 'v-else-if="error"' in panel and "attempt < 3" in panel and "@click=\"load\"" in panel
   for value in ('"split"', '"driving"', '"map"', "map_side", "map_orientation", "north_up", "heading_up", "camera",

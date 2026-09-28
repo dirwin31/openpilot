@@ -101,6 +101,7 @@ def test_one_report_and_its_raw_log(monkeypatch, tmp_path):
   assert report["report"]["usb"]["method"] == "direct" and "Outcome: failed" in report["text"]
   log = client.get("/api/android_auto/diagnostics/session-000001-20260927-130000.jsonl?format=log")
   assert log.status_code == 200 and "attachment" in log.headers["Content-Disposition"] and b"usb_no_accessory_start" in log.data
+  log.close()
   for name in ("notes.txt", "..%2Fconfig.json", "car_ui.log", "session-missing.jsonl"):
     assert client.get(f"/api/android_auto/diagnostics/{name}?format=log").status_code == 404
 
@@ -113,13 +114,13 @@ def test_bundle_has_logs_reports_and_settings_but_no_identity(monkeypatch, tmp_p
   response = client.get("/api/android_auto/diagnostics/bundle")
   assert response.status_code == 200 and response.mimetype == "application/zip"
   assert "starpilot-android-auto-" in response.headers["Content-Disposition"]
-  archive = zipfile.ZipFile(io.BytesIO(response.data))
-  names = set(archive.namelist())
-  assert {"REPORT.txt", "config.json", "logs/car_ui.log", "logs/session-000001-20260927-130000.jsonl",
-          "reports/session-000002-20260927-140000.json"} <= names
-  assert not any("identity" in name or name.endswith(".pem") or "notes" in name for name in names)
-  assert "Outcome: projected" in archive.read("REPORT.txt").decode()
-  assert json.loads(archive.read("config.json"))["usb_mode"] == "auto"
+  with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+    names = set(archive.namelist())
+    assert {"REPORT.txt", "config.json", "logs/car_ui.log", "logs/session-000001-20260927-130000.jsonl",
+            "reports/session-000002-20260927-140000.json"} <= names
+    assert not any("identity" in name or name.endswith(".pem") or "notes" in name for name in names)
+    assert "Outcome: projected" in archive.read("REPORT.txt").decode()
+    assert json.loads(archive.read("config.json"))["usb_mode"] == "auto"
 
 
 def test_settings_page_offers_the_diagnostics_panel():

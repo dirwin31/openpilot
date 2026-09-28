@@ -64,7 +64,7 @@ class AndroidAutoLayoutMici(NavScroller):
     # Short titles: a multi-toggle's title shares its width with the pills.
     self._connection_toggle = BigMultiToggle("Link Type", ["wireless", "usb"], select_callback=self._connection_tapped)
     self._view_toggle = BigMultiToggle("display", ["car layout", "mirror"], select_callback=self._view_tapped)
-    self._pair_btn = BigButton("Pair New Car", "pair while parked")
+    self._pair_btn = BigButton("Pair a New Car", "pair while parked")
     self._pair_btn.set_click_callback(self._pair)
     self._setup_btn = BigButton("Setup Help", "tap to read")
     self._setup_btn.set_click_callback(self._show_setup)
