@@ -1,22 +1,31 @@
 """Wired Android Auto: the comma as an Android Open Accessory (AOA) USB device.
 
-The car's USB port is the host. It enumerates the comma's normal gadget and
-sends the AOA handshake (GET_PROTOCOL, the accessory strings, START), which the
-kernel's f_accessory answers and reports as an ``ACCESSORY=START`` uevent on
-``android0``. Like an Android phone, the comma then re-enumerates as Google's
-accessory (18d1:2d01, keeping adb) and the car opens bulk endpoints that carry
-the same Android Auto protocol as the Wi-Fi link.
+The car's USB port is the host. ``AccessoryGadget`` binds a gadget of its own to
+the comma's USB controller (comma's ADB gadget, if bound, steps aside and comes
+back afterwards), with the accessory function as its only interface, so the car
+finds it at interface 0 as on a phone; head units built on aasdk open only that.
 
-``/dev/usb_accessory`` has no poll() and each read() consumes one whole USB
-transfer, so ``AccessoryBridge`` copies between it and a socket pair; the
-projection session uses the socket end unchanged. Gadget changes need root and
-go through ``sudo -n``, like ``/usr/comma/set_adb.sh``; ``restore`` puts the
-original gadget back.
+Two ways in, as head units differ:
+
+* handshake: present as the comma. The car sends the AOA handshake
+  (GET_PROTOCOL, the accessory strings, START), which the kernel's f_accessory
+  answers and reports as an ``ACCESSORY=START`` uevent; the comma then
+  re-enumerates as Google's accessory (18d1:2d00), as a phone does.
+* direct: present as Google's accessory from the start, for head units that
+  never send START to a device they do not recognise as a phone.
+
+Either way the car then opens bulk endpoints carrying the same Android Auto
+protocol as the Wi-Fi link. ``/dev/usb_accessory`` has no poll() and each
+read() consumes one whole USB transfer, so ``AccessoryBridge`` copies between
+it and a socket pair; the projection session uses the socket end unchanged.
+Gadget changes need root and go through ``sudo -n``, like
+``/usr/comma/set_adb.sh``.
 """
 
 from __future__ import annotations
 
 import errno
+import fcntl
 import os
 import socket
 import subprocess
@@ -24,17 +33,56 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-
-GADGET = Path("/sys/kernel/config/usb_gadget/g1")
+CONFIGFS_MOUNT = Path("/config")  # where /usr/comma/set_adb.sh mounts configfs when nothing has
+GADGET_NAME = "starpilot_aa"
 CONFIG = "configs/c.1"
 UDC_NAME = "a600000.dwc3"
 ACCESSORY_FUNCTION = "accessory.gs2"
 ACCESSORY_DEVICE = "/dev/usb_accessory"
+COMMA_VID, COMMA_PID = 0x04D8, 0x1234  # the comma's own gadget identity, before the handshake
 GOOGLE_VID = 0x18D1
-ACCESSORY_ADB_PID = 0x2D01
+ACCESSORY_PID = 0x2D00                 # accessory only: nothing else for the car to open instead
+MAX_SPEED = "high-speed"               # head units are USB 2.0 hosts
 READ_SIZE = 16384  # f_accessory's bulk buffer; a read must cover a whole transfer
 MAX_EMPTY_READS = 64
 NETLINK_KOBJECT_UEVENT = 15
+OPEN_BUSY_WAIT = 5.0  # /dev/usb_accessory stays busy until the previous session's descriptor is released
+# f_accessory's ACCESSORY_GET_STRING_* ioctls: _IOW('M', n, char[256]) for n = 1..6 in this order.
+ACCESSORY_STRINGS = ("manufacturer", "model", "description", "version", "uri", "serial")
+ACCESSORY_STRING_SIZE = 256
+
+
+def _ioc_write(kind: str, number: int, size: int) -> int:
+  return (1 << 30) | (size << 16) | (ord(kind) << 8) | number
+
+
+ACCESSORY_GET_STRING = {name: _ioc_write("M", index + 1, ACCESSORY_STRING_SIZE) for index, name in enumerate(ACCESSORY_STRINGS)}
+
+
+def read_accessory_strings(fd: int, ioctl: Callable = fcntl.ioctl) -> dict[str, str]:
+  """What the car sent in the AOA handshake: its maker and model, for diagnostics. Empty when it sent none."""
+  strings = {}
+  for name, request in ACCESSORY_GET_STRING.items():
+    buffer = bytearray(ACCESSORY_STRING_SIZE)
+    try:
+      ioctl(fd, request, buffer, True)
+    except OSError:
+      continue
+    value = bytes(buffer).split(b"\0", 1)[0].decode("utf-8", "replace").strip()
+    if value:
+      strings[name] = "redacted" if name == "serial" else value  # a per-car identifier; logs are shared
+  return strings
+
+
+def configfs_mount(mounts: str = "/proc/mounts") -> Path | None:
+  try:
+    for line in Path(mounts).read_text().splitlines():
+      parts = line.split()
+      if len(parts) >= 3 and parts[2] == "configfs":
+        return Path(parts[1])
+  except OSError:
+    pass
+  return None
 
 
 def parse_uevent(data: bytes) -> dict[str, str]:
@@ -78,71 +126,118 @@ class UeventListener:
 
 
 class AccessoryGadget:
-  """Switch the comma's USB gadget into accessory mode and back."""
+  """A gadget of our own on the comma's USB controller: the accessory function alone, at interface 0."""
 
-  def __init__(self, log: Callable[..., None], root: Path = GADGET, udc: str = UDC_NAME,
+  def __init__(self, log: Callable[..., None], configfs: Path | None = None, udc: str = UDC_NAME,
                run: Callable[..., subprocess.CompletedProcess] = subprocess.run):
     self.log = log
-    self.root = root
+    self.configfs = configfs
     self.udc = udc
     self.run = run
-    self.original: dict[str, str] | None = None
+    self.root: Path | None = None
+    self.released: Path | None = None  # the gadget that had the controller, rebound by restore()
 
   def _sudo(self, *args: str, data: str | None = None) -> None:
     result = self.run(["sudo", "-n", *args], input=data, capture_output=True, text=True, timeout=10)
     if result.returncode != 0:
       raise RuntimeError(f"{' '.join(args)}: {(result.stderr or '').strip() or result.returncode}")
 
-  def _write(self, name: str, value: str) -> None:
-    self._sudo("tee", str(self.root / name), data=value + "\n")
+  def _write(self, path: Path, value: str) -> None:
+    self._sudo("tee", str(path), data=value + "\n")
 
-  def _read(self, name: str) -> str:
+  @staticmethod
+  def _read(path: Path) -> str:
     try:
-      return (self.root / name).read_text().strip()
+      return path.read_text().strip()
     except OSError:
       return ""
 
-  def prepare(self) -> None:
-    """Create the accessory function so the kernel answers the car's AOA handshake."""
-    if not self.root.is_dir():
-      raise RuntimeError(f"USB gadget {self.root} not set up (enable ADB, which creates it)")
-    self.original = {"idVendor": self._read("idVendor"), "idProduct": self._read("idProduct"), "UDC": self._read("UDC")}
-    if not (self.root / "functions" / ACCESSORY_FUNCTION).is_dir():
-      self._sudo("mkdir", str(self.root / "functions" / ACCESSORY_FUNCTION))
-    if not self.original["UDC"]:
-      self._write("UDC", self.udc)
-    self.log("usb_gadget_prepared", original=self.original)
+  def _base(self) -> Path:
+    if self.configfs is None:
+      self.configfs = configfs_mount()
+    if self.configfs is None:
+      self._sudo("mkdir", "-p", str(CONFIGFS_MOUNT))
+      self._sudo("mount", "-t", "configfs", "none", str(CONFIGFS_MOUNT))
+      self.configfs = CONFIGFS_MOUNT
+    return self.configfs / "usb_gadget"
+
+  def _release_controller(self, base: Path) -> None:
+    """Unbind whichever other gadget holds the controller (comma's ADB gadget), to rebind it later."""
+    self.released = None
+    for gadget in sorted(base.glob("*")):
+      if gadget != self.root and self._read(gadget / "UDC") == self.udc:
+        self._write(gadget / "UDC", "")
+        self.released = gadget
+
+  def _remove_stale_accessories(self, base: Path) -> None:
+    """f_accessory allows one instance; earlier versions left an unlinked one in comma's ADB gadget."""
+    for function in sorted(base.glob("*/functions/accessory.*")):
+      gadget = function.parent.parent
+      if gadget == self.root or any(link.is_symlink() and link.name == function.name for link in gadget.glob("configs/*/*")):
+        continue
+      self._sudo("rmdir", str(function))
+      self.log("usb_stale_accessory_removed", gadget=gadget.name)
+
+  def _bind(self, vid: int, pid: int) -> None:
+    assert self.root is not None
+    if self._read(self.root / "UDC"):
+      self._write(self.root / "UDC", "")
+    self._write(self.root / "idVendor", f"0x{vid:04x}")
+    self._write(self.root / "idProduct", f"0x{pid:04x}")
+    self._write(self.root / "UDC", self.udc)
+
+  def prepare(self, direct: bool = False) -> None:
+    """Take the controller with the accessory gadget; ``direct`` presents as Google's accessory at once."""
+    base = self._base()
+    self.root = base / GADGET_NAME
+    config = self.root / CONFIG
+    self._remove_stale_accessories(base)
+    for path in (self.root / "strings/0x409", config / "strings/0x409", self.root / "functions" / ACCESSORY_FUNCTION):
+      if not path.is_dir():
+        self._sudo("mkdir", "-p", str(path))
+    for name, value in (("strings/0x409/manufacturer", "comma.ai"), ("strings/0x409/product", "StarPilot"),
+                        ("strings/0x409/serialnumber", "StarPilot"), (f"{CONFIG}/strings/0x409/configuration", "Android Auto"),
+                        (f"{CONFIG}/MaxPower", "250")):
+      self._write(self.root / name, value)
+    try:
+      self._write(self.root / "max_speed", MAX_SPEED)
+    except RuntimeError as error:
+      self.log("usb_max_speed_unset", error=str(error))
+    for link in config.iterdir():
+      if link.is_symlink() and link.name != ACCESSORY_FUNCTION:
+        self._sudo("rm", "-f", str(link))  # only the accessory: the car must find it at interface 0
+    if not (config / ACCESSORY_FUNCTION).is_symlink():
+      self._sudo("ln", "-s", str(self.root / "functions" / ACCESSORY_FUNCTION), str(config / ACCESSORY_FUNCTION))
+    self._release_controller(base)
+    self._bind(GOOGLE_VID if direct else COMMA_VID, ACCESSORY_PID if direct else COMMA_PID)
+    self.log("usb_gadget_prepared", mode="direct" if direct else "handshake",
+             released=self.released.name if self.released else "")
+    if direct:
+      self._await_device()
 
   def switch_to_accessory(self) -> None:
     """Re-enumerate as Google's accessory, as a phone does after the AOA START request."""
-    self._write("UDC", "")
-    self._write("idVendor", f"0x{GOOGLE_VID:04x}")
-    self._write("idProduct", f"0x{ACCESSORY_ADB_PID:04x}")
-    link = self.root / CONFIG / ACCESSORY_FUNCTION
-    if not link.exists():
-      self._sudo("ln", "-s", str(self.root / "functions" / ACCESSORY_FUNCTION), str(link))
-    self._write("UDC", self.udc)
+    self._bind(GOOGLE_VID, ACCESSORY_PID)
+    self._await_device()
+    self.log("usb_accessory_mode", vid=f"{GOOGLE_VID:04x}", pid=f"{ACCESSORY_PID:04x}")
+
+  def _await_device(self) -> None:
     for _ in range(50):
       if os.path.exists(ACCESSORY_DEVICE):
         break
       time.sleep(0.1)
     self._sudo("chown", f"{os.getuid()}:{os.getgid()}", ACCESSORY_DEVICE)
-    self.log("usb_accessory_mode", vid=f"{GOOGLE_VID:04x}", pid=f"{ACCESSORY_ADB_PID:04x}")
 
   def restore(self) -> None:
-    """Put the original gadget back; leaves the accessory function unlinked but created."""
-    if self.original is None:
+    """Let go of the controller and give it back to the gadget that had it; the car sees the cable drop."""
+    if self.root is None:
       return
     try:
-      self._write("UDC", "")
-      link = self.root / CONFIG / ACCESSORY_FUNCTION
-      if link.is_symlink():
-        self._sudo("rm", "-f", str(link))
-      for key in ("idVendor", "idProduct"):
-        if self.original[key]:
-          self._write(key, self.original[key])
-      self._write("UDC", self.original["UDC"] or self.udc)
-      self.log("usb_gadget_restored")
+      if self._read(self.root / "UDC"):
+        self._write(self.root / "UDC", "")
+      if self.released is not None:
+        self._write(self.released / "UDC", self.udc)
+      self.log("usb_gadget_restored", rebound=self.released.name if self.released else "")
     except Exception as error:
       self.log("usb_gadget_restore_failed", error=str(error))
 
@@ -152,7 +247,8 @@ class AccessoryBridge:
 
   def __init__(self, device: str = ACCESSORY_DEVICE, log: Callable[..., None] = lambda *a, **k: None):
     self.log = log
-    self.fd = os.open(device, os.O_RDWR)
+    self.fd = self._open(device)
+    self.strings = read_accessory_strings(self.fd)
     self.session_sock, self.bridge_sock = socket.socketpair()
     self.closed = threading.Event()
     self.error = ""
@@ -160,6 +256,17 @@ class AccessoryBridge:
                     threading.Thread(target=self._socket_to_usb, name="aa_usb_tx", daemon=True)]
     for thread in self.threads:
       thread.start()
+
+  @staticmethod
+  def _open(device: str) -> int:
+    deadline = time.monotonic() + OPEN_BUSY_WAIT
+    while True:
+      try:
+        return os.open(device, os.O_RDWR)
+      except OSError as error:
+        if error.errno != errno.EBUSY or time.monotonic() >= deadline:
+          raise
+        time.sleep(0.25)
 
   @property
   def socket(self) -> socket.socket:

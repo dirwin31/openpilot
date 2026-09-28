@@ -36,6 +36,9 @@ ACTIVE_STATE_ACTIVATED = 2
 ACTIVE_STATE_DEACTIVATED = 4
 CONNECTION_ID = "starpilot-android-auto"
 SECURITY_WPA3 = (32,)
+SECURITY_WPA2_WPA3 = (40,)  # transition mode: a WPA2 client joins; PMF where the car offers it
+SECURITY_UNSUPPORTED = {2: "WEP", 3: "WEP", 20: "WPA enterprise", 24: "WPA2 enterprise", 28: "WPA/WPA2 enterprise"}
+PMF_OPTIONAL, PMF_REQUIRED = 2, 3  # NetworkManager 802-11-wireless-security.pmf
 
 
 class NetworkError(RuntimeError):
@@ -69,10 +72,17 @@ def connection_settings(credentials: WifiCredentials, interface: str) -> dict:
     "ipv6": {"method": ("s", "ignore")},
   }
   if not credentials.open:
-    settings["802-11-wireless-security"] = {
+    if credentials.security in SECURITY_UNSUPPORTED:
+      raise NetworkError(f"The car's Wi-Fi uses {SECURITY_UNSUPPORTED[credentials.security]}, which Android Auto phones do not join")
+    security = {
       "key-mgmt": ("s", "sae" if credentials.security in SECURITY_WPA3 else "wpa-psk"),
       "psk": ("s", credentials.key),
     }
+    if credentials.security in SECURITY_WPA3:
+      security["pmf"] = ("i", PMF_REQUIRED)  # WPA3-Personal requires protected management frames
+    elif credentials.security in SECURITY_WPA2_WPA3:
+      security["pmf"] = ("i", PMF_OPTIONAL)
+    settings["802-11-wireless-security"] = security
   return settings
 
 

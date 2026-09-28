@@ -31,7 +31,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field as dataclass_field
 
-from openpilot.starpilot.system.android_auto.wire import field, one, parse_fields, signed, text
+from openpilot.starpilot.system.android_auto.wire import describe, field, one, parse_fields, signed, text
 
 WIFI_START_REQUEST = 1
 WIFI_INFO_REQUEST = 2
@@ -57,6 +57,7 @@ SECURITY_NAMES = {0: "unknown", 1: "open", 2: "wep64", 3: "wep128", 4: "wpa", 8:
                   20: "wpa-enterprise", 24: "wpa2-enterprise", 28: "wpa/wpa2-enterprise", 32: "wpa3", 40: "wpa2/wpa3"}
 
 MAX_FRAME = 4096
+JOIN_PING_INTERVAL = 2.0  # phone-side WifiPing while joining the car's Wi-Fi; impatient receivers drop an idle RFCOMM link
 MAX_FRAMES = 64
 MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
 
@@ -155,6 +156,17 @@ def parse_setup_info(payload: bytes) -> tuple[Endpoint | None, WifiCredentials |
   return endpoint, credentials
 
 
+def describe_version_request(payload: bytes):
+  """The whole WifiVersionRequest for diagnostics, without the vehicle identifier some receivers include."""
+  described = describe(payload)
+  if isinstance(described, dict):
+    for number in (4, 5):
+      for info in described.get(number, []):
+        if isinstance(info, dict) and isinstance((info.get(4) or [None])[0], str):
+          info[4] = ["redacted"]  # HeadUnitInfo.vehicle_id; the endpoint's field 4 is a number
+  return described
+
+
 def parse_version_request(payload: bytes) -> tuple[int, int, Endpoint | None, dict]:
   """Major/minor, an optional projection endpoint, and head-unit identity strings."""
   fields = parse_fields(payload)
@@ -202,8 +214,10 @@ class WirelessBootstrap:
   """Runs the phone side of the handshake on a connected RFCOMM socket."""
 
   def __init__(self, sock, log: Callable[..., None], *, device_serial: str = "starpilot",
-               version_status: int = STATUS_SUCCESS, stage_timeout: float = 20.0, start_request_delay: float = 5.0):
+               version_status: int = STATUS_SUCCESS, stage_timeout: float = 20.0, start_request_delay: float = 5.0,
+               join_ping_interval: float = JOIN_PING_INTERVAL):
     self.sock = sock
+    self.join_ping_interval = join_ping_interval
     self.start_request_delay = start_request_delay
     self.log = log
     self.device_serial = device_serial
@@ -297,7 +311,7 @@ class WirelessBootstrap:
         major, minor, version_endpoint, info = parse_version_request(payload)
         version, head_unit = (major, minor), {**head_unit, **info}
         self.log("bootstrap_version", major=major, minor=minor, head_unit=info,
-                 endpoint=version_endpoint.__dict__ if version_endpoint else None)
+                 endpoint=version_endpoint.__dict__ if version_endpoint else None, message=describe_version_request(payload))
         self.send(WIFI_VERSION_RESPONSE, field(1, major) + field(2, minor) + field(3, self.device_serial) +
                   field(4, self.version_status))
         hinted = version_endpoint or hinted
@@ -352,9 +366,14 @@ class WirelessBootstrap:
 
     thread = threading.Thread(target=worker, name="aa_wifi_join", daemon=True)
     thread.start()
+    next_ping = time.monotonic() + self.join_ping_interval
     while thread.is_alive():
       if cancelled():
         raise BootstrapError(self.stage, "cancelled")
+      if self.join_ping_interval > 0 and time.monotonic() >= next_ping:
+        # Joining and DHCP can take 10+ s; a phone keeps the RFCOMM link visibly alive meanwhile.
+        next_ping = time.monotonic() + self.join_ping_interval
+        self.send(WIFI_PING_REQUEST, field(1, time.monotonic_ns() // 1_000_000))
       try:
         message_id, payload = self.next_frame(0.25)
       except BootstrapError as error:

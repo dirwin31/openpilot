@@ -1,3 +1,4 @@
+import json
 import socket
 import ssl
 import struct
@@ -102,7 +103,7 @@ def test_sdp_channel_encodings():
 
 # ----------------------------------------------------------------- bootstrap
 
-def run_bootstrap(start_request_delay=5.0, **hu_options):
+def run_bootstrap(start_request_delay=5.0, join_seconds=0.3, join_ping_interval=bs.JOIN_PING_INTERVAL, **hu_options):
   phone, car = socket.socketpair()
   joined = []
   result_holder = {}
@@ -117,10 +118,10 @@ def run_bootstrap(start_request_delay=5.0, **hu_options):
   thread.start()
   events = []
   boot = bs.WirelessBootstrap(phone, lambda name, **values: events.append((name, values)), stage_timeout=5.0,
-                              start_request_delay=start_request_delay)
+                              start_request_delay=start_request_delay, join_ping_interval=join_ping_interval)
 
   def join(credentials):
-    time.sleep(0.3)  # the car pings while we join
+    time.sleep(join_seconds)  # the car pings while we join
     joined.append(credentials)
 
   result = boot.run(join)
@@ -139,6 +140,20 @@ def test_bootstrap_standard_flow():
   assert signed(one(seen["start_response"], 3)) == 0 and 1 not in seen["start_response"]
   assert signed(one(seen["connect_status"], 1)) == 0
   assert all("secret-key" not in repr(values) for _, values in events)
+
+
+def test_bootstrap_pings_the_car_during_a_slow_join():
+  _, joined, seen, _ = run_bootstrap(join_seconds=0.75, join_ping_interval=0.2)
+  assert joined[0].ssid == "HondaAA" and seen.get("phone_pings", 0) >= 2
+  _, _, seen, _ = run_bootstrap(join_seconds=0.3, join_ping_interval=0)
+  assert "phone_pings" not in seen
+
+
+def test_bootstrap_version_log_keeps_head_unit_but_not_vehicle_id():
+  info = bs.describe_version_request(field(1, 1) + field(2, 3) + field(5, field(1, "Hyundai") + field(4, "VIN-SECRET")) +
+                                     field(4, field(1, "192.168.1.1") + field(2, 5288) + field(4, 36)))
+  assert info[5][0] == {1: ["Hyundai"], 4: ["redacted"]}
+  assert info[4][0][4] == [36], "a channel number in the endpoint is kept"
 
 
 def test_bootstrap_version_first_and_fragmented():
@@ -337,6 +352,104 @@ def test_session_end_to_end_with_focus_epochs(identity):
   assert hu.device_name == "StarPilot" and hu.start_indications == [1, 2]
   assert [sid for sid, _ in hu.frames] == [1, 1, 1, 1, 1, 2] and hu.shutdown_received.is_set()
 
+
+
+def run_until_streaming(hu: FakeHeadUnit, identity, log=None) -> ProjectionSession:
+  sock = socket.create_connection(("127.0.0.1", hu.port), timeout=5)
+  session = ProjectionSession(sock, str(identity["phone_cert"]), str(identity["phone_key"]), log, str(identity["root"]))
+  session.authenticate()
+  session.start("StarPilot", "comma.ai")
+  pump_until(session, lambda: session.focused)
+  session.send_frame(keyframe_au(1), 1, keyframe=True)
+  pump_until(session, lambda: session.acked == 1)
+  return session
+
+
+def finish(session: ProjectionSession, hu: FakeHeadUnit) -> None:
+  session.shutdown()
+  session.peer.close()
+  hu.thread.join(5)
+  assert hu.error is None, hu.error
+
+
+def test_session_accepts_a_legacy_tls_only_head_unit(identity):
+  hu = FakeHeadUnit(identity, ciphers="AES128-SHA:@SECLEVEL=0")  # e.g. Sony XAV-AX3200: TLS_RSA_WITH_AES_128_CBC_SHA only
+  finish(run_until_streaming(hu, identity), hu)
+  assert hu.cipher == "AES128-SHA"
+
+
+def test_session_answers_pings_during_the_handshake(identity):
+  events = []
+  hu = FakeHeadUnit(identity, ping_during_auth=True)
+  finish(run_until_streaming(hu, identity, lambda name, **values: events.append(name)), hu)
+  assert hu.ping_replies >= 2 and "handshake_ignored" not in events
+
+
+def test_session_waits_for_a_slow_discovery_response(identity):
+  hu = FakeHeadUnit(identity, discovery_delay=4.0)  # longer than the 3 s streaming receive deadline
+  finish(run_until_streaming(hu, identity), hu)
+
+
+def test_session_projects_to_the_main_display_not_the_cluster(identity):
+  from openpilot.starpilot.system.android_auto.tests.fake_head_unit import discovery_response
+  hu = FakeHeadUnit(identity, discovery=discovery_response(cluster_channel=5))
+  session = run_until_streaming(hu, identity)
+  assert session.mode.channel == 3 and 5 not in hu.opened
+  finish(session, hu)
+
+
+
+def test_session_takes_touch_from_the_projected_display(identity):
+  from openpilot.starpilot.system.android_auto.tests.fake_head_unit import discovery_response
+  hu = FakeHeadUnit(identity, discovery=discovery_response(cluster_channel=5, cluster_input_channel=6))
+  session = run_until_streaming(hu, identity)
+  assert session.input_channel == 1 and 6 not in hu.opened, "the cluster's input is listed first but not the driver's screen"
+  finish(session, hu)
+
+
+def test_input_channel_matches_display_or_falls_back_to_the_only_one():
+  session = ProjectionSession.__new__(ProjectionSession)
+  session.channels = [{"id": 6, "input": True, "display_id": 1}, {"id": 3, "video_configs": []},
+                      {"id": 1, "input": True}, {"id": 5, "video_configs": [], "display_id": 1}]
+  assert session.input_channel_for(3)["id"] == 1 and session.input_channel_for(5)["id"] == 6
+  session.channels = [{"id": 3, "video_configs": []}, {"id": 1, "input": True, "display_id": 2}]
+  assert session.input_channel_for(3)["id"] == 1, "a single input service is used even without a matching id"
+  session.channels = [{"id": 3, "video_configs": []}, {"id": 1, "input": True, "display_id": 2}, {"id": 2, "input": True, "display_id": 1}]
+  assert session.input_channel_for(3) is None
+
+def test_session_takes_a_1080p_only_head_unit(identity):
+  from openpilot.starpilot.system.android_auto.tests.fake_head_unit import discovery_response
+  hu = FakeHeadUnit(identity, discovery=discovery_response(resolutions=((3, 0, 0),)), accepted_config=0)
+  session = run_until_streaming(hu, identity)
+  assert (session.mode.width, session.mode.height) == (1920, 1080)
+  finish(session, hu)
+
+
+def test_discovery_log_names_the_head_unit_without_its_vehicle_id(identity):
+  from openpilot.starpilot.system.android_auto.tests.fake_head_unit import discovery_response
+  records = []
+  hu = FakeHeadUnit(identity, discovery=discovery_response(headunit_info=True))
+  finish(run_until_streaming(hu, identity, lambda name, **values: records.append((name, values))), hu)
+  discovered = next(values for name, values in records if name == "discovered")
+  assert discovered["head_unit"][2] == ["Honda"] and discovered["head_unit"][17][0][2] == ["IONIQ 6"]
+  assert "VIN-SECRET" not in json.dumps(records, default=str)
+
+
+def test_no_supported_mode_error_lists_the_offer():
+  channels = [{"id": 3, "video_configs": [parse_fields(field(1, 4) + field(10, 3)), parse_fields(field(1, 2) + field(10, 7))]},
+              {"id": 5, "display_type": 1, "video_configs": [parse_fields(field(1, 2))]}]
+  with pytest.raises(ValueError, match=r"2560x1440 H\.264, 1280x720 H\.265, 1280x720 H\.264 \(display 1\)"):
+    choose_video_mode(channels)
+
+
+def test_ignored_messages_are_rate_limited():
+  events = []
+  session = ProjectionSession.__new__(ProjectionSession)
+  session._log = lambda name, **values: events.append(values["count"])
+  session.ignored_counts = {}
+  for _ in range(250):
+    session.ignored("channel_ignored", 9, 0x8001, b"\x08\x01")
+  assert events == [1, 2, 3, 4, 5, 100, 200]
 
 def test_session_accepts_newer_head_unit_protocol(identity):
   hu = FakeHeadUnit(identity, version=(4, 1))  # 2025 Honda Civic head unit
@@ -696,6 +809,21 @@ def test_network_lease_settings_keep_internet_route():
   assert settings["ipv4"]["never-default"] == ("b", True) and settings["ipv4"]["ignore-auto-dns"] == ("b", True)
   assert settings["connection"]["autoconnect"] == ("b", False) and settings["802-11-wireless-security"]["psk"] == ("s", "secret-key")
   assert settings["802-11-wireless"]["bssid"] == ("ay", bytes.fromhex("AABBCCDDEEFF"))
+
+
+@pytest.mark.parametrize("security,key_mgmt,pmf", [(8, "wpa-psk", None), (32, "sae", 3), (40, "wpa-psk", 2)])
+def test_network_lease_security_modes(security, key_mgmt, pmf):
+  from dataclasses import replace
+  from openpilot.starpilot.system.android_auto.network import connection_settings
+  wireless = connection_settings(replace(credentials(), security=security), "wlan0")["802-11-wireless-security"]
+  assert wireless["key-mgmt"] == ("s", key_mgmt) and wireless.get("pmf") == (None if pmf is None else ("i", pmf))
+
+
+def test_network_lease_refuses_security_a_phone_cannot_join():
+  from dataclasses import replace
+  from openpilot.starpilot.system.android_auto.network import NetworkError, connection_settings
+  with pytest.raises(NetworkError, match="WEP"):
+    connection_settings(replace(credentials(), security=2), "wlan0")
 
 
 def test_network_lease_retries_without_bssid_and_restores_previous():

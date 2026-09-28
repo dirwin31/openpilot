@@ -172,6 +172,41 @@ def test_supervisor_auto_connect_off(identity, tmp_path, monkeypatch):
   assert json.loads((tmp_path / "aa" / "config.json").read_text())["auto_connect"] is False
 
 
+
+def test_supervisor_auto_starts_wired_on_ignition_without_bluetooth(identity, tmp_path, monkeypatch):
+  onroad = {"value": True}  # the car was already on when the comma booted
+  sup, starts, alive = auto_supervisor(identity, tmp_path, monkeypatch, onroad)
+  sup.set_connection("wired")
+  sup.config["receiver_address"] = ""  # wired needs no chosen car
+  bluez = sup._phone()                 # a gateway left from wireless use
+  sup.maintain(0)
+  assert starts == ["onroad"] and alive["value"]
+  assert bluez.released == 1 and bluez.hfp_registrations == 0, "no Bluetooth standby for a USB car"
+  onroad["value"] = False              # drive over: stop once the car has been gone a while
+  sup.maintain(2)
+  sup.maintain(2 + auto_connect.STOP_AFTER)
+  assert not alive["value"]
+  sup.maintain(3 + auto_connect.STOP_AFTER)
+  assert starts == ["onroad"], "parked: nothing restarts until the next drive"
+  onroad["value"] = True
+  sup.maintain(4 + auto_connect.STOP_AFTER)
+  assert starts == ["onroad", "onroad"]
+
+
+def test_supervisor_wired_auto_connect_off_and_user_stop(identity, tmp_path, monkeypatch):
+  onroad = {"value": True}
+  sup, starts, alive = auto_supervisor(identity, tmp_path, monkeypatch, onroad)
+  sup.set_connection("wired")
+  sup.set_auto_connect(False)
+  sup.maintain(0)
+  assert starts == []
+  sup.set_auto_connect(True)
+  sup.maintain(2)
+  assert starts == ["onroad"]
+  sup.user_stop()
+  sup.maintain(4)
+  assert starts == ["onroad"] and sup.status()["auto_paused"]
+
 def test_supervisor_auto_start_refused_reports_and_waits(identity, tmp_path, monkeypatch):
   onroad = {"value": True}
   sup, _ = make_supervisor(identity, tmp_path, monkeypatch, lambda *a, **k: socket.socketpair()[0])

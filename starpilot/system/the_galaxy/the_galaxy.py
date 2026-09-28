@@ -189,6 +189,7 @@ from openpilot.starpilot.system.the_galaxy import flm_workspace, utilities
 from openpilot.starpilot.system.the_galaxy.update_recovery import inspect_interrupted_update, public_recovery_status, recover_interrupted_update
 from openpilot.starpilot.system.android_auto import apk_identity
 from openpilot.starpilot.system.android_auto import car_screen as aa_car_screen
+from openpilot.starpilot.system.android_auto import compat_report as aa_compat_report
 from openpilot.starpilot.system.bluetooth import BluetoothClient
 from openpilot.starpilot.system.wheel_controls import (
   CONTROLLER_ACTION_OPTIONS,
@@ -5616,6 +5617,37 @@ def setup(app):
     except OSError as error:
       return jsonify({"error": f"Could not save: {error}"}), 500
     return jsonify({"settings": saved}), 200
+
+  # Android Auto session logs as compatibility reports, one log, or everything zipped for a bug report.
+  # Read-only; available even with Android Auto off, so a failed car can still be reported.
+  @app.route("/api/android_auto/diagnostics", methods=["GET"])
+  def android_auto_diagnostics():
+    sessions = []
+    for path in aa_compat_report.session_logs():
+      try:
+        stat = path.stat()
+      except OSError:
+        continue
+      report = aa_compat_report.summarize(aa_compat_report.load_events(path))
+      sessions.append({"name": path.name, "bytes": stat.st_size, "started": report["started"], "transport": report["transport"],
+                       "outcome": report["outcome"], "furthest_stage": report["furthest_stage"], "car": report["car"]})
+    return jsonify({"sessions": sessions}), 200
+
+  @app.route("/api/android_auto/diagnostics/bundle", methods=["GET"])
+  def android_auto_diagnostics_bundle():
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    return send_file(io.BytesIO(aa_compat_report.bundle()), as_attachment=True, mimetype="application/zip",
+                     download_name=f"starpilot-android-auto-{stamp}.zip")
+
+  @app.route("/api/android_auto/diagnostics/<name>", methods=["GET"])
+  def android_auto_diagnostics_session(name):
+    path = aa_compat_report.session_path(name)
+    if path is None:
+      return jsonify({"error": "No such Android Auto session log."}), 404
+    if request.args.get("format") == "log":
+      return send_file(str(path), as_attachment=True, mimetype="application/x-ndjson", download_name=path.name)
+    report = aa_compat_report.summarize(aa_compat_report.load_events(path))
+    return jsonify({"name": path.name, "report": report, "text": aa_compat_report.render_text(report, path.name)}), 200
 
   # Offline map tiles for the Android Auto navigation map; navtilesd does the downloading.
   OFFLINE_AREA_DETAIL = {16: "Street detail", 15: "City detail", 14: "Road detail", 13: "Regional"}
