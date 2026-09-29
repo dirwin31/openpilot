@@ -499,7 +499,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"MapBoxRequests", {PERSISTENT, JSON, "{}", "{}"}},
     {"MapboxSecretKey", {PERSISTENT | DONT_LOG, STRING, "", "", 0}},
     {"MapDeceleration", {PERSISTENT, BOOL, "0", "0", 1}},
-    {"MapdSettings", {PERSISTENT, JSON, "{}", "{}"}},
+    {"MapdSettings", {PERSISTENT, JSON, "{\"settings_version\": 2}", "{\"settings_version\": 2}"}},
     {"MapGears", {PERSISTENT, BOOL, "0", "0", 2, SETTINGS_SIMPLE}},
     {"MapsSelected", {PERSISTENT, STRING, "", "", 0}},
     {"MapSpeedLimit", {CLEAR_ON_MANAGER_START, FLOAT, "0.0", "0.0"}},
