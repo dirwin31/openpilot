@@ -1,20 +1,19 @@
 # Check a drive on the bench
 
-Everything needed to explain a "TAKE CONTROL IMMEDIATELY", a lag spike or a slow Android Auto
+Everything needed to explain a "TAKE CONTROL IMMEDIATELY", a lag spike or a slow Starpilot Auto
 connection is written to the drive's **rlog**. rlogs survive unplugging the comma; at most the last
 few seconds of a drive are lost. The swaglog files in `/data/log` don't reliably survive: they are
 uploaded and then deleted.
 
-## Testers: Send to AA Guy
+## Testers: Send to Starpilot Auto Guy
 
 Testers don't need SSH. On a phone connected to the comma, open The Galaxy, then **Logs & Diagnostics →
-Android Auto**. Describe what happened, choose how many recent drives to include, and tap **Send to AA
-Guy**. The zip (usually under 1 MB) arrives in AA Guy's Discord channel with the note and the device's
+Starpilot Auto**. Describe what happened, choose how many recent drives to include, and tap **Send to Starpilot Auto Guy**. The zip (usually under 1 MB) arrives in Starpilot Auto Guy's Discord channel with the note and the device's
 dongle ID. **Download** saves the same zip to the phone instead, for when there's no internet.
 
 What the zip contains:
 
-- **android-auto/**: session logs covering pairing, the Wi-Fi handshake and streaming, plus reports and
+- **starpilot-auto/**: session logs covering pairing, the Wi-Fi handshake and streaming, plus reports and
   settings.
 - **bluetooth/**: every pairing prompt and how it ended, and the adapter status.
 - **drives/**: a report for each drive, the same as step 2 below. The comma builds these itself, only
@@ -40,10 +39,10 @@ Copy its rlogs into one tar (`<route>` is the name without `--0`):
 ssh comma 'cd /data/media/0/realdata && tar cf - <route>--*/rlog.zst' > docs/Rlogs/<route>-logs.tar
 ```
 
-For Android Auto problems, also copy that drive's session log:
+For Starpilot Auto problems, also copy that drive's session log:
 
 ```bash
-scp 'comma:/data/android_auto/logs/session-*' docs/Rlogs/   # or just the newest one
+scp 'comma:/data/starpilot_auto/logs/session-*' docs/Rlogs/   # or just the newest one
 ```
 
 `docs/Rlogs/` is excluded from git.
@@ -53,7 +52,7 @@ scp 'comma:/data/android_auto/logs/session-*' docs/Rlogs/   # or just the newest
 ```bash
 uv run --no-project --with pycapnp --with zstandard \
   python starpilot/system/diagnostics/drive_report.py docs/Rlogs/<route>-logs.tar \
-  --aa docs/Rlogs/session-NNNNNN-*.jsonl
+  --starpilot-auto docs/Rlogs/session-NNNNNN-*.jsonl
 ```
 
 This needs no openpilot build and doesn't need the comma. A 30-minute drive takes a few seconds.
@@ -77,4 +76,4 @@ This needs no openpilot build and doesn't need the comma. A 30-minute drive take
   Cores 4 and 5 run card, controlsd and selfdrived. When they reach about 90%, inputs start arriving
   late. mapd's CPU depends on the offline map tile the car is in: dense city tiles cost several times
   more.
-- **Android Auto:** connection attempts, failures, reconnects and why the session ended.
+- **Starpilot Auto:** connection attempts, failures, reconnects and why the session ended.

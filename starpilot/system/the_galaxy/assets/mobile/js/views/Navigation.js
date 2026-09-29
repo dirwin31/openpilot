@@ -2,7 +2,7 @@ import { NavigationDestinationPanel } from "../components/NavigationDestinationP
 import { MapsPanel } from "../components/MapsPanel.js?v=offline-download-4"
 import { NavigationKeysPanel } from "../components/NavigationKeysPanel.js"
 import { SpeedLimitsPanel } from "../components/SpeedLimitsPanel.js"
-import { AndroidAutoOfflinePanel } from "../components/AndroidAutoOfflinePanel.js?v=offline-layout-8"
+import { StarpilotAutoOfflinePanel } from "../components/StarpilotAutoOfflinePanel.js?v=offline-layout-8"
 import { GalaxySection } from "../components/GalaxySection.js"
 import { GalaxyTabs } from "../components/GalaxyTabs.js"
 import { useTabRouting } from "../composables.js"
@@ -18,7 +18,7 @@ export const Navigation = {
   name: "Navigation",
   components: {
     NavigationDestinationPanel, MapsPanel, NavigationKeysPanel, SpeedLimitsPanel, GalaxyTabs,
-    AndroidAutoOfflinePanel, GalaxySection,
+    StarpilotAutoOfflinePanel, GalaxySection,
   },
   data() { return { TABS } },
   setup() {
@@ -43,9 +43,9 @@ export const Navigation = {
               <MapsPanel />
             </div>
           </GalaxySection>
-          <GalaxySection title="Offline Maps for Android Auto" icon="bi-cloud-arrow-down">
+          <GalaxySection title="Offline Maps for Starpilot Auto" icon="bi-cloud-arrow-down">
             <div style="padding: var(--sp-3);">
-              <AndroidAutoOfflinePanel />
+              <StarpilotAutoOfflinePanel />
             </div>
           </GalaxySection>
         </div>

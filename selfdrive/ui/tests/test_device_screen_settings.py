@@ -42,7 +42,7 @@ def make_device(monkeypatch, **overrides):
     ignition=False,
     light_sensor=-1.0,
     sm={},
-    android_auto_car_view=False,
+    starpilot_auto_car_view=False,
   )
   monkeypatch.setattr(ui_state_module, "ui_state", state)
   monkeypatch.setattr(ui_state_module.gui_app, "big_ui", lambda: False)
@@ -181,15 +181,15 @@ def test_standby_wakes_for_visible_alert(monkeypatch):
 
 
 @pytest.mark.parametrize("device_type, available", [("mici", True), ("tizi", True), ("tici", True), ("pc", False)])
-def test_aa_screen_sleep_is_available_on_comma_four_and_3x(monkeypatch, device_type, available):
+def test_starpilot_auto_screen_sleep_is_available_on_comma_four_and_3x(monkeypatch, device_type, available):
   monkeypatch.setattr(ui_state_module.HARDWARE, "get_device_type", lambda: device_type)
   monkeypatch.setattr(ui_state_module, "FrameProducer", lambda path: SimpleNamespace(recently_sent=lambda: False))
   device, _ = make_device(monkeypatch)
-  assert (device._aa_car_frames is not None) == available
+  assert (device._starpilot_auto_car_frames is not None) == available
 
 
 @pytest.fixture(params=["mici", "tizi"])
-def aa_sleep_device(monkeypatch, request):
+def starpilot_auto_sleep_device(monkeypatch, request):
   clock, streaming, setting = [100.0], [True], [True]
   power, rendering = [], []
   monkeypatch.setattr(ui_state_module.time, "monotonic", lambda: clock[0])
@@ -198,19 +198,19 @@ def aa_sleep_device(monkeypatch, request):
   monkeypatch.setattr(ui_state_module.HARDWARE, "set_display_power", power.append)
   monkeypatch.setattr(ui_state_module.gui_app, "set_should_render", rendering.append)
   monkeypatch.setattr(ui_state_module.gui_app, "ui_stream_wants_frames", lambda: False)
-  monkeypatch.setattr(ui_state_module.gui_app, "_aa_enabled", True)
+  monkeypatch.setattr(ui_state_module.gui_app, "_starpilot_auto_enabled", True)
   device, state = make_device(monkeypatch)
   state.started = state.ignition = device._ignition = device._screen_off_started = True
-  device._aa_car_frames = SimpleNamespace(recently_sent=lambda: streaming[0])
-  device._aa_screen_settings = SimpleNamespace(poll=lambda: {"sleep_device_screen": setting[0]})
+  device._starpilot_auto_car_frames = SimpleNamespace(recently_sent=lambda: streaming[0])
+  device._starpilot_auto_screen_settings = SimpleNamespace(poll=lambda: {"sleep_device_screen": setting[0]})
   device._update_wakefulness()
   assert device.awake and device._interaction_time == 110.0
   clock[0] = 111.0
   return SimpleNamespace(device=device, state=state, clock=clock, streaming=streaming, setting=setting, power=power, rendering=rendering)
 
 
-def test_aa_screen_sleeps_after_timeout_and_tap_wakes(aa_sleep_device, monkeypatch):
-  s = aa_sleep_device
+def test_starpilot_auto_screen_sleeps_after_timeout_and_tap_wakes(starpilot_auto_sleep_device, monkeypatch):
+  s = starpilot_auto_sleep_device
   s.device._update_wakefulness()
   assert not s.device.awake and s.power == [False] and s.rendering == [False]
   assert s.device._calculate_brightness() == 0
@@ -224,35 +224,35 @@ def test_aa_screen_sleeps_after_timeout_and_tap_wakes(aa_sleep_device, monkeypat
   assert not s.device.awake
 
 
-@pytest.mark.parametrize("reason", ["stale_or_unfocused", "toggle_off", "aa_disabled", "offroad", "car_renderer", "not_c4"])
-def test_aa_sleep_fails_awake(aa_sleep_device, monkeypatch, reason):
-  s = aa_sleep_device
+@pytest.mark.parametrize("reason", ["stale_or_unfocused", "toggle_off", "starpilot_auto_disabled", "offroad", "car_renderer", "not_c4"])
+def test_starpilot_auto_sleep_fails_awake(starpilot_auto_sleep_device, monkeypatch, reason):
+  s = starpilot_auto_sleep_device
   s.device._update_wakefulness()
   assert not s.device.awake
   if reason == "stale_or_unfocused":
     s.streaming[0] = False
-    s.clock[0] += ui_state_module.AA_SLEEP_STALE_GRACE
+    s.clock[0] += ui_state_module.STARPILOT_AUTO_SLEEP_STALE_GRACE
   elif reason == "toggle_off":
     s.setting[0] = False
-  elif reason == "aa_disabled":
-    monkeypatch.setattr(ui_state_module.gui_app, "_aa_enabled", False)
+  elif reason == "starpilot_auto_disabled":
+    monkeypatch.setattr(ui_state_module.gui_app, "_starpilot_auto_enabled", False)
   elif reason == "offroad":
     s.state.started = s.state.ignition = False
   elif reason == "car_renderer":
-    s.state.android_auto_car_view = True
+    s.state.starpilot_auto_car_view = True
   elif reason == "not_c4":
-    s.device._aa_car_frames = None
+    s.device._starpilot_auto_car_frames = None
   s.device._update_wakefulness()
   assert s.device.awake and s.device._render_awake
   assert s.power == [False, True] and s.rendering == [False, True]
 
 
-def test_brief_frame_gap_keeps_aa_screen_asleep(aa_sleep_device):
-  s = aa_sleep_device
+def test_brief_frame_gap_keeps_starpilot_auto_screen_asleep(starpilot_auto_sleep_device):
+  s = starpilot_auto_sleep_device
   s.device._update_wakefulness()
   assert not s.device.awake
   s.streaming[0] = False
-  s.clock[0] = 111.0 + ui_state_module.AA_SLEEP_STALE_GRACE - 0.1
+  s.clock[0] = 111.0 + ui_state_module.STARPILOT_AUTO_SLEEP_STALE_GRACE - 0.1
   s.device._update_wakefulness()
   s.streaming[0] = True
   s.clock[0] += 0.05
@@ -260,8 +260,8 @@ def test_brief_frame_gap_keeps_aa_screen_asleep(aa_sleep_device):
   assert not s.device.awake and s.power == [False] and s.device._interaction_time == 110.0
 
 
-def test_aa_sleep_ignores_standby_wake_selections(aa_sleep_device):
-  s = aa_sleep_device
+def test_starpilot_auto_sleep_ignores_standby_wake_selections(starpilot_auto_sleep_device):
+  s = starpilot_auto_sleep_device
   s.device._standby_mode = True
   s.device._wake_keys = ui_state_module.enabled_wake_keys(ui_state_module.ui_state.ui_params) | {"StandbyWakeTurnSignal"}
   s.device._update_wakefulness()
@@ -274,8 +274,8 @@ def test_aa_sleep_ignores_standby_wake_selections(aa_sleep_device):
 
 
 @pytest.mark.parametrize("alert", ["StandbyWakeWarningAlert", "StandbyWakeCriticalAlert"])
-def test_driver_alert_keeps_aa_sleeping_screen_awake(aa_sleep_device, alert):
-  s = aa_sleep_device
+def test_driver_alert_keeps_starpilot_auto_sleeping_screen_awake(starpilot_auto_sleep_device, alert):
+  s = starpilot_auto_sleep_device
   s.device._update_wakefulness()
   s.device._active_standby_alerts = lambda: {alert}
   for now in (112.0, 125.0, 140.0):
@@ -288,8 +288,8 @@ def test_driver_alert_keeps_aa_sleeping_screen_awake(aa_sleep_device, alert):
   assert not s.device.awake
 
 
-def test_native_live_ui_keeps_rendering_with_aa_screen_asleep(aa_sleep_device, monkeypatch):
-  s = aa_sleep_device
+def test_native_live_ui_keeps_rendering_with_starpilot_auto_screen_asleep(starpilot_auto_sleep_device, monkeypatch):
+  s = starpilot_auto_sleep_device
   monkeypatch.setattr(ui_state_module.gui_app, "ui_stream_wants_frames", lambda: True)
   s.device._update_wakefulness()
   assert not s.device.awake and s.device._render_awake
@@ -322,10 +322,10 @@ def test_sleeping_render_loop_skips_gpu_work_but_keeps_yielding(monkeypatch):
     loop.close()
 
 
-def test_aa_sleep_wakes_for_the_car_screen_choices(aa_sleep_device):
-  s = aa_sleep_device
+def test_starpilot_auto_sleep_wakes_for_the_car_screen_choices(starpilot_auto_sleep_device):
+  s = starpilot_auto_sleep_device
   choices = {"sleep_device_screen": True, "sleep_wake_events": []}
-  s.device._aa_screen_settings = SimpleNamespace(poll=lambda: choices)
+  s.device._starpilot_auto_screen_settings = SimpleNamespace(poll=lambda: choices)
   s.device._update_wakefulness()
   assert not s.device.awake
   s.device._active_standby_alerts = lambda: {"StandbyWakeWarningAlert"}

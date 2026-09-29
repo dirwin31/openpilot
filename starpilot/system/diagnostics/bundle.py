@@ -1,11 +1,11 @@
 """A diagnostics zip a tester can send to the developer (RECIPIENT) from The Galaxy.
 
-Contents: the Android Auto session logs (Bluetooth pairing, Wi-Fi handshake, streaming)
+Contents: the Starpilot Auto session logs (Bluetooth pairing, Wi-Fi handshake, streaming)
 with their reports and settings, the Bluetooth pairing prompt log and adapter status,
 and a one-page report for each of the last few drives (see drive_report.py). Never the
-Android Auto identity or any Wi-Fi password.
+Starpilot Auto identity or any Wi-Fi password.
 
-"Send to AA Guy" (RECIPIENT) posts the zip to a Discord webhook. The URL is built in, encoded so
+"Send to Starpilot Auto Guy" (RECIPIENT) posts the zip to a Discord webhook. The URL is built in, encoded so
 repository scanners don't pick it up; a URL in WEBHOOK_OVERRIDE_PATH on the device
 replaces it without a code change. Download is always available.
 """
@@ -26,7 +26,7 @@ import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
-RECIPIENT = "AA Guy"  # who "Send to ..." delivers to, as testers see it
+RECIPIENT = "Starpilot Auto Guy"  # who "Send to ..." delivers to, as testers see it
 REALDATA = Path("/data/media/0/realdata")
 DIAGNOSTICS_DIR = Path("/data/diagnostics")
 WEBHOOK_OVERRIDE_PATH = DIAGNOSTICS_DIR / "webhook_url"
@@ -96,23 +96,23 @@ def _drive_report(route: str, realdata: Path) -> str:
 
 def build(note: str = "", drives: int = 1, progress: Callable[[str], None] = lambda _: None, *,
           realdata: Path = REALDATA, drive_report: Callable[[str, Path], str] = _drive_report,
-          aa_bundle: Callable[[], bytes] | None = None, bluetooth_status: Callable[[], dict] = _bluetooth_status,
+          starpilot_auto_bundle: Callable[[], bytes] | None = None, bluetooth_status: Callable[[], dict] = _bluetooth_status,
           pairing_log: Path | None = None, summary: Callable[[], dict] = device_summary) -> bytes:
   """The zip, built in memory (a few hundred KB to a few MB)."""
   problems: list[str] = []
   info = summary()
   output = io.BytesIO()
   with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-    progress("Collecting Android Auto logs")
+    progress("Collecting Starpilot Auto logs")
     try:
-      if aa_bundle is None:
-        from openpilot.starpilot.system.android_auto import compat_report
-        aa_bundle = compat_report.bundle
-      with zipfile.ZipFile(io.BytesIO(aa_bundle())) as aa:
+      if starpilot_auto_bundle is None:
+        from openpilot.starpilot.system.starpilot_auto import compat_report
+        starpilot_auto_bundle = compat_report.bundle
+      with zipfile.ZipFile(io.BytesIO(starpilot_auto_bundle())) as aa:
         for entry in aa.infolist():
-          archive.writestr(f"android-auto/{entry.filename}", aa.read(entry))
+          archive.writestr(f"starpilot-auto/{entry.filename}", aa.read(entry))
     except Exception as error:
-      problems.append(f"Android Auto logs: {error}")
+      problems.append(f"Starpilot Auto logs: {error}")
 
     progress("Collecting Bluetooth pairing logs")
     if pairing_log is None:
@@ -145,7 +145,7 @@ def build(note: str = "", drives: int = 1, progress: Callable[[str], None] = lam
       json.dumps(info, indent=2, default=str),
       "",
       "Contents:",
-      "  android-auto/  Android Auto session logs (pairing, Wi-Fi handshake, streaming), reports and settings",
+      "  starpilot-auto/  Starpilot Auto session logs (pairing, Wi-Fi handshake, streaming), reports and settings",
       "  bluetooth/     every Bluetooth pairing prompt and how it ended, and the adapter/device status",
       f"  drives/        one-page health report per drive: {', '.join(routes) or 'none included'}",
       "                 (read with starpilot/system/diagnostics/drive_report.py; see docs/how-to/drive-diagnostics.md)",

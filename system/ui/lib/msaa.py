@@ -1,7 +1,7 @@
 """Multisampled offscreen rendering.
 
 Raylib render textures are single-sampled, so everything drawn into one (the
-device UI when it renders through a texture, and the Android Auto frames) is
+device UI when it renders through a texture, and the Starpilot Auto frames) is
 aliased even though the window asks for FLAG_MSAA_4X_HINT. MsaaTarget is a
 multisampled framebuffer that raylib can draw into with begin_texture_mode();
 resolve() then blits it into an ordinary RenderTexture (GLES3 / GL3).

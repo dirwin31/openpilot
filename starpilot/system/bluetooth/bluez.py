@@ -141,7 +141,7 @@ class PairingAgent:
       self._auto_accept_incoming = enabled
 
   def set_auto_accept_head_units(self, device_paths: set[str]) -> None:
-    """Paired, trusted Android Auto head units: the car re-confirms the bond onroad while nobody is in settings."""
+    """Paired, trusted Starpilot Auto head units: the car re-confirms the bond onroad while nobody is in settings."""
     with self._condition:
       self._head_unit_paths = set(device_paths)
 
@@ -153,7 +153,7 @@ class PairingAgent:
       if kind not in {"confirmation", "authorization"}:
         return ""
       if device_path in self._head_unit_paths:
-        return "android_auto_head_unit"
+        return "starpilot_auto_head_unit"
       if device_path in self._auto_accept_paths:
         return "pairing_from_settings"
       return "offroad" if self._auto_accept_incoming else ""

@@ -8,7 +8,7 @@ their loop gaps), mapd's tile/activity events, the kernel/system journal, proces
 restarts and per-process CPU. No native openpilot build is needed:
 
   uv run --no-project --with pycapnp --with zstandard \\
-    python tools/profiling/drive_report.py docs/Rlogs/<route>-logs.tar [--aa session-NNNNNN-*.jsonl]
+    python tools/profiling/drive_report.py docs/Rlogs/<route>-logs.tar [--starpilot-auto session-NNNNNN-*.jsonl]
 
 The input is an exported ``<route>-logs.tar`` or a directory of ``<route>--N/rlog.zst``
 (qlogs work too, without CPU detail).
@@ -28,7 +28,7 @@ from pathlib import Path
 CEREAL = Path(__file__).resolve().parents[2] / "cereal"
 ROUTINE_ALERTS = {"preLaneChangeLeft", "preLaneChangeRight", "laneChange", "laneChangeBlocked", "reverseGear", "userBookmark",
                   "steerSaturated", "driverDistracted1", "promptDriverDistracted", "preDriverDistracted", "gasPressedOverride"}
-WATCHED_EVENTS = re.compile(r"InputsInvalid|commIssue|^mapd_|upload_(paused|resumed)_android_auto")
+WATCHED_EVENTS = re.compile(r"InputsInvalid|commIssue|^mapd_|upload_(paused|resumed)_(starpilot|android)_auto")
 KERNEL_TROUBLE = re.compile("|".join((r"oom", r"out of memory", r"killed process", r"lowmemory", r"throttl", r"thermal", r"kgsl",
                                        r"gpu fault", r"hung task", r"soft lockup", r"rcu.*stall", r"page allocation failure",
                                        r"segfault", r"watchdog: bug")), re.I)
@@ -153,7 +153,7 @@ def _describe_event(daemon: str, message: dict) -> str:
   return f"{daemon or '?'}: {name} {json.dumps(details, separators=(',', ':'))}"[:400]
 
 
-def report(segments: list[dict], aa_log: Path | None) -> str:
+def report(segments: list[dict], starpilot_auto_log: Path | None) -> str:
   anchor = next((s["anchor"] for s in segments if s["anchor"]), None)
 
   def clock(mono: float) -> str:
@@ -186,12 +186,12 @@ def report(segments: list[dict], aa_log: Path | None) -> str:
     top = ", ".join(f"{name} {pct:.0f}%" for name, pct in cpu["top"])
     lines.append(f"  seg {seg['segment']:3} {mph:3.0f} mph  cores {cpu['cores']}  free {cpu['mem_avail_mb']} MB  mapd {cpu['mapd']}%  | {top}")
 
-  if aa_log is not None:
+  if starpilot_auto_log is not None:
     keep = {"session_start", "attempt_failed", "session_ended", "bootstrap_start_refused", "projection_ready", "bluez_restarted",
             "wifi_joined", "peer_requested_shutdown", "tcp_retry"}
-    rows = [json.loads(line) for line in aa_log.read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in starpilot_auto_log.read_text().splitlines() if line.strip()]
     events = [r for r in rows if r.get("event") in keep]
-    lines.append(f"\n== Android Auto session {aa_log.name}: {len(events)} key events")
+    lines.append(f"\n== Starpilot Auto session {starpilot_auto_log.name}: {len(events)} key events")
     for row in events:
       when = datetime.datetime.fromisoformat(row["t"]).astimezone().strftime("%H:%M:%S.%f")[:-4]
       detail = {k: v for k, v in row.items() if k not in ("t", "event", "head_unit", "message", "channels")}
@@ -202,7 +202,7 @@ def report(segments: list[dict], aa_log: Path | None) -> str:
 def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
   parser.add_argument("source", type=Path, help="<route>-logs.tar or a directory of <route>--N/rlog.zst")
-  parser.add_argument("--aa", type=Path, help="Android Auto session-*.jsonl for the same drive")
+  parser.add_argument("--starpilot-auto", type=Path, help="Starpilot Auto session-*.jsonl for the same drive")
   parser.add_argument("--jobs", type=int, default=6)
   args = parser.parse_args()
 
@@ -211,7 +211,7 @@ def main() -> None:
     raise SystemExit(f"No rlog.zst or qlog.zst segments found in {args.source}")
   with ProcessPoolExecutor(args.jobs) as pool:
     segments = list(pool.map(scan_segment, items))
-  print(report(segments, args.aa))
+  print(report(segments, args.starpilot_auto))
 
 
 if __name__ == "__main__":

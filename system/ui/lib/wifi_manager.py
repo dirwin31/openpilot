@@ -62,8 +62,8 @@ DEBUG = False
 _dbus_call_idx = 0
 
 
-# Profile id owned by starpilot/system/android_auto/network.py.
-PROJECTION_CONNECTION_ID = "starpilot-android-auto"
+# Profile id owned by starpilot/system/starpilot_auto/network.py.
+PROJECTION_CONNECTION_ID = "starpilot-auto"
 
 
 def _is_projection_connection(settings: dict) -> bool:
@@ -235,7 +235,7 @@ class WifiManager:
 
     # State
     self._connections: dict[str, str] = {}  # ssid -> connection path, updated via NM signals
-    self._projection_connections: set[str] = set()  # android_autod-owned volatile profiles; never saved or listed
+    self._projection_connections: set[str] = set()  # starpilot_autod-owned volatile profiles; never saved or listed
     self._wifi_state: WifiState = WifiState()
     self._user_epoch: int = 0
     self._ipv4_address: str = ""
@@ -612,7 +612,7 @@ class WifiManager:
         self._ensure_tethering_nat()
 
       # Persist volatile connections (created by AddAndActivateConnection2) to disk.
-      # Android Auto's projection profile is owned by android_autod and must stay volatile.
+      # Starpilot Auto's projection profile is owned by starpilot_autod and must stay volatile.
       if conn_path is not None and conn_path not in getattr(self, '_projection_connections', ()):
         conn_addr = DBusAddress(conn_path, bus_name=NM, interface=NM_CONNECTION_IFACE)
         save_reply = self._conn_monitor.send_and_get_reply(new_method_call(conn_addr, 'Save'))

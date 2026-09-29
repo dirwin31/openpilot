@@ -831,7 +831,7 @@ def test_streamer_stopping_under_a_remote_press_cancels_it():
   assert app._arbitrate_input([], 10.2) == []
 
 
-# ------------------------------------------------------------ android auto
+# ------------------------------------------------------------ starpilot auto
 
 def _fake_projection_gl(monkeypatch, pixels: bytes):
   drawn = []
@@ -854,69 +854,69 @@ def _fake_projection_gl(monkeypatch, pixels: bytes):
   return drawn
 
 
-def test_android_auto_capture_letterboxes_and_publishes(monkeypatch, tmp_path):
-  from openpilot.starpilot.system.android_auto.frame_source import FrameConsumer, FrameProducer, FrameRequest
+def test_starpilot_auto_capture_letterboxes_and_publishes(monkeypatch, tmp_path):
+  from openpilot.starpilot.system.starpilot_auto.frame_source import FrameConsumer, FrameProducer, FrameRequest
   path = str(tmp_path / "frames")
   consumer = FrameConsumer(path)
   consumer.configure(FrameRequest(800, 480, 0, 0, 50_000))
   app = _bare_app()
-  app.set_android_auto_enabled(True)
+  app.set_starpilot_auto_enabled(True)
   app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
   app._render_texture_width, app._render_texture_height = 536, 240
-  app._aa_producer = FrameProducer(path)
+  app._starpilot_auto_frame_producer = FrameProducer(path)
   drawn = _fake_projection_gl(monkeypatch, bytes([9]) * (800 * 480 * 4))
 
   assert not app.ui_stream_wants_frames()
-  app._capture_android_auto_frame()
+  app._capture_starpilot_auto_frame()
   assert drawn == []  # no demand, no GPU work
 
   consumer.demand(1.0)
-  app._aa_producer._next_open_check = 0
+  app._starpilot_auto_frame_producer._next_open_check = 0
   assert app.ui_stream_wants_frames()  # keeps rendering while the display sleeps
-  app._capture_android_auto_frame()
+  app._capture_starpilot_auto_frame()
   assert drawn == [(0.0, 60.0, 800.0, 358.0)]
   frame = consumer.latest()
   assert frame is not None and (frame.width, frame.height) == (800, 480) and frame.data[:1] == b"\x09"
   consumer.close()
 
 
-def test_android_auto_capture_failure_disables_only_projection(monkeypatch, tmp_path):
-  from openpilot.starpilot.system.android_auto.frame_source import FrameConsumer, FrameProducer, FrameRequest
+def test_starpilot_auto_capture_failure_disables_only_projection(monkeypatch, tmp_path):
+  from openpilot.starpilot.system.starpilot_auto.frame_source import FrameConsumer, FrameProducer, FrameRequest
   path = str(tmp_path / "frames")
   consumer = FrameConsumer(path)
   consumer.configure(FrameRequest(800, 480, 0, 0, 50_000))
   consumer.demand(1.0)
   app = _bare_app()
-  app.set_android_auto_enabled(True)
+  app.set_starpilot_auto_enabled(True)
   app._render_texture = SimpleNamespace(texture=SimpleNamespace(id=1))
   app._render_texture_width, app._render_texture_height = 536, 240
-  app._aa_producer = FrameProducer(path)
+  app._starpilot_auto_frame_producer = FrameProducer(path)
   _fake_projection_gl(monkeypatch, bytes(16))
 
   def explode(texture):
     raise RuntimeError("readback failed")
 
   monkeypatch.setattr(application.rl, "load_image_from_texture", explode)
-  app._capture_android_auto_frame()
-  assert app._aa_failed and app._aa_producer is None and app._aa_texture is None
-  assert not app.android_auto_wants_frames()
+  app._capture_starpilot_auto_frame()
+  assert app._starpilot_auto_failed and app._starpilot_auto_frame_producer is None and app._starpilot_auto_texture is None
+  assert not app.starpilot_auto_wants_frames()
   consumer.close()
 
 
 @pytest.mark.parametrize("live_ui", [False, True])
-def test_android_auto_disable_releases_projection_and_preserves_live_ui(monkeypatch, tmp_path, live_ui):
-  from openpilot.starpilot.system.android_auto.frame_source import FrameConsumer, FrameProducer, FrameRequest
+def test_starpilot_auto_disable_releases_projection_and_preserves_live_ui(monkeypatch, tmp_path, live_ui):
+  from openpilot.starpilot.system.starpilot_auto.frame_source import FrameConsumer, FrameProducer, FrameRequest
   path = str(tmp_path / "frames")
   consumer = FrameConsumer(path)
   consumer.configure(FrameRequest(800, 480, 0, 0, 50_000))
   consumer.demand(1.0)
   app = _bare_app()
-  app.set_android_auto_enabled(True)
-  producer = app._aa_producer = FrameProducer(path)
+  app.set_starpilot_auto_enabled(True)
+  producer = app._starpilot_auto_frame_producer = FrameProducer(path)
   assert producer.demand_active()
   main_texture = app._render_texture = object()
-  capture_texture = app._aa_texture = object()
-  app._aa_owns_render_texture = True
+  capture_texture = app._starpilot_auto_texture = object()
+  app._starpilot_auto_owns_render_texture = True
   stream = SimpleNamespace(image_demand_active=lambda: True)
   app._ui_stream = stream if live_ui else None
   unloaded = []
@@ -924,27 +924,27 @@ def test_android_auto_disable_releases_projection_and_preserves_live_ui(monkeypa
   monkeypatch.setattr(app, "_unload_render_texture", unloaded.append)
   monkeypatch.setattr(application.rl, "load_render_texture", lambda *a: pytest.fail("disabled projection allocated a texture"))
 
-  app.set_android_auto_enabled(False)
-  app._ensure_android_auto_texture()
-  app._capture_android_auto_frame()
-  assert app._aa_producer is None and producer.mm is None
-  assert not app.android_auto_wants_frames()
+  app.set_starpilot_auto_enabled(False)
+  app._ensure_starpilot_auto_texture()
+  app._capture_starpilot_auto_frame()
+  assert app._starpilot_auto_frame_producer is None and producer.mm is None
+  assert not app.starpilot_auto_wants_frames()
   assert app.ui_stream_wants_frames() is live_ui
   assert capture_texture in unloaded
   assert (main_texture not in unloaded) is live_ui
   assert app._ui_stream is (stream if live_ui else None)
   if live_ui:
     app._ui_stream = None
-    app._ensure_android_auto_texture()
+    app._ensure_starpilot_auto_texture()
     assert main_texture in unloaded
   consumer.close()
 
 
-def test_android_auto_default_off_never_opens_frame_source(monkeypatch):
-  from openpilot.starpilot.system.android_auto import frame_source
+def test_starpilot_auto_default_off_never_opens_frame_source(monkeypatch):
+  from openpilot.starpilot.system.starpilot_auto import frame_source
   monkeypatch.setattr(frame_source, "FrameProducer", lambda: pytest.fail("disabled projection opened a frame source"))
   app = _bare_app()
-  assert not app.android_auto_enabled
-  assert not app.android_auto_wants_frames()
-  app._ensure_android_auto_texture()
-  app._capture_android_auto_frame()
+  assert not app.starpilot_auto_enabled
+  assert not app.starpilot_auto_wants_frames()
+  app._ensure_starpilot_auto_texture()
+  app._capture_starpilot_auto_frame()

@@ -18,7 +18,7 @@ export const SendDiagnosticsPanel = {
     return { note: "", drives: 1, status: {}, starting: false, timer: null, pendingDownload: false }
   },
   computed: {
-    recipient() { return this.status.recipient || "AA Guy" },
+    recipient() { return this.status.recipient || "Starpilot Auto Guy" },
     busy() { return this.starting || BUSY.includes(this.status.state) },
     driveChoices() {
       const available = Math.min(3, this.status.drives_available ?? 3)
@@ -72,9 +72,9 @@ export const SendDiagnosticsPanel = {
         <span class="gx-section__title">Report a problem</span>
       </div>
       <div style="padding: var(--sp-4); display:grid; gap:12px;">
-        <p class="gx-row__desc" style="margin:0;">Something went wrong with Android Auto, Bluetooth pairing or a drive? Describe what happened and send the logs. They include Android Auto and Bluetooth pairing logs and a short health report for recent drives. No passwords, certificates, camera video or GPS track.</p>
+        <p class="gx-row__desc" style="margin:0;">Something went wrong with Starpilot Auto, Bluetooth pairing or a drive? Describe what happened and send the logs. They include Starpilot Auto and Bluetooth pairing logs and a short health report for recent drives. No passwords, certificates, camera video or GPS track.</p>
         <textarea class="gx-field" rows="3" maxlength="1000" v-model="note" :disabled="busy"
-          placeholder="What happened, and roughly when? (e.g. 'Android Auto took 3 tries to connect after I started the car')"></textarea>
+          placeholder="What happened, and roughly when? (e.g. 'Starpilot Auto took 3 tries to connect after I started the car')"></textarea>
         <label class="gx-row__desc" style="display:grid; gap:4px;">Include drive reports
           <select class="gx-field" v-model.number="drives" :disabled="busy">
             <option v-for="count in driveChoices" :key="count" :value="count" :disabled="count > 0 && status.offroad === false">{{ driveLabel(count) }}</option>

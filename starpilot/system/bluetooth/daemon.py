@@ -17,7 +17,7 @@ OFFROAD_COMMANDS = {"set_power", "start_scan", "stop_scan", "pair", "forget", "t
 SCAN_DURATION = 20.0
 AUDIO_TEST_START_DELAY = 3.0
 AUDIO_TEST_HOLD_TIME = 3.0
-ANDROID_AUTO_WIRELESS_UUID = "4de17a00-52cb-11e6-bdf4-0800200c9a66"
+STARPILOT_AUTO_WIRELESS_UUID = "4de17a00-52cb-11e6-bdf4-0800200c9a66"
 RECONNECT_INTERVAL_SECONDS = 15.0
 CONTROLLER_RECONNECT_INTERVAL_SECONDS = 5.0
 RECONNECT_MAX_BACKOFF_SECONDS = 300.0
@@ -119,7 +119,7 @@ class BluetoothController:
         self._bluez.agent.set_auto_accept_incoming(result["offroad"])
         self._bluez.agent.set_auto_accept_head_units({
           device["path"] for device in result["devices"]
-          if device.get("path") and device["paired"] and device["trusted"] and ANDROID_AUTO_WIRELESS_UUID in device.get("uuids", [])
+          if device.get("path") and device["paired"] and device["trusted"] and STARPILOT_AUTO_WIRELESS_UUID in device.get("uuids", [])
         })
         prompt = result.get("prompt")
         if prompt is not None and self._pairing_address:
@@ -140,9 +140,9 @@ class BluetoothController:
     try:
       self._client().pair(address)
       status = self._client().device_for_address(address)
-      # A car head unit (Android Auto Wireless service) is paired for projection;
+      # A car head unit (Starpilot Auto Wireless service) is paired for projection;
       # never silently route comma alerts to the car's speakers.
-      head_unit = ANDROID_AUTO_WIRELESS_UUID in status.get("uuids", [])
+      head_unit = STARPILOT_AUTO_WIRELESS_UUID in status.get("uuids", [])
       if select_audio and not head_unit and status.get("audio") and not self.params.get("BluetoothAudioAddress", encoding="utf-8"):
         self.params.put("BluetoothAudioAddress", address)
       self._pairing_error = ""

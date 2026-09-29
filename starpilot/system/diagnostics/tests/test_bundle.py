@@ -12,7 +12,7 @@ from openpilot.starpilot.system.diagnostics import bundle
 SUMMARY = {"dongle_id": "b0c4a280b2f96b86", "branch": "AAComma", "commit": "5abc56a29deadbeef"}
 
 
-def _aa_zip():
+def _starpilot_auto_zip():
   output = io.BytesIO()
   with zipfile.ZipFile(output, "w") as archive:
     archive.writestr("REPORT.txt", "Honda CIVIC: projected")
@@ -34,20 +34,20 @@ def _build(tmp_path, **overrides):
   pairing = tmp_path / "pairing.jsonl"
   pairing.write_text('{"kind": "confirmation", "outcome": "timed_out"}\n')
   options = dict(realdata=_drives(tmp_path, "000000cc--newest", "000000cb--older", "000000ca--oldest", "000000c9--too-old"),
-                 drive_report=lambda route, _: f"report for {route}", aa_bundle=_aa_zip,
+                 drive_report=lambda route, _: f"report for {route}", starpilot_auto_bundle=_starpilot_auto_zip,
                  bluetooth_status=lambda: {"powered": True}, pairing_log=pairing, summary=lambda: SUMMARY)
   options.update(overrides)
   return zipfile.ZipFile(io.BytesIO(bundle.build(**options)))
 
 
-def test_bundle_holds_android_auto_bluetooth_and_newest_drives(tmp_path):
-  archive = _build(tmp_path, note="AA took 3 tries", drives=2)
+def test_bundle_holds_starpilot_auto_bluetooth_and_newest_drives(tmp_path):
+  archive = _build(tmp_path, note="Starpilot Auto took 3 tries", drives=2)
   names = set(archive.namelist())
-  assert {"android-auto/REPORT.txt", "android-auto/logs/session-000025-20260928-141351.jsonl", "bluetooth/pairing_events.jsonl",
+  assert {"starpilot-auto/REPORT.txt", "starpilot-auto/logs/session-000025-20260928-141351.jsonl", "bluetooth/pairing_events.jsonl",
           "bluetooth/status.json", "drives/000000cc--newest.txt", "drives/000000cb--older.txt", "README.txt"} <= names
   assert "drives/000000ca--oldest.txt" not in names
   readme = archive.read("README.txt").decode()
-  assert "AA took 3 tries" in readme and "b0c4a280b2f96b86" in readme and "Could not collect" not in readme
+  assert "Starpilot Auto took 3 tries" in readme and "b0c4a280b2f96b86" in readme and "Could not collect" not in readme
 
 
 def test_bundle_caps_drives_and_reports_what_it_could_not_collect(tmp_path):
@@ -93,12 +93,12 @@ class Response:
 
 def test_send_posts_zip_and_note_to_discord():
   calls = []
-  bundle.send(b"zip-bytes", "diag.zip", "AA dropped at 2:34", SUMMARY, url="https://example.invalid/hook",
+  bundle.send(b"zip-bytes", "diag.zip", "Starpilot Auto dropped at 2:34", SUMMARY, url="https://example.invalid/hook",
               post=lambda url, **kwargs: calls.append((url, kwargs)) or Response(200))
   url, kwargs = calls[0]
   payload = json.loads(kwargs["data"]["payload_json"])
   assert url == "https://example.invalid/hook" and kwargs["files"]["files[0]"] == ("diag.zip", b"zip-bytes", "application/zip")
-  assert "AA dropped at 2:34" in payload["content"] and "b0c4a280b2f96b86" in payload["content"]
+  assert "Starpilot Auto dropped at 2:34" in payload["content"] and "b0c4a280b2f96b86" in payload["content"]
   assert payload["allowed_mentions"] == {"parse": []}, "a tester's note must never ping anyone"
 
 
@@ -128,7 +128,7 @@ def test_job_download_flow():
   assert job.result() is None
   job.start("download", "note", 1)
   status = _wait(job)
-  assert status["state"] == "ready" and status["bytes"] == 3 and status["recipient"] == "AA Guy"
+  assert status["state"] == "ready" and status["bytes"] == 3 and status["recipient"] == "Starpilot Auto Guy"
   name, data = job.result()
   assert data == b"zip" and name.startswith("starpilot-diagnostics-b0c4a280b2f96b86-")
 
@@ -140,7 +140,7 @@ def test_job_send_success_and_failure_keeps_the_zip():
   assert _wait(job)["state"] == "sent" and sent[0][0] == b"zip"
 
   def offline(*_):
-    raise RuntimeError("Could not reach AA Guy")
+    raise RuntimeError("Could not reach Starpilot Auto Guy")
 
   job = bundle.DiagnosticsJob(builder=lambda **_: b"zip", sender=offline, summary=lambda: SUMMARY)
   job.start("send")
@@ -168,4 +168,4 @@ def test_builder_failure_is_reported():
   job = bundle.DiagnosticsJob(builder=broken, summary=lambda: SUMMARY)
   job.start("download")
   assert _wait(job) | {"send_available": None} == {"state": "error", "message": "disk full", "action": "download", "name": "",
-                                                   "bytes": 0, "send_available": None, "recipient": "AA Guy"}
+                                                   "bytes": 0, "send_available": None, "recipient": "Starpilot Auto Guy"}

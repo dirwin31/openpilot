@@ -4,10 +4,10 @@ import { test } from 'node:test'
 import { reactive, compile } from '../assets/vendor/vue/vue.esm-browser.js'
 import * as helpers from '../assets/mobile/js/components/auto_offline_helpers.js'
 
-const source = readFileSync(new URL('../assets/mobile/js/components/AndroidAutoOfflinePanel.js', import.meta.url), 'utf8')
+const source = readFileSync(new URL('../assets/mobile/js/components/StarpilotAutoOfflinePanel.js', import.meta.url), 'utf8')
 const api = {}
 const panel = new Function('api', 'showSnackbar', 'usePolling', 'GxNotice', 'getMapboxSearchContext', ...Object.keys(helpers),
-  source.replace(/^import [\s\S]*? from ".*?"\n/gm, '').replace('export const AndroidAutoOfflinePanel =', 'return'))(
+  source.replace(/^import [\s\S]*? from ".*?"\n/gm, '').replace('export const StarpilotAutoOfflinePanel =', 'return'))(
   api, () => {}, () => {}, {}, () => {}, ...Object.values(helpers))
 function instance() {
   const state = reactive({ ...panel.data(), token: '', metric: false })
