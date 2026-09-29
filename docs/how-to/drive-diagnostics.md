@@ -24,6 +24,19 @@ It never contains passwords, certificates, video or a GPS track.
 The Discord webhook is built into `starpilot/system/diagnostics/bundle.py`, base64-encoded. To replace
 it without a code change, write a new URL to `/data/diagnostics/webhook_url` on the comma.
 
+Use a webhook belonging to a Discord forum channel. The first upload creates a post named
+`Device <dongle ID>`; subsequent uploads add messages and attachments to that post. The device saves
+the thread ID under `/data/diagnostics/threads/`, scoped to both the dongle ID and webhook. Changing
+either starts a separate post; switching back reuses its saved thread. A deleted thread is recreated
+with at most one retry. Old, unscoped `thread_id` files are ignored because their destination cannot
+be verified.
+
+The cache survives restarts and updates that preserve `/data/diagnostics/`. If it is erased, another
+post is created: a webhook cannot look up an existing post by dongle ID. Recovering after cache loss
+requires a server-side registry or bot. If a successful upload cannot save its thread ID, The Galaxy
+shows a warning that the next upload may create another post. To select an existing post manually,
+put its thread ID in the override URL's `thread_id` query parameter.
+
 ## 1. Copy the drive off the comma
 
 Plug the comma in on the bench and find the route. Routes are listed by the time their first segment
