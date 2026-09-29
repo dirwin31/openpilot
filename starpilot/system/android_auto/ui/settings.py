@@ -312,7 +312,8 @@ class CarSettingsLayout(Widget):
       self._tabs_scroll.set_offset(-starts[self._first_tab(index, starts[index] + widths[index], tabs.width)])
       self._reveal_tab = False
     offset = self._tabs_scroll.update(tabs, extent)
-    rl.begin_scissor_mode(int(tabs.x), int(tabs.y), int(tabs.width), int(tabs.height))
+    clip_pad = max(style.px(3), 2 * style.hairline())
+    rl.begin_scissor_mode(int(tabs.x), int(tabs.y - clip_pad), int(tabs.width), int(tabs.height + 2 * clip_pad))
     for page, x, w in zip(pages, starts, widths, strict=True):
       self._button(f'page:{page.key}', rl.Rectangle(tabs.x + offset + x, tabs.y, w, tabs.height), page.title, page.key == self._page, tabs, tab_font)
     rl.end_scissor_mode()
