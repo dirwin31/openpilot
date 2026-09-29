@@ -6,10 +6,10 @@ index bf13a63..87d7555 100644
  
  const mapLoadRetryDelay = time.Second
  
-+// mapUpdateInterval caps how often a GPS fix triggers the way search. Each search scans the
-+// whole offline tile, so dense city tiles would otherwise use most of a core. carState keeps
-+// advancing DistanceSinceLastPosition between updates.
-+const mapUpdateInterval = time.Second / 3
++// mapUpdateInterval caps how often a GPS fix triggers the way search (10 Hz). 3 Hz made the
++// outputs visibly jittery; 0002's endpoint index makes each search cheap enough for 10 Hz.
++// carState keeps advancing DistanceSinceLastPosition between updates.
++const mapUpdateInterval = time.Second / 10
 +
  func main() {
  	ms.Settings.Default()                // set defaults so settings not already in param are defaulted
