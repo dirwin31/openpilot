@@ -169,9 +169,16 @@ def test_stopped_timer_replaces_speed_in_full_and_split_camera_panes(monkeypatch
     monkeypatch.setattr(onroad_widgets.rl, "draw_text_ex", lambda *args, draws=draws: draws.append(args))
     widget._render(rect)
 
-    assert len(draws) == 8  # three shadow layers and the foreground for each line
-    label, timer = draws[3], draws[7]
+    shadows = len(CarStoppedTimerWidget.SHADOW_RINGS) * len(CarStoppedTimerWidget.SHADOW_DIRECTIONS)
+    assert len(draws) == 2 * (shadows + 1)  # the halo and the foreground for each line
+    label, timer = draws[shadows], draws[-1]
     assert (label[1], timer[1]) == ("Stopped", "01:01")
+    # The shadow surrounds the text: it spreads left, right, up and down by the same amount.
+    offsets = [(pos.x - label[2].x, pos.y - label[2].y) for _font, _text, pos, *_ in draws[:shadows]]
+    spread = max(radius for radius, _alpha in CarStoppedTimerWidget.SHADOW_RINGS)
+    for axis in (0, 1):
+      assert min(o[axis] for o in offsets) == pytest.approx(-spread)
+      assert max(o[axis] for o in offsets) == pytest.approx(spread)
     # The label's ink starts level with the top of the MAX card and the steering wheel.
     label_ink = onroad_widgets.text_ink(None, "Stopped", label[3])
     assert label[2].y + label_ink.y == rect.y + onroad_widgets.CONTROL_TOP
@@ -552,3 +559,47 @@ def test_current_speed_sits_level_with_the_controls_and_can_be_hidden(monkeypatc
   monkeypatch.setattr(ui_state, "car_show_current_speed", False)
   hud._draw_current_speed(rect)
   assert tops == []
+
+
+# ── bookmark, driver monitoring, gauge and directions ────────────────────────
+
+def test_bookmark_steps_the_counter_feedbackd_watches():
+  class Memory(dict):
+    def get_int(self, key):
+      return self.get(key, 0)
+
+    def put_int(self, key, value):
+      self[key] = value
+
+  memory = Memory()
+  onroad_widgets.request_bookmark(memory)
+  onroad_widgets.request_bookmark(memory)
+  assert memory == {"WheelButtonBookmarkCounter": 2}
+
+
+def test_bookmark_sits_just_above_the_smaller_dm_icon():
+  assert onroad_widgets.DM_SIZE < 192 and onroad_widgets.DM_ICON_SIZE < 128
+  center = rl.Vector2(353, 904)
+  rect = onroad_widgets.bookmark_rect(center)
+  assert rect.x + rect.width / 2 == center.x
+  assert rect.y + rect.height == pytest.approx(center.y - onroad_widgets.DM_ICON_SIZE / 2 - onroad_widgets.BOOKMARK_GAP)
+
+
+def test_gauge_is_pulled_up_under_the_limit_card():
+  native = onroad_widgets.AetherGaugeWidget
+  car = onroad_widgets.CarAetherGaugeWidget
+  assert native.ROAD_BOTTOM - car.ROAD_BOTTOM == native.HEIGHT - car.HEIGHT == onroad_widgets.GAUGE_TOP_TRIM > 0
+
+
+@pytest.mark.parametrize("left", [False, True])
+def test_directions_card_follows_the_directions_side(monkeypatch, left):
+  monkeypatch.setattr(ui_state, "car_directions_left", left)
+  card = onroad_widgets.CarNavigationCardRenderer.__new__(onroad_widgets.CarNavigationCardRenderer)
+  rect = rl.Rectangle(30, 30, 1860, 1020)
+  x = card._card_x(rect, 560)
+  if left:
+    assert x == int(rect.x + onroad_widgets.DIRECTIONS_LEFT_X)
+    # clear of the MAX / LIMIT column
+    assert x > rect.x + onroad_widgets.WIDGET_ANCHOR_OFFSET + onroad_widgets.CONTROL_WIDTH / 2
+  else:
+    assert x == int(rect.x + rect.width - 560 - 40)

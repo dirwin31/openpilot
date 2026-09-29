@@ -153,18 +153,21 @@ def test_onroad_factories_register_car_widgets_once(monkeypatch):
 
   monkeypatch.setattr(native.AugmentedRoadView, "__init__", init_road)
   monkeypatch.setattr(native.gui_app, "font", lambda *_args: None)
-  for name in ("TorqueBar", "SetSpeedWidget", "AetherGaugeWidget", "SteeringWheelWidget", "PedalIconsWidget",
-               "PersonalityButtonWidget", "DriverMonitorWidget", "ModelSourceWidget"):
+  for name in ("TorqueBar", "SetSpeedWidget", "SteeringWheelWidget", "PedalIconsWidget",
+               "PersonalityButtonWidget", "ModelSourceWidget"):
     monkeypatch.setattr(native, name, FakeWidget)
   builds = {}
-  for name in ("CarPipSideCamera", "CarSpeedLimitWidget", "CarStoppedTimerWidget", "NoFavoriteMenu"):
+  for name in ("CarPipSideCamera", "CarSpeedLimitWidget", "CarStoppedTimerWidget", "NoFavoriteMenu",
+               "CarAetherGaugeWidget", "CarDriverMonitorWidget"):
     builds[name] = Mock(side_effect=FakeWidget)
     monkeypatch.setattr(car, name, builds[name])
-  for name in ("PipSideCamera", "SpeedLimitWidget", "StoppedTimerWidget", "FavoriteRadialMenu"):
+  for name in ("PipSideCamera", "SpeedLimitWidget", "StoppedTimerWidget", "FavoriteRadialMenu",
+               "AetherGaugeWidget", "DriverMonitorWidget"):
     monkeypatch.setattr(native, name, Mock(side_effect=AssertionError("constructed a discarded native widget")))
   view = car.CarOnroadView()
   for factory in builds.values():
     assert factory.call_count == 1
-  for widget in (view._pip_sidecam, view._speed_limit_widget, view._stopped_timer_widget):
+  for widget in (view._pip_sidecam, view._speed_limit_widget, view._stopped_timer_widget,
+                 view._aethergauge_widget, view._driver_monitor_widget):
     assert view._children.count(widget) == 1
   assert view.layout_manager.zones["left"].count(view._speed_limit_widget) == 1

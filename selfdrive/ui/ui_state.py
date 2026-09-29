@@ -134,6 +134,8 @@ class UIState:
     self.car_camera_off: bool = False
     # The car view's "Show Current Speed" setting; the comma's own display always shows it.
     self.car_show_current_speed: bool = True
+    # The car view's "Directions Side": which side of its driving view the next-turn card sits on.
+    self.car_directions_left: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
     self.panda_type: log.PandaState.PandaType = log.PandaState.PandaType.unknown

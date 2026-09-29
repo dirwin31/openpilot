@@ -612,6 +612,8 @@ class OnroadControls:
     self.last_touch = clock()
     self.map_button = None  # the map's compass button while the map is on screen
     self.on_map_button = None
+    self.bookmark_button = None  # the driving view's bookmark button while it is drawn
+    self.on_bookmark = None
     self._state_read = -STATE_REFRESH
     self._started = False
     self._hold_home = False  # the home screen shown at drive start; no idle timeout while slow
@@ -762,9 +764,12 @@ class OnroadControls:
     self.menu.on_home = self.on_home(started)
     self.menu.corner = "right" if self.menu.on_home else "left"
 
-  def _on_map_button(self, x: float, y: float) -> bool:
-    button = self.map_button
-    return button is not None and button.x <= x <= button.x + button.width and button.y <= y <= button.y + button.height
+  def _plain_button_at(self, x: float, y: float) -> str | None:
+    """The plain button under a touch: the map's compass or the driving view's bookmark."""
+    for name, button in (("map_button", self.map_button), ("bookmark_button", self.bookmark_button)):
+      if button is not None and button.x <= x <= button.x + button.width and button.y <= y <= button.y + button.height:
+        return name
+    return None
 
   def full_screen(self, started: bool) -> bool:
     """Whether the main layout (or the Navigate screen) fills the car screen instead of the drive layout."""
@@ -784,16 +789,17 @@ class OnroadControls:
           self.target = "menu"
         elif layout_ok:
           self.target = "layout"
-        elif started and self._on_map_button(x, y):
-          self.target = "map_button"
+        elif started:
+          self.target = self._plain_button_at(x, y)
         else:
           self.target = None
         self.last_touch = self._clock()
-      if self.target == "map_button":
+      if self.target in ("map_button", "bookmark_button"):
         # A plain button: it acts when the finger lifts on it, and takes no widget events.
         if touch.kind in ("up", "cancel"):
-          if touch.kind == "up" and self._on_map_button(x, y) and self.on_map_button is not None:
-            self.on_map_button()
+          action = self.on_map_button if self.target == "map_button" else self.on_bookmark
+          if touch.kind == "up" and self._plain_button_at(x, y) == self.target and action is not None:
+            action()
           self.target = None
         continue
       events = touch_input.events([touch], allowed=self.target is not None, now=self._clock())
@@ -878,6 +884,8 @@ def run(frames_path: str, touch_path: str) -> int:
       print(json.dumps({"event": "map_orientation_save_failed", "error": str(error)[:200]}), flush=True)
 
   controls.on_map_button = toggle_map_orientation
+  drive_view = main_layout._layouts[controls._MainState.ONROAD]
+  controls.on_bookmark = drive_view.bookmark_button.press
 
   content = rl.load_render_texture(visible_w, visible_h)
   # The second UI shares the GPU with driver monitoring. Single-sample rendering
@@ -992,6 +1000,8 @@ def run(frames_path: str, touch_path: str) -> int:
       controls.update(started, speed_ms, vehicle_parked(ui_state))
       # Last frame's map placement; the layout only changes with settings or a screen switch.
       controls.map_button = map_pane.button_rect if started and not controls.full_screen(started) else None
+      controls.bookmark_button = drive_view.bookmark_rect if started and not controls.full_screen(started) else None
+      drive_view.bookmark_rect = None  # set again only if the drive draws the button this frame
       layout_events, menu_events = controls.route(receiver.drain(), touch, started, viewport)
       settings = car_settings.poll()
       main_layout._dev_sidebar.metric_override = [STATUS_METRICS[slot][0] for slot in settings["status_slots"]]
@@ -1000,6 +1010,7 @@ def run(frames_path: str, touch_path: str) -> int:
       if started and not controls.full_screen(started) and any(slot != "blank" for slot in settings["status_slots"]):
         main_rect, map_rect, status_rect = status_layout(settings, main_rect, map_rect)
       ui_state.car_show_current_speed = settings["show_current_speed"]
+      ui_state.car_directions_left = settings["directions_side"] == "left"
       ui_state.nav_map_beside_road = main_rect is not None and map_rect is not None
       ui_state.car_camera_off = started and not settings["camera"]
       onroad_view = main_layout._layouts.get(controls._MainState.ONROAD)

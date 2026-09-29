@@ -20,6 +20,7 @@ from openpilot.starpilot.system.android_auto.identity import DATA_DIR
 CAR_SCREEN_PATH = DATA_DIR / "car_screen.json"
 ONROAD_VIEWS = ("split", "driving", "map")  # map + driving view, driving view only, map only
 MAP_SIDES = ("right", "left")
+DIRECTIONS_SIDES = ("right", "left")  # the driving view's next-turn card, when the map isn't beside it
 MAP_ORIENTATIONS = ("north_up", "heading_up")
 MAX_BLIND_SPOT_SPEED_MS = 60.0
 STATUS_METRICS = {
@@ -70,6 +71,7 @@ SLEEP_WAKE_EVENTS = {
 DEFAULTS = {
   "onroad_view": "split",
   "map_side": "right",
+  "directions_side": "right",
   "map_orientation": "north_up",
   "camera": True,
   "blind_spot_monitors": True,
@@ -100,6 +102,8 @@ def normalize(raw: object) -> dict:
       settings["onroad_view"] = raw["onroad_view"]
     if raw.get("map_side") in MAP_SIDES:
       settings["map_side"] = raw["map_side"]
+    if raw.get("directions_side") in DIRECTIONS_SIDES:
+      settings["directions_side"] = raw["directions_side"]
     if raw.get("map_orientation") in MAP_ORIENTATIONS:
       settings["map_orientation"] = raw["map_orientation"]
     if isinstance(raw.get("camera"), bool):

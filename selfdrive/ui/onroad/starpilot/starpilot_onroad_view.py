@@ -61,11 +61,11 @@ class StarPilotOnroadView(AugmentedRoadView):
     # Initialize layout widgets
     self._set_speed_widget = self._create_set_speed_widget()
     self._speed_limit_widget = self._create_speed_limit_widget()
-    self._aethergauge_widget = AetherGaugeWidget(self._hud_renderer)
+    self._aethergauge_widget = self._create_aethergauge_widget()
     self._steering_wheel_widget = SteeringWheelWidget(self._hud_renderer._exp_button)
     self._pedals_widget = PedalIconsWidget()
     self._personality_button_widget = PersonalityButtonWidget()
-    self._driver_monitor_widget = DriverMonitorWidget(self.driver_state_renderer)
+    self._driver_monitor_widget = self._create_driver_monitor_widget()
     self._model_source_widget = ModelSourceWidget()
     self._stopped_timer_widget = self._create_stopped_timer_widget()
 
@@ -104,6 +104,12 @@ class StarPilotOnroadView(AugmentedRoadView):
 
   def _create_stopped_timer_widget(self):
     return StoppedTimerWidget(self.is_in_reverse)
+
+  def _create_aethergauge_widget(self):
+    return AetherGaugeWidget(self._hud_renderer)
+
+  def _create_driver_monitor_widget(self):
+    return DriverMonitorWidget(self.driver_state_renderer)
 
   def _blind_spot_monitors_visible(self) -> bool:
     return True

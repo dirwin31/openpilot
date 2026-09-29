@@ -147,6 +147,12 @@ export const AndroidAutoCarScreenPanel = {
               :class="settings.map_side === side ? '' : 'gx-btn--tonal'" :aria-pressed="settings.map_side === side" :disabled="saving"
               @click="update({ map_side: side })">{{ side === 'left' ? 'Left' : 'Right' }}</button></div>
           </div>
+          <div v-if="showsDriving" class="gx-row">
+            <div class="gx-row__info"><span class="gx-row__label">Directions Side</span><span class="gx-row__desc">Where the next-turn card sits on the driving view when the map is not beside it.</span></div>
+            <div class="gx-car-display__tabs"><button v-for="side in ['left', 'right']" :key="side" type="button" class="gx-btn"
+              :class="settings.directions_side === side ? '' : 'gx-btn--tonal'" :aria-pressed="settings.directions_side === side" :disabled="saving"
+              @click="update({ directions_side: side })">{{ side === 'left' ? 'Left' : 'Right' }}</button></div>
+          </div>
           <div v-if="showsMap" class="gx-row">
             <div class="gx-row__info"><span class="gx-row__label">Map Orientation</span><span class="gx-row__desc">Keep north or your direction of travel at the top.</span></div>
             <div class="gx-car-display__tabs"><button v-for="orientation in mapOrientations" :key="orientation.value" type="button" class="gx-btn"
