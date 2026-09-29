@@ -66,13 +66,16 @@ class AugmentedRoadView(CameraView):
     self.model_renderer = ModelRenderer()
     self._hud_renderer = self._create_hud_renderer()
     self.alert_renderer = self._create_alert_renderer()
-    self.driver_state_renderer = DriverStateRenderer()
+    self.driver_state_renderer = self._create_driver_state_renderer()
 
     # debug
     self._pm = messaging.PubMaster(['uiDebug'])
 
   def _create_hud_renderer(self):
     return HudRenderer()
+
+  def _create_driver_state_renderer(self):
+    return DriverStateRenderer()
 
   def _create_alert_renderer(self):
     return AlertRenderer()

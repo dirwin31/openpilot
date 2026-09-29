@@ -9,6 +9,7 @@ import pyray as rl
 from cereal import log
 
 from openpilot.selfdrive.ui.lib.starpilot_status import ENGAGED_COLOR, EXPERIMENTAL_COLOR, TRAFFIC_COLOR
+from openpilot.selfdrive.ui.onroad.driver_state import DMOJI_SIZE, DriverStateRenderer
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.onroad.alert_renderer import (
   ALERT_PADDING,
@@ -24,10 +25,16 @@ from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import NavigationCa
 from openpilot.selfdrive.ui.onroad.starpilot.pip_sidecam import PipSideCamera
 from openpilot.selfdrive.ui.onroad.starpilot import slc_speed_limit as slc
 from openpilot.selfdrive.ui.onroad.starpilot.slc_speed_limit import render_speed_limit_at
-from openpilot.selfdrive.ui.onroad.starpilot.widget_style import CONTROL_BORDER, draw_control_card
-from openpilot.selfdrive.ui.onroad.starpilot.widgets import SetSpeedWidget, SpeedLimitWidget, StoppedTimerWidget
+from openpilot.selfdrive.ui.onroad.starpilot.widget_style import CONTROL_BORDER, CONTROL_WIDTH, WIDGET_ANCHOR_OFFSET, draw_control_card
+from openpilot.selfdrive.ui.onroad.starpilot.widgets import (
+  AetherGaugeWidget,
+  DriverMonitorWidget,
+  SetSpeedWidget,
+  SpeedLimitWidget,
+  StoppedTimerWidget,
+)
 from openpilot.selfdrive.ui.ui_state import UIStatus, ui_state
-from openpilot.system.ui.lib.application import FONT_SCALE, font_fallback
+from openpilot.system.ui.lib.application import FONT_SCALE, font_fallback, gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import draw_text_with_shadow, measure_text_cached
 
@@ -62,6 +69,18 @@ CARD_VALUE_INSET = 10       # the value's ink keeps this clear of the card's sid
 SET_SPEED_VALUE_FONT = 120  # the value fills the space under the label
 LIMIT_OFFSET_VALUE_FONT = 100  # leaves room for the offset chip
 LIMIT_CHIP_LIFT = 6         # the offset chip's bottom margin matches the label's top one
+# The stop / curve gauge draws nothing in the top 25px of the comma's box (the curve's road
+# starts there); the car trims it so the road sits one column gap under the LIMIT card.
+GAUGE_TOP_TRIM = 25.0
+# A smaller driver-monitoring icon, with a bookmark button just above it.
+DM_SIZE = 160
+DM_ICON_SIZE = round(DMOJI_SIZE * DM_SIZE / 192)  # the comma draws a 128 icon in a 192 slot
+BOOKMARK_SIZE = 96
+BOOKMARK_GAP = 12           # between the bookmark's circle and the DM icon's
+BOOKMARK_FLASH_SECONDS = 1.2
+BOOKMARK_COUNTER = "WheelButtonBookmarkCounter"
+# The next-turn card on the left clears the MAX / LIMIT column by the margin it keeps on the right.
+DIRECTIONS_LEFT_X = WIDGET_ANCHOR_OFFSET + CONTROL_WIDTH / 2 + 40
 
 
 _ink_cache: dict[tuple, rl.Rectangle] = {}
@@ -286,11 +305,17 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
     self._draw_text(self._font_bold, label_text, rl.Vector2(center_x - label_size.x / 2, label_y), label_font, duration_color)
     self._draw_text(self._font_normal, timer_text, rl.Vector2(center_x - timer_size.x / 2, timer_y), timer_font, rl.WHITE)
 
-  @staticmethod
-  def _draw_text(font: rl.Font, text: str, pos: rl.Vector2, font_size: int, color: rl.Color) -> None:
-    """Draw a soft dark drop shadow without an opaque panel behind the car HUD."""
-    for offset_x, offset_y, alpha in ((5, 6, 70), (3, 4, 125), (1, 2, 190)):
-      rl.draw_text_ex(font, text, rl.Vector2(pos.x + offset_x, pos.y + offset_y), font_size, 0, rl.Color(0, 0, 0, alpha))
+  # A soft dark halo on every side (radius, alpha per copy), so the text reads over a bright
+  # road or sky without an opaque panel behind the car HUD.
+  SHADOW_RINGS = ((5, 28), (3, 48), (1, 90))
+  SHADOW_DIRECTIONS = tuple((math.cos(math.radians(a)), math.sin(math.radians(a))) for a in range(0, 360, 45))
+
+  @classmethod
+  def _draw_text(cls, font: rl.Font, text: str, pos: rl.Vector2, font_size: int, color: rl.Color) -> None:
+    for radius, alpha in cls.SHADOW_RINGS:
+      shadow = rl.Color(0, 0, 0, alpha)
+      for dx, dy in cls.SHADOW_DIRECTIONS:
+        rl.draw_text_ex(font, text, rl.Vector2(pos.x + dx * radius, pos.y + dy * radius), font_size, 0, shadow)
     rl.draw_text_ex(font, text, pos, font_size, 0, color)
 
   def _duration_color(self) -> rl.Color:
@@ -328,12 +353,16 @@ class CarSpeedLimitWidget(SpeedLimitWidget):
   """The US card shares MAX's layout, so the two stacked cards line up; the pending
   sign and the round Vienna sign are the comma's."""
 
+  directions_on_left = False  # set each frame by the view
+
   def _render(self, rect: rl.Rectangle) -> None:
     state = self._slc_state
     if state is None:
       return
-    # Beside the map the per-source list is noise; the sign alone is enough.
-    expanded = ui_state.ui_params.get_bool("SpeedLimitSources") and not ui_state.nav_map_beside_road
+    # Beside the map the per-source list is noise; the sign alone is enough. The turn card
+    # on the left takes the list's place.
+    expanded = ui_state.ui_params.get_bool("SpeedLimitSources") and not ui_state.nav_map_beside_road and \
+               not self.directions_on_left
     if state["use_vienna"] or (state["speed_limit_changed"] and state["unconfirmed_valid"]):
       self._sign_rect = render_speed_limit_at(state, rect, expanded)
       return
@@ -364,6 +393,16 @@ class CarNavigationCardRenderer(NavigationCardRenderer):
       return None
     return super().render(rect)
 
+  @property
+  def on_left(self) -> bool:
+    return self._valid and ui_state.car_directions_left and not ui_state.nav_map_beside_road
+
+  def _card_x(self, rect: rl.Rectangle, width: float) -> int:
+    """The car's Directions Side: right-aligned like the comma, or just right of the MAX / LIMIT column."""
+    if ui_state.car_directions_left:
+      return int(rect.x + DIRECTIONS_LEFT_X)
+    return super()._card_x(rect, width)
+
 
 class CarHudRenderer(HudRenderer):
   def __init__(self):
@@ -372,6 +411,10 @@ class CarHudRenderer(HudRenderer):
 
   def _create_navigation_card(self):
     return CarNavigationCardRenderer()
+
+  @property
+  def directions_on_left(self) -> bool:
+    return self._navigation_card.on_left
 
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
     """The speed's ink level with the top of the MAX card and the steering wheel, the unit and
@@ -387,6 +430,56 @@ class CarHudRenderer(HudRenderer):
     if compass_text:
       size = measure_text_cached(self._font_bold, compass_text, 50)
       draw_text_with_shadow(self._font_bold, compass_text, rl.Vector2(center_x - size.x / 2, bottom + SPEED_UNIT_GAP), 50, rl.WHITE)
+
+
+class CarAetherGaugeWidget(AetherGaugeWidget):
+  """The stop / curve gauge pulled up tight under the LIMIT card."""
+
+  HEIGHT = AetherGaugeWidget.HEIGHT - GAUGE_TOP_TRIM
+  ROAD_BOTTOM = AetherGaugeWidget.ROAD_BOTTOM - GAUGE_TOP_TRIM
+
+
+class CarDriverStateRenderer(DriverStateRenderer):
+  def __init__(self):
+    super().__init__(DM_ICON_SIZE)
+
+
+class CarDriverMonitorWidget(DriverMonitorWidget):
+  def get_size(self) -> tuple[float, float]:
+    return float(DM_SIZE), float(DM_SIZE)
+
+
+def request_bookmark(params_memory) -> None:
+  """Bookmark the drive. The comma's own UI owns bookmarkButton, so this steps the counter feedbackd
+  also watches for steering-wheel bookmarks; each step becomes a userBookmark."""
+  params_memory.put_int(BOOKMARK_COUNTER, params_memory.get_int(BOOKMARK_COUNTER) + 1)
+
+
+def bookmark_rect(dm_center: rl.Vector2) -> rl.Rectangle:
+  """The bookmark button just above the driver-monitoring icon."""
+  y = dm_center.y - DM_ICON_SIZE / 2 - BOOKMARK_GAP - BOOKMARK_SIZE
+  return rl.Rectangle(dm_center.x - BOOKMARK_SIZE / 2, y, BOOKMARK_SIZE, BOOKMARK_SIZE)
+
+
+class CarBookmarkButton:
+  """Drawn by the view; the car routes its taps (car_ui.OnroadControls), since the drive takes no touches."""
+
+  def __init__(self, clock: Callable[[], float] = rl.get_time):
+    self._clock = clock
+    self._flashed_at = -math.inf
+
+  def press(self) -> None:
+    request_bookmark(ui_state.params_memory)
+    self._flashed_at = self._clock()  # the button lights up briefly to confirm it
+
+  def render(self, rect: rl.Rectangle) -> None:
+    icon = gui_app.texture("icons_mici/onroad/bookmark.png", BOOKMARK_SIZE, BOOKMARK_SIZE)
+    center = rl.Vector2(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    rl.draw_texture(icon, int(rect.x), int(rect.y), rl.WHITE)
+    lit = 1.0 - (self._clock() - self._flashed_at) / BOOKMARK_FLASH_SECONDS
+    if lit > 0:
+      rl.draw_circle_v(center, rect.width / 2, rl.Color(255, 255, 255, int(90 * lit)))
+      rl.draw_ring(center, rect.width / 2 - 4, rect.width / 2, 0, 360, 48, rl.Color(ENGAGED_COLOR.r, ENGAGED_COLOR.g, ENGAGED_COLOR.b, int(255 * lit)))
 
 
 class NoFavoriteMenu:

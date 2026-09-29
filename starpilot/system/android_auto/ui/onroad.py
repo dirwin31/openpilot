@@ -12,7 +12,10 @@ so each widget is initialized and registered once:
     steering-wheel button moved toward the edge to give it room
   * MAX laid out like the speed-limit card (label at the top edge, large value)
   * with the map beside the road: no turn card (the map shows it larger) and the
-    speed-limit sign without its per-source list
+    speed-limit sign without its per-source list; without it, the turn card on the
+    side the car's Directions Side setting picks
+  * the stop / curve gauge tight under the LIMIT card
+  * a smaller driver-monitoring icon with a bookmark button above it
   * the camera can be turned off from the car's settings
 """
 
@@ -27,8 +30,14 @@ from openpilot.selfdrive.ui.onroad.starpilot.starpilot_onroad_view import StarPi
 from openpilot.selfdrive.ui.onroad.starpilot.weather_icon import render_weather_icon
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.starpilot.system.android_auto.ui.onroad_widgets import (
+  BOOKMARK_SIZE,
   BUBBLE_REDUNDANT_ALERTS,
+  DM_SIZE,
+  CarAetherGaugeWidget,
   CarAlertRenderer,
+  CarBookmarkButton,
+  CarDriverMonitorWidget,
+  CarDriverStateRenderer,
   CarHudRenderer,
   CarPipSideCamera,
   CarSetSpeedWidget,
@@ -36,6 +45,7 @@ from openpilot.starpilot.system.android_auto.ui.onroad_widgets import (
   CarStoppedTimerWidget,
   NoFavoriteMenu,
   RIGHT_COLUMN_ANCHOR,
+  bookmark_rect,
   lateral_pause_rect,
   render_lateral_paused,
 )
@@ -46,12 +56,24 @@ class CarOnroadView(StarPilotOnroadView):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     self.layout_manager.right_anchor = RIGHT_COLUMN_ANCHOR
+    self.bookmark_button = CarBookmarkButton()
+    # Where the bookmark was drawn; car_ui routes taps there and clears it before each frame.
+    self.bookmark_rect: rl.Rectangle | None = None
 
   def _create_hud_renderer(self):
     return CarHudRenderer()
 
   def _create_alert_renderer(self):
     return CarAlertRenderer()
+
+  def _create_driver_state_renderer(self):
+    return CarDriverStateRenderer()
+
+  def _create_driver_monitor_widget(self):
+    return CarDriverMonitorWidget(self.driver_state_renderer)
+
+  def _create_aethergauge_widget(self):
+    return CarAetherGaugeWidget(self._hud_renderer)
 
   def _create_pip_sidecam(self):
     return CarPipSideCamera()
@@ -98,11 +120,35 @@ class CarOnroadView(StarPilotOnroadView):
       finally:
         rl.end_scissor_mode()
 
+  def _render_slc(self):
+    self._speed_limit_widget.directions_on_left = self._hud_renderer.directions_on_left
+    super()._render_slc()
+
+  def _dm_center(self) -> rl.Vector2:
+    """The driver-monitoring icon's centre, or where the bottom row would put it while it's hidden."""
+    dm = self._driver_monitor_widget
+    if dm.is_visible:
+      return rl.Vector2(dm.rect.x + dm.rect.width / 2, dm.rect.y + dm.rect.height / 2)
+    manager, content = self.layout_manager, self._content_rect
+    y = content.y + content.height - 146
+    if self.driver_state_renderer.is_rhd:
+      return rl.Vector2(content.x + content.width - 146, y)
+    personality = self._personality_button_widget
+    offset = personality.get_size()[0] + manager.spacing if personality.is_visible else 0
+    return rl.Vector2(content.x + 146 + offset, y)
+
   def _render_bottom_row_widgets(self):
     # Hide if any alert (stock or StarPilot) is active
     alert_showing, _ = self.alert_renderer.will_render()
     if alert_showing is not None:
       return
+
+    dm_center = self._dm_center()
+    if self._driver_monitor_widget.is_visible:
+      self.bookmark_rect = bookmark_rect(dm_center)
+    else:  # it takes the hidden icon's place
+      self.bookmark_rect = rl.Rectangle(dm_center.x - BOOKMARK_SIZE / 2, dm_center.y - BOOKMARK_SIZE / 2, BOOKMARK_SIZE, BOOKMARK_SIZE)
+    self.bookmark_button.render(self.bookmark_rect)
 
     starpilot_car_state = ui_state.sm["starpilotCarState"] if ui_state.sm.valid.get("starpilotCarState", False) else None
     plan = ui_state.sm["starpilotPlan"] if ui_state.sm.valid.get("starpilotPlan", False) else None
@@ -127,7 +173,7 @@ class CarOnroadView(StarPilotOnroadView):
     badge_w = 120
     badge_h = 72
     spacing = 20
-    dm_r = 96  # DM button size is 192
+    dm_r = DM_SIZE / 2
 
     for i, badge in enumerate(active_badges):
       if not dm.is_rhd:

@@ -6,7 +6,9 @@ from openpilot.selfdrive.ui.layouts.main import MainLayout, MainState
 from openpilot.selfdrive.ui.layouts.settings.types import PanelType
 from openpilot.starpilot.system.android_auto.ui.developer_sidebar import CarDeveloperSidebar
 from openpilot.starpilot.system.android_auto.ui.home import CarHomeLayout
+from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.starpilot.system.android_auto.ui.onroad import CarOnroadView
+from openpilot.starpilot.system.android_auto.ui.onroad_widgets import request_bookmark
 from openpilot.starpilot.system.android_auto.ui.settings import CarSettingsLayout
 from openpilot.starpilot.system.android_auto.ui.sidebar import CarSidebar
 
@@ -36,6 +38,9 @@ class CarMainLayout(MainLayout):
     if self._current_mode != mode_before_sidebar or self._sidebar.is_visible != sidebar_visible_before:
       return
     self._layouts[self._current_mode].render(self._content_rect if self._sidebar.is_visible else self._rect)
+
+  def _on_bookmark_clicked(self):
+    request_bookmark(ui_state.params_memory)
 
   def render_status(self, rect: rl.Rectangle):
     """The status column, wherever car_ui placed it: an edge, or between the driving view and the map."""

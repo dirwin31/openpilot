@@ -803,6 +803,33 @@ def test_map_compass_button_toggles_orientation_onroad(controls):
   assert isinstance(button, type(rl.Rectangle(0, 0, 0, 0)))
 
 
+def test_directions_side_validates(tmp_path):
+  path = tmp_path / "car_screen.json"
+  assert car_screen.DEFAULTS["directions_side"] == "right"
+  assert car_screen.update({"directions_side": "left"}, path)["directions_side"] == "left"
+  with pytest.raises(ValueError):
+    car_screen.update({"directions_side": "up"}, path)
+  assert car_screen.normalize({"directions_side": "up"})["directions_side"] == "right"
+
+
+def test_bookmark_button_bookmarks_on_release_onroad(controls):
+  import pyray as rl
+  button = rl.Rectangle(300, 700, 96, 96)
+  bookmarks = []
+  controls.bookmark_button = button
+  controls.on_bookmark = lambda: bookmarks.append(True)
+  touches = touch_input()
+  cx, cy = button.x + button.width / 2, button.y + button.height / 2
+  layout_events, menu_events = controls.route(tap(cx, cy), touches, True, screen())
+  assert bookmarks == [True] and layout_events == [] and menu_events == []
+
+  # Sliding off before lifting does nothing, and neither does a tap once the button is gone.
+  controls.route([TouchEvent("down", cx / 1920, cy / 1080), TouchEvent("up", 100 / 1920, 100 / 1080)], touches, True, screen())
+  controls.bookmark_button = None
+  controls.route(tap(cx, cy), touches, True, screen())
+  assert bookmarks == [True]
+
+
 def test_next_orientation_flips():
   assert car_ui.next_orientation("north_up") == "heading_up"
   assert car_ui.next_orientation("heading_up") == "north_up"
