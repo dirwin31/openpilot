@@ -40,7 +40,7 @@ class CarDisplaySettings(AetherSettingsView):
     ]), SettingSection('Comma Display', [
       SettingRow('sleep_device_screen', 'toggle', 'Turn Off Comma Display',
                  'After the screen timeout while Android Auto is connected. Tap the comma to wake it; ' +
-                 'connection loss and critical alerts always wake it. Applies to comma four.',
+                 'connection loss and critical alerts always wake it. On by default on comma four; off by default on comma 3X.',
                  get_state=lambda: self.current['sleep_device_screen'], set_state=self._set_sleep),
     ]), SettingSection('Wake Comma Display For', [
       SettingRow(f'wake_{key}', 'toggle', label, visible=lambda: self.current['sleep_device_screen'],

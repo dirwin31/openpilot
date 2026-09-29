@@ -180,13 +180,21 @@ def test_standby_wakes_for_visible_alert(monkeypatch):
   assert device._calculate_brightness() == 45
 
 
-@pytest.fixture
-def aa_sleep_device(monkeypatch):
+@pytest.mark.parametrize("device_type, available", [("mici", True), ("tizi", True), ("tici", True), ("pc", False)])
+def test_aa_screen_sleep_is_available_on_comma_four_and_3x(monkeypatch, device_type, available):
+  monkeypatch.setattr(ui_state_module.HARDWARE, "get_device_type", lambda: device_type)
+  monkeypatch.setattr(ui_state_module, "FrameProducer", lambda path: SimpleNamespace(recently_sent=lambda: False))
+  device, _ = make_device(monkeypatch)
+  assert (device._aa_car_frames is not None) == available
+
+
+@pytest.fixture(params=["mici", "tizi"])
+def aa_sleep_device(monkeypatch, request):
   clock, streaming, setting = [100.0], [True], [True]
   power, rendering = [], []
   monkeypatch.setattr(ui_state_module.time, "monotonic", lambda: clock[0])
   monkeypatch.setattr(ui_state_module, "PC", False)
-  monkeypatch.setattr(ui_state_module.HARDWARE, "get_device_type", lambda: "mici")
+  monkeypatch.setattr(ui_state_module.HARDWARE, "get_device_type", lambda: request.param)
   monkeypatch.setattr(ui_state_module.HARDWARE, "set_display_power", power.append)
   monkeypatch.setattr(ui_state_module.gui_app, "set_should_render", rendering.append)
   monkeypatch.setattr(ui_state_module.gui_app, "ui_stream_wants_frames", lambda: False)

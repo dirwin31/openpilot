@@ -45,6 +45,24 @@ def test_device_screen_sleep_is_on_by_default_and_strictly_boolean(tmp_path):
   assert car_screen.load(path)["sleep_device_screen"]
 
 
+def test_device_screen_sleep_is_offered_on_the_3x_but_off_by_default(monkeypatch, tmp_path):
+  assert car_screen.device_sleep_default("mici") and car_screen.device_sleep_default("pc")
+  assert not car_screen.device_sleep_default("tizi") and not car_screen.device_sleep_default("tici")
+  from openpilot.selfdrive.ui import ui_state as ui_state_module
+  assert {"mici", "tizi"} <= set(ui_state_module.AA_SLEEP_DEVICES), "the display can sleep for Android Auto on both"
+
+  monkeypatch.setitem(car_screen.DEFAULTS, "sleep_device_screen", False)  # a 3X
+  path = tmp_path / "car_screen.json"
+  assert not car_screen.load(path)["sleep_device_screen"]
+  # Every file saved before the 3X had a choice stored the old universal default (on); on a 3X that isn't a choice.
+  path.write_text(json.dumps({"camera": False, "sleep_device_screen": True, "sleep_wake_events": []}))
+  assert not car_screen.load(path)["sleep_device_screen"] and not car_screen.load(path)["camera"]
+  chosen = car_screen.update({"sleep_device_screen": True}, path)
+  assert chosen["sleep_device_screen"] and chosen["sleep_device_screen_set"]
+  assert car_screen.load(path)["sleep_device_screen"], "turned on from settings, it stays on"
+  assert not car_screen.update({"sleep_device_screen": False}, path)["sleep_device_screen"]
+
+
 def test_wake_events_speed_and_status_positions_validate(tmp_path):
   assert car_screen.DEFAULTS["sleep_wake_events"] == ["StandbyWakeWarningAlert"]
   assert "StandbyWakeCriticalAlert" not in car_screen.SLEEP_WAKE_EVENTS, "critical alerts are not optional"
@@ -662,6 +680,10 @@ class FakePage:
     self._preview_route_index = 0
     self._selected_favorite = None
     self.targets = []
+    self.live_queries = []
+
+  def set_live_query(self, text, now=None, immediate=False):
+    self.live_queries.append((text, immediate))
 
   def _same_destination(self, left, right):
     return self._same(left, right)
@@ -752,6 +774,99 @@ def test_screen_taps_activate_and_drags_scroll(nav_screen):
   nav_screen._handle_mouse_press(MousePos(40, 40))
   nav_screen._handle_mouse_release(MousePos(40, 40))
   assert nav_screen.closed == [True]
+
+
+def test_search_field_opens_a_keyboard_in_place_of_the_map_and_searches_as_you_type(nav_screen):
+  from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.navigation import SearchResult
+  page = nav_screen.page
+  page._favorites = [{"id": "g", "name": "Gym", "place_name": "12 Main St", "latitude": 37.6, "longitude": -122.2}]
+  page._recent_destinations = [{"name": "Airport", "latitude": 37.6, "longitude": -122.4}]
+  nav_screen.activate("action:search")
+  assert nav_screen.searching and nav_screen.page.targets == [], "the car's own keyboard, not the comma's dialog"
+  assert nav_screen.notice() is None and [title for title, _ in nav_screen.list_rows()] == ["Favorites", "Recent"]
+
+  for key in "mai":
+    nav_screen.activate(f"key:{key}")
+  assert nav_screen.typed == "mai" and page.live_queries[-1] == ("mai", False), "each key updates the live query"
+  sections = dict(nav_screen.list_rows())
+  assert [row.title for row in sections["Saved places"]] == ["Gym"], "saved places matching the text show at once"
+
+  page._search_results = [SearchResult("Main Street Cafe", "Reno, NV")]
+  assert [title for title, _ in nav_screen.list_rows()] == ["Suggestions", "Saved places"]
+  nav_screen.activate("key:back")
+  nav_screen.activate("key:space")
+  nav_screen.activate("key:space")
+  assert nav_screen.typed == "ma " and page.live_queries[-1] == ("ma ", False), "no double spaces"
+  page._search_results = []
+  page._favorites = []
+  assert nav_screen.notice()[0] == "Keep typing"
+
+  nav_screen.activate("back")
+  assert not nav_screen.searching and nav_screen.closed == [], "Back puts the keyboard away before leaving"
+  nav_screen.activate("action:search")
+  nav_screen.activate("key:clear")
+  assert nav_screen.typed == "" and page.live_queries[-1] == ("", False)
+  nav_screen.activate("key:x")
+  nav_screen.activate("key:done")
+  assert not nav_screen.searching and page.live_queries[-1] == ("x", True), "Done searches at once"
+
+  nav_screen.activate("action:search")
+  nav_screen.activate("result:0")
+  assert not nav_screen.searching and page.targets[-1] == "result:0", "picking a place brings the map back"
+
+
+def test_navigate_keyboard_keys_are_tap_targets(nav_screen, monkeypatch):
+  import pyray as rl
+  from openpilot.starpilot.system.android_auto import car_navigate
+  for name in ("draw_rectangle_rounded", "draw_text_ex", "draw_line_ex"):
+    monkeypatch.setattr(car_navigate.rl, name, lambda *args: None)
+  monkeypatch.setattr(car_navigate, "measure_text_cached", lambda font, text, size: rl.Vector2(len(text) * size * 0.5, size))
+  monkeypatch.setattr(nav_screen, "_font", lambda weight: None)
+  nav_screen._targets = []
+  panel = rl.Rectangle(900, 140, 980, 900)
+  nav_screen._draw_keyboard(panel)
+  keys = {target: area for target, area, _ in nav_screen._targets}
+  assert {"key:a", "key:0", "key:back", "key:space", "key:done", "key:&"} <= set(keys)
+  for area in keys.values():
+    assert panel.x <= area.x and area.x + area.width <= panel.x + panel.width + 0.01
+    assert panel.y <= area.y and area.y + area.height <= panel.y + panel.height + 0.01
+  assert keys["key:space"].width > 3 * keys["key:a"].width
+
+
+def test_live_query_waits_for_a_pause_and_keeps_results_while_loading(monkeypatch):
+  from openpilot.starpilot.system.android_auto.ui import navigation
+  from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.navigation import SearchResult
+  page = navigation.CarNavigationLayout.__new__(navigation.CarNavigationLayout)
+  page._live_query, page._search_due = "", None
+  page._query, page._search_results, page._search_loading, page._search_error = "", [], False, ""
+  page._search_generation, page._draft_destination, page._selected_favorite = 0, None, None
+  started = []
+
+  def start(query):
+    started.append(query)
+    page._query, page._search_results, page._search_loading = query, [], True
+  page._start_search = start
+
+  page.set_live_query("reno c", now=10.0)
+  page._run_due_search(10.2)
+  assert started == [], "nothing is sent mid-word"
+  page.set_live_query("reno ca", now=10.2)
+  page._run_due_search(10.4)
+  assert started == []
+  page._run_due_search(10.2 + navigation.SEARCH_DEBOUNCE_SECONDS)
+  assert started == ["reno ca"], "one search after the pause, for the latest text"
+
+  page._search_results = [SearchResult("Reno Cafe")]
+  page._search_loading = False
+  page.set_live_query("reno caf", now=20.0, immediate=True)
+  page._run_due_search(20.0)
+  assert started[-1] == "reno caf" and [r.name for r in page._search_results] == ["Reno Cafe"], \
+    "the last results stay up until the new ones arrive"
+
+  page.set_live_query("re", now=30.0, immediate=True)
+  page._run_due_search(30.0)
+  assert started[-1] == "reno caf" and page._search_results == [] and page._query == "re", "too short: cleared, not sent"
+  assert navigation.LiveSearchClient.search.__kwdefaults__["limit"] == navigation.LIVE_RESULT_LIMIT > 4
 
 
 def test_navigate_screen_links_to_offline_maps_settings(controls, nav_screen):

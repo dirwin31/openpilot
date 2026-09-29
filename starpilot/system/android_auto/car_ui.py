@@ -765,7 +765,7 @@ class OnroadControls:
     self.menu.corner = "right" if self.menu.on_home else "left"
 
   def _plain_button_at(self, x: float, y: float) -> str | None:
-    """The plain button under a touch: the map's compass or the driving view's bookmark."""
+    """The plain button under a touch: the map's compass or the status column's bookmark slot."""
     for name, button in (("map_button", self.map_button), ("bookmark_button", self.bookmark_button)):
       if button is not None and button.x <= x <= button.x + button.width and button.y <= y <= button.y + button.height:
         return name
@@ -884,8 +884,7 @@ def run(frames_path: str, touch_path: str) -> int:
       print(json.dumps({"event": "map_orientation_save_failed", "error": str(error)[:200]}), flush=True)
 
   controls.on_map_button = toggle_map_orientation
-  drive_view = main_layout._layouts[controls._MainState.ONROAD]
-  controls.on_bookmark = drive_view.bookmark_button.press
+  controls.on_bookmark = main_layout._dev_sidebar.bookmark.press
 
   content = rl.load_render_texture(visible_w, visible_h)
   # The second UI shares the GPU with driver monitoring. Single-sample rendering
@@ -1000,8 +999,9 @@ def run(frames_path: str, touch_path: str) -> int:
       controls.update(started, speed_ms, vehicle_parked(ui_state))
       # Last frame's map placement; the layout only changes with settings or a screen switch.
       controls.map_button = map_pane.button_rect if started and not controls.full_screen(started) else None
-      controls.bookmark_button = drive_view.bookmark_rect if started and not controls.full_screen(started) else None
-      drive_view.bookmark_rect = None  # set again only if the drive draws the button this frame
+      # Last frame's status-column bookmark slot, if the column drew one.
+      controls.bookmark_button = main_layout._dev_sidebar.bookmark_rect if started and not controls.full_screen(started) else None
+      main_layout._dev_sidebar.bookmark_rect = None  # set again only if the column draws the slot this frame
       layout_events, menu_events = controls.route(receiver.drain(), touch, started, viewport)
       settings = car_settings.poll()
       main_layout._dev_sidebar.metric_override = [STATUS_METRICS[slot][0] for slot in settings["status_slots"]]

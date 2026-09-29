@@ -185,12 +185,16 @@ def test_stopped_timer_replaces_speed_in_full_and_split_camera_panes(monkeypatch
     timer_ink = onroad_widgets.text_ink(None, "01:01", timer[3])
     assert timer[2].y + timer_ink.y == pytest.approx(rect.y + onroad_widgets.CONTROL_TOP + label_ink.height +
                                                      CarStoppedTimerWidget.LINE_GAP)
-    # Centred on the pane, where the speed it replaces sits, clear of both control columns.
-    center = rect.x + rect.width / 2
+    # Centred between the MAX card's right edge and the steering wheel's left edge (as far from
+    # each), where the speed it replaces sits, and clear of both.
+    max_right = rect.x + onroad_widgets.WIDGET_ANCHOR_OFFSET + onroad_widgets.CONTROL_WIDTH / 2
+    wheel_left = rect.x + rect.width - onroad_widgets.RIGHT_COLUMN_ANCHOR - onroad_widgets.EXP_BUTTON_SIZE / 2
+    center = (max_right + wheel_left) / 2
+    assert center > rect.x + rect.width / 2, "the wheel hugs its edge more than MAX does"
     assert abs(label[2].x + len("Stopped") * label[3] * 0.55 / 2 - center) < 1
     assert abs(timer[2].x + len("01:01") * timer[3] * 0.55 / 2 - center) < 1
-    left = rect.x + CarStoppedTimerWidget.LEFT_CONTROLS_RESERVE + CarStoppedTimerWidget.HORIZONTAL_MARGIN
-    right = rect.x + rect.width - CarStoppedTimerWidget.RIGHT_CONTROLS_RESERVE - CarStoppedTimerWidget.HORIZONTAL_MARGIN
+    left = max_right + CarStoppedTimerWidget.HORIZONTAL_MARGIN
+    right = wheel_left - CarStoppedTimerWidget.HORIZONTAL_MARGIN
     assert label[2].x >= left - 1 and label[2].x + len("Stopped") * label[3] * 0.55 <= right + 1
 
 
@@ -547,7 +551,9 @@ def test_current_speed_sits_level_with_the_controls_and_can_be_hidden(monkeypatc
   hud._font_bold = hud._font_medium = None
   hud.speed = 42.4
   tops = []
-  monkeypatch.setattr(onroad_widgets, "draw_ink", lambda font, text, size, x, top, color: tops.append((text, top)) or top + 100)
+  centers = []
+  monkeypatch.setattr(onroad_widgets, "draw_ink",
+                      lambda font, text, size, x, top, color: tops.append((text, top)) or centers.append(x) or top + 100)
   monkeypatch.setattr(onroad_widgets, "get_compass_text", lambda: None)
   monkeypatch.setattr(ui_state, "is_metric", False)
   rect = rl.Rectangle(0, 30, 1200, 1000)
@@ -555,6 +561,7 @@ def test_current_speed_sits_level_with_the_controls_and_can_be_hidden(monkeypatc
   hud._draw_current_speed(rect)
   assert tops == [("42", rect.y + onroad_widgets.CONTROL_TOP), ("mph", rect.y + onroad_widgets.CONTROL_TOP + 100 +
                                                                      onroad_widgets.SPEED_UNIT_GAP)]
+  assert centers == [sum(onroad_widgets.top_center_span(rect)) / 2] * 2, "centred between MAX and the wheel, like Stopped"
   tops.clear()
   monkeypatch.setattr(ui_state, "car_show_current_speed", False)
   hud._draw_current_speed(rect)
@@ -577,12 +584,46 @@ def test_bookmark_steps_the_counter_feedbackd_watches():
   assert memory == {"WheelButtonBookmarkCounter": 2}
 
 
-def test_bookmark_sits_just_above_the_smaller_dm_icon():
+def test_bookmark_is_a_status_slot_not_a_button_over_the_dm_icon(monkeypatch):
+  from openpilot.starpilot.system.android_auto import car_screen
+  from openpilot.starpilot.system.android_auto.ui import developer_sidebar, onroad
   assert onroad_widgets.DM_SIZE < 192 and onroad_widgets.DM_ICON_SIZE < 128
-  center = rl.Vector2(353, 904)
-  rect = onroad_widgets.bookmark_rect(center)
-  assert rect.x + rect.width / 2 == center.x
-  assert rect.y + rect.height == pytest.approx(center.y - onroad_widgets.DM_ICON_SIZE / 2 - onroad_widgets.BOOKMARK_GAP)
+  assert not hasattr(onroad.CarOnroadView, "_dm_center"), "nothing is drawn above the DM icon any more"
+  assert car_screen.STATUS_METRICS["bookmark"][0] == developer_sidebar.BOOKMARK_METRIC
+  assert car_screen.normalize({"status_slots": ["bookmark", *car_screen.DEFAULTS["status_slots"][1:]]})["status_slots"][0] == "bookmark"
+
+  sidebar = developer_sidebar.CarDeveloperSidebar.__new__(developer_sidebar.CarDeveloperSidebar)
+  sidebar._visible, sidebar.metric_override = True, [developer_sidebar.BLANK_METRIC, developer_sidebar.BOOKMARK_METRIC]
+  sidebar._slot_ids = list(sidebar.metric_override)
+  sidebar._metrics, sidebar._font_bold, sidebar.bookmark_rect = {}, None, None
+  drawn = []
+  sidebar.bookmark = SimpleNamespace(render=lambda rect, font, size: drawn.append(rect))
+  monkeypatch.setattr(developer_sidebar.rl, "draw_rectangle_rec", lambda *args: None)
+  column = rl.Rectangle(1500, 0, 300, 1080)
+  sidebar.render(column)
+  assert drawn == [sidebar.bookmark_rect], "the tap target is exactly the card that was drawn"
+  card = sidebar.bookmark_rect
+  assert column.x <= card.x and card.x + card.width <= column.x + column.width and card.y > column.height / 2
+
+  sidebar._slot_ids = sidebar.metric_override = [developer_sidebar.BLANK_METRIC, 18]
+  sidebar._metrics, sidebar._metric_colors, sidebar._metric_color = {18: ("CPU", "5%")}, {}, None
+  sidebar._draw_metric = lambda *args: None
+  sidebar.render(column)
+  assert sidebar.bookmark_rect is None, "no slot, no tap target"
+
+
+def test_bookmark_card_confirms_a_press(monkeypatch):
+  now = [100.0]
+  requests = []
+  monkeypatch.setattr(onroad_widgets, "request_bookmark", lambda memory: requests.append(True))
+  button = onroad_widgets.CarBookmarkButton(clock=lambda: now[0])
+  assert button.lit() == 0
+  button.press()
+  assert requests == [True] and button.lit() == 1.0
+  now[0] += onroad_widgets.BOOKMARK_FLASH_SECONDS / 2
+  assert button.lit() == pytest.approx(0.5)
+  now[0] += onroad_widgets.BOOKMARK_FLASH_SECONDS
+  assert button.lit() == 0
 
 
 def test_gauge_is_pulled_up_under_the_limit_card():

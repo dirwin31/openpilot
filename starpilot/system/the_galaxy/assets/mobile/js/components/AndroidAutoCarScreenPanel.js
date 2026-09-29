@@ -182,7 +182,7 @@ export const AndroidAutoCarScreenPanel = {
           </label>
           <div class="gx-row__label gx-car-display__heading">Comma Display</div>
           <label class="gx-row">
-            <div class="gx-row__info"><span class="gx-row__label">Turn Off Comma Display</span><span class="gx-row__desc">After the screen timeout while Android Auto is connected. Tap the comma to wake it; connection loss and critical alerts always wake it. Keeping it on uses additional CPU. Applies to the independent car view on comma four.</span></div>
+            <div class="gx-row__info"><span class="gx-row__label">Turn Off Comma Display</span><span class="gx-row__desc">After the screen timeout while Android Auto is connected. Tap the comma to wake it; connection loss and critical alerts always wake it. Keeping it on uses additional CPU. On by default on comma four; off by default on comma 3X.</span></div>
             <span class="gx-switch"><input type="checkbox" :checked="settings.sleep_device_screen" :disabled="saving" @change="updateSleep" />
               <span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></span>
           </label>

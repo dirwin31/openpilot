@@ -62,6 +62,8 @@ EXP_ICON_SIZE = 120
 RIGHT_COLUMN_ANCHOR = 130  # column centre, from the camera pane's right edge (the comma uses 146)
 CONTROL_TOP = 45  # the MAX card's and the steering wheel's top edge, below the pane's top (widget_layout_manager)
 SPEED_UNIT_GAP = 22  # between the speed's ink and the unit's
+# The experimental icon's dark outline (offset px, alpha), outer ring first; see ExpButton.ICON_OUTLINE.
+EXP_ICON_OUTLINE = ((6, 60), (3, 150))
 # MAX and LIMIT cards are laid out by glyph ink, not line boxes: a line box carries ~19%
 # empty space above digits, which left a gap under the label and the value off centre.
 CARD_INK_MARGIN = 16        # card edge to the label's ink; the value's space ends as far from the bottom
@@ -72,15 +74,23 @@ LIMIT_CHIP_LIFT = 6         # the offset chip's bottom margin matches the label'
 # The stop / curve gauge draws nothing in the top 25px of the comma's box (the curve's road
 # starts there); the car trims it so the road sits one column gap under the LIMIT card.
 GAUGE_TOP_TRIM = 25.0
-# A smaller driver-monitoring icon, with a bookmark button just above it.
+# A smaller driver-monitoring icon. The bookmark button is a status-column slot (developer_sidebar.py).
 DM_SIZE = 160
 DM_ICON_SIZE = round(DMOJI_SIZE * DM_SIZE / 192)  # the comma draws a 128 icon in a 192 slot
-BOOKMARK_SIZE = 96
-BOOKMARK_GAP = 12           # between the bookmark's circle and the DM icon's
+BOOKMARK_ICON_SIZE = 64
 BOOKMARK_FLASH_SECONDS = 1.2
 BOOKMARK_COUNTER = "WheelButtonBookmarkCounter"
 # The next-turn card on the left clears the MAX / LIMIT column by the margin it keeps on the right.
 DIRECTIONS_LEFT_X = WIDGET_ANCHOR_OFFSET + CONTROL_WIDTH / 2 + 40
+
+
+def top_center_span(rect: rl.Rectangle) -> tuple[float, float]:
+  """(left, right) of the space between the MAX card and the steering wheel. The speed and the
+  Stopped timer centre in it: the wheel sits closer to its edge than MAX does to its own, so the
+  pane's centre would put them nearer MAX."""
+  left = rect.x + WIDGET_ANCHOR_OFFSET + CONTROL_WIDTH / 2
+  right = rect.x + rect.width - RIGHT_COLUMN_ANCHOR - EXP_BUTTON_SIZE / 2
+  return left, right
 
 
 _ink_cache: dict[tuple, rl.Rectangle] = {}
@@ -270,13 +280,10 @@ class CarPipSideCamera(PipSideCamera):
 class CarStoppedTimerWidget(StoppedTimerWidget):
   """A compact "Stopped" label and mm:ss timer in place of the speed readout.
 
-  Centred on the pane, where the speed it replaces sits, with the label's ink level with
-  the top of the MAX card and the steering wheel, and sized to stay clear of the wider of
-  the MAX / LIMIT column and the steering-wheel column.
+  Centred between the MAX card and the steering wheel, where the speed it replaces sits, with
+  the label's ink level with the top of the MAX card and the wheel, and sized to fit that gap.
   """
 
-  LEFT_CONTROLS_RESERVE = 290  # MAX / LIMIT column
-  RIGHT_CONTROLS_RESERVE = RIGHT_COLUMN_ANCHOR + 90  # steering wheel and the 180-wide pedal icons below it
   LABEL_FONT = 104
   TIMER_FONT = 88
   HORIZONTAL_MARGIN = 38
@@ -287,8 +294,8 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
     duration = self._duration
     label_text, timer_text = "Stopped", f"{duration // 60:02d}:{duration % 60:02d}"
     full_width = measure_text_cached(self._font_bold, label_text, self.LABEL_FONT).x
-    reserve = max(self.LEFT_CONTROLS_RESERVE, self.RIGHT_CONTROLS_RESERVE) + self.HORIZONTAL_MARGIN
-    available = max(1.0, rect.width - 2 * reserve)
+    left, right = top_center_span(rect)
+    available = max(1.0, right - left - 2 * self.HORIZONTAL_MARGIN)
     scale = min(1.0, available / full_width) if full_width > 0 else 1.0
     scale = max(0.6, scale)
     label_font = max(1, int(self.LABEL_FONT * scale))
@@ -299,7 +306,7 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
     timer_ink = text_ink(self._font_normal, timer_text, timer_font)
 
     duration_color = self._duration_color()
-    center_x = rect.x + rect.width / 2
+    center_x = (left + right) / 2
     label_y = rect.y + self.TEXT_TOP - label_ink.y
     timer_y = rect.y + self.TEXT_TOP + label_ink.height + self.LINE_GAP - timer_ink.y
     self._draw_text(self._font_bold, label_text, rl.Vector2(center_x - label_size.x / 2, label_y), label_font, duration_color)
@@ -404,10 +411,14 @@ class CarNavigationCardRenderer(NavigationCardRenderer):
     return super()._card_x(rect, width)
 
 
+class CarExpButton(ExpButton):
+  ICON_OUTLINE = EXP_ICON_OUTLINE
+
+
 class CarHudRenderer(HudRenderer):
   def __init__(self):
     super().__init__()
-    self._exp_button = ExpButton(EXP_BUTTON_SIZE, EXP_ICON_SIZE)
+    self._exp_button = CarExpButton(EXP_BUTTON_SIZE, EXP_ICON_SIZE)
 
   def _create_navigation_card(self):
     return CarNavigationCardRenderer()
@@ -417,11 +428,12 @@ class CarHudRenderer(HudRenderer):
     return self._navigation_card.on_left
 
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
-    """The speed's ink level with the top of the MAX card and the steering wheel, the unit and
-    compass below it; off with the car's Show Current Speed setting."""
+    """The speed's ink level with the top of the MAX card and the steering wheel and centred
+    between them, the unit and compass below it; off with the car's Show Current Speed setting."""
     if not ui_state.car_show_current_speed:
       return
-    center_x = rect.x + rect.width / 2
+    left, right = top_center_span(rect)
+    center_x = (left + right) / 2
     bottom = draw_ink(self._font_bold, str(round(self.speed)), FONT_SIZES.current_speed, center_x, rect.y + CONTROL_TOP,
                       COLORS.WHITE)
     unit = tr("km/h") if ui_state.is_metric else tr("mph")
@@ -455,14 +467,8 @@ def request_bookmark(params_memory) -> None:
   params_memory.put_int(BOOKMARK_COUNTER, params_memory.get_int(BOOKMARK_COUNTER) + 1)
 
 
-def bookmark_rect(dm_center: rl.Vector2) -> rl.Rectangle:
-  """The bookmark button just above the driver-monitoring icon."""
-  y = dm_center.y - DM_ICON_SIZE / 2 - BOOKMARK_GAP - BOOKMARK_SIZE
-  return rl.Rectangle(dm_center.x - BOOKMARK_SIZE / 2, y, BOOKMARK_SIZE, BOOKMARK_SIZE)
-
-
 class CarBookmarkButton:
-  """Drawn by the view; the car routes its taps (car_ui.OnroadControls), since the drive takes no touches."""
+  """A status-column card; the car routes its taps (car_ui.OnroadControls), since the drive takes no touches."""
 
   def __init__(self, clock: Callable[[], float] = rl.get_time):
     self._clock = clock
@@ -470,16 +476,33 @@ class CarBookmarkButton:
 
   def press(self) -> None:
     request_bookmark(ui_state.params_memory)
-    self._flashed_at = self._clock()  # the button lights up briefly to confirm it
+    self._flashed_at = self._clock()  # the card lights up briefly to confirm it
 
-  def render(self, rect: rl.Rectangle) -> None:
-    icon = gui_app.texture("icons_mici/onroad/bookmark.png", BOOKMARK_SIZE, BOOKMARK_SIZE)
-    center = rl.Vector2(rect.x + rect.width / 2, rect.y + rect.height / 2)
-    rl.draw_texture(icon, int(rect.x), int(rect.y), rl.WHITE)
-    lit = 1.0 - (self._clock() - self._flashed_at) / BOOKMARK_FLASH_SECONDS
+  def lit(self) -> float:
+    """1.0 just after a press, fading to 0 over BOOKMARK_FLASH_SECONDS."""
+    return max(0.0, 1.0 - (self._clock() - self._flashed_at) / BOOKMARK_FLASH_SECONDS)
+
+  def render(self, rect: rl.Rectangle, font: rl.Font, font_size: int) -> None:
+    """The bookmark icon and BOOKMARK in a metric card's outline; SAVED in green after a press."""
+    lit = self.lit()
+    roundness = 0.3
     if lit > 0:
-      rl.draw_circle_v(center, rect.width / 2, rl.Color(255, 255, 255, int(90 * lit)))
-      rl.draw_ring(center, rect.width / 2 - 4, rect.width / 2, 0, 360, 48, rl.Color(ENGAGED_COLOR.r, ENGAGED_COLOR.g, ENGAGED_COLOR.b, int(255 * lit)))
+      rl.draw_rectangle_rounded(rect, roundness, 10, rl.Color(ENGAGED_COLOR.r, ENGAGED_COLOR.g, ENGAGED_COLOR.b, int(70 * lit)))
+      rl.draw_rectangle_rounded_lines_ex(rect, roundness, 10, 3, rl.Color(ENGAGED_COLOR.r, ENGAGED_COLOR.g, ENGAGED_COLOR.b, int(255 * lit)))
+    else:
+      rl.draw_rectangle_rounded_lines_ex(rect, roundness, 10, 2, rl.Color(255, 255, 255, 85))
+    label = tr("SAVED") if lit > 0 else tr("BOOKMARK")
+    icon = gui_app.texture("icons_mici/onroad/bookmark.png", BOOKMARK_ICON_SIZE, BOOKMARK_ICON_SIZE)
+    gap = 14
+    text_width = measure_text_cached(font, label, font_size).x
+    room = rect.width - 36 - BOOKMARK_ICON_SIZE - gap
+    if text_width > room > 0:
+      font_size = max(1, int(font_size * room / text_width))
+      text_width = measure_text_cached(font, label, font_size).x
+    x = rect.x + (rect.width - BOOKMARK_ICON_SIZE - gap - text_width) / 2
+    rl.draw_texture(icon, int(x), int(rect.y + (rect.height - BOOKMARK_ICON_SIZE) / 2), rl.WHITE)
+    rl.draw_text_ex(font, label, rl.Vector2(x + BOOKMARK_ICON_SIZE + gap, rect.y + (rect.height - font_size) / 2), font_size, 0,
+                    ENGAGED_COLOR if lit > 0 else rl.WHITE)
 
 
 class NoFavoriteMenu:

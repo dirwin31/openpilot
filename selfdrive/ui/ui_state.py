@@ -30,10 +30,11 @@ BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
 # open on a parked car; with ignition on there is no cap.
 STREAM_OFFROAD_HOLD_MAX = 600.0
 
-# While the C4 screen sleeps for Android Auto, critical / takeover alerts always wake it;
+# While the comma's screen sleeps for Android Auto, critical / takeover alerts always wake it;
 # the car screen's "sleep_wake_events" setting adds more (warnings by default). The car
 # screen already shows everything else. Standby wake selections do not apply.
 AA_SLEEP_WAKE_KEYS = frozenset({"StandbyWakeCriticalAlert"})
+AA_SLEEP_DEVICES = ("mici", "tizi", "tici")
 # A car-view frame gap shorter than this (an encoder reopen, a heavy map/route
 # frame) keeps the screen asleep instead of waking it for a full timeout.
 AA_SLEEP_STALE_GRACE = 3.0
@@ -364,7 +365,9 @@ class Device:
     self._aa_screen_sleep = False
     self._aa_last_streaming = 0.0
     self._aa_screen_settings = CarScreenSettings()
-    self._aa_car_frames = FrameProducer(CAR_FRAME_PATH) if HARDWARE.get_device_type() == "mici" else None
+    # The car view runs as its own process on every comma (comma four and 3X), so the display can
+    # sleep during Android Auto on either; the car screen's setting picks whether it does.
+    self._aa_car_frames = FrameProducer(CAR_FRAME_PATH) if HARDWARE.get_device_type() in AA_SLEEP_DEVICES else None
     self._stream_hold_since: float = 0.0
     self._stream_hold_used: float = 0.0
     self._params = ui_state.ui_params
