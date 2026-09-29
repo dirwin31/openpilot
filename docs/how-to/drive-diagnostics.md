@@ -5,6 +5,26 @@ connection is written to the drive's **rlog**. rlogs survive unplugging the comm
 few seconds of a drive are lost. The swaglog files in `/data/log` don't reliably survive: they are
 uploaded and then deleted.
 
+## Testers: Send to AA Guy
+
+Testers don't need SSH. On a phone connected to the comma, open The Galaxy, then **Logs & Diagnostics →
+Android Auto**. Describe what happened, choose how many recent drives to include, and tap **Send to AA
+Guy**. The zip (usually under 1 MB) arrives in AA Guy's Discord channel with the note and the device's
+dongle ID. **Download** saves the same zip to the phone instead, for when there's no internet.
+
+What the zip contains:
+
+- **android-auto/**: session logs covering pairing, the Wi-Fi handshake and streaming, plus reports and
+  settings.
+- **bluetooth/**: every pairing prompt and how it ended, and the adapter status.
+- **drives/**: a report for each drive, the same as step 2 below. The comma builds these itself, only
+  while the car is off.
+
+It never contains passwords, certificates, video or a GPS track.
+
+The Discord webhook is built into `starpilot/system/diagnostics/bundle.py`, base64-encoded. To replace
+it without a code change, write a new URL to `/data/diagnostics/webhook_url` on the comma.
+
 ## 1. Copy the drive off the comma
 
 Plug the comma in on the bench and find the route. Routes are listed by the time their first segment
@@ -32,7 +52,7 @@ scp 'comma:/data/android_auto/logs/session-*' docs/Rlogs/   # or just the newest
 
 ```bash
 uv run --no-project --with pycapnp --with zstandard \
-  python tools/profiling/drive_report.py docs/Rlogs/<route>-logs.tar \
+  python starpilot/system/diagnostics/drive_report.py docs/Rlogs/<route>-logs.tar \
   --aa docs/Rlogs/session-NNNNNN-*.jsonl
 ```
 

@@ -192,6 +192,8 @@ export const api = {
   removeAndroidAutoIdentity() { return request("/api/android_auto/identity", { method: "DELETE" }) },
   getCarScreen() { return request("/api/android_auto/car_screen", { cache: "no-store", timeout: 10000 }) },
   setCarScreen(body) { return request("/api/android_auto/car_screen", { method: "POST", data: body, timeout: 10000 }) },
+  getDiagnosticsStatus() { return request("/api/diagnostics/status", { cache: "no-store", timeout: 15000 }) },
+  startDiagnostics(body) { return request("/api/diagnostics/start", { method: "POST", data: body, timeout: 15000 }) },
   getAndroidAutoDiagnostics() { return request("/api/android_auto/diagnostics", { cache: "no-store", timeout: 15000 }) },
   getAndroidAutoDiagnosticsReport(name) { return request(`/api/android_auto/diagnostics/${encodeURIComponent(name)}`, { cache: "no-store", timeout: 15000 }) },
   getAutoOffline() { return request("/api/android_auto/offline", { cache: "no-store", timeout: 15000 }) },
