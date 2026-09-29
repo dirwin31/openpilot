@@ -1,0 +1,240 @@
+"""A diagnostics zip a tester can send to the developer (RECIPIENT) from The Galaxy.
+
+Contents: the Android Auto session logs (Bluetooth pairing, Wi-Fi handshake, streaming)
+with their reports and settings, the Bluetooth pairing prompt log and adapter status,
+and a one-page report for each of the last few drives (see drive_report.py). Never the
+Android Auto identity or any Wi-Fi password.
+
+"Send to AA Guy" (RECIPIENT) posts the zip to a Discord webhook. The URL is built in, encoded so
+repository scanners don't pick it up; a URL in WEBHOOK_OVERRIDE_PATH on the device
+replaces it without a code change. Download is always available.
+"""
+
+from __future__ import annotations
+
+import base64
+import dataclasses
+import datetime
+import io
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+import zipfile
+from collections.abc import Callable
+from pathlib import Path
+
+RECIPIENT = "AA Guy"  # who "Send to ..." delivers to, as testers see it
+REALDATA = Path("/data/media/0/realdata")
+DIAGNOSTICS_DIR = Path("/data/diagnostics")
+WEBHOOK_OVERRIDE_PATH = DIAGNOSTICS_DIR / "webhook_url"
+# base64 of the Discord webhook URL that receives tester diagnostics ("" = sending not set up).
+_WEBHOOK_B64 = "".join(("aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTU1NDI4MDc2NjU3NjI2NzMyNC9jelFvQ0VJUnFE",
+                        "VWkxbXM5M3VvTzZ6TXVZRVJXUE5OTV90bWVKUEV3cXJjUjFUdHlMQ1lnSDNLeEtsb1NfamNIdlBCag=="))
+DISCORD_FILE_LIMIT = 10 * 1024 * 1024 - 64 * 1024  # 10 MiB attachment limit, with room for the form fields
+MAX_DRIVES = 3
+DRIVE_REPORT_TIMEOUT_S = 900
+DRIVE_REPORT = Path(__file__).with_name("drive_report.py")
+
+
+def webhook_url(override_path: Path = WEBHOOK_OVERRIDE_PATH) -> str:
+  try:
+    override = override_path.read_text().strip()
+  except OSError:
+    override = ""
+  if override:
+    return override
+  return base64.b64decode(_WEBHOOK_B64).decode() if _WEBHOOK_B64 else ""
+
+
+def recent_routes(realdata: Path = REALDATA, count: int = MAX_DRIVES) -> list[str]:
+  """Newest drives first, by when their first segment was written."""
+  firsts = []
+  for first in realdata.glob("*--0"):
+    if (first / "rlog.zst").exists() or (first / "qlog.zst").exists():
+      try:
+        firsts.append((first.stat().st_mtime, first.name.removesuffix("--0")))
+      except OSError:
+        continue
+  return [route for _, route in sorted(firsts, reverse=True)[:count]]
+
+
+def device_summary() -> dict:
+  summary: dict = {"generated": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")}
+  try:
+    from openpilot.system.version import get_build_metadata
+    build = get_build_metadata()
+    summary.update(branch=build.channel, commit=build.openpilot.git_commit, version=build.openpilot.version,
+                   origin=build.openpilot.git_normalized_origin)
+  except Exception as error:
+    summary["build_error"] = str(error)
+  try:
+    from openpilot.common.params import Params
+    params = Params()
+    summary["dongle_id"] = params.get("DongleId", encoding="utf-8") or ""
+    summary["offroad"] = params.get_bool("IsOffroad")
+  except Exception as error:
+    summary["params_error"] = str(error)
+  return summary
+
+
+def _bluetooth_status() -> dict:
+  from openpilot.starpilot.system.bluetooth.protocol import BluetoothClient
+  status = BluetoothClient(timeout=5.0).status()
+  return dataclasses.asdict(status) if dataclasses.is_dataclass(status) else dict(status)
+
+
+def _drive_report(route: str, realdata: Path) -> str:
+  result = subprocess.run([sys.executable, str(DRIVE_REPORT), str(realdata), "--route", route, "--jobs", "2"],
+                          capture_output=True, text=True, timeout=DRIVE_REPORT_TIMEOUT_S, preexec_fn=lambda: os.nice(19))
+  if result.returncode != 0:
+    raise RuntimeError((result.stderr or result.stdout).strip()[-500:] or f"exit code {result.returncode}")
+  return result.stdout
+
+
+def build(note: str = "", drives: int = 1, progress: Callable[[str], None] = lambda _: None, *,
+          realdata: Path = REALDATA, drive_report: Callable[[str, Path], str] = _drive_report,
+          aa_bundle: Callable[[], bytes] | None = None, bluetooth_status: Callable[[], dict] = _bluetooth_status,
+          pairing_log: Path | None = None, summary: Callable[[], dict] = device_summary) -> bytes:
+  """The zip, built in memory (a few hundred KB to a few MB)."""
+  problems: list[str] = []
+  info = summary()
+  output = io.BytesIO()
+  with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+    progress("Collecting Android Auto logs")
+    try:
+      if aa_bundle is None:
+        from openpilot.starpilot.system.android_auto import compat_report
+        aa_bundle = compat_report.bundle
+      with zipfile.ZipFile(io.BytesIO(aa_bundle())) as aa:
+        for entry in aa.infolist():
+          archive.writestr(f"android-auto/{entry.filename}", aa.read(entry))
+    except Exception as error:
+      problems.append(f"Android Auto logs: {error}")
+
+    progress("Collecting Bluetooth pairing logs")
+    if pairing_log is None:
+      from openpilot.starpilot.system.bluetooth.bluez import PAIRING_LOG_PATH
+      pairing_log = PAIRING_LOG_PATH
+    try:
+      archive.writestr("bluetooth/pairing_events.jsonl", pairing_log.read_bytes())
+    except FileNotFoundError:
+      archive.writestr("bluetooth/pairing_events.jsonl", "")
+    except OSError as error:
+      problems.append(f"Bluetooth pairing log: {error}")
+    try:
+      archive.writestr("bluetooth/status.json", json.dumps(bluetooth_status(), indent=2, default=str))
+    except Exception as error:
+      problems.append(f"Bluetooth status: {error}")
+
+    routes = recent_routes(realdata, max(0, min(drives, MAX_DRIVES))) if drives > 0 else []
+    for index, route in enumerate(routes, 1):
+      progress(f"Summarizing drive {index} of {len(routes)} (about a minute per 10 minutes driven)")
+      try:
+        archive.writestr(f"drives/{route}.txt", drive_report(route, realdata))
+      except Exception as error:
+        problems.append(f"Drive {route}: {error}")
+
+    readme = [
+      "StarPilot diagnostics",
+      "",
+      f"Note from the tester: {note.strip() or '(none)'}",
+      "",
+      json.dumps(info, indent=2, default=str),
+      "",
+      "Contents:",
+      "  android-auto/  Android Auto session logs (pairing, Wi-Fi handshake, streaming), reports and settings",
+      "  bluetooth/     every Bluetooth pairing prompt and how it ended, and the adapter/device status",
+      f"  drives/        one-page health report per drive: {', '.join(routes) or 'none included'}",
+      "                 (read with starpilot/system/diagnostics/drive_report.py; see docs/how-to/drive-diagnostics.md)",
+    ]
+    if problems:
+      readme += ["", "Could not collect:", *(f"  {problem}" for problem in problems)]
+    archive.writestr("README.txt", "\n".join(readme) + "\n")
+  return output.getvalue()
+
+
+def bundle_name(summary: dict | None = None) -> str:
+  stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+  dongle = (summary or {}).get("dongle_id") or "device"
+  return f"starpilot-diagnostics-{dongle}-{stamp}.zip"
+
+
+def send(data: bytes, name: str, note: str, summary: dict, url: str | None = None, post=None) -> None:
+  """Post the zip to the Discord webhook; raises with a message a tester can act on."""
+  url = webhook_url() if url is None else url
+  if not url:
+    raise RuntimeError("Sending isn't set up on this build. Use Download and send the file instead.")
+  if len(data) > DISCORD_FILE_LIMIT:
+    size = f"{len(data) / 1e6:.1f} MB"
+    raise RuntimeError(f"The diagnostics are {size}, over Discord's 10 MB limit. Include fewer drives, or use Download instead.")
+  if post is None:
+    import requests
+    post = requests.post
+  lines = [f"**Diagnostics from {summary.get('dongle_id') or 'a device'}**",
+           f"Branch {summary.get('branch', '?')} @ {str(summary.get('commit', '?'))[:10]}",
+           f"Note: {note.strip() or '(none)'}"]
+  payload = {"content": "\n".join(lines)[:1900], "username": "StarPilot diagnostics", "allowed_mentions": {"parse": []}}
+  try:
+    response = post(url, data={"payload_json": json.dumps(payload)}, files={"files[0]": (name, data, "application/zip")}, timeout=120)
+  except Exception as error:
+    raise RuntimeError(f"Could not reach {RECIPIENT}: {error}. Check the internet connection, or use Download.") from error
+  if response.status_code not in (200, 204):
+    raise RuntimeError(f"{RECIPIENT}'s Discord refused the upload (HTTP {response.status_code}). Use Download instead.")
+
+
+class DiagnosticsJob:
+  """One bundle at a time, built off the request thread; the last one stays for download."""
+
+  def __init__(self, builder: Callable[..., bytes] = build, sender: Callable[..., None] = send,
+               summary: Callable[[], dict] = device_summary):
+    self._builder, self._sender, self._summary = builder, sender, summary
+    self._lock = threading.Lock()
+    self._thread: threading.Thread | None = None
+    self._state = {"state": "idle", "message": "", "action": "", "name": "", "bytes": 0}
+    self._data = b""
+
+  def status(self) -> dict:
+    with self._lock:
+      return {**self._state, "send_available": bool(webhook_url()), "recipient": RECIPIENT}
+
+  def result(self) -> tuple[str, bytes] | None:
+    with self._lock:
+      return (self._state["name"], self._data) if self._data and self._state["state"] in ("ready", "sent", "send_failed") else None
+
+  def start(self, action: str, note: str = "", drives: int = 1) -> None:
+    if action not in ("download", "send"):
+      raise ValueError(f"Unknown action {action!r}")
+    with self._lock:
+      if self._thread is not None and self._thread.is_alive():
+        raise RuntimeError("Diagnostics are already being prepared.")
+      self._state = {"state": "preparing", "message": "Starting", "action": action, "name": "", "bytes": 0}
+      self._data = b""
+      self._thread = threading.Thread(target=self._run, args=(action, note, drives), name="diagnostics_bundle", daemon=True)
+      self._thread.start()
+
+  def _set(self, **values) -> None:
+    with self._lock:
+      self._state.update(values)
+
+  def _run(self, action: str, note: str, drives: int) -> None:
+    try:
+      summary = self._summary()
+      data = self._builder(note=note, drives=drives, progress=lambda message: self._set(message=message))
+      name = bundle_name(summary)
+      with self._lock:
+        self._data = data
+      if action == "send":
+        self._set(state="sending", message=f"Sending to {RECIPIENT}", name=name, bytes=len(data))
+        try:
+          self._sender(data, name, note, summary)
+        except Exception as error:
+          self._set(state="send_failed", message=str(error)[:400])  # the zip is still there to download
+          return
+        self._set(state="sent", message=f"Sent to {RECIPIENT}. Thanks!")
+      else:
+        self._set(state="ready", message="Ready to download", name=name, bytes=len(data))
+    except Exception as error:
+      self._set(state="error", message=str(error)[:400])

@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """One-page health report for a drive, read on a laptop after the comma is unplugged.
 
@@ -8,10 +7,11 @@ their loop gaps), mapd's tile/activity events, the kernel/system journal, proces
 restarts and per-process CPU. No native openpilot build is needed:
 
   uv run --no-project --with pycapnp --with zstandard \\
-    python tools/profiling/drive_report.py docs/Rlogs/<route>-logs.tar [--aa session-NNNNNN-*.jsonl]
+    python starpilot/system/diagnostics/drive_report.py docs/Rlogs/<route>-logs.tar [--aa session-NNNNNN-*.jsonl]
 
 The input is an exported ``<route>-logs.tar`` or a directory of ``<route>--N/rlog.zst``
-(qlogs work too, without CPU detail).
+(qlogs work too, without CPU detail). On the comma, pass ``--route`` to pick one drive out
+of /data/media/0/realdata; the diagnostics bundle does that.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import tarfile
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-CEREAL = Path(__file__).resolve().parents[2] / "cereal"
+CEREAL = Path(__file__).resolve().parents[3] / "cereal"
 ROUTINE_ALERTS = {"preLaneChangeLeft", "preLaneChangeRight", "laneChange", "laneChangeBlocked", "reverseGear", "userBookmark",
                   "steerSaturated", "driverDistracted1", "promptDriverDistracted", "preDriverDistracted", "gasPressedOverride"}
 WATCHED_EVENTS = re.compile(r"InputsInvalid|commIssue|^mapd_|upload_(paused|resumed)_android_auto")
@@ -46,10 +46,11 @@ def _segment_number(name: str) -> int:
   return int(match.group(1)) if match else -1
 
 
-def list_segments(source: Path) -> list[tuple[str, str]]:
+def list_segments(source: Path, route: str | None = None) -> list[tuple[str, str]]:
   """(source, member) pairs in segment order; member is a tar member name or a file path."""
   if source.is_dir():
-    files = sorted(source.glob("*--*/rlog.zst")) or sorted(source.glob("*--*/qlog.zst"))
+    pattern = f"{route}--*" if route else "*--*"
+    files = sorted(source.glob(f"{pattern}/rlog.zst")) or sorted(source.glob(f"{pattern}/qlog.zst"))
     return [(str(path), str(path)) for path in sorted(files, key=lambda p: _segment_number(str(p)))]
   with tarfile.open(source) as tar:
     names = [m.name for m in tar.getmembers() if m.name.endswith("rlog.zst")] or \
@@ -203,10 +204,11 @@ def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
   parser.add_argument("source", type=Path, help="<route>-logs.tar or a directory of <route>--N/rlog.zst")
   parser.add_argument("--aa", type=Path, help="Android Auto session-*.jsonl for the same drive")
+  parser.add_argument("--route", help="only this route (e.g. 000000cb--604289c5b5) when SOURCE holds several")
   parser.add_argument("--jobs", type=int, default=6)
   args = parser.parse_args()
 
-  items = list_segments(args.source)
+  items = list_segments(args.source, args.route)
   if not items:
     raise SystemExit(f"No rlog.zst or qlog.zst segments found in {args.source}")
   with ProcessPoolExecutor(args.jobs) as pool:

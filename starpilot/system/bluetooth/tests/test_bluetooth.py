@@ -1,4 +1,5 @@
 import io
+import json
 import threading
 import time
 
@@ -6,7 +7,7 @@ import numpy as np
 import pytest
 
 from openpilot.starpilot.system.bluetooth.audio import BluetoothAudioSink
-from openpilot.starpilot.system.bluetooth.bluez import PairingAgent
+from openpilot.starpilot.system.bluetooth.bluez import PairingAgent, PairingLog
 from openpilot.starpilot.system.bluetooth.daemon import BluetoothController
 from openpilot.starpilot.system.bluetooth.protocol import (A2DP_SINK_UUID, HID_UUID, BluetoothClient, BluetoothDevice, BluetoothStatus,
                                                            device_capabilities, show_pairing_device)
@@ -625,3 +626,37 @@ def test_pairing_a_car_head_unit_does_not_take_over_alert_audio():
 
   controller._pair_worker(client.device["address"])
   assert params.get("BluetoothAudioAddress") == client.device["address"]
+
+
+def test_pairing_log_records_how_each_prompt_ended(tmp_path):
+  path = tmp_path / "diagnostics" / "bluetooth_pairing.jsonl"
+  agent = PairingAgent(PairingLog(path))
+  car = "/org/bluez/hci0/dev_C4_B7_57_6E_AC_E2"
+  agent.set_auto_accept_head_units({car})
+  agent.request("confirmation", car, "123456")
+  agent.set_auto_accept_head_units(set())
+  agent.request("confirmation", car, "123456", timeout=0.01)
+  agent.set_auto_accept_incoming(True)
+  agent.request("authorization", "/org/bluez/hci0/dev_00_11_22_33_44_55")
+
+  entries = [json.loads(line) for line in path.read_text().splitlines()]
+  assert [(e["kind"], e["device"], e["outcome"], e.get("reason")) for e in entries] == [
+    ("confirmation", "C4:B7:57:6E:AC:E2", "auto_accepted", "android_auto_head_unit"),
+    ("confirmation", "C4:B7:57:6E:AC:E2", "timed_out", None),
+    ("authorization", "00:11:22:33:44:55", "auto_accepted", "offroad"),
+  ]
+
+
+def test_pairing_log_stays_bounded_and_never_raises(tmp_path):
+  path = tmp_path / "pairing.jsonl"
+  log = PairingLog(path, max_bytes=400)
+  for i in range(40):
+    log.record("confirmation", f"/dev_{i:02d}", "rejected")
+  lines = path.read_text().splitlines()
+  assert path.stat().st_size < 600 and all(json.loads(line)["outcome"] == "rejected" for line in lines)
+  assert json.loads(lines[-1])["device"] == "39"
+
+  blocked = tmp_path / "file"
+  blocked.write_text("")
+  PairingLog(blocked / "sub" / "log.jsonl").record("pin", "/dev_x", "timed_out")  # parent is a file: swallowed
+  PairingLog(None).record("pin", "/dev_x", "timed_out")

@@ -192,6 +192,7 @@ from openpilot.starpilot.system.android_auto import car_screen as aa_car_screen
 from openpilot.starpilot.system.android_auto import compat_report as aa_compat_report
 from openpilot.starpilot.system.android_auto import connection_help as aa_connection_help
 from openpilot.starpilot.system.android_auto.protocol import AndroidAutoClient
+from openpilot.starpilot.system.diagnostics import bundle as diagnostics_bundle
 from openpilot.starpilot.system.bluetooth import BluetoothClient
 from openpilot.starpilot.system.wheel_controls import (
   CONTROLLER_ACTION_OPTIONS,
@@ -5376,6 +5377,7 @@ class GalaxySlugMiddleware:
 def setup(app):
   from openpilot.starpilot.assets.model_sizes import ModelSizes
   model_sizes = ModelSizes()
+  diagnostics_job = diagnostics_bundle.DiagnosticsJob()
   if not isinstance(app.wsgi_app, GalaxySlugMiddleware):
     app.wsgi_app = GalaxySlugMiddleware(app.wsgi_app)
 
@@ -5419,7 +5421,7 @@ def setup(app):
       response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
-    if request.path.startswith(("/api/bluetooth/", "/api/android_auto/")):
+    if request.path.startswith(("/api/bluetooth/", "/api/android_auto/", "/api/diagnostics/")):
       response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
@@ -5720,6 +5722,39 @@ def setup(app):
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     return send_file(io.BytesIO(aa_compat_report.bundle()), as_attachment=True, mimetype="application/zip",
                      download_name=f"starpilot-android-auto-{stamp}.zip")
+
+  # "Send to AA Guy": one zip of Android Auto/pairing logs, Bluetooth pairing prompts and recent drive
+  # reports, sent to the developer's Discord or downloaded. Built off the request thread; poll status.
+  @app.route("/api/diagnostics/status", methods=["GET"])
+  def diagnostics_status():
+    return jsonify({**diagnostics_job.status(), "offroad": not params.get_bool("IsOnroad"),
+                    "drives_available": len(diagnostics_bundle.recent_routes())}), 200
+
+  @app.route("/api/diagnostics/start", methods=["POST"])
+  def diagnostics_start():
+    body = request.get_json(silent=True) or {}
+    action = str(body.get("action", ""))
+    try:
+      drives = max(0, min(int(body.get("drives", 1)), diagnostics_bundle.MAX_DRIVES))
+    except (TypeError, ValueError):
+      return jsonify({"error": "drives must be a number"}), 400
+    if drives and params.get_bool("IsOnroad"):
+      return jsonify({"error": "Drive summaries take a few minutes of CPU. Turn the car off first, or send without drives."}), 409
+    try:
+      diagnostics_job.start(action, str(body.get("note", ""))[:1000], drives)
+    except ValueError as error:
+      return jsonify({"error": str(error)}), 400
+    except RuntimeError as error:
+      return jsonify({"error": str(error)}), 409
+    return jsonify(diagnostics_job.status()), 202
+
+  @app.route("/api/diagnostics/download", methods=["GET"])
+  def diagnostics_download():
+    result = diagnostics_job.result()
+    if result is None:
+      return jsonify({"error": "No diagnostics are ready. Prepare them first."}), 404
+    name, data = result
+    return send_file(io.BytesIO(data), as_attachment=True, mimetype="application/zip", download_name=name)
 
   @app.route("/api/android_auto/diagnostics/<name>", methods=["GET"])
   def android_auto_diagnostics_session(name):
