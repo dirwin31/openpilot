@@ -5560,6 +5560,7 @@ def setup(app):
 
   # The Android Auto phone identity, extracted on device from the user's own copy of the app.
   android_auto_import = apk_identity.ImportJob()
+  android_auto_recommendation = apk_identity.RecommendationCheck()
 
   @app.before_request
   def require_android_auto_enabled():
@@ -5647,9 +5648,12 @@ def setup(app):
     except Exception as error:
       return jsonify({"error": str(error)}), 409
 
-  def _android_auto_identity_payload():
+  def _android_auto_identity_payload(check_updates=False):
+    identity = apk_identity.identity_status()
     return {
-      **apk_identity.identity_status(),
+      **identity,
+      "recommendation": android_auto_recommendation.status(identity.get("package_version", ""),
+                                                          check=check_updates and params.get_bool("AndroidAutoEnabled")),
       "job": android_auto_import.status(),
       "knownGoodVersion": apk_identity.KNOWN_GOOD_VERSION,
       "maxUploadMb": apk_identity.MAX_FILE_BYTES // (1024 * 1024),
@@ -5657,7 +5661,7 @@ def setup(app):
 
   @app.route("/api/android_auto/identity", methods=["GET"])
   def android_auto_identity():
-    return jsonify(_android_auto_identity_payload()), 200
+    return jsonify(_android_auto_identity_payload(check_updates=request.args.get("check_updates") == "1")), 200
 
   @app.route("/api/android_auto/identity/upload", methods=["POST"])
   def android_auto_identity_upload():
@@ -5685,6 +5689,16 @@ def setup(app):
       return jsonify({"error": "Enter an http(s) link to the Android Auto APK or XAPK."}), 400
     try:
       android_auto_import.start(url=url, enabled=lambda: params.get_bool("AndroidAutoEnabled"))
+    except apk_identity.IdentityImportError as error:
+      return jsonify({"error": str(error)}), 409
+    return jsonify(_android_auto_identity_payload()), 202
+
+  @app.route("/api/android_auto/identity/recommended", methods=["POST"])
+  def android_auto_identity_recommended():
+    if not params.get_bool("AndroidAutoEnabled"):
+      return jsonify({"error": "Enable Android Auto before installing its identity."}), 409
+    try:
+      android_auto_import.start(recommended=True, enabled=lambda: params.get_bool("AndroidAutoEnabled"))
     except apk_identity.IdentityImportError as error:
       return jsonify({"error": str(error)}), 409
     return jsonify(_android_auto_identity_payload()), 202

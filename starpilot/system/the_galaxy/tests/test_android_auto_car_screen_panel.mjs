@@ -80,6 +80,7 @@ test("the Android Auto master toggle has a dedicated settings section", () => {
   assert.match(settingsSource, /<GalaxySection title="Status Widgets"/)
   assert.match(settingsSource, /<AndroidAutoCarScreenPanel section="widgets"/)
   assert.doesNotMatch(settingsSource, /<GalaxySection title="Car Display"/)
+  assert.doesNotMatch(settingsSource, /AndroidAutoDiagnosticsPanel|<GalaxySection title="Diagnostics"/)
 })
 
 test("embedded sections hide the internal tabs while standalone use keeps them", () => {

@@ -86,6 +86,7 @@ createApp({components:{AndroidAutoCarScreenPanel,Settings},template:fullSettings
     assert.equal(await page.getByText('Layout',{exact:true}).count(),1)
     assert.equal(await page.getByText('Status Widgets',{exact:true}).count(),1)
     assert.equal(await page.getByText('Android Auto Certificate',{exact:true}).count(),1)
+    assert.equal(await page.getByText('Diagnostics',{exact:true}).count(),0)
     for(const width of [320,800,1920]) {
       await page.setViewportSize({width,height:900})
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true,`Settings overflow at ${width}`)
@@ -98,6 +99,7 @@ createApp({components:{AndroidAutoCarScreenPanel,Settings},template:fullSettings
     assert.equal(await page.getByText('Connection',{exact:true}).count(),1)
     assert.equal(await page.getByText('Layout',{exact:true}).count(),1)
     assert.equal(await page.getByText('Status Widgets',{exact:true}).count(),1)
+    assert.equal(await page.getByText('Diagnostics',{exact:true}).count(),0)
     assert.deepEqual(errors,[])
     console.log('Android Auto controls: six widths, dependencies, switches, selection, save rollback, and Settings navigation passed.')
   } finally { await browser.close() }

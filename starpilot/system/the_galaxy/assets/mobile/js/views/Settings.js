@@ -13,9 +13,8 @@ import { GalaxySection } from "../components/GalaxySection.js"
 import { DevModeBanner } from "../components/DevModeBanner.js"
 import { LanguageSelector } from "../components/LanguageSelector.js"
 import { AndroidAutoConnectionPanel } from "../components/AndroidAutoConnectionPanel.js?v=aa-connection-2"
-import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-identity-3"
+import { AndroidAutoIdentityPanel } from "../components/AndroidAutoIdentityPanel.js?v=aa-recommended-1"
 import { AndroidAutoCarScreenPanel } from "../components/AndroidAutoCarScreenPanel.js?v=car-screen-7"
-import { AndroidAutoDiagnosticsPanel } from "../components/AndroidAutoDiagnosticsPanel.js?v=aa-diagnostics-2"
 import { languageState, setLanguage, t } from "../i18n.js"
 
 const LEGACY_PERSONALITY_KEYS = new Set([
@@ -31,7 +30,7 @@ const LANGUAGE_SECTION_SLUG = "language"
 export const Settings = {
   name: "Settings",
   components: { SettingTree, PersonalityProfiles, GalaxyToggleCard, GalaxySection, DevModeBanner, LongitudinalMode, LanguageSelector,
-    AndroidAutoConnectionPanel, AndroidAutoIdentityPanel, AndroidAutoCarScreenPanel, AndroidAutoDiagnosticsPanel },
+    AndroidAutoConnectionPanel, AndroidAutoIdentityPanel, AndroidAutoCarScreenPanel },
   data() {
     return {
       layout: [],
@@ -203,6 +202,7 @@ export const Settings = {
           <LanguageSelector v-if="activeSectionSlug === 'language'" :device-value="currentLanguage" />
 
           <div v-else style="display:grid; gap:12px;">
+            <div v-if="activeSection.name === 'Android Auto' && values.AndroidAutoEnabled" id="android-auto-certificate-update"></div>
             <div v-if="activeSection.name !== 'Android Auto'" class="gx-card">
               <div class="gx-section__header">
                 <i class="bi" :class="activeSection.icon"></i>
@@ -228,10 +228,7 @@ export const Settings = {
                 <AndroidAutoCarScreenPanel section="widgets" :is-metric="!!values.IsMetric" />
               </GalaxySection>
               <GalaxySection title="Android Auto Certificate" icon="bi-key">
-                <AndroidAutoIdentityPanel />
-              </GalaxySection>
-              <GalaxySection title="Diagnostics" icon="bi-clipboard-data">
-                <AndroidAutoDiagnosticsPanel />
+                <AndroidAutoIdentityPanel update-notice-target="#android-auto-certificate-update" />
               </GalaxySection>
             </template>
           </div>

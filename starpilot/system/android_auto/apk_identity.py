@@ -1,10 +1,9 @@
-"""Extract and install the Android Auto phone identity from the user's own copy of the app.
+"""Extract and install the Android Auto phone identity from an app package.
 
 The car accepts a projection source only when it presents Google's Android Auto
 phone certificate and proves it holds the matching key. Both are embedded in the
-Android Auto app, so each user supplies their own APK (or XAPK/APKM bundle) and
-the comma extracts the identity on device. Nothing is downloaded from or sent to
-anyone except the link the user provides.
+Android Auto app. The comma extracts the identity on device from a manual upload,
+a user-provided link, or the recommended package described by a hosted manifest.
 
 Extraction needs no decompiler. The app's DEX files hold the phone certificate
 and the Google Automotive Link root as PEM string constants, and the key as an
@@ -40,6 +39,7 @@ import zipfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from openpilot.starpilot.system.android_auto import identity as identity_store
 
@@ -47,6 +47,8 @@ from openpilot.starpilot.system.android_auto import identity as identity_store
 GOOGLE_ROOT_SHA256 = "49e52efc13ad2ed09f204c3b10698bd84bb7105f510558aa14b8119a5c4ad17f"
 PACKAGE = "com.google.android.projection.gearhead"
 KNOWN_GOOD_VERSION = "17.6.663454-release"
+RECOMMENDED_MANIFEST_URL = "https://aa.didesigns.fyi/android-auto/recommended.json"
+MAX_MANIFEST_BYTES = 16 * 1024
 
 MAX_FILE_BYTES = 256 * 1024 * 1024       # an uploaded or downloaded APK/XAPK
 MAX_APK_BYTES = 192 * 1024 * 1024        # the base APK inside a bundle
@@ -239,10 +241,16 @@ def install_identity(files: dict[str, bytes], metadata: dict, directory: Path | 
         os.fsync(handle.fileno())
     identity_store.load_identity(staging)  # the service must be able to use it before it goes live
     previous = directory.with_name(directory.name + ".previous")
-    if directory.exists():
+    replacing = directory.exists()
+    if replacing:
       shutil.rmtree(previous, ignore_errors=True)
       os.replace(directory, previous)
-    os.replace(staging, directory)
+    try:
+      os.replace(staging, directory)
+    except OSError:
+      if replacing and previous.exists() and not directory.exists():
+        os.replace(previous, directory)
+      raise
   except BaseException:
     shutil.rmtree(staging, ignore_errors=True)
     raise
@@ -258,13 +266,17 @@ def identity_status(directory: Path | None = None) -> dict:
   if not (directory / identity_store.CERT_NAME).exists():
     return {"installed": False, "message": "No Android Auto identity installed"}
   try:
-    ident = identity_store.load_identity(directory)
-  except identity_store.IdentityError as error:
-    return {"installed": False, "expired": "expired" in str(error), "error": str(error), "message": str(error)}
-  try:
     provenance = json.loads((directory / "provenance.json").read_text())
+    if not isinstance(provenance, dict):
+      provenance = {}
   except (OSError, ValueError):
     provenance = {}
+  package_version = provenance.get("package_version", "")
+  try:
+    ident = identity_store.load_identity(directory)
+  except identity_store.IdentityError as error:
+    return {"installed": False, "expired": "expired" in str(error), "error": str(error), "message": str(error),
+            "package_version": package_version}
   return {
     "installed": True,
     "expires": ident.expires,
@@ -274,24 +286,30 @@ def identity_status(directory: Path | None = None) -> dict:
     "certificate_sha256": provenance.get("certificate_sha256", ""),
     "imported": provenance.get("imported", ""),
     "source": provenance.get("source", ""),
+    "package_version": package_version,
   }
 
 
 # ------------------------------------------------------------------ background import
 
-def download(url: str, destination: Path, progress: Callable[[int, int], None] = lambda done, total: None) -> None:
+def download(url: str, destination: Path, progress: Callable[[int, int], None] = lambda done, total: None,
+             *, max_bytes: int = MAX_FILE_BYTES, https_only: bool = False) -> None:
   if not url.lower().startswith(("https://", "http://")):
     raise IdentityImportError("Enter an http(s) link to the APK or XAPK")
+  if https_only and urlsplit(url).scheme != "https":
+    raise IdentityImportError("Recommended downloads require HTTPS")
   request = urllib.request.Request(url, headers={"User-Agent": "StarPilot-AndroidAuto/1"})
   try:
     with urllib.request.urlopen(request, timeout=30) as response, open(destination, "wb") as handle:
+      if https_only and urlsplit(response.geturl()).scheme != "https":
+        raise IdentityImportError("Recommended downloads require HTTPS")
       total = int(response.headers.get("Content-Length") or 0)
-      if total > MAX_FILE_BYTES:
+      if total > max_bytes:
         raise IdentityImportError("That file is too large to be the Android Auto app")
       done = 0
       while chunk := response.read(1024 * 1024):
         done += len(chunk)
-        if done > MAX_FILE_BYTES:
+        if done > max_bytes:
           raise IdentityImportError("That file is too large to be the Android Auto app")
         handle.write(chunk)
         progress(done, total)
@@ -299,6 +317,129 @@ def download(url: str, destination: Path, progress: Callable[[int, int], None] =
     raise
   except Exception as error:
     raise IdentityImportError(f"Download failed: {error}") from error
+
+
+def validate_recommended_manifest(value: object) -> dict:
+  """Validate the small public manifest before fetching or unpacking its package."""
+  if not isinstance(value, dict) or type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 1:
+    raise IdentityImportError("Unsupported recommended package manifest")
+  version, url, digest = (value.get(key) for key in ("version", "url", "sha256"))
+  if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", version):
+    raise IdentityImportError("Recommended manifest has an invalid version")
+  if not isinstance(url, str) or len(url) > 2048:
+    raise IdentityImportError("Recommended manifest has an invalid download URL")
+  try:
+    parsed = urlsplit(url)
+    valid_url = parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password and not parsed.fragment
+  except ValueError:
+    valid_url = False
+  if not valid_url:
+    raise IdentityImportError("Recommended manifest requires an HTTPS download URL")
+  if not isinstance(digest, str) or not re.fullmatch(r"[a-fA-F0-9]{64}", digest):
+    raise IdentityImportError("Recommended manifest has an invalid SHA-256 checksum")
+  size = value.get("sizeBytes")
+  if type(size) is not int or not 0 < size <= MAX_FILE_BYTES:
+    raise IdentityImportError("Recommended package size is invalid or too large")
+  if value.get("format") not in ("apk", "xapk", "apkm", "zip"):
+    raise IdentityImportError("Unsupported recommended package format")
+  if value["format"] == "zip":
+    member = value.get("archiveMember")
+    if (not isinstance(member, str) or len(member) > 512 or "\\" in member or
+        member.startswith("/") or any(part in ("", ".", "..") for part in member.split("/")) or
+        not member.lower().endswith((".apk", ".xapk", ".apkm"))):
+      raise IdentityImportError("Recommended manifest has an invalid archive member")
+  return value
+
+
+def download_recommended(destination: Path, progress: Callable[..., None]) -> dict:
+  """Fetch, verify and unwrap the recommended app, without touching the installed identity."""
+  manifest_path = destination.with_suffix(".manifest")
+  unpacked = destination.with_suffix(".unpacked")
+  try:
+    progress(stage="resolving")
+    download(RECOMMENDED_MANIFEST_URL, manifest_path, lambda *_: progress(), max_bytes=MAX_MANIFEST_BYTES, https_only=True)
+    try:
+      manifest = validate_recommended_manifest(json.loads(manifest_path.read_bytes()))
+    except (ValueError, UnicodeError) as error:
+      raise IdentityImportError("Could not read the recommended package manifest") from error
+    progress(stage="downloading", version=manifest["version"], downloaded=0, total=manifest["sizeBytes"])
+    download(manifest["url"], destination, lambda done, _: progress(downloaded=done, total=manifest["sizeBytes"]),
+             max_bytes=manifest["sizeBytes"], https_only=True)
+    progress(stage="checking_package")
+    if destination.stat().st_size != manifest["sizeBytes"]:
+      raise IdentityImportError("Recommended download is incomplete; please try again")
+    with destination.open("rb") as handle:
+      digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    if digest != manifest["sha256"].lower():
+      raise IdentityImportError("Recommended package checksum does not match; nothing was installed")
+    if manifest["format"] == "zip":
+      progress(stage="unpacking")
+      try:
+        with zipfile.ZipFile(destination) as archive:
+          matches = [info for info in archive.infolist() if info.filename == manifest["archiveMember"]]
+          if len(matches) != 1 or matches[0].is_dir():
+            raise IdentityImportError("The recommended app is missing or duplicated in the ZIP")
+          if matches[0].file_size > MAX_FILE_BYTES:
+            raise IdentityImportError("The unpacked app is too large")
+          # Write only the named member to a fixed temporary path, never extractall.
+          with archive.open(matches[0]) as source, unpacked.open("wb") as output:
+            size = 0
+            while chunk := source.read(1024 * 1024):
+              progress()
+              size += len(chunk)
+              if size > MAX_FILE_BYTES:
+                raise IdentityImportError("The unpacked app is too large")
+              output.write(chunk)
+        os.replace(unpacked, destination)
+      except IdentityImportError:
+        raise
+      except (zipfile.BadZipFile, RuntimeError, NotImplementedError) as error:
+        raise IdentityImportError("Could not unpack the recommended ZIP") from error
+    return manifest
+  finally:
+    manifest_path.unlink(missing_ok=True)
+    unpacked.unlink(missing_ok=True)
+
+
+class RecommendationCheck:
+  """Check on page entry; ordinary status polls only read the cached result."""
+
+  def __init__(self):
+    self.lock = threading.Lock()
+    self.thread: threading.Thread | None = None
+    self.version = ""
+    self.error = ""
+
+  def status(self, installed_version: str = "", *, check: bool = False) -> dict:
+    with self.lock:
+      if check and not (self.thread and self.thread.is_alive()):
+        self.thread = threading.Thread(target=self._check, name="android_auto_recommendation", daemon=True)
+        self.thread.start()
+      version, error = self.version, self.error
+      checking = bool(self.thread and self.thread.is_alive())
+    # Compare numeric components, so 17.10 is newer than 17.9. Never label a
+    # manually installed package with unknown provenance as out of date.
+    def numbers(value):
+      match = re.fullmatch(r"(\d+(?:\.\d+)*)(?:[-_].*)?", str(value))
+      return tuple(int(part) for part in match[1].split(".")) if match else ()
+    current, recommended = numbers(installed_version), numbers(version)
+    length = max(len(current), len(recommended))
+    newer = bool(current and recommended and current + (0,) * (length - len(current)) < recommended + (0,) * (length - len(recommended)))
+    return {"version": version, "updateAvailable": newer, "checking": checking, "error": error}
+
+  def _check(self) -> None:
+    try:
+      with tempfile.TemporaryDirectory(prefix="aa-recommendation-") as directory:
+        path = Path(directory) / "manifest.json"
+        download(RECOMMENDED_MANIFEST_URL, path, max_bytes=MAX_MANIFEST_BYTES, https_only=True)
+        manifest = validate_recommended_manifest(json.loads(path.read_bytes()))
+      with self.lock:
+        self.version, self.error = manifest["version"], ""
+    except Exception:
+      with self.lock:
+        # Keep the last known recommendation; a connectivity problem must not
+        # change installation status or expose the download address in the UI.
+        self.error = "Could not check for updates. Reopen this page to try again."
 
 
 class ImportJob:
@@ -327,27 +468,33 @@ class ImportJob:
     self.work_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     return self.work_dir / "android-auto-upload.bin"
 
-  def start(self, *, path: Path | None = None, url: str = "", enabled=None) -> None:
+  def start(self, *, path: Path | None = None, url: str = "", enabled=None, recommended: bool = False) -> None:
     with self.lock:  # check and claim together, so two requests cannot both start
       if self.busy():
         raise IdentityImportError("An import is already running")
-      self.state = {"state": "running", "stage": "downloading" if url else "reading", "started": time.time(),
+      self.state = {"state": "running", "stage": "resolving" if recommended else "downloading" if url else "reading", "started": time.time(),
                     "downloaded": 0, "total": 0}
-      self.thread = threading.Thread(target=self._run, args=(path, url, enabled), name="android_auto_identity_import", daemon=True)
+      self.thread = threading.Thread(target=self._run, args=(path, url, enabled, recommended), name="android_auto_identity_import", daemon=True)
       self.thread.start()
 
-  def _run(self, path: Path | None, url: str, enabled=None) -> None:
+  def _run(self, path: Path | None, url: str, enabled=None, recommended: bool = False) -> None:
     def progress(**values):
       if enabled is not None and not enabled():
         raise IdentityImportError("Import cancelled: Android Auto is disabled")
       self._set(**values)
 
-    source = path or self.upload_path()
+    source = path
     try:
+      source = source or self.upload_path()
       progress()
-      if url:
+      manifest = None
+      if recommended:
+        manifest = download_recommended(source, progress)
+      elif url:
         download(url, source, lambda done, total: progress(downloaded=done, total=total))
       files, metadata = extract_identity(source, root_sha256=self.root_sha256, progress=lambda stage: progress(stage=stage))
+      if manifest:
+        metadata.update(package_version=manifest["version"], package_sha256=manifest["sha256"], package_url=manifest["url"])
       progress(stage="installing")
       install_identity(files, metadata, self.identity_dir)
       self._set(state="done", stage="done", finished=time.time(), expires=metadata["expires"],
@@ -358,6 +505,7 @@ class ImportJob:
       self._set(state="failed", finished=time.time(), error=f"{type(error).__name__}: {error}")
     finally:
       try:
-        source.unlink(missing_ok=True)
+        if source is not None:
+          source.unlink(missing_ok=True)
       except OSError:
         pass

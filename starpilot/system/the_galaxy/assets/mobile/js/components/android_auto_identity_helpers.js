@@ -1,7 +1,10 @@
 // Display logic for the Android Auto identity panel (tested from pytest via node).
 
 const STAGES = {
+  resolving: "Checking the recommended version",
   downloading: "Downloading on the comma",
+  checking_package: "Verifying the download checksum",
+  unpacking: "Unpacking the app",
   reading: "Reading the app",
   searching: "Finding the identity",
   decrypting: "Decrypting the key",
@@ -23,7 +26,7 @@ export function describeIdentity(status) {
   }
   if (status.expired) return { tone: "danger", title: "Expired", text: "Android Auto will not connect until you renew the identity with a newer Android Auto app below." }
   if (status.error) return { tone: "danger", title: "Unusable", text: status.error }
-  return { tone: "info", title: "Not installed", text: "Android Auto needs Google's phone identity, which you extract from your own copy of the Android Auto app." }
+  return { tone: "info", title: "Not installed", text: "Install the recommended package below, or provide your own Android Auto app file." }
 }
 
 const RESULT_SECONDS = 120  // a finished import's success stays on screen this long

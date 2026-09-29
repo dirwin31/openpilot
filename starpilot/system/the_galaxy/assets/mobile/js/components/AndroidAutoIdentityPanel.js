@@ -1,7 +1,7 @@
-import { api } from "../api.js"
+import { api } from "../api.js?v=aa-recommended-1"
 import { usePolling } from "../composables.js"
 import { GxNotice } from "./GxNotice.js"
-import { acceptsFile, describeIdentity, describeJob, uploadLabel } from "./android_auto_identity_helpers.js?v=aa-identity-2"
+import { acceptsFile, describeIdentity, describeJob, uploadLabel } from "./android_auto_identity_helpers.js?v=aa-recommended-1"
 
 function uploadWithProgress(file, onProgress) {
   return new Promise((resolve, reject) => {
@@ -24,26 +24,49 @@ function uploadWithProgress(file, onProgress) {
 export const AndroidAutoIdentityPanel = {
   name: "AndroidAutoIdentityPanel",
   components: { GxNotice },
+  props: { updateNoticeTarget: { type: String, default: "" } },
   data() {
     return { status: null, error: "", busy: "", uploadProgress: 0, url: "", fileName: "" }
   },
-  created() { this.poll = usePolling(() => this.refresh(), { interval: 2000 }); this.poll.start() },
+  created() {
+    let first = true
+    this.poll = usePolling(() => {
+      const checkUpdates = first
+      first = false
+      return this.refresh(checkUpdates)
+    }, { interval: 2000 })
+    this.poll.start()
+  },
   beforeUnmount() { this.poll?.destroy() },
   computed: {
     identity() { return describeIdentity(this.status) },
     job() { return describeJob(this.status?.job, Date.now() / 1000) },
     running() { return !!this.job?.running || !!this.busy },
     fileLabel() { return uploadLabel(this.status) },
+    updateAvailable() { return !!this.status?.recommendation?.updateAvailable },
   },
   methods: {
-    async refresh() {
+    async refresh(checkUpdates = false) {
       try {
-        this.status = await api.getAndroidAutoIdentity()
+        this.status = await api.getAndroidAutoIdentity(checkUpdates === true)
       } catch (e) {
         this.error = e?.message || "Could not read the Android Auto identity"
       }
     },
     chooseFile() { this.$refs.file?.click() },
+    async installRecommended() {
+      if (this.running) return
+      this.error = ""
+      this.busy = "recommended"
+      try {
+        await api.installRecommendedAndroidAutoIdentity()
+        await this.refresh()
+      } catch (e) {
+        this.error = e?.message || "Could not install the recommended version. Try again or install from a file."
+      } finally {
+        this.busy = ""
+      }
+    },
     async onFile(event) {
       const file = event.target.files?.[0]
       event.target.value = ""
@@ -108,8 +131,31 @@ export const AndroidAutoIdentityPanel = {
                 :icon="job.running ? 'bi-hourglass-split' : job.tone === 'ok' ? 'bi-check-circle-fill' : 'bi-x-octagon-fill'"
                 :text="job.text" style="margin:0 0 var(--sp-2);" />
       <GxNotice v-if="error" tone="danger" :text="error" style="margin:0 0 var(--sp-2);" />
+      <Teleport :to="updateNoticeTarget || 'body'" :disabled="!updateNoticeTarget">
+        <div v-if="updateAvailable" style="margin:0 0 var(--sp-2);">
+          <GxNotice tone="info" icon="bi-arrow-up-circle"
+                    title="Update to Android Auto certificate available"
+                    :text="'Version ' + status.recommendation.version + ' is available. Installed version: ' + status.package_version + '.'" />
+          <template v-if="updateNoticeTarget">
+            <button type="button" class="gx-btn" :disabled="running" @click="installRecommended">{{ running ? 'Updating…' : 'Update certificate' }}</button>
+            <p v-if="job?.text || error" role="status" class="gx-row__desc">{{ error || job.text }}</p>
+          </template>
+        </div>
+      </Teleport>
+      <p v-if="!updateAvailable && status?.recommendation?.version && status?.installed && !status?.package_version"
+         class="gx-row__desc">Recommended version: {{ status.recommendation.version }}. Your manually installed version is unknown.</p>
+      <p v-if="status?.recommendation?.error" class="gx-row__desc">{{ status.recommendation.error }}</p>
 
-      <h4 style="margin:12px 0 8px;">{{ status && (status.installed || status.expired) ? 'Renew' : 'Install' }}</h4>
+      <h4 style="margin:12px 0 8px;">{{ updateAvailable ? 'Update' : status && (status.installed || status.expired) ? 'Renew' : 'Install' }}</h4>
+      <p class="gx-row__desc" style="margin:0 0 12px;">Download the recommended Android Auto package directly on the comma.
+        It verifies the download, unpacks the app and installs the identity automatically.</p>
+      <button type="button" class="gx-btn" :disabled="running || !status" @click="installRecommended" style="margin:0 0 12px;">
+        <i class="bi bi-download"></i> {{ busy === 'recommended' ? 'Starting…' : updateAvailable ? 'Update Android Auto' : 'Install recommended version' }}
+      </button>
+      <p class="gx-row__desc" style="margin:0 0 12px;">Requires internet on the comma. If installation fails, your current identity is kept.</p>
+
+      <details style="margin:0 0 12px;">
+      <summary style="cursor:pointer; color:var(--text-muted);">Manual installation</summary>
       <ol style="margin:0 0 12px; padding-left:20px; color:var(--text-muted); line-height:1.5;">
         <li>On this phone or computer, download the <strong>Android Auto</strong> app
           (<code>{{ status?.knownGoodVersion || '17.6.663454-release' }}</code> is known to work) as an XAPK or APK from an APK mirror.
@@ -132,6 +178,7 @@ export const AndroidAutoIdentityPanel = {
           <button type="button" class="gx-btn gx-btn--tonal" :disabled="running || !url.trim()" @click="download">Download</button>
         </div>
         <p class="gx-row__desc" style="margin-top:6px;">A direct link to the file, e.g. from your own cloud storage. Mirror pages that need a browser will not work here.</p>
+      </details>
       </details>
 
       <div v-if="status && (status.installed || status.expired || status.error)" style="display:flex; justify-content:flex-end;">

@@ -123,8 +123,10 @@ def test_bundle_has_logs_reports_and_settings_but_no_identity(monkeypatch, tmp_p
     assert json.loads(archive.read("config.json"))["usb_mode"] == "auto"
 
 
-def test_settings_page_offers_the_diagnostics_panel():
+def test_logs_page_offers_the_diagnostics_panel_without_settings_duplicate():
   settings = (JS_ROOT / "views" / "Settings.js").read_text()
+  logs = (JS_ROOT / "views" / "Logs.js").read_text()
   panel = (JS_ROOT / "components" / "AndroidAutoDiagnosticsPanel.js").read_text()
-  assert "<AndroidAutoDiagnosticsPanel />" in settings and 'title="Diagnostics"' in settings
+  assert "<AndroidAutoDiagnosticsPanel />" in logs
+  assert "AndroidAutoDiagnosticsPanel" not in settings and 'title="Diagnostics"' not in settings
   assert "/api/android_auto/diagnostics/bundle" in panel and "format=log" in panel and "fetch(" not in panel

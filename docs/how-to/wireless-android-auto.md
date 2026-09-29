@@ -45,11 +45,22 @@ Android Auto.
 ## 1. Install the phone identity
 
 The car only accepts a phone that presents Google's Android Auto phone
-certificate and its key. They are embedded in the Android Auto app, so each user
-extracts them from their own copy. The comma does this itself:
+certificate and its key. They are embedded in the Android Auto app. The comma
+can download the recommended package and extract the identity itself:
 
 1. Open The Galaxy and go to **Toggles → Android Auto → Android Auto Certificate**.
-2. Tap **Install from File** and pick the Android Auto file you downloaded.
+2. Tap **Install recommended version**. The comma needs internet access.
+
+The installer downloads the recommended version and verifies the exact byte count and SHA-256
+checksum before opening the package. If it is a ZIP, only the named APK/XAPK/APKM
+member is unpacked. Progress appears on the card, and temporary files are removed
+after success or failure. Downloads and validation run in the background.
+
+**Manual installation** remains available: expand it, tap **Install from File**,
+and pick your Android Auto APK, XAPK or APKM. Under the same section,
+**Or have the comma download it from a link** accepts a direct app-file URL.
+The outer ZIP used by the recommended package is unpacked using its manifest;
+for manual installation, provide the APK/XAPK/APKM inside it.
 
 The comma finds the certificate and the encrypted key in the app's code,
 decrypts the key, and accepts the result only if the key matches the
@@ -75,6 +86,18 @@ Galaxy card and the device's Android Auto status warn; after that Android Auto
 stops connecting. Download a newer Android Auto version and use **Renew from
 File** on the same card. The previous identity is kept in
 `/data/android_auto/identity.previous/`.
+
+You can also use **Install recommended version** once the hosted recommendation
+has been updated to a newer, tested version. Reinstalling the same version does
+not extend its certificate's expiry date.
+
+When you open the Android Auto settings page with Android Auto enabled, Galaxy
+checks once for a newer recommended version in the background. An
+**Update to Android Auto certificate available** notice at the top of the page offers **Update certificate**; updates
+are never installed automatically. Reopening the page checks again; ordinary
+installation-status polling does not check for updates or retry failed checks.
+Manual installations without recorded version information show the recommended
+version without claiming the installed package is outdated.
 
 If a future app version stores its key differently, the import says so and
 leaves the current identity in place; use a version that works.

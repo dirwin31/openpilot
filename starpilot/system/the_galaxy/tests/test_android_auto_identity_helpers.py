@@ -68,3 +68,9 @@ def test_upload_label_and_file_types():
   assert evaluate('return [uploadLabel({installed: false}), uploadLabel({installed: true}), uploadLabel({expired: true})]') == \
     ["Install from File", "Renew from File", "Renew from File"]
   assert evaluate('return ["a.XAPK", "b.apk", "c.apkm", "d.zip", ""].map(acceptsFile)') == [True, True, True, False, False]
+
+
+def test_recommended_progress():
+  assert evaluate('return ["resolving", "checking_package", "unpacking"].map(stage => describeJob({state: "running", stage}).text)') == [
+    "Checking the recommended version…", "Verifying the download checksum…", "Unpacking the app…",
+  ]
