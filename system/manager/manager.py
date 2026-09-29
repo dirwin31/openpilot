@@ -69,6 +69,8 @@ STARPILOT_PC_ROOT_MIGRATION_FLAG = Path("/data") / "starpilot_pc_root_v1"
 STARPILOT_PARAMS_CACHE_MIGRATION_FLAG = Path("/data") / "starpilot_params_cache_v1"
 STARPILOT_DEFAULT_MODEL_MIGRATION_FLAG = Path("/data") / "starpilot_default_model_rdf_v4"
 STARPILOT_CE_MODEL_STOP_TIME_MIGRATION_FLAG = Path("/data") / "starpilot_ce_model_stop_time_v2"
+STARPILOT_MAPD_SETTINGS_VERSION_MIGRATION_FLAG = Path("/data") / "starpilot_mapd_settings_version_v1"
+MAPD_SETTINGS_DEFAULT = {"settings_version": 2}
 STARPILOT_LEGACY_CACHE_MARKER_KEYS = ("RemapCancelToDistance",)
 STARPILOT_REMOVED_PARAM_KEYS = (
   "CoastUpToLeads", "HumanAcceleration", "HumanFollowing", "PrioritizeSmoothFollowing",
@@ -837,6 +839,34 @@ def _parse_legacy_time(raw_text: str):
   return None
 
 
+def migrate_mapd_settings_version(params: Params, params_cache: Params) -> None:
+  # mapd v2.1+ runs settings migrations when settings_version is missing and panics on the
+  # old unversioned "{}" default. Rewrite that empty default only; mapd-saved settings
+  # already carry their version.
+  if STARPILOT_MAPD_SETTINGS_VERSION_MIGRATION_FLAG.exists():
+    return
+
+  for params_obj in (params, params_cache):
+    raw_value = _read_raw_param_bytes(params_obj, "MapdSettings")
+    if not raw_value:
+      continue
+
+    try:
+      parsed_value = json.loads(raw_value.decode("utf-8", errors="strict"))
+    except Exception:
+      continue
+
+    if parsed_value == {}:
+      params_obj.put("MapdSettings", MAPD_SETTINGS_DEFAULT)
+      cloudlog.warning("Applied one-time MapdSettings migration from {} to a versioned default")
+
+  try:
+    STARPILOT_MAPD_SETTINGS_VERSION_MIGRATION_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    STARPILOT_MAPD_SETTINGS_VERSION_MIGRATION_FLAG.write_text(f"{datetime.datetime.now(datetime.UTC).isoformat()}\n")
+  except Exception:
+    cloudlog.exception(f"Failed to write migration flag: {STARPILOT_MAPD_SETTINGS_VERSION_MIGRATION_FLAG}")
+
+
 def migrate_param_type_canonicalization(params: Params) -> None:
   if STARPILOT_PARAM_CANONICALIZATION_MIGRATION_FLAG.exists():
     return
@@ -1026,6 +1056,7 @@ def manager_init() -> None:
   migrate_cluster_offset_default(params, params_cache)
   migrate_traffic_mode_smooth_defaults(params, params_cache)
   migrate_traffic_follow_default(params, params_cache)
+  migrate_mapd_settings_version(params, params_cache)
   last_timing = _log_boot_timing("manager_init", "starpilot_migrations", manager_init_start, last_timing)
 
   # set unset params to their default value
