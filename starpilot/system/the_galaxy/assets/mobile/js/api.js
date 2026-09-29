@@ -187,8 +187,11 @@ export const api = {
   bluetoothOp(operation, body = {}) { return request(`/api/bluetooth/${operation}`, { method: "POST", data: body }) },
   getAndroidAutoConnection() { return request("/api/android_auto/connection", { cache: "no-store", timeout: 20000 }) },
   androidAutoConnectionOp(operation, body = {}) { return request(`/api/android_auto/connection/${operation}`, { method: "POST", data: body, timeout: 25000 }) },
-  getAndroidAutoIdentity() { return request("/api/android_auto/identity", { cache: "no-store" }) },
+  getAndroidAutoIdentity(checkUpdates = false) {
+    return request("/api/android_auto/identity" + (checkUpdates === true ? "?check_updates=1" : ""), { cache: "no-store" })
+  },
   downloadAndroidAutoApk(url) { return request("/api/android_auto/identity/download", { method: "POST", data: { url } }) },
+  installRecommendedAndroidAutoIdentity() { return request("/api/android_auto/identity/recommended", { method: "POST" }) },
   removeAndroidAutoIdentity() { return request("/api/android_auto/identity", { method: "DELETE" }) },
   getCarScreen() { return request("/api/android_auto/car_screen", { cache: "no-store", timeout: 10000 }) },
   setCarScreen(body) { return request("/api/android_auto/car_screen", { method: "POST", data: body, timeout: 10000 }) },

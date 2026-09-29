@@ -2,6 +2,7 @@ import datetime
 import hashlib
 import http.server
 import io
+import json
 import os
 import struct
 import threading
@@ -179,6 +180,25 @@ def test_import_stops_when_master_switch_is_disabled(monkeypatch, tmp_path):
   assert not source.exists()
 
 
+def test_install_restores_previous_if_final_replace_fails(monkeypatch, tmp_path, ident):
+  directory = tmp_path / "identity"
+  files = {"phone-cert.pem": ident["cert"], "phone-key.pem": ident["key"], "root-cert.pem": ident["root"]}
+  apk_identity.install_identity(files, {"original": True}, directory)
+  original = apk_identity.os.replace
+
+  def fail_final(source, target):
+    if Path(source).name.startswith(".identity-"):
+      raise OSError("simulated install failure")
+    original(source, target)
+
+  monkeypatch.setattr(apk_identity.os, "replace", fail_final)
+  with pytest.raises(OSError, match="simulated"):
+    apk_identity.install_identity(files, {"original": False}, directory)
+  assert apk_identity.identity_status(directory)["installed"]
+  assert json.loads((directory / "provenance.json").read_text()) == {"original": True}
+  assert not list(tmp_path.glob(".identity-*"))
+
+
 def test_status_reports_expiry(tmp_path):
   cert, root, key_pem, _ = build_identity(days=5)
   directory = tmp_path / "identity"
@@ -221,9 +241,147 @@ def test_import_job_from_upload_and_from_link(tmp_path, ident):
     assert status["state"] == "done" and status["downloaded"] == len(served), status
   finally:
     server.shutdown()
+    server.server_close()
   job.start(url="ftp://example.com/aa.apk")
   status = wait_job(job)
   assert status["state"] == "failed" and "http(s)" in status["error"]
+
+
+def recommended_fixture(monkeypatch, tmp_path, ident, *, wrapped=True, changes=None, member=None):
+  app = make_xapk(tmp_path, ident).read_bytes()
+  data = app
+  if wrapped:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+      archive.writestr(member or "android-auto.xapk", app)
+      archive.writestr("__MACOSX/._android-auto.xapk", b"ignored")
+    data = buffer.getvalue()
+  manifest = {"schemaVersion": 1, "version": "17.6.663454", "url": "https://example.test/app",
+              "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+              "format": "zip" if wrapped else "xapk", "archiveMember": "android-auto.xapk", **(changes or {})}
+  stages = []
+
+  class Response(io.BytesIO):
+    headers = {}
+
+    def geturl(self):
+      return "https://example.test/file"
+
+  def fetch(request, **kwargs):
+    return Response(json.dumps(manifest).encode() if request.full_url == apk_identity.RECOMMENDED_MANIFEST_URL else data)
+
+  monkeypatch.setattr(apk_identity.urllib.request, "urlopen", fetch)
+  job = apk_identity.ImportJob(work_dir=tmp_path / "work", identity_dir=tmp_path / "identity", root_sha256=ident["root_sha"])
+  original = job._set
+
+  def record(**values):
+    if "stage" in values:
+      stages.append(values["stage"])
+    original(**values)
+
+  monkeypatch.setattr(job, "_set", record)
+  return job, stages
+
+
+@pytest.mark.parametrize("wrapped", [True, False])
+def test_recommended_installs_verified_package_and_cleans_up(monkeypatch, tmp_path, ident, wrapped):
+  job, stages = recommended_fixture(monkeypatch, tmp_path, ident, wrapped=wrapped)
+  job.start(recommended=True)
+  result = wait_job(job)
+  assert result["state"] == "done", result
+  assert "checking_package" in stages and ("unpacking" in stages) == wrapped
+  assert apk_identity.identity_status(job.identity_dir)["installed"]
+  assert json.loads((job.identity_dir / "provenance.json").read_text())["package_version"] == "17.6.663454"
+  assert list(job.work_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("changes,member,error", [
+  ({"sha256": "0" * 64}, None, "checksum"),
+  ({"sizeBytes": 1}, None, "too large"),
+  ({"sizeBytes": apk_identity.MAX_FILE_BYTES}, None, "incomplete"),
+  ({}, "wrong.xapk", "missing"),
+  ({"archiveMember": "../outside.xapk"}, None, "archive member"),
+  ({"url": "http://example.test/app"}, None, "HTTPS"),
+  ({"schemaVersion": 2}, None, "Unsupported"),
+])
+def test_recommended_failure_preserves_existing_identity(monkeypatch, tmp_path, ident, changes, member, error):
+  job, _ = recommended_fixture(monkeypatch, tmp_path, ident, changes=changes, member=member)
+  apk_identity.install_identity({"phone-cert.pem": ident["cert"], "phone-key.pem": ident["key"], "root-cert.pem": ident["root"]},
+                                {"original": True}, job.identity_dir)
+  before = {p.name: p.read_bytes() for p in job.identity_dir.iterdir()}
+  job.start(recommended=True)
+  result = wait_job(job)
+  assert result["state"] == "failed" and error in result["error"], result
+  assert {p.name: p.read_bytes() for p in job.identity_dir.iterdir()} == before
+  assert list(job.work_dir.iterdir()) == []
+
+
+def test_recommended_cancel_and_busy(monkeypatch, tmp_path, ident):
+  job, _ = recommended_fixture(monkeypatch, tmp_path, ident)
+  entered, release = threading.Event(), threading.Event()
+
+  def enabled():
+    entered.set()
+    release.wait(5)
+    return False
+
+  job.start(recommended=True, enabled=enabled)
+  assert entered.wait(5)
+  try:
+    with pytest.raises(apk_identity.IdentityImportError, match="already running"):
+      job.start(recommended=True)
+  finally:
+    release.set()
+  assert "disabled" in wait_job(job)["error"]
+  assert not job.identity_dir.exists() and list(job.work_dir.iterdir()) == []
+
+
+def test_recommended_bounds_manifest_download(monkeypatch, tmp_path, ident):
+  job, _ = recommended_fixture(monkeypatch, tmp_path, ident)
+
+  class Response(io.BytesIO):
+    headers = {}
+
+    def geturl(self):
+      return apk_identity.RECOMMENDED_MANIFEST_URL
+
+  monkeypatch.setattr(apk_identity.urllib.request, "urlopen", lambda *a, **k: Response(b" " * (apk_identity.MAX_MANIFEST_BYTES + 1)))
+  job.start(recommended=True)
+  assert "too large" in wait_job(job)["error"]
+  assert list(job.work_dir.iterdir()) == []
+
+
+def test_recommendation_only_checks_on_request_and_compares_versions(monkeypatch, tmp_path, ident):
+  recommended_fixture(monkeypatch, tmp_path, ident, changes={"version": "17.10.1"})
+  checker = apk_identity.RecommendationCheck()
+  assert checker.status()["version"] == "" and checker.thread is None
+  checker.status(check=True)
+  checker.thread.join(5)
+  thread = checker.thread
+  assert checker.status("17.9.999")["updateAvailable"]
+  assert not checker.status("17.10.1-release")["updateAvailable"]
+  assert not checker.status("18.0")["updateAvailable"]
+  assert not checker.status("")["updateAvailable"]
+  assert checker.thread is thread, "status polling must never launch a check"
+  checker.status(check=True)
+  checker.thread.join(5)
+  assert checker.thread is not thread, "reopening checks again"
+
+
+def test_recommendation_failure_does_not_retry_from_status_polls(monkeypatch):
+  calls = []
+
+  def offline(*args, **kwargs):
+    calls.append(True)
+    raise OSError("offline")
+
+  monkeypatch.setattr(apk_identity, "download", offline)
+  checker = apk_identity.RecommendationCheck()
+  checker.status(check=True)
+  checker.thread.join(5)
+  for _ in range(5):
+    assert "Reopen" in checker.status()["error"]
+  assert len(calls) == 1
 
 
 @pytest.mark.skipif(not REAL_XAPK.exists(), reason="the user's own Android Auto XAPK is not in .cache/")
