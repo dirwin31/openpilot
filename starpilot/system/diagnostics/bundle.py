@@ -15,16 +15,19 @@ from __future__ import annotations
 import base64
 import dataclasses
 import datetime
+import hashlib
 import io
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 RECIPIENT = "Starpilot Auto Guy"  # who "Send to ..." delivers to, as testers see it
 REALDATA = Path("/data/media/0/realdata")
@@ -162,8 +165,34 @@ def bundle_name(summary: dict | None = None) -> str:
   return f"starpilot-diagnostics-{dongle}-{stamp}.zip"
 
 
-def send(data: bytes, name: str, note: str, summary: dict, url: str | None = None, post=None) -> None:
-  """Post the zip to the Discord webhook; raises with a message a tester can act on."""
+THREAD_CACHE_WARNING = "The forum thread could not be remembered on this device. The next upload may create another post."
+
+
+def _response_json(response) -> dict:
+  try:
+    value = response.json()
+  except (AttributeError, ValueError):
+    return {}
+  return value if isinstance(value, dict) else {}
+
+
+def _save_thread_id(path: Path, key: str, thread_id: str) -> None:
+  path.parent.mkdir(parents=True, exist_ok=True)
+  # A power loss during a write must not truncate the previous cache entry.
+  with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as temporary:
+    temporary_path = Path(temporary.name)
+    try:
+      json.dump({"key": key, "thread_id": thread_id}, temporary)
+      temporary.flush()
+      os.fsync(temporary.fileno())
+      os.replace(temporary_path, path)
+    finally:
+      temporary_path.unlink(missing_ok=True)
+
+
+def send(data: bytes, name: str, note: str, summary: dict, url: str | None = None, post=None,
+         thread_path: Path | None = None) -> str | None:
+  """Post the zip; return a cache warning after success, or raise on an upload failure."""
   url = webhook_url() if url is None else url
   if not url:
     raise RuntimeError("Sending isn't set up on this build. Use Download and send the file instead.")
@@ -173,22 +202,74 @@ def send(data: bytes, name: str, note: str, summary: dict, url: str | None = Non
   if post is None:
     import requests
     post = requests.post
-  lines = [f"**Diagnostics from {summary.get('dongle_id') or 'a device'}**",
+  dongle_id = summary.get("dongle_id") or "device"
+  lines = [f"**Diagnostics from {dongle_id}**",
            f"Branch {summary.get('branch', '?')} @ {str(summary.get('commit', '?'))[:10]}",
            f"Note: {note.strip() or '(none)'}"]
   payload = {"content": "\n".join(lines)[:1900], "username": "StarPilot diagnostics", "allowed_mentions": {"parse": []}}
-  try:
-    response = post(url, data={"payload_json": json.dumps(payload)}, files={"files[0]": (name, data, "application/zip")}, timeout=120)
-  except Exception as error:
-    raise RuntimeError(f"Could not reach {RECIPIENT}: {error}. Check the internet connection, or use Download.") from error
+
+  parts = urlsplit(url)
+  query = dict(parse_qsl(parts.query, keep_blank_values=True))
+  explicit_thread = bool(query.get("thread_id"))
+  # Ignore query options when identifying a webhook, and never store its token in the cache.
+  cache_key = hashlib.sha256(json.dumps([parts.scheme, parts.netloc, parts.path.rstrip("/"), dongle_id]).encode()).hexdigest()
+  cached_id = None
+  if not explicit_thread:
+    query.pop("thread_id", None)
+    if thread_path is None:
+      thread_path = DIAGNOSTICS_DIR / "threads" / f"{cache_key}.json"
+    try:
+      entry = json.loads(thread_path.read_text())
+      if isinstance(entry, dict) and entry.get("key") == cache_key:
+        candidate = entry.get("thread_id")
+        if isinstance(candidate, str) and candidate.isascii() and candidate.isdigit():
+          cached_id = candidate
+    except (OSError, ValueError):
+      pass
+
+  # Always wait for confirmation, including uploads to an existing thread.
+  query["wait"] = "true"
+  for attempt in range(2):
+    if not explicit_thread and cached_id:
+      query["thread_id"] = cached_id
+    elif not explicit_thread:
+      query.pop("thread_id", None)
+      payload["thread_name"] = f"Device {dongle_id}"
+    post_url = urlunsplit(parts._replace(query=urlencode(query)))
+
+    try:
+      response = post(post_url, data={"payload_json": json.dumps(payload)}, files={"files[0]": (name, data, "application/zip")}, timeout=120)
+    except Exception as error:
+      raise RuntimeError(f"Could not reach {RECIPIENT}: {error}. Check the internet connection, or use Download.") from error
+
+    # Unknown Channel means the cached thread was deleted. Unknown Webhook does not.
+    if attempt == 0 and cached_id and response.status_code == 404 and _response_json(response).get("code") == 10003:
+      cached_id = None  # Retry from memory even if the cache cannot be removed.
+      try:
+        thread_path.unlink(missing_ok=True)
+      except OSError:
+        pass
+      continue
+    break
+
   if response.status_code not in (200, 204):
     raise RuntimeError(f"{RECIPIENT}'s Discord refused the upload (HTTP {response.status_code}). Use Download instead.")
+
+  if not explicit_thread and not cached_id:
+    new_thread_id = _response_json(response).get("channel_id")
+    if not isinstance(new_thread_id, str) or not new_thread_id.isascii() or not new_thread_id.isdigit():
+      return THREAD_CACHE_WARNING
+    try:
+      _save_thread_id(thread_path, cache_key, new_thread_id)
+    except OSError:
+      return THREAD_CACHE_WARNING
+  return None
 
 
 class DiagnosticsJob:
   """One bundle at a time, built off the request thread; the last one stays for download."""
 
-  def __init__(self, builder: Callable[..., bytes] = build, sender: Callable[..., None] = send,
+  def __init__(self, builder: Callable[..., bytes] = build, sender: Callable[..., str | None] = send,
                summary: Callable[[], dict] = device_summary):
     self._builder, self._sender, self._summary = builder, sender, summary
     self._lock = threading.Lock()
@@ -229,11 +310,11 @@ class DiagnosticsJob:
       if action == "send":
         self._set(state="sending", message=f"Sending to {RECIPIENT}", name=name, bytes=len(data))
         try:
-          self._sender(data, name, note, summary)
+          warning = self._sender(data, name, note, summary)
         except Exception as error:
           self._set(state="send_failed", message=str(error)[:400])  # the zip is still there to download
           return
-        self._set(state="sent", message=f"Sent to {RECIPIENT}. Thanks!")
+        self._set(state="sent", message=f"Sent to {RECIPIENT}. {warning or 'Thanks!'}")
       else:
         self._set(state="ready", message="Ready to download", name=name, bytes=len(data))
     except Exception as error:
