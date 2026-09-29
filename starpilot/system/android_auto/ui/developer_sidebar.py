@@ -4,7 +4,8 @@ The comma's developer sidebar with car additions: the car's status-slot
 setting chooses the metrics (and shows the sidebar) instead of the Developer
 Sidebar toggles, device metrics 18-22 (CPU, GPU, TEMP, MEMORY, STORAGE) exist
 for those slots, a slot can show the local time (24), and a slot can show the
-StarPilot logo (23, the boot screen's cut-out inside a metric card's outline) or
+StarPilot logo (23, the boot screen's cut-out inside a metric card's outline), a
+slot can be the drive's bookmark button (25; car_ui routes taps to it), or it can
 stay blank (-1), keeping its place in the column.
 """
 
@@ -14,16 +15,19 @@ import pyray as rl
 
 from openpilot.selfdrive.ui.onroad.starpilot.developer_sidebar import (
   _WHITE_DIM,
+  FONT_SIZE,
   METRIC_HEIGHT,
   METRIC_MARGIN,
   METRIC_WIDTH,
   DeveloperSidebar,
 )
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.starpilot.system.android_auto.ui.onroad_widgets import CarBookmarkButton
 from openpilot.system.ui.lib.application import gui_app
 
 LOGO_METRIC = 23
 CLOCK_METRIC = 24
+BOOKMARK_METRIC = 25
 TIMEZONE_RELOAD_SECONDS = 60.0  # timed sets the zone from GPS after the UI has started
 BLANK_METRIC = -1
 # The boot screen's frog cut-out (supervisor.py's "Starting StarPilot" frame), relative to selfdrive/assets.
@@ -55,6 +59,9 @@ class CarDeveloperSidebar(DeveloperSidebar):
     self._params = _ShowSidebarParams(self._params, self)
     self._slot_ids: list[int] = []  # every car slot in order, blanks included
     self._logo = None
+    self.bookmark = CarBookmarkButton()
+    # Where the bookmark slot was drawn this frame, for car_ui's tap routing; None without one.
+    self.bookmark_rect: rl.Rectangle | None = None
     self._timezone_read = -float("inf")
 
   def _refresh_cache(self):
@@ -91,6 +98,7 @@ class CarDeveloperSidebar(DeveloperSidebar):
     return f"{local.tm_hour % 12 or 12}:{local.tm_min:02d} {'AM' if local.tm_hour < 12 else 'PM'}"
 
   def render(self, sidebar_rect: rl.Rectangle):
+    self.bookmark_rect = None
     slots = self._slot_ids
     if not self._visible or self.metric_override is None or not slots or all(slot <= 0 for slot in slots):
       super().render(sidebar_rect)
@@ -102,6 +110,10 @@ class CarDeveloperSidebar(DeveloperSidebar):
     for metric_id in slots:
       if metric_id == LOGO_METRIC:
         self._draw_logo(sidebar_rect, y)
+      elif metric_id == BOOKMARK_METRIC:
+        card_x = int(sidebar_rect.x + sidebar_rect.width) - METRIC_MARGIN - METRIC_WIDTH
+        self.bookmark_rect = rl.Rectangle(card_x, y, METRIC_WIDTH, METRIC_HEIGHT)
+        self.bookmark.render(self.bookmark_rect, self._font_bold, FONT_SIZE)
       elif metric_id in self._metrics:
         label_first, label_second = self._metrics[metric_id]
         self._draw_metric(sidebar_rect, label_first, label_second, self._metric_colors.get(metric_id, self._metric_color), y)

@@ -31,7 +31,8 @@ def test_defaults_then_partial_updates_are_saved_for_car_ui(monkeypatch, tmp_pat
   assert json.loads(path.read_text()) == saved
   assert car_screen.load(path) == saved
   awake = client.post("/api/android_auto/car_screen", json={"sleep_device_screen": False}).get_json()["settings"]
-  assert awake == {**saved, "sleep_device_screen": False}, "sleeping is the default; staying on is the choice"
+  assert awake == {**saved, "sleep_device_screen": False, "sleep_device_screen_set": True}, \
+    "sleeping is the default here; staying on is the choice, and it is marked as chosen"
   assert car_screen.load(path) == awake
   placed = client.post("/api/android_auto/car_screen", json={
     "sleep_wake_events": ["StandbyWakeTurnSignal"], "show_current_speed": False,

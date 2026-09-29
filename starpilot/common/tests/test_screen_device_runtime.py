@@ -50,7 +50,7 @@ def make_device(*, device_type="tici", **settings):
   clock = {'now': 100}
   app.clock = clock
   env = {**vars(screen), 'ui_state': state, 'gui_app': app, 'UIStatus': status, 'BACKLIGHT_OFFROAD': 65,
-         'STREAM_OFFROAD_HOLD_MAX': 600.0, 'AA_SLEEP_STALE_GRACE': 3.0,
+         'STREAM_OFFROAD_HOLD_MAX': 600.0, 'AA_SLEEP_STALE_GRACE': 3.0, 'AA_SLEEP_DEVICES': ('mici', 'tizi', 'tici'),
          'AA_SLEEP_WAKE_KEYS': frozenset({'StandbyWakeWarningAlert', 'StandbyWakeCriticalAlert'}),
          'CarScreenSettings': lambda: SimpleNamespace(poll=lambda: {'sleep_device_screen': False}),
          'FrameProducer': lambda path: None, 'CAR_FRAME_PATH': '',

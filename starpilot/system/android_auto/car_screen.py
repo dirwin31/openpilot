@@ -48,6 +48,7 @@ STATUS_METRICS = {
   "storage": (22, "Free Storage"),
   "starpilot_logo": (23, "StarPilot Logo"),
   "clock": (24, "Clock"),
+  "bookmark": (25, "Bookmark Button"),  # tap to bookmark the drive
   "blank": (-1, "Blank"),  # keeps its place in the column, draws nothing
 }
 STATUS_SLOT_COUNT = 7
@@ -68,6 +69,23 @@ SLEEP_WAKE_EVENTS = {
   "StandbyWakeTurnSignal": "Turn signals",
   "StandbyWakeButton": "Steering wheel or Bluetooth button",
 }
+
+
+def device_sleep_default(device_type: str) -> bool:
+  """Whether the comma's display turns off during Android Auto unless the user chooses otherwise:
+  on by default on comma four; available on comma 3X (tizi, and the older tici) but off by default,
+  since its larger screen stays useful beside the car's."""
+  return device_type not in ("tizi", "tici")
+
+
+def _device_type() -> str:
+  try:
+    from openpilot.system.hardware import HARDWARE
+    return HARDWARE.get_device_type()
+  except Exception:
+    return "pc"
+
+
 DEFAULTS = {
   "onroad_view": "split",
   "map_side": "right",
@@ -76,7 +94,10 @@ DEFAULTS = {
   "camera": True,
   "blind_spot_monitors": True,
   "blind_spot_min_speed_ms": 0.0,
-  "sleep_device_screen": True,
+  "sleep_device_screen": device_sleep_default(_device_type()),
+  # Set once the user picks sleep on or off. Files from before the 3X had a choice saved the old
+  # default (on) without meaning it, so on a 3X a saved "on" only counts when it was chosen.
+  "sleep_device_screen_set": False,
   "sleep_wake_events": ["StandbyWakeWarningAlert"],
   "show_current_speed": True,
   "status_slots": ["steer_delay", "friction", "cpu", "gpu", "temperature", "memory", "starpilot_logo"],
@@ -110,9 +131,13 @@ def normalize(raw: object) -> dict:
       settings["camera"] = raw["camera"]
     if isinstance(raw.get("blind_spot_monitors"), bool):
       settings["blind_spot_monitors"] = raw["blind_spot_monitors"]
-    # Files saved before the wake choices existed stored the old default (awake); sleeping is the default now.
-    if isinstance(raw.get("sleep_device_screen"), bool) and "sleep_wake_events" in raw:
-      settings["sleep_device_screen"] = raw["sleep_device_screen"]
+    # Files saved before the wake choices existed stored the old default (awake); the device's default applies now.
+    if isinstance(raw.get("sleep_device_screen_set"), bool):
+      settings["sleep_device_screen_set"] = raw["sleep_device_screen_set"]
+    saved_sleep = raw.get("sleep_device_screen")
+    if isinstance(saved_sleep, bool) and "sleep_wake_events" in raw and \
+       (not saved_sleep or settings["sleep_device_screen"] or settings["sleep_device_screen_set"]):
+      settings["sleep_device_screen"] = saved_sleep
     wake_events = raw.get("sleep_wake_events")
     if isinstance(wake_events, list) and all(isinstance(event, str) and event in SLEEP_WAKE_EVENTS for event in wake_events) and \
        len(set(wake_events)) == len(wake_events):
@@ -175,6 +200,8 @@ def update(change: dict, path: Path | None = None) -> dict:
   path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
   with path.with_suffix('.lock').open('a') as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
+    if "sleep_device_screen" in change:
+      change = {**change, "sleep_device_screen_set": True}
     merged = {**load(path), **change}
     if set(change) - DEFAULTS.keys() or normalize(merged) != merged:
       raise ValueError('Unknown or invalid car screen setting.')

@@ -141,6 +141,37 @@ def desire_line(started: bool, desire: int, nav_desire: int, nav: dict | None) -
   return None
 
 
+ROUTE_DOWNLOAD_HINTS = {
+  "none": "No connection. The download picks up once you're back online; offline maps keep the map ready without one.",
+  "wifi": "No cellular? Stay on Wi-Fi until this finishes. Offline maps (Settings) make routing faster while it downloads.",
+  "cell": "For faster routing, save this area in Offline maps (Settings).",
+}
+
+
+def network_kind(device_state) -> str:
+  """The connection for the route download card: "wifi" (or ethernet), "cell" or "none"."""
+  if device_state is None:
+    return "none"
+  kind = str(device_state.networkType)
+  if kind in ("wifi", "ethernet"):
+    return "wifi"
+  return "cell" if kind.startswith("cell") else "none"
+
+
+def route_download(route: dict, network: str, offline: bool) -> tuple[str, str, float] | None:
+  """(title, hint, progress) while navtilesd is still saving the route's map tiles, from its status."""
+  try:
+    remaining, total = int(route.get("remaining") or 0), int(route.get("total") or 0)
+  except (TypeError, ValueError):
+    return None
+  if remaining <= 0 or total <= 0:
+    return None
+  progress = min(1.0, (total - remaining) / total)
+  if offline or network == "none":
+    return f"Route map paused  •  {int(100 * progress)}%", ROUTE_DOWNLOAD_HINTS["none"], progress
+  return f"Downloading route map  •  {int(100 * progress)}%", ROUTE_DOWNLOAD_HINTS[network], progress
+
+
 def _decode_tile(data: bytes, extension: str):
   """Runs on a tile worker thread: PNG/JPEG bytes to a CPU-side raylib image."""
   image = rl.load_image_from_memory(extension, data, len(data))
@@ -658,7 +689,8 @@ class NavMapView(Widget):
       guidance = (nav["primary"], nav["secondary"], nav["type"], nav["modifier"], nav["next_type"], nav["next_modifier"],
                   _format_distance(nav["distance"], ui_state.is_metric), self._trip_texts(nav))
     return (self._route_key, self._gps is not None and self._gps.fresh, self._center_message(), self._status_badges(),
-            guidance, desire_line(ui_state.started, self._desire, self._nav_desire, nav), self._preview_active)
+            guidance, desire_line(ui_state.started, self._desire, self._nav_desire, nav), self._preview_active,
+            self._route_download())
 
   def _acquiring(self) -> bool:
     """Onroad without a fresh fix. Offroad the GPS receiver is not running at all."""
@@ -982,6 +1014,7 @@ class NavMapView(Widget):
     self._draw_status(rect)
     if self._show_guidance and not self._preview_active:
       self._draw_guidance(rect, now)
+      self._draw_route_download(rect, now)
     self._draw_attribution(rect)
 
   def _draw_tiles(self, rect: rl.Rectangle, camera: Camera, anchor: tuple[float, float], tile_scale: float) -> None:
@@ -1230,11 +1263,6 @@ class NavMapView(Widget):
       badges.append(("Add a Mapbox key in The Galaxy", BADGE_WARN))
     elif self._tiles is not None and self._tiles.service.offline:
       badges.append(("Offline • cached map", BADGE_WARN))
-    elif self._tiles is not None and not ui_state.started:
-      route = self._tiles.offline_status().get("route") or {}
-      remaining, total = int(route.get("remaining") or 0), int(route.get("total") or 0)
-      if remaining > 0 and total > 0:
-        badges.append((f"Saving route for offline • {100 * (total - remaining) // total}%", SUBTEXT))
     progress = None
     if self._gps is not None and not self._gps.fresh and not self._preview_active:
       if self._acquiring():
@@ -1259,6 +1287,50 @@ class NavMapView(Widget):
       if bar:
         self._progress_bar(badge.x + 22, badge.y + 52, width - 44, 8, progress)
       y += badge.height + 12
+
+  def _route_download(self) -> tuple[str, str, float] | None:
+    """The route download card's content: a route is set and navtilesd is still saving its map."""
+    if self._tiles is None or self._preview_active or not self._navigation_requested or not self._tiles.has_token:
+      return None
+    status = self._tiles.offline_status()
+    sm = ui_state.sm
+    device_state = sm["deviceState"] if sm.valid.get("deviceState", False) else None
+    return route_download(status.get("route") or {}, network_kind(device_state),
+                          bool(status.get("offline")) or self._tiles.service.offline)
+
+  def _wrap(self, text: str, size: int, width: float, max_lines: int = 2) -> list[str]:
+    lines, line = [], ""
+    for word in text.split():
+      candidate = f"{line} {word}".strip()
+      if line and self._text_width(candidate, size) > width:
+        lines.append(line)
+        line = word
+      else:
+        line = candidate
+    if line:
+      lines.append(line)
+    if len(lines) > max_lines:
+      lines = lines[:max_lines - 1] + [self._fit_text(" ".join(lines[max_lines - 1:]), size, width)]
+    return lines
+
+  def _draw_route_download(self, rect: rl.Rectangle, now: float) -> None:
+    """Bottom centre, above the trip bar: how far the route's map has downloaded, and what to do meanwhile."""
+    content = self._route_download()
+    if content is None:
+      return
+    title, hint, progress = content
+    width = min(rect.width - 48, 640.0)
+    lines = self._wrap(hint, 26, width - 56)
+    height = 100.0 + 34 * len(lines)
+    bottom = rect.y + rect.height - 44
+    if self._nav_active(now):
+      bottom -= 96 + 12  # the trip bar
+    card = rl.Rectangle(rect.x + (rect.width - width) / 2, bottom - height, width, height)
+    self._card(card)
+    self._text(self._fit_text(title, 32, width - 56, bold=True), card.x + 28, card.y + 22, 32, TEXT, bold=True)
+    self._progress_bar(card.x + 28, card.y + 70, width - 56, 10, progress)
+    for index, line in enumerate(lines):
+      self._text(line, card.x + 28, card.y + 96 + 34 * index, 26, SUBTEXT)
 
   def _draw_attribution(self, rect: rl.Rectangle) -> None:
     label = "(c) Mapbox (c) OpenStreetMap"

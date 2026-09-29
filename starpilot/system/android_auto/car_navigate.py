@@ -3,8 +3,9 @@
 CarNavigateCard sits on the car's home screen: pick Home or Work, press Start, and the
 drive opens in the chosen car screen layout. "Other destination" opens
 CarNavigateScreen, which fills the car screen: search, favorites and recent
-destinations on the left, the route preview on the right. Starting a route (or the
-Back button) returns to where the driver was.
+destinations on the left, the route preview on the right. Tapping the search field
+puts a keyboard where the map was and suggestions follow the typing. Starting a
+route (or the Back button) returns to where the driver was.
 
 Onroad a destination can only be set below NAV_UNLOCK_MPH, measured by the car's own
 wheel speed; the Navigate screen closes by itself if the car goes faster. A Desktop
@@ -32,12 +33,11 @@ TOP_BAR = 140.0
 ROUND_BUTTON = 80.0
 SEARCH_HEIGHT = 92.0
 SECTION_HEIGHT = 64.0
-ROW_HEIGHT = 112.0
-ROW_GAP = 12.0
+ROW_HEIGHT = 104.0
+ROW_GAP = 6.0
 ICON = 56.0
 CHIP_HEIGHT = 60.0
 DRAG_SLOP = 18.0
-PANEL_PAD = 20.0
 PANEL_RADIUS = 24.0
 
 SCREEN_BG = rl.Color(6, 6, 15, 255)
@@ -54,6 +54,20 @@ CARD_BORDER = rl.Color(58, 42, 106, 255)
 TILE_BG = rl.Color(18, 18, 36, 255)
 TILE_PRESSED = rl.Color(28, 28, 54, 255)
 ROUND_BG = rl.Color(18, 18, 36, 255)
+DIVIDER = rl.Color(58, 42, 106, 120)
+
+# The Navigate screen's keyboard: (key, width in key units) per row. "back" deletes a letter.
+KEY_ROWS = (
+  tuple((key, 1) for key in "1234567890"),
+  tuple((key, 1) for key in "qwertyuiop"),
+  tuple((key, 1) for key in "asdfghjkl"),
+  (*((key, 1) for key in "zxcvbnm."), ("back", 2)),
+  (("-", 1), (",", 1), ("'", 1), ("&", 1), ("space", 4), ("done", 2)),
+)
+KEY_GAP = 12.0
+KEY_PAD = 24.0
+KEY_MAX_HEIGHT = 124.0
+MAX_QUERY_LENGTH = 80
 
 
 def fit_text(font, text: str, size: int, width: float) -> str:
@@ -106,6 +120,10 @@ class CarNavigateScreen(Widget):
   The car's Navigation page (CarNavigationLayout) does the work: search,
   route previews, favorites and starting the route. This screen only draws it for a
   car screen and turns taps into the page's target ids.
+
+  Tapping the search field swaps the map for a keyboard drawn here (no full-screen
+  dialog): suggestions fill the list as the driver types, and picking one brings the
+  map back with its route preview.
   """
 
   def __init__(self, on_started: Callable[[], None], on_close: Callable[[], None], on_offline_maps: Callable[[], None]):
@@ -114,6 +132,8 @@ class CarNavigateScreen(Widget):
     self._on_close = on_close
     self._on_offline_maps = on_offline_maps
     self.page = CarNavigationLayout(on_started=on_started)
+    self.searching = False  # the keyboard is up in place of the map
+    self.typed = ""         # the search field's text while searching
     self.scroll = 0.0
     self._content_height = 0.0
     self._list_rect = rl.Rectangle(0, 0, 0, 0)
@@ -129,6 +149,7 @@ class CarNavigateScreen(Widget):
     super().show_event()
     self.page.show_event()
     self.scroll = 0.0
+    self.searching, self.typed = False, ""
 
   def hide_event(self):
     super().hide_event()
@@ -136,47 +157,66 @@ class CarNavigateScreen(Widget):
 
   # ── the page's state, shaped for the car ──────────────────────────────────
 
+  def _typed_query(self) -> str:
+    return self.typed.strip() if self.searching else ""
+
   def list_rows(self) -> list[tuple[str, list[ListRow]]]:
-    """(section title, rows) for the scrolling list."""
+    """(section title, rows) for the scrolling list. While typing, saved places that match
+    the text show at once under Mapbox's suggestions."""
     from openpilot.starpilot.navigation.destination_store import ordered_favorite_destinations
     page = self.page
     draft = page._draft_destination
+    typed = self._typed_query().casefold()
     sections = []
-    if page._search_results:
+    if page._search_results and (not self.searching or typed):
       rows = [ListRow(f"result:{i}", "result", r.name, r.subtitle,
                       selected=r.has_coordinates and page._same_destination(draft, r.to_destination()))
               for i, r in enumerate(page._search_results)]
-      sections.append((tr("Results"), rows))
-    favorites = ordered_favorite_destinations(page._favorites)
-    if favorites:
-      rows = []
-      for favorite in favorites:
+      sections.append((tr("Suggestions") if self.searching else tr("Results"), rows))
+
+    def matches(place: dict) -> bool:
+      return not typed or any(typed in str(place.get(key) or "").casefold() for key in ("name", "place_name", "address"))
+
+    favorite_rows, recent_rows = [], []
+    for favorite in ordered_favorite_destinations(page._favorites):
+      if matches(favorite):
         title = str(favorite.get("name") or tr("Saved place"))
         badge = tr("Home") if favorite.get("is_home") else tr("Work") if favorite.get("is_work") else ""
-        rows.append(ListRow(f"favorite:{favorite.get('id')}", "favorite", title, _place_detail(favorite, title), badge,
-                            page._same_destination(draft, favorite)))
-      sections.append((tr("Favorites"), rows))
-    if page._recent_destinations:
-      rows = []
-      for index, recent in enumerate(page._recent_destinations):
+        favorite_rows.append(ListRow(f"favorite:{favorite.get('id')}", "favorite", title, _place_detail(favorite, title), badge,
+                                     page._same_destination(draft, favorite)))
+    for index, recent in enumerate(page._recent_destinations):
+      if matches(recent):
         title = str(recent.get("name") or recent.get("place_name") or tr("Recent place"))
-        rows.append(ListRow(f"recent:{index}", "recent", title, _place_detail(recent, title),
-                            selected=page._same_destination(draft, recent)))
-      sections.append((tr("Recent"), rows))
+        recent_rows.append(ListRow(f"recent:{index}", "recent", title, _place_detail(recent, title),
+                                   selected=page._same_destination(draft, recent)))
+    if typed:
+      if favorite_rows or recent_rows:
+        sections.append((tr("Saved places"), favorite_rows + recent_rows))
+    else:
+      if favorite_rows:
+        sections.append((tr("Favorites"), favorite_rows))
+      if recent_rows:
+        sections.append((tr("Recent"), recent_rows))
     return sections
 
   def notice(self) -> tuple[str, str, rl.Color] | None:
-    """(title, body, colour) of a status card above the list, if any."""
+    """(title, body, colour) of a message above the list, if any."""
     page = self.page
-    if page._search_loading:
-      return tr("Searching…"), page._query, SUBTEXT
+    rows = self.list_rows()
     if page._search_error:
       return tr("Search unavailable"), page._search_error, WARNING
-    if not self.list_rows():
-      if page._query:
-        return tr("No matches"), tr("Try a different place or address."), SUBTEXT
-      return tr("No places yet"), tr("Search for a place or address to begin."), SUBTEXT
-    return None
+    if page._search_loading and not rows:
+      return tr("Searching…"), page._query, SUBTEXT
+    if rows:
+      return None
+    typed = self._typed_query()
+    if self.searching and len(typed) < 3:
+      if typed:
+        return tr("Keep typing"), tr("Suggestions appear after 3 letters."), SUBTEXT
+      return tr("Where to?"), tr("Type a place, business or address."), SUBTEXT
+    if page._query or typed:
+      return tr("No matches"), tr("Try a different place or address."), SUBTEXT
+    return tr("No places yet"), tr("Search for a place or address to begin."), SUBTEXT
 
   def route_chips(self) -> list[tuple[str, str, bool]]:
     """(target, label, selected) per previewed route, when there's a choice."""
@@ -215,11 +255,37 @@ class CarNavigateScreen(Widget):
 
   def activate(self, target: str) -> None:
     if target == "back":
-      self._on_close()
+      if self.searching:
+        self.searching = False  # Back puts the keyboard away first
+      else:
+        self._on_close()
     elif target == "offline_maps":
       self._on_offline_maps()
+    elif target == "action:search":
+      if not self.searching:
+        self.searching, self.typed = True, self.page._query
+    elif target.startswith("key:"):
+      self._key(target[4:])
     else:
+      if target.split(":", 1)[0] in ("result", "favorite", "recent"):
+        self.searching = False  # a place was picked: back to the map and its route preview
       self.page._activate_navigation_target(target)
+
+  def _key(self, key: str) -> None:
+    if key == "done":
+      self.searching = False
+      self.page.set_live_query(self.typed, immediate=True)
+      return
+    if key == "back":
+      self.typed = self.typed[:-1]
+    elif key == "clear":
+      self.typed = ""
+    elif key == "space":
+      if self.typed and not self.typed.endswith(" "):
+        self.typed += " "
+    elif len(self.typed) < MAX_QUERY_LENGTH:
+      self.typed += key
+    self.page.set_live_query(self.typed)
 
   # ── input ─────────────────────────────────────────────────────────────────
 
@@ -276,88 +342,111 @@ class CarNavigateScreen(Widget):
     self._targets = []
     rl.draw_rectangle_rec(rect, SCREEN_BG)
     list_w = min(820.0, max(620.0, rect.width * 0.43))
-    self._draw_top_bar(rect)
+    self._draw_top_bar(rect, list_w)
     body_y = rect.y + TOP_BAR
     body_h = rect.y + rect.height - PAD - body_y
     self._draw_list_column(rl.Rectangle(rect.x + PAD, body_y, list_w, body_h))
-    map_x = rect.x + PAD + list_w + 24
-    self._draw_map_panel(rl.Rectangle(map_x, body_y, rect.x + rect.width - PAD - map_x, body_h))
+    side_x = rect.x + PAD + list_w + 32
+    side = rl.Rectangle(side_x, body_y, rect.x + rect.width - PAD - side_x, body_h)
+    if self.searching:
+      self._draw_keyboard(side)
+    else:
+      self._draw_map_panel(side)
 
-  def _draw_top_bar(self, rect: rl.Rectangle) -> None:
-    bold, medium = self._font(FontWeight.BOLD), self._font(FontWeight.MEDIUM)
+  def _draw_top_bar(self, rect: rl.Rectangle, list_w: float) -> None:
+    medium = self._font(FontWeight.MEDIUM)
     back = rl.Rectangle(rect.x + PAD, rect.y + (TOP_BAR - ROUND_BUTTON) / 2, ROUND_BUTTON, ROUND_BUTTON)
     pressed = self._target("back", back)
     center = rl.Vector2(back.x + ROUND_BUTTON / 2, back.y + ROUND_BUTTON / 2)
-    rl.draw_rectangle_rounded(back, 0.3, 12, TILE_PRESSED if pressed else ROUND_BG)
-    rl.draw_rectangle_rounded_lines_ex(back, 0.3, 12, 2, ACCENT_BORDER if pressed else CARD_BORDER)
+    rl.draw_circle_v(center, ROUND_BUTTON / 2, TILE_PRESSED if pressed else ROUND_BG)
     draw_chevron(center.x + 5, center.y, TEXT, left=True)
-    title_x = back.x + ROUND_BUTTON + 28
-    rl.draw_text_ex(medium, tr("Navigate").upper(), rl.Vector2(title_x, rect.y + 31), 23, 2, ACCENT)
-    rl.draw_text_ex(bold, tr("Other destinations"), rl.Vector2(title_x, rect.y + 63), 48, 0, TEXT)
 
     # Offline maps live in Settings; this is the car's way there.
     label = tr("Offline maps")
     width = measure_text_cached(medium, label, 28).x + 104
-    button = rl.Rectangle(rect.x + rect.width - PAD - width, rect.y + (TOP_BAR - 74) / 2, width, 74)
+    button = rl.Rectangle(rect.x + rect.width - PAD - width, rect.y + (TOP_BAR - SEARCH_HEIGHT) / 2, width, SEARCH_HEIGHT)
     pressed = self._target("offline_maps", button)
-    rl.draw_rectangle_rounded(button, 0.35, 12, TILE_PRESSED if pressed else TILE_BG)
-    rl.draw_rectangle_rounded_lines_ex(button, 0.35, 12, 2, ACCENT_BORDER if pressed else CARD_BORDER)
-    arrow = rl.Vector2(button.x + 40, button.y + 37)  # download glyph: an arrow into a tray
+    rl.draw_rectangle_rounded(button, 0.5, 12, TILE_PRESSED if pressed else TILE_BG)
+    arrow = rl.Vector2(button.x + 42, button.y + SEARCH_HEIGHT / 2)  # download glyph: an arrow into a tray
     rl.draw_line_ex(rl.Vector2(arrow.x, arrow.y - 16), rl.Vector2(arrow.x, arrow.y + 6), 4, SUBTEXT)
     rl.draw_line_ex(rl.Vector2(arrow.x - 9, arrow.y - 3), rl.Vector2(arrow.x, arrow.y + 7), 4, SUBTEXT)
     rl.draw_line_ex(rl.Vector2(arrow.x + 9, arrow.y - 3), rl.Vector2(arrow.x, arrow.y + 7), 4, SUBTEXT)
     rl.draw_line_ex(rl.Vector2(arrow.x - 14, arrow.y + 16), rl.Vector2(arrow.x + 14, arrow.y + 16), 4, SUBTEXT)
-    rl.draw_text_ex(medium, label, rl.Vector2(button.x + 70, button.y + (74 - 28) / 2), 28, 0, TEXT)
+    rl.draw_text_ex(medium, label, rl.Vector2(button.x + 72, button.y + (SEARCH_HEIGHT - 28) / 2), 28, 0, TEXT)
+
+    field_x = back.x + ROUND_BUTTON + 24
+    field = rl.Rectangle(field_x, rect.y + (TOP_BAR - SEARCH_HEIGHT) / 2, button.x - 24 - field_x, SEARCH_HEIGHT)
+    self._draw_search_field(field)
+
+  def _draw_search_field(self, field: rl.Rectangle) -> None:
+    medium = self._font(FontWeight.MEDIUM)
+    page = self.page
+    pressed = self._target("action:search", field)
+    active = self.searching
+    rl.draw_rectangle_rounded(field, 0.5, 16, TILE_PRESSED if pressed else TILE_BG)
+    if active:
+      rl.draw_rectangle_rounded_lines_ex(field, 0.5, 16, 3, ACCENT_BORDER)
+    glass = rl.Vector2(field.x + 48, field.y + SEARCH_HEIGHT / 2 - 4)
+    glass_color = ACCENT if active or pressed else SUBTEXT
+    rl.draw_ring(glass, 11, 16, 0, 360, 24, glass_color)
+    rl.draw_line_ex(rl.Vector2(glass.x + 11, glass.y + 11), rl.Vector2(glass.x + 22, glass.y + 22), 5, glass_color)
+
+    right = field.x + field.width - 24
+    text = self.typed if active else page._query
+    if active and self.typed:
+      clear = rl.Rectangle(field.x + field.width - 84, field.y + (SEARCH_HEIGHT - 64) / 2, 64, 64)
+      clear_pressed = self._target("key:clear", clear)
+      c = rl.Vector2(clear.x + 32, clear.y + 32)
+      rl.draw_circle_v(c, 22, TILE_PRESSED if clear_pressed else rl.Color(SUBTEXT.r, SUBTEXT.g, SUBTEXT.b, 60))
+      rl.draw_line_ex(rl.Vector2(c.x - 8, c.y - 8), rl.Vector2(c.x + 8, c.y + 8), 3, TEXT)
+      rl.draw_line_ex(rl.Vector2(c.x + 8, c.y - 8), rl.Vector2(c.x - 8, c.y + 8), 3, TEXT)
+      right = clear.x - 12
+    if page._search_loading:
+      status = tr("Searching…")
+      status_w = measure_text_cached(medium, status, 24).x
+      rl.draw_text_ex(medium, status, rl.Vector2(right - status_w, field.y + (SEARCH_HEIGHT - 24) / 2), 24, 0, SUBTEXT)
+      right -= status_w + 16
+    text_x = field.x + 88
+    width = right - text_x
+    if text:
+      shown = text
+      if measure_text_cached(medium, shown, 34).x > width:  # typing: keep the end in view
+        while shown and measure_text_cached(medium, "…" + shown, 34).x > width:
+          shown = shown[1:]
+        shown = "…" + shown
+      rl.draw_text_ex(medium, shown, rl.Vector2(text_x, field.y + (SEARCH_HEIGHT - 34) / 2), 34, 0, TEXT)
+      end_x = text_x + measure_text_cached(medium, shown, 34).x
+    else:
+      placeholder = tr("Search for a place or address")
+      rl.draw_text_ex(medium, fit_text(medium, placeholder, 34, width), rl.Vector2(text_x, field.y + (SEARCH_HEIGHT - 34) / 2),
+                      34, 0, SUBTEXT)
+      end_x = text_x - 4
+    if active and int(rl.get_time() * 2) % 2 == 0:  # caret
+      rl.draw_rectangle_rec(rl.Rectangle(end_x + 4, field.y + 24, 3, SEARCH_HEIGHT - 48), ACCENT)
 
   def _draw_list_column(self, column: rl.Rectangle) -> None:
     bold, medium = self._font(FontWeight.BOLD), self._font(FontWeight.MEDIUM)
-    rl.draw_rectangle_rounded(column, 2 * PANEL_RADIUS / column.width, 16, CARD_BG)
-    rl.draw_rectangle_rounded_lines_ex(column, 2 * PANEL_RADIUS / column.width, 16, 2, CARD_BORDER)
-    search = rl.Rectangle(column.x + PANEL_PAD, column.y + PANEL_PAD, column.width - 2 * PANEL_PAD, SEARCH_HEIGHT)
-    pressed = self._target("action:search", search)
-    rl.draw_rectangle_rounded(search, 0.34, 12, TILE_PRESSED if pressed else TILE_BG)
-    rl.draw_rectangle_rounded_lines_ex(search, 0.34, 12, 2, ACCENT_BORDER if pressed else CARD_BORDER)
-    glass = rl.Vector2(search.x + 50, search.y + SEARCH_HEIGHT / 2 - 4)
-    rl.draw_ring(glass, 11, 16, 0, 360, 24, ACCENT if pressed else SUBTEXT)
-    rl.draw_line_ex(rl.Vector2(glass.x + 11, glass.y + 11), rl.Vector2(glass.x + 22, glass.y + 22), 5,
-                    ACCENT if pressed else SUBTEXT)
-    query = self.page._query
-    text = fit_text(medium, query or tr("Search for a place or address"), 34, search.width - 120)
-    rl.draw_text_ex(medium, text, rl.Vector2(search.x + 92, search.y + (SEARCH_HEIGHT - 34) / 2), 34, 0, TEXT if query else SUBTEXT)
-
-    list_y = search.y + SEARCH_HEIGHT + 12
-    self._list_rect = rl.Rectangle(column.x + PANEL_PAD, list_y, column.width - 2 * PANEL_PAD,
-                                   column.y + column.height - PANEL_PAD - list_y)
-    view = self._list_rect
+    self._list_rect = column
+    view = column
     rl.begin_scissor_mode(int(view.x), int(view.y), int(view.width), int(view.height))
     y = view.y - self.scroll
     notice = self.notice()
     if notice is not None:
       title, body, color = notice
-      card = rl.Rectangle(view.x, y + 8, view.width, 132)
-      rl.draw_rectangle_rounded(card, 0.2, 12, TILE_BG)
-      rl.draw_rectangle_rounded_lines_ex(card, 0.2, 12, 2, rl.Color(color.r, color.g, color.b, 110))
-      icon = rl.Vector2(card.x + 42, card.y + card.height / 2)
+      icon = rl.Vector2(view.x + 34, y + 58)
       rl.draw_circle_v(icon, 22, rl.Color(color.r, color.g, color.b, 35))
-      rl.draw_circle_lines_v(icon, 22, rl.Color(color.r, color.g, color.b, 120))
-      rl.draw_circle_v(icon, 5, color)
-      text_x = card.x + 82
-      rl.draw_text_ex(bold, fit_text(bold, title, 32, card.width - 110), rl.Vector2(text_x, card.y + 25), 32, 0, color)
-      rl.draw_text_ex(medium, fit_text(medium, body, 26, card.width - 110), rl.Vector2(text_x, card.y + 76), 26, 0, SUBTEXT)
-      y += 152
+      rl.draw_circle_v(icon, 6, color)
+      text_x = view.x + 78
+      rl.draw_text_ex(bold, fit_text(bold, title, 32, view.width - 90), rl.Vector2(text_x, y + 24), 32, 0, color)
+      rl.draw_text_ex(medium, fit_text(medium, body, 26, view.width - 90), rl.Vector2(text_x, y + 68), 26, 0, SUBTEXT)
+      y += 124
     for title, rows in self.list_rows():
-      label = title.upper()
-      label_y = y + (SECTION_HEIGHT - 24) / 2 + 5
-      rl.draw_text_ex(bold, label, rl.Vector2(view.x + 8, label_y), 24, 1.8, SUBTEXT)
-      count = str(len(rows))
-      count_w = measure_text_cached(medium, count, 22).x + 28
-      count_rect = rl.Rectangle(view.x + view.width - count_w - 8, y + 15, count_w, 38)
-      rl.draw_rectangle_rounded(count_rect, 0.5, 10, ACCENT_SURFACE)
-      rl.draw_text_ex(medium, count, rl.Vector2(count_rect.x + 14, count_rect.y + 8), 22, 0, ACCENT)
+      rl.draw_text_ex(bold, title.upper(), rl.Vector2(view.x + 8, y + (SECTION_HEIGHT - 24) / 2 + 6), 24, 1.8, SUBTEXT)
       y += SECTION_HEIGHT
-      for row in rows:
-        self._draw_row(row, rl.Rectangle(view.x, y, view.width, ROW_HEIGHT))
+      for index, row in enumerate(rows):
+        self._draw_row(row, rl.Rectangle(view.x, y, view.width, ROW_HEIGHT), last=index == len(rows) - 1)
         y += ROW_HEIGHT + ROW_GAP
+      y += 8
     rl.end_scissor_mode()
     self._content_height = y + self.scroll - view.y + 12
     self.scroll = min(self.scroll, self._max_scroll())
@@ -369,20 +458,18 @@ class CarNavigateScreen(Widget):
       bar_y = view.y + 8 + (track - bar_h) * self.scroll / self._max_scroll()
       rl.draw_rectangle_rounded(rl.Rectangle(view.x + view.width - 5, bar_y, 4, bar_h), 1.0, 4, rl.Color(145, 96, 255, 125))
 
-  def _draw_row(self, row: ListRow, area: rl.Rectangle) -> None:
+  def _draw_row(self, row: ListRow, area: rl.Rectangle, last: bool = False) -> None:
     bold, medium = self._font(FontWeight.BOLD), self._font(FontWeight.MEDIUM)
     pressed = self._target(row.target, area, scrolled=True)
-    fill = TILE_PRESSED if pressed else ACCENT_SURFACE if row.selected else TILE_BG
-    rl.draw_rectangle_rounded(area, 0.22, 12, fill)
-    rl.draw_rectangle_rounded_lines_ex(area, 0.22, 12, 3 if row.selected else 2,
-                                       ACCENT_BORDER if row.selected or pressed else CARD_BORDER)
-    if row.selected:
-      accent = rl.Rectangle(area.x, area.y + 22, 5, area.height - 44)
-      rl.draw_rectangle_rounded(accent, 1.0, 6, ACCENT)
+    if pressed or row.selected:
+      rl.draw_rectangle_rounded(area, 0.3, 12, TILE_PRESSED if pressed else ACCENT_SURFACE)
+    elif not last:
+      rl.draw_line_ex(rl.Vector2(area.x + 24 + ICON + 22, area.y + area.height + ROW_GAP / 2),
+                      rl.Vector2(area.x + area.width - 12, area.y + area.height + ROW_GAP / 2), 1, DIVIDER)
     self._draw_icon(row.kind, rl.Vector2(area.x + 24 + ICON / 2, area.y + area.height / 2), ACCENT if row.selected else SUBTEXT)
 
     text_x = area.x + 24 + ICON + 22
-    right = area.x + area.width - 58
+    right = area.x + area.width - 24
     if row.badge:
       badge_w = measure_text_cached(medium, row.badge, 24).x + 32
       badge = rl.Rectangle(right - badge_w, area.y + (area.height - 44) / 2, badge_w, 44)
@@ -391,11 +478,10 @@ class CarNavigateScreen(Widget):
       right = badge.x - 16
     width = right - text_x
     if row.subtitle:
-      rl.draw_text_ex(bold, fit_text(bold, row.title, 34, width), rl.Vector2(text_x, area.y + 18), 34, 0, TEXT)
-      rl.draw_text_ex(medium, fit_text(medium, row.subtitle, 26, width), rl.Vector2(text_x, area.y + 62), 26, 0, SUBTEXT)
+      rl.draw_text_ex(bold, fit_text(bold, row.title, 34, width), rl.Vector2(text_x, area.y + 14), 34, 0, TEXT)
+      rl.draw_text_ex(medium, fit_text(medium, row.subtitle, 26, width), rl.Vector2(text_x, area.y + 58), 26, 0, SUBTEXT)
     else:
       rl.draw_text_ex(bold, fit_text(bold, row.title, 34, width), rl.Vector2(text_x, area.y + (area.height - 34) / 2), 34, 0, TEXT)
-    draw_chevron(area.x + area.width - 30, area.y + area.height / 2, ACCENT if row.selected else SUBTEXT, size=11, thickness=3)
 
   @staticmethod
   def _draw_icon(kind: str, center: rl.Vector2, color) -> None:
@@ -413,6 +499,43 @@ class CarNavigateScreen(Widget):
       rl.draw_triangle(rl.Vector2(center.x - 10, center.y + 1), rl.Vector2(center.x, center.y + 17), rl.Vector2(center.x + 10, center.y + 1), color)
       rl.draw_circle_v(rl.Vector2(center.x, center.y - 5), 5, TILE_BG)
 
+  def _draw_keyboard(self, panel: rl.Rectangle) -> None:
+    """Letters and digits for the search field, in place of the map. Search is case-blind, so no shift."""
+    bold, medium = self._font(FontWeight.BOLD), self._font(FontWeight.MEDIUM)
+    rl.draw_rectangle_rounded(panel, 2 * PANEL_RADIUS / max(1.0, min(panel.width, panel.height)), 16, CARD_BG)
+    hint = tr("Suggestions update as you type")
+    rl.draw_text_ex(medium, fit_text(medium, hint, 26, panel.width - 2 * KEY_PAD), rl.Vector2(panel.x + KEY_PAD, panel.y + 26),
+                    26, 0, SUBTEXT)
+    units = max(sum(width for _key, width in row) for row in KEY_ROWS)
+    unit = (panel.width - 2 * KEY_PAD - (units - 1) * KEY_GAP) / units
+    top = panel.y + 76
+    key_h = min(KEY_MAX_HEIGHT, unit * 1.5, (panel.y + panel.height - KEY_PAD - top - (len(KEY_ROWS) - 1) * KEY_GAP) / len(KEY_ROWS))
+    y = panel.y + panel.height - KEY_PAD - len(KEY_ROWS) * key_h - (len(KEY_ROWS) - 1) * KEY_GAP
+    for row in KEY_ROWS:
+      row_units = sum(width for _key, width in row)
+      x = panel.x + KEY_PAD + (units - row_units) * (unit + KEY_GAP) / 2
+      for key, width in row:
+        area = rl.Rectangle(x, y, width * unit + (width - 1) * KEY_GAP, key_h)
+        pressed = self._target(f"key:{key}", area)
+        done = key == "done"
+        fill = ACCENT if done else TILE_BG
+        if pressed:
+          fill = rl.Color(fill.r, fill.g, fill.b, 170) if done else TILE_PRESSED
+        rl.draw_rectangle_rounded(area, 0.25, 10, fill)
+        center = rl.Vector2(area.x + area.width / 2, area.y + area.height / 2)
+        if key == "back":  # a left arrow
+          rl.draw_line_ex(rl.Vector2(center.x - 16, center.y), rl.Vector2(center.x + 18, center.y), 4, TEXT)
+          draw_chevron(center.x - 4, center.y, TEXT, left=True, size=12, thickness=4)
+        else:
+          label = {"space": tr("space"), "done": tr("Done")}.get(key, key)
+          size = 30 if key in ("space", "done") else 40
+          font = bold if done else medium
+          label_w = measure_text_cached(font, label, size).x
+          rl.draw_text_ex(font, label, rl.Vector2(center.x - label_w / 2, center.y - size / 2), size, 0,
+                          rl.Color(8, 6, 20, 255) if done else TEXT)
+        x += area.width + KEY_GAP
+      y += key_h + KEY_GAP
+
   def _chip(self, target: str, label: str, selected: bool, x: float, y: float) -> float:
     medium = self._font(FontWeight.MEDIUM)
     width = measure_text_cached(medium, label, 26).x + 44
@@ -420,7 +543,8 @@ class CarNavigateScreen(Widget):
     pressed = self._target(target, area)
     fill = ACCENT_SURFACE if selected else TILE_PRESSED if pressed else TILE_BG
     rl.draw_rectangle_rounded(area, 0.5, 10, fill)
-    rl.draw_rectangle_rounded_lines_ex(area, 0.5, 10, 2, ACCENT_BORDER if selected else CARD_BORDER)
+    if selected:
+      rl.draw_rectangle_rounded_lines_ex(area, 0.5, 10, 2, ACCENT_BORDER)
     rl.draw_text_ex(medium, label, rl.Vector2(x + 22, y + (CHIP_HEIGHT - 26) / 2), 26, 0, ACCENT if selected else SUBTEXT)
     return width
 
@@ -442,19 +566,9 @@ class CarNavigateScreen(Widget):
     map_rect = rl.Rectangle(panel.x, panel.y, panel.width, panel.height - sheet_h - 16)
     rl.draw_rectangle_rounded(map_rect, 2 * PANEL_RADIUS / map_rect.width, 16, TILE_BG)
     page._map.render(map_rect)
-    rl.draw_rectangle_rounded_lines_ex(map_rect, 2 * PANEL_RADIUS / map_rect.width, 16, 2, CARD_BORDER)
-
-    preview = tr("Route preview").upper()
-    preview_w = measure_text_cached(medium, preview, 22).x + 38
-    preview_badge = rl.Rectangle(map_rect.x + 20, map_rect.y + 20, preview_w, 48)
-    rl.draw_rectangle_rounded(preview_badge, 0.5, 10, rl.Color(14, 12, 23, 225))
-    rl.draw_rectangle_rounded_lines_ex(preview_badge, 0.5, 10, 2, CARD_BORDER)
-    rl.draw_text_ex(medium, preview, rl.Vector2(preview_badge.x + 19, preview_badge.y + 13), 22, 1.2, TEXT)
 
     sheet = rl.Rectangle(panel.x, panel.y + panel.height - sheet_h, panel.width, sheet_h)
     rl.draw_rectangle_rounded(sheet, 2 * PANEL_RADIUS / sheet.width, 16, CARD_BG)
-    rl.draw_rectangle_rounded_lines_ex(sheet, 2 * PANEL_RADIUS / sheet.width, 16, 2, CARD_BORDER)
-    rl.draw_rectangle_rounded(rl.Rectangle(sheet.x + 30, sheet.y, 110, 4), 1.0, 4, ACCENT)
     inner_x, inner_w = sheet.x + 30, sheet.width - 60
 
     if draft is None:
@@ -466,10 +580,9 @@ class CarNavigateScreen(Widget):
         rl.draw_text_ex(medium, tr("Navigating to").upper(), rl.Vector2(inner_x, sheet.y + 30), 23, 1.5, ACCENT)
         rl.draw_text_ex(bold, fit_text(bold, name, 38, button.x - inner_x - 24), rl.Vector2(inner_x, sheet.y + 72), 38, 0, TEXT)
       else:
-        rl.draw_text_ex(medium, tr("Ready when you are").upper(), rl.Vector2(inner_x, sheet.y + 28), 23, 1.5, ACCENT)
-        rl.draw_text_ex(bold, tr("Where to?"), rl.Vector2(inner_x, sheet.y + 62), 38, 0, TEXT)
-        rl.draw_text_ex(medium, fit_text(medium, tr("Choose a place to preview your route"), 27, inner_w),
-                        rl.Vector2(inner_x, sheet.y + 112), 27, 0, SUBTEXT)
+        rl.draw_text_ex(bold, tr("Where to?"), rl.Vector2(inner_x, sheet.y + 40), 38, 0, TEXT)
+        rl.draw_text_ex(medium, fit_text(medium, tr("Search or pick a saved place to preview the route"), 27, inner_w),
+                        rl.Vector2(inner_x, sheet.y + 94), 27, 0, SUBTEXT)
       return
 
     start = rl.Rectangle(sheet.x + sheet.width - 30 - 240, sheet.y + 30, 240, 110)
@@ -477,10 +590,9 @@ class CarNavigateScreen(Widget):
     self._big_button("action:start", tr("Start"), START, start, enabled=can_start)
     text_w = start.x - inner_x - 24
     name = str(draft.get("name") or draft.get("place_name") or tr("Destination"))
-    rl.draw_text_ex(medium, tr("Selected destination").upper(), rl.Vector2(inner_x, sheet.y + 28), 22, 1.4, ACCENT)
-    rl.draw_text_ex(bold, fit_text(bold, name, 40, text_w), rl.Vector2(inner_x, sheet.y + 63), 40, 0, TEXT)
+    rl.draw_text_ex(bold, fit_text(bold, name, 40, text_w), rl.Vector2(inner_x, sheet.y + 40), 40, 0, TEXT)
     summary, color = self.route_summary()
-    rl.draw_text_ex(medium, fit_text(medium, summary, 28, text_w), rl.Vector2(inner_x, sheet.y + 112), 28, 0, color)
+    rl.draw_text_ex(medium, fit_text(medium, summary, 28, text_w), rl.Vector2(inner_x, sheet.y + 96), 28, 0, color)
 
     y = sheet.y + 176
     for chips in (route_chips, self.favorite_chips()):

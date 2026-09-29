@@ -2,13 +2,18 @@
 
 The comma's settings page (StarPilotNavigationLayout) does search, favorites and
 starting a route. The car adds route alternatives from Mapbox, a map preview
-beside the list on wide screens, and a callback once a route starts.
+beside the list on wide screens, a callback once a route starts, and predictive
+search: results follow the text as it is typed (set_live_query), a short pause
+after the last key. Suggestions share one Mapbox Search Box session until a
+place is picked, which is how Mapbox bills them.
 """
 
 from __future__ import annotations
 
 import queue
 import threading
+import time
+import uuid
 from typing import Any
 
 import pyray as rl
@@ -29,6 +34,7 @@ from openpilot.starpilot.system.android_auto.ui.settings_panels.starpilot.naviga
   MapboxSearchClient,
   MapboxSearchError,
   NavigationManagerView,
+  SearchResult,
   StarPilotNavigationLayout,
 )
 from openpilot.starpilot.system.android_auto.ui.nav_map import NavMapView
@@ -40,6 +46,9 @@ from openpilot.system.ui.lib.multilang import tr
 NAV_ROUTE_ROW_HEIGHT = 104.0
 NAV_MAP_MIN_WIDTH = 1100.0  # below this the page is list-only
 NAV_MAP_FRACTION = 0.5
+SEARCH_DEBOUNCE_SECONDS = 0.35  # after the last key, before asking Mapbox
+MIN_SEARCH_CHARS = 3            # MapboxSearchClient.search needs this many
+LIVE_RESULT_LIMIT = 6
 
 
 class CarMapboxSearchClient(MapboxSearchClient):
@@ -70,12 +79,21 @@ class CarMapboxSearchClient(MapboxSearchClient):
     return result.name if result is not None else ""
 
 
+class LiveSearchClient(MapboxSearchClient):
+  """Predictive search lists a few more suggestions than the comma's search page."""
+
+  def search(self, query: str, public_token: str, session_token: str, *, proximity: tuple[float, float] | None = None,
+             language: str = "", limit: int = LIVE_RESULT_LIMIT) -> list[SearchResult]:
+    return super().search(query, public_token, session_token, proximity=proximity, language=language, limit=limit)
+
+
 class CarNavigationLayout(StarPilotNavigationLayout):
   """``on_started`` runs after a route starts. Offline maps have their own page (offline_maps.py)."""
 
   def __init__(self, on_started=None):
     super().__init__()
     self._on_started = on_started
+    self._search_client = LiveSearchClient()
     from openpilot.starpilot.navigation.mapbox_usage import shared_usage
     self._route_engine = MapboxRouteEngine(usage=shared_usage())
     self._map = NavMapView(show_guidance=True)
@@ -85,11 +103,47 @@ class CarNavigationLayout(StarPilotNavigationLayout):
     self._preview_route_index = 0
     self._routes_loading = False
     self._routes_error = ""
+    self._live_query = ""
+    self._search_due: float | None = None
 
   def show_event(self):
     self._clear_route_preview()
+    self._live_query = ""
+    self._search_due = None
     super().show_event()
     self._map.show_event()
+
+  # ── predictive search ─────────────────────────────────────────────────────
+
+  def set_live_query(self, text: str, now: float | None = None, immediate: bool = False) -> None:
+    """The search field's text as the driver types. The search runs SEARCH_DEBOUNCE_SECONDS after
+    the last change (at once with ``immediate``); earlier results stay listed until new ones arrive."""
+    now = time.monotonic() if now is None else now
+    if text != self._live_query:
+      self._live_query = text
+      self._search_due = now if immediate else now + SEARCH_DEBOUNCE_SECONDS
+    elif immediate and self._search_due is not None:
+      self._search_due = now
+
+  def _run_due_search(self, now: float) -> None:
+    if self._search_due is None or now < self._search_due:
+      return
+    self._search_due = None
+    query = self._live_query.strip()
+    if query == self._query and (self._search_results or self._search_loading or self._search_error):
+      return
+    if self._draft_destination is not None:
+      self._clear_route_preview()
+    if len(query) < MIN_SEARCH_CHARS:
+      # Too short for Mapbox: drop the old results quietly; the car lists matching saved places.
+      self._search_generation += 1
+      self._query, self._search_results, self._search_loading, self._search_error = query, [], False, ""
+      self._draft_destination = self._selected_favorite = None
+      return
+    shown = self._search_results
+    self._start_search(query)
+    if self._search_loading:
+      self._search_results = shown  # no blank list between keystrokes
 
   def hide_event(self):
     self._route_generation += 1
@@ -98,6 +152,7 @@ class CarNavigationLayout(StarPilotNavigationLayout):
 
   def _update_state(self):
     self._consume_route_results()
+    self._run_due_search(time.monotonic())
     super()._update_state()
 
   def _consume_route_results(self):
@@ -119,6 +174,8 @@ class CarNavigationLayout(StarPilotNavigationLayout):
 
   def _select_destination(self, payload: dict[str, Any], favorite: dict[str, Any] | None = None):
     super()._select_destination(payload, favorite)
+    # A place was picked: the Search Box session ends, and the next search starts a new one.
+    self._session_token = str(uuid.uuid4())
     if self._draft_destination is not None:
       self._fetch_route_preview(self._draft_destination)
 

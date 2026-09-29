@@ -603,3 +603,41 @@ def test_resent_instruction_with_the_same_words_keeps_the_overlay(view, monkeypa
   assert view._overlay_content(101.0) == first
   view._nav, view._nav_received = instruction(300.0), 102.0
   assert view._overlay_content(102.0) != first
+
+
+def test_route_download_card_text_depends_on_the_connection():
+  assert nav_map.route_download({"total": 0, "remaining": 0}, "wifi", False) is None
+  assert nav_map.route_download({"total": 200, "remaining": 0}, "wifi", False) is None, "finished: no card"
+  title, hint, progress = nav_map.route_download({"total": 200, "remaining": 150}, "wifi", False)
+  assert title.startswith("Downloading route map") and title.endswith("25%") and progress == 0.25
+  assert "Wi-Fi" in hint and "cellular" in hint and "Offline maps" in hint
+  title, hint, _ = nav_map.route_download({"total": 200, "remaining": 150}, "cell", False)
+  assert "Wi-Fi" not in hint and "Offline maps" in hint
+  for network, offline in (("none", False), ("wifi", True)):
+    title, hint, _ = nav_map.route_download({"total": 200, "remaining": 150}, network, offline)
+    assert title.startswith("Route map paused") and "back online" in hint
+  assert nav_map.route_download({"total": "x", "remaining": 1}, "wifi", False) is None
+
+
+def test_network_kind_reads_device_state():
+  assert nav_map.network_kind(None) == "none"
+  for kind, expected in (("wifi", "wifi"), ("ethernet", "wifi"), ("cell4G", "cell"), ("cell5G", "cell"), ("none", "none")):
+    assert nav_map.network_kind(SimpleNamespace(networkType=kind)) == expected
+
+
+def test_route_download_shows_only_while_driving_a_route(view, monkeypatch):
+  status = {"route": {"total": 100, "remaining": 40}}
+  view._tiles = SimpleNamespace(service=SimpleNamespace(offline=False), has_token=True, offline_status=lambda: status)
+  class SubMaster:
+    valid = {"deviceState": True}
+
+    def __getitem__(self, key):
+      return SimpleNamespace(networkType="wifi")
+
+  monkeypatch.setattr(nav_map.ui_state, "sm", SubMaster())
+  view._navigation_requested, view._preview_active = False, False
+  assert view._route_download() is None, "no route set"
+  view._navigation_requested = True
+  assert view._route_download()[2] == pytest.approx(0.6)
+  view._preview_active = True
+  assert view._route_download() is None, "not over a route preview"
