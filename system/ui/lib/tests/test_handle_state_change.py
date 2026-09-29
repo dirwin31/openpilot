@@ -335,8 +335,8 @@ class TestActivated:
     wm._update_active_connection_info.assert_called_once()
     wm._update_networks.assert_not_called()
 
-  def test_android_auto_projection_profile_is_never_saved(self, mocker):
-    """android_autod's volatile car Wi-Fi profile must vanish on disconnect, not be persisted."""
+  def test_starpilot_auto_projection_profile_is_never_saved(self, mocker):
+    """starpilot_autod's volatile car Wi-Fi profile must vanish on disconnect, not be persisted."""
     wm = _make_wm(mocker)
     wm._projection_connections = {"/path/aa"}
     wm._get_active_wifi_connection.return_value = ("/path/aa", {})

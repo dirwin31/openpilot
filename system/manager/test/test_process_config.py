@@ -9,7 +9,7 @@ from openpilot.common.gps import get_gps_location_service
 import openpilot.system.manager.process_config as process_config
 from openpilot.system.manager.process_config import (
   allow_uploads,
-  android_auto_enabled,
+  starpilot_auto_enabled,
   bluetooth_enabled,
   camera_run,
   managed_processes,
@@ -22,12 +22,12 @@ from openpilot.system.manager.process_config import (
 
 @pytest.mark.parametrize("enabled,bluetooth", [(False, False), (False, True), (True, False), (True, True)])
 @pytest.mark.parametrize("started", [False, True])
-def test_android_auto_requires_its_own_master_switch(enabled, bluetooth, started):
-  values = {"AndroidAutoEnabled": enabled, "BluetoothEnabled": bluetooth}
+def test_starpilot_auto_requires_its_own_master_switch(enabled, bluetooth, started):
+  values = {"StarpilotAutoEnabled": enabled, "BluetoothEnabled": bluetooth}
   params = SimpleNamespace(get_bool=lambda key: values[key])
-  assert android_auto_enabled(started, params, None, SimpleNamespace()) is (enabled and bluetooth)
+  assert starpilot_auto_enabled(started, params, None, SimpleNamespace()) is (enabled and bluetooth)
   assert bluetooth_enabled(started, params, None, SimpleNamespace()) is bluetooth
-  assert managed_processes["android_autod"].should_run is android_auto_enabled
+  assert managed_processes["starpilot_autod"].should_run is starpilot_auto_enabled
 
 
 class FakeParams:

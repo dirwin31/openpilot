@@ -1,4 +1,4 @@
-// Pure helpers for the Android Auto offline maps panel; covered by tests/test_auto_offline_helpers.py.
+// Pure helpers for the Starpilot Auto offline maps panel; covered by tests/test_auto_offline_helpers.py.
 
 export function formatBytes(bytes) {
   const size = Math.max(0, Number(bytes) || 0)

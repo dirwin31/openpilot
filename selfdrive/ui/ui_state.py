@@ -15,9 +15,9 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.starpilot.common.lateral_only_experimental import lateral_only_experimental_available
 from openpilot.starpilot.common.car_params_capability import capability_car_params_bytes
 from openpilot.system.hardware import HARDWARE, PC
-from openpilot.starpilot.system.android_auto.car_screen import DEFAULTS as CAR_SCREEN_DEFAULTS, CarScreenSettings
-from openpilot.starpilot.system.android_auto.frame_source import FrameProducer
-from openpilot.starpilot.system.android_auto.view import CAR_FRAME_PATH
+from openpilot.starpilot.system.starpilot_auto.car_screen import DEFAULTS as CAR_SCREEN_DEFAULTS, CarScreenSettings
+from openpilot.starpilot.system.starpilot_auto.frame_source import FrameProducer
+from openpilot.starpilot.system.starpilot_auto.view import CAR_FRAME_PATH
 from openpilot.starpilot.common.screen_settings import (
   alert_wake_key, brightness_preferences, calculate_screen_brightness, enabled_wake_keys, standby_button_press_time,
   screen_off_toggle_counter,
@@ -30,14 +30,14 @@ BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
 # open on a parked car; with ignition on there is no cap.
 STREAM_OFFROAD_HOLD_MAX = 600.0
 
-# While the comma's screen sleeps for Android Auto, critical / takeover alerts always wake it;
+# While the comma's screen sleeps for Starpilot Auto, critical / takeover alerts always wake it;
 # the car screen's "sleep_wake_events" setting adds more (warnings by default). The car
 # screen already shows everything else. Standby wake selections do not apply.
-AA_SLEEP_WAKE_KEYS = frozenset({"StandbyWakeCriticalAlert"})
-AA_SLEEP_DEVICES = ("mici", "tizi", "tici")
+STARPILOT_AUTO_SLEEP_WAKE_KEYS = frozenset({"StandbyWakeCriticalAlert"})
+STARPILOT_AUTO_SLEEP_DEVICES = ("mici", "tizi", "tici")
 # A car-view frame gap shorter than this (an encoder reopen, a heavy map/route
 # frame) keeps the screen asleep instead of waking it for a full timeout.
-AA_SLEEP_STALE_GRACE = 3.0
+STARPILOT_AUTO_SLEEP_STALE_GRACE = 3.0
 
 
 def _noop_progress(_phase: str) -> None:
@@ -121,15 +121,15 @@ class UIState:
     self.usbgpu_active: bool = self.params.get_bool("UsbGpuActive")
     self.usbgpu_loading: bool = self.params.get_bool("UsbGpuLoading")
     self.started: bool = False
-    # Set by the Android Auto car view while its navigation map is drawn beside the
+    # Set by the Starpilot Auto car view while its navigation map is drawn beside the
     # driving view; the driving view then leaves out what the map already shows.
     self.nav_map_beside_road: bool = False
-    # The Android Auto renderer runs in its own process, so car-screen-only layout
+    # The Starpilot Auto renderer runs in its own process, so car-screen-only layout
     # changes can key off this without changing the comma's built-in display.
-    self.android_auto_car_view: bool = False
+    self.starpilot_auto_car_view: bool = False
     # The car-screen layout can hide blind-spot-only visuals or defer them until
     # a configured speed without affecting alerts, controls, or the built-in display.
-    self.android_auto_blind_spot_monitors_visible: bool = True
+    self.starpilot_auto_blind_spot_monitors_visible: bool = True
     # Set by the car view when its camera is turned off in The Galaxy: the driving view keeps
     # its border, HUD and alerts over black, and the video stream isn't fetched at all.
     self.car_camera_off: bool = False
@@ -256,7 +256,7 @@ class UIState:
     self.recording_audio = params.get_bool("RecordAudio") and self.started
 
     self.is_metric = params.get_bool("IsMetric")
-    gui_app.set_android_auto_enabled(params.get_bool("AndroidAutoEnabled"))
+    gui_app.set_starpilot_auto_enabled(params.get_bool("StarpilotAutoEnabled"))
     self.always_on_dm = params.get_bool("AlwaysOnDM")
     self.usbgpu_compiled = params.get_bool("UsbGpuCompiled")
     self.usbgpu_active = params.get_bool("UsbGpuActive")
@@ -362,12 +362,12 @@ class Device:
     self._prev_timed_out = False
     self._awake: bool = True
     self._render_awake: bool = True
-    self._aa_screen_sleep = False
-    self._aa_last_streaming = 0.0
-    self._aa_screen_settings = CarScreenSettings()
+    self._starpilot_auto_screen_sleep = False
+    self._starpilot_auto_last_streaming = 0.0
+    self._starpilot_auto_screen_settings = CarScreenSettings()
     # The car view runs as its own process on every comma (comma four and 3X), so the display can
-    # sleep during Android Auto on either; the car screen's setting picks whether it does.
-    self._aa_car_frames = FrameProducer(CAR_FRAME_PATH) if HARDWARE.get_device_type() in AA_SLEEP_DEVICES else None
+    # sleep during Starpilot Auto on either; the car screen's setting picks whether it does.
+    self._starpilot_auto_car_frames = FrameProducer(CAR_FRAME_PATH) if HARDWARE.get_device_type() in STARPILOT_AUTO_SLEEP_DEVICES else None
     self._stream_hold_since: float = 0.0
     self._stream_hold_used: float = 0.0
     self._params = ui_state.ui_params
@@ -525,19 +525,19 @@ class Device:
     )
 
   def _update_wakefulness(self):
-    # Dedicated AA car view renders independently. Never sleep for mirror mode,
+    # Dedicated Starpilot Auto car view renders independently. Never sleep for mirror mode,
     # startup, lost focus or a stalled connection; stale heartbeats fail awake
     # once they outlast the grace period.
     now = time.monotonic()
-    aa_settings = (self._aa_screen_settings.poll() if self._aa_car_frames is not None and not ui_state.android_auto_car_view and
-                   ui_state.started and gui_app.android_auto_enabled else None)
-    aa_eligible = bool(aa_settings and aa_settings["sleep_device_screen"])
-    aa_streaming = aa_eligible and self._aa_car_frames.recently_sent()
-    if aa_streaming:
-      self._aa_last_streaming = now
-    aa_sleep = aa_streaming or (aa_eligible and self._aa_screen_sleep and now - self._aa_last_streaming < AA_SLEEP_STALE_GRACE)
-    if aa_sleep != self._aa_screen_sleep:
-      self._aa_screen_sleep = aa_sleep
+    starpilot_auto_settings = (self._starpilot_auto_screen_settings.poll() if self._starpilot_auto_car_frames is not None and not ui_state.starpilot_auto_car_view and
+                   ui_state.started and gui_app.starpilot_auto_enabled else None)
+    starpilot_auto_eligible = bool(starpilot_auto_settings and starpilot_auto_settings["sleep_device_screen"])
+    starpilot_auto_streaming = starpilot_auto_eligible and self._starpilot_auto_car_frames.recently_sent()
+    if starpilot_auto_streaming:
+      self._starpilot_auto_last_streaming = now
+    starpilot_auto_sleep = starpilot_auto_streaming or (starpilot_auto_eligible and self._starpilot_auto_screen_sleep and now - self._starpilot_auto_last_streaming < STARPILOT_AUTO_SLEEP_STALE_GRACE)
+    if starpilot_auto_sleep != self._starpilot_auto_screen_sleep:
+      self._starpilot_auto_screen_sleep = starpilot_auto_sleep
       self._reset_interactive_timeout()
 
     # Handle interactive timeout
@@ -551,15 +551,15 @@ class Device:
     active_alerts = self._active_standby_alerts()
     selected_status_change = status_changed and status_key in self._wake_keys
     selected_turn_signal = bool(input_events & self._wake_keys)
-    # AA sleep replaces the Standby wake selections with AA_SLEEP_WAKE_KEYS and the car screen's choices.
-    button_pressed = (not aa_sleep and self._standby_mode and (ui_state.started or ui_state.ignition) and
+    # Starpilot Auto sleep replaces the Standby wake selections with STARPILOT_AUTO_SLEEP_WAKE_KEYS and the car screen's choices.
+    button_pressed = (not starpilot_auto_sleep and self._standby_mode and (ui_state.started or ui_state.ignition) and
                       "StandbyWakeButton" in self._wake_keys and "button" in input_events)
-    wake_for_onroad_event = (not aa_sleep and ui_state.started and self._standby_mode and self._screen_brightness_onroad != 0 and
+    wake_for_onroad_event = (not starpilot_auto_sleep and ui_state.started and self._standby_mode and self._screen_brightness_onroad != 0 and
                              (selected_status_change or bool(active_alerts & self._wake_keys) or selected_turn_signal))
-    aa_wake_keys = AA_SLEEP_WAKE_KEYS | frozenset(aa_settings.get("sleep_wake_events", CAR_SCREEN_DEFAULTS["sleep_wake_events"])
-                                                  if aa_settings else ())
-    aa_alert = aa_sleep and (bool(active_alerts & aa_wake_keys) or (status_changed and status_key in aa_wake_keys) or
-                             bool(input_events & aa_wake_keys) or ("button" in input_events and "StandbyWakeButton" in aa_wake_keys))
+    starpilot_auto_wake_keys = STARPILOT_AUTO_SLEEP_WAKE_KEYS | frozenset(starpilot_auto_settings.get("sleep_wake_events", CAR_SCREEN_DEFAULTS["sleep_wake_events"])
+                                                  if starpilot_auto_settings else ())
+    starpilot_auto_alert = starpilot_auto_sleep and (bool(active_alerts & starpilot_auto_wake_keys) or (status_changed and status_key in starpilot_auto_wake_keys) or
+                             bool(input_events & starpilot_auto_wake_keys) or ("button" in input_events and "StandbyWakeButton" in starpilot_auto_wake_keys))
 
     counter = screen_off_toggle_counter(ui_state.params_memory)
     presses = counter - self._screen_off_counter
@@ -574,12 +574,12 @@ class Device:
     elif presses > 0:
       if presses % 2:
         self._screen_off = not self._screen_off
-    elif touched or wake_for_onroad_event or critical_alert or aa_alert:
+    elif touched or wake_for_onroad_event or critical_alert or starpilot_auto_alert:
       self._screen_off = False
 
     # Resetting every frame holds the screen awake while the alert is shown.
     if (ignition_state_changed or touched or button_pressed or wake_for_onroad_event or presses > 0 or
-        (was_screen_off and not self._screen_off) or aa_alert):
+        (was_screen_off and not self._screen_off) or starpilot_auto_alert):
       self._reset_interactive_timeout()
 
     interaction_timeout = time.monotonic() > self._interaction_time
@@ -588,7 +588,7 @@ class Device:
         callback()
     self._prev_timed_out = interaction_timeout
 
-    standby_active = ui_state.started and (self._standby_mode or aa_sleep)
+    standby_active = ui_state.started and (self._standby_mode or starpilot_auto_sleep)
     keep_display_awake = not interaction_timeout or PC
     keep_display_awake |= ui_state.ignition and not standby_active
     self._set_awake(keep_display_awake and not self._screen_off)

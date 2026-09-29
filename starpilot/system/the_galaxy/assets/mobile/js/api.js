@@ -185,28 +185,28 @@ export const api = {
 
   getBluetoothStatus() { return request("/api/bluetooth/status") },
   bluetoothOp(operation, body = {}) { return request(`/api/bluetooth/${operation}`, { method: "POST", data: body }) },
-  getAndroidAutoConnection() { return request("/api/android_auto/connection", { cache: "no-store", timeout: 20000 }) },
-  androidAutoConnectionOp(operation, body = {}) { return request(`/api/android_auto/connection/${operation}`, { method: "POST", data: body, timeout: 25000 }) },
-  getAndroidAutoIdentity(checkUpdates = false) {
-    return request("/api/android_auto/identity" + (checkUpdates === true ? "?check_updates=1" : ""), { cache: "no-store" })
+  getStarpilotAutoConnection() { return request("/api/starpilot_auto/connection", { cache: "no-store", timeout: 20000 }) },
+  starpilotAutoConnectionOp(operation, body = {}) { return request(`/api/starpilot_auto/connection/${operation}`, { method: "POST", data: body, timeout: 25000 }) },
+  getStarpilotAutoIdentity(checkUpdates = false) {
+    return request("/api/starpilot_auto/identity" + (checkUpdates === true ? "?check_updates=1" : ""), { cache: "no-store" })
   },
-  downloadAndroidAutoApk(url) { return request("/api/android_auto/identity/download", { method: "POST", data: { url } }) },
-  installRecommendedAndroidAutoIdentity() { return request("/api/android_auto/identity/recommended", { method: "POST" }) },
-  removeAndroidAutoIdentity() { return request("/api/android_auto/identity", { method: "DELETE" }) },
-  getCarScreen() { return request("/api/android_auto/car_screen", { cache: "no-store", timeout: 10000 }) },
-  setCarScreen(body) { return request("/api/android_auto/car_screen", { method: "POST", data: body, timeout: 10000 }) },
+  downloadStarpilotAutoApk(url) { return request("/api/starpilot_auto/identity/download", { method: "POST", data: { url } }) },
+  installRecommendedStarpilotAutoIdentity() { return request("/api/starpilot_auto/identity/recommended", { method: "POST" }) },
+  removeStarpilotAutoIdentity() { return request("/api/starpilot_auto/identity", { method: "DELETE" }) },
+  getCarScreen() { return request("/api/starpilot_auto/car_screen", { cache: "no-store", timeout: 10000 }) },
+  setCarScreen(body) { return request("/api/starpilot_auto/car_screen", { method: "POST", data: body, timeout: 10000 }) },
   getDiagnosticsStatus() { return request("/api/diagnostics/status", { cache: "no-store", timeout: 15000 }) },
   startDiagnostics(body) { return request("/api/diagnostics/start", { method: "POST", data: body, timeout: 15000 }) },
-  getAndroidAutoDiagnostics() { return request("/api/android_auto/diagnostics", { cache: "no-store", timeout: 15000 }) },
-  getAndroidAutoDiagnosticsReport(name) { return request(`/api/android_auto/diagnostics/${encodeURIComponent(name)}`, { cache: "no-store", timeout: 15000 }) },
-  getAutoOffline() { return request("/api/android_auto/offline", { cache: "no-store", timeout: 15000 }) },
-  getAutoOfflineCoverage(bounds) { return request(`/api/android_auto/offline/coverage?${new URLSearchParams(bounds)}`, { cache: "no-store", timeout: 15000 }) },
-  setAutoOfflineSettings(body) { return request("/api/android_auto/offline/settings", { method: "POST", data: body }) },
-  estimateAutoOffline(body) { return request("/api/android_auto/offline/estimate", { method: "POST", data: body, timeout: 30000 }) },
-  addAutoOfflineArea(body) { return request("/api/android_auto/offline/areas", { method: "POST", data: body }) },
-  addAutoOfflineRoute(body) { return request("/api/android_auto/offline/routes", { method: "POST", data: body }) },
-  autoOfflineAction(id, action) { return request(`/api/android_auto/offline/${encodeURIComponent(id)}/${action}`, { method: "POST" }) },
-  deleteAutoOffline(id) { return request(`/api/android_auto/offline/${encodeURIComponent(id)}`, { method: "DELETE" }) },
+  getStarpilotAutoDiagnostics() { return request("/api/starpilot_auto/diagnostics", { cache: "no-store", timeout: 15000 }) },
+  getStarpilotAutoDiagnosticsReport(name) { return request(`/api/starpilot_auto/diagnostics/${encodeURIComponent(name)}`, { cache: "no-store", timeout: 15000 }) },
+  getAutoOffline() { return request("/api/starpilot_auto/offline", { cache: "no-store", timeout: 15000 }) },
+  getAutoOfflineCoverage(bounds) { return request(`/api/starpilot_auto/offline/coverage?${new URLSearchParams(bounds)}`, { cache: "no-store", timeout: 15000 }) },
+  setAutoOfflineSettings(body) { return request("/api/starpilot_auto/offline/settings", { method: "POST", data: body }) },
+  estimateAutoOffline(body) { return request("/api/starpilot_auto/offline/estimate", { method: "POST", data: body, timeout: 30000 }) },
+  addAutoOfflineArea(body) { return request("/api/starpilot_auto/offline/areas", { method: "POST", data: body }) },
+  addAutoOfflineRoute(body) { return request("/api/starpilot_auto/offline/routes", { method: "POST", data: body }) },
+  autoOfflineAction(id, action) { return request(`/api/starpilot_auto/offline/${encodeURIComponent(id)}/${action}`, { method: "POST" }) },
+  deleteAutoOffline(id) { return request(`/api/starpilot_auto/offline/${encodeURIComponent(id)}`, { method: "DELETE" }) },
 
   carFeaturesCheck(tool = "") {
     const query = tool ? `?tool=${encodeURIComponent(tool)}` : ""

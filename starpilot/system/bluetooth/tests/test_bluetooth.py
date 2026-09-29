@@ -270,7 +270,7 @@ def test_pairing_agent_accepts_known_head_unit_onroad():
   assert agent.request("confirmation", "/car", "123456", timeout=0.01) == (False, "")
 
 
-def test_status_auto_accepts_only_paired_trusted_android_auto_head_units():
+def test_status_auto_accepts_only_paired_trusted_starpilot_auto_head_units():
   params = FakeParams(IsOffroad=False, BluetoothEnabled=True)
   bluez = FakeBlueZ()
   car = dict(bluez.device, path="/car", address="C4:B7:57:6E:AC:E2", name="Honda CIVIC", audio=False,
@@ -641,7 +641,7 @@ def test_pairing_log_records_how_each_prompt_ended(tmp_path):
 
   entries = [json.loads(line) for line in path.read_text().splitlines()]
   assert [(e["kind"], e["device"], e["outcome"], e.get("reason")) for e in entries] == [
-    ("confirmation", "C4:B7:57:6E:AC:E2", "auto_accepted", "android_auto_head_unit"),
+    ("confirmation", "C4:B7:57:6E:AC:E2", "auto_accepted", "starpilot_auto_head_unit"),
     ("confirmation", "C4:B7:57:6E:AC:E2", "timed_out", None),
     ("authorization", "00:11:22:33:44:55", "auto_accepted", "offroad"),
   ]

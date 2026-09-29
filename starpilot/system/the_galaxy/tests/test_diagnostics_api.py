@@ -50,16 +50,16 @@ def test_status_before_anything_is_prepared(monkeypatch):
   response = client.get("/api/diagnostics/status")
   status = response.get_json()
   assert response.status_code == 200 and response.headers["Cache-Control"].startswith("no-store")
-  assert status["state"] == "idle" and status["recipient"] == "AA Guy" and status["drives_available"] == 1 and status["offroad"]
+  assert status["state"] == "idle" and status["recipient"] == "Starpilot Auto Guy" and status["drives_available"] == 1 and status["offroad"]
   assert client.get("/api/diagnostics/download").status_code == 404
 
 
 def test_download_flow(monkeypatch):
   client, calls = _client(monkeypatch)
-  response = client.post("/api/diagnostics/start", json={"action": "download", "note": "AA took 3 tries", "drives": 9})
+  response = client.post("/api/diagnostics/start", json={"action": "download", "note": "Starpilot Auto took 3 tries", "drives": 9})
   assert response.status_code == 202
   assert _settle(client)["state"] == "ready"
-  assert calls["build"] == [("AA took 3 tries", diagnostics_bundle.MAX_DRIVES)] and calls["send"] == []
+  assert calls["build"] == [("Starpilot Auto took 3 tries", diagnostics_bundle.MAX_DRIVES)] and calls["send"] == []
   download = client.get("/api/diagnostics/download")
   assert download.status_code == 200 and download.mimetype == "application/zip"
   assert "starpilot-diagnostics-tester-" in download.headers["Content-Disposition"]
@@ -71,10 +71,10 @@ def test_send_flow_and_failed_send_can_still_download(monkeypatch):
   client, calls = _client(monkeypatch)
   assert client.post("/api/diagnostics/start", json={"action": "send", "note": "hi", "drives": 0}).status_code == 202
   status = _settle(client)
-  assert status["state"] == "sent" and "AA Guy" in status["message"] and calls["send"][0][1] == "hi"
+  assert status["state"] == "sent" and "Starpilot Auto Guy" in status["message"] and calls["send"][0][1] == "hi"
 
   def offline(*_):
-    raise RuntimeError("Could not reach AA Guy")
+    raise RuntimeError("Could not reach Starpilot Auto Guy")
 
   client, _ = _client(monkeypatch, sender=offline)
   client.post("/api/diagnostics/start", json={"action": "send", "drives": 0})
@@ -97,12 +97,12 @@ def test_bad_requests(monkeypatch):
   assert client.post("/api/diagnostics/start", json={"action": "send", "drives": "lots"}).status_code == 400
 
 
-def test_logs_page_opens_on_the_android_auto_tab():
+def test_logs_page_opens_on_the_starpilot_auto_tab():
   logs = (JS_ROOT / "views" / "Logs.js").read_text()
   panel = (JS_ROOT / "components" / "SendDiagnosticsPanel.js").read_text()
   api = (JS_ROOT / "api.js").read_text()
-  assert logs.index('androidAuto: "Android Auto"') < logs.index('troubleshoot: "Troubleshoot"'), "first tab is the default"
-  assert "<SendDiagnosticsPanel />" in logs and "<AndroidAutoDiagnosticsPanel />" in logs
+  assert logs.index('starpilotAuto: "Starpilot Auto"') < logs.index('troubleshoot: "Troubleshoot"'), "first tab is the default"
+  assert "<SendDiagnosticsPanel />" in logs and "<StarpilotAutoDiagnosticsPanel />" in logs
   assert "Logs.js?v=send-diagnostics-2" in (JS_ROOT / "app.js").read_text()
   assert "Send to {{ recipient }}" in panel
   assert "/api/diagnostics/start" in api and "/api/diagnostics/status" in api

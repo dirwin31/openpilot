@@ -383,6 +383,14 @@ def cleanup_removed_starpilot_params(params: Params, params_cache: Params) -> No
     cloudlog.warning(f"Removed deprecated StarPilot params: {removed_keys}")
 
 
+def migrate_legacy_starpilot_auto_enabled(params: Params) -> None:
+  try:
+    from openpilot.starpilot.system.starpilot_auto.identity import migrate_enabled_flag
+    migrate_enabled_flag(params)
+  except Exception:
+    cloudlog.exception("Failed to migrate AndroidAutoEnabled to StarpilotAutoEnabled")
+
+
 def migrate_starpilot_param_renames(params: Params, params_cache: Params) -> None:
   if STARPILOT_PARAM_RENAME_MIGRATION_FLAG.exists():
     return
@@ -1024,6 +1032,7 @@ def manager_init() -> None:
   # Legacy FrogPilot params are unknown to the renamed schema and would be
   # deleted by clear_all() if we do not migrate them first.
   migrate_starpilot_param_renames(params, params_cache)
+  migrate_legacy_starpilot_auto_enabled(params)
   last_timing = _log_boot_timing("manager_init", "param_renames", manager_init_start, last_timing)
 
   from openpilot.starpilot.common.cache_compat import retire_foreign_caches
