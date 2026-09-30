@@ -11,7 +11,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 
 from cereal import custom
-from openpilot.starpilot.common.starpilot_utilities import calculate_bearing_offset, calculate_distance_to_point, is_url_pingable
+from openpilot.starpilot.common.starpilot_utilities import calculate_bearing_offset, calculate_distance_to_point, is_url_pingable, lower_thread_priority
 
 FREE_MAPBOX_REQUESTS = 100_000
 
@@ -86,7 +86,7 @@ class SpeedLimitController:
     self.previous_target = self.starpilot_planner.params.get_float("PreviousSpeedLimit")
     self.last_valid_limit = self.previous_target if self.previous_target > 0 else 0
 
-    self.executor = ThreadPoolExecutor(max_workers=1)
+    self.executor = ThreadPoolExecutor(max_workers=1, initializer=lower_thread_priority)
     self.mapbox_future = None
 
     self.session = requests.Session()

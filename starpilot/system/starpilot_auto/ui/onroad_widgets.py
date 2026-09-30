@@ -8,7 +8,7 @@ from collections.abc import Callable
 import pyray as rl
 from cereal import log
 
-from openpilot.selfdrive.ui.lib.starpilot_status import ENGAGED_COLOR, EXPERIMENTAL_COLOR, TRAFFIC_COLOR
+from openpilot.selfdrive.ui.lib.starpilot_status import ENGAGED_COLOR, TRAFFIC_COLOR
 from openpilot.selfdrive.ui.onroad.driver_state import DMOJI_SIZE, DriverStateRenderer
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.onroad.alert_renderer import (
@@ -277,6 +277,9 @@ class CarPipSideCamera(PipSideCamera):
     return False
 
 
+STOPPED_COLOR = rl.Color(255, 40, 40, 255)  # bright red, readable over any background
+
+
 class CarStoppedTimerWidget(StoppedTimerWidget):
   """A compact "Stopped" label and mm:ss timer in place of the speed readout.
 
@@ -326,12 +329,7 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
     rl.draw_text_ex(font, text, pos, font_size, 0, color)
 
   def _duration_color(self) -> rl.Color:
-    duration = self._duration
-    if duration < 150:
-      return self._blend_colors(ENGAGED_COLOR, EXPERIMENTAL_COLOR, (duration - 60) / 90.0)
-    if duration < 300:
-      return self._blend_colors(EXPERIMENTAL_COLOR, TRAFFIC_COLOR, (duration - 150) / 150.0)
-    return TRAFFIC_COLOR
+    return STOPPED_COLOR
 
 
 class CarSetSpeedWidget(SetSpeedWidget):

@@ -13,7 +13,7 @@ import { GalaxySection } from "../components/GalaxySection.js"
 import { DevModeBanner } from "../components/DevModeBanner.js"
 import { LanguageSelector } from "../components/LanguageSelector.js"
 import { StarpilotAutoConnectionPanel } from "../components/StarpilotAutoConnectionPanel.js?v=starpilot-auto-connection-2"
-import { StarpilotAutoIdentityPanel } from "../components/StarpilotAutoIdentityPanel.js?v=starpilot-auto-recommended-1"
+import { StarpilotAutoIdentityPanel } from "../components/StarpilotAutoIdentityPanel.js?v=starpilot-auto-manual-upload-1"
 import { StarpilotAutoCarScreenPanel } from "../components/StarpilotAutoCarScreenPanel.js?v=car-screen-7"
 import { languageState, setLanguage, t } from "../i18n.js"
 

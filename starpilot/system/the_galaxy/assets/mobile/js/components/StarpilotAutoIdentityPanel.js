@@ -26,7 +26,7 @@ export const StarpilotAutoIdentityPanel = {
   components: { GxNotice },
   props: { updateNoticeTarget: { type: String, default: "" } },
   data() {
-    return { status: null, error: "", busy: "", uploadProgress: 0, url: "", fileName: "" }
+    return { status: null, error: "", busy: "", uploadProgress: 0, fileName: "" }
   },
   created() {
     let first = true
@@ -88,23 +88,6 @@ export const StarpilotAutoIdentityPanel = {
         this.busy = ""
       }
     },
-    async download() {
-      const url = this.url.trim()
-      if (!/^https?:\/\//i.test(url)) {
-        this.error = "Enter an http(s) link to the APK or XAPK."
-        return
-      }
-      this.error = ""
-      this.busy = "download"
-      try {
-        await api.downloadStarpilotAutoApk(url)
-        await this.refresh()
-      } catch (e) {
-        this.error = e?.message || "Download failed"
-      } finally {
-        this.busy = ""
-      }
-    },
     async remove() {
       if (!window.confirm("Remove the Starpilot Auto identity from this comma? Starpilot Auto will stop working until you install it again.")) return
       this.busy = "remove"
@@ -155,12 +138,8 @@ export const StarpilotAutoIdentityPanel = {
 
       <details style="margin:0 0 12px;">
       <summary style="cursor:pointer; color:var(--text-muted);">Manual installation</summary>
-      <ol style="margin:0 0 12px; padding-left:20px; color:var(--text-muted); line-height:1.5;">
-        <li>On this phone or computer, download the <strong>Starpilot Auto</strong> app
-          (<code>{{ status?.knownGoodVersion || '17.6.663454-release' }}</code> is known to work) as an XAPK or APK from an APK mirror.
-          Make sure it is the app itself, not a mirror's store installer.</li>
-        <li>Choose the file below.</li>
-      </ol>
+      <p class="gx-row__desc" style="margin:8px 0 12px;">On this phone or computer, upload the XAPK or APK from an APK mirror.
+        Make sure it is the app itself, not a mirror's store installer.</p>
 
       <input ref="file" type="file" accept=".apk,.xapk,.apkm,application/vnd.android.package-archive" style="display:none;" @change="onFile" />
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin:0 0 12px;">
@@ -170,14 +149,6 @@ export const StarpilotAutoIdentityPanel = {
         <button type="button" class="gx-btn gx-btn--tonal" :disabled="!!busy" @click="refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
       </div>
 
-      <details style="margin:0 0 12px;">
-        <summary style="cursor:pointer; color:var(--text-muted);">Or have the comma download it from a link</summary>
-        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
-          <input v-model="url" class="gx-field" style="flex:1; min-width:200px;" type="url" inputmode="url" placeholder="https://…/starpilot-auto.xapk" />
-          <button type="button" class="gx-btn gx-btn--tonal" :disabled="running || !url.trim()" @click="download">Download</button>
-        </div>
-        <p class="gx-row__desc" style="margin-top:6px;">A direct link to the file, e.g. from your own cloud storage. Mirror pages that need a browser will not work here.</p>
-      </details>
       </details>
 
       <div v-if="status && (status.installed || status.expired || status.error)" style="display:flex; justify-content:flex-end;">
