@@ -155,7 +155,8 @@ def test_send_persists_and_reuses_thread_id(tmp_path):
   assert "thread_name" not in json.loads(calls[0][1]["data"]["payload_json"])
 
 
-def test_send_retries_on_404_if_thread_deleted(tmp_path):
+@pytest.mark.parametrize("status", [400, 404])
+def test_send_retries_if_thread_deleted(tmp_path, status):
   thread_path = tmp_path / "thread_id"
   _remember_thread(thread_path)
   calls = []
@@ -163,7 +164,7 @@ def test_send_retries_on_404_if_thread_deleted(tmp_path):
   def post_mock(url, **kwargs):
     calls.append((url, kwargs))
     if "thread_id=999888777" in url:
-      return Response(404, {"code": 10003, "message": "Unknown Channel"})
+      return Response(status, {"code": 10003, "message": "Unknown Channel"})
     return Response(200, {"channel_id": "123456789"})
 
   bundle.send(b"zip-bytes", "diag.zip", "", SUMMARY, url="https://example.invalid/hook",

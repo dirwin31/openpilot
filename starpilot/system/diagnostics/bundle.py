@@ -281,8 +281,9 @@ def send(data: bytes, name: str, note: str, summary: dict, url: str | None = Non
     except Exception as error:
       raise RuntimeError(f"Could not reach {RECIPIENT}: {error}. Check the internet connection, or use Download.") from error
 
-    # Unknown Channel means the cached thread was deleted. Unknown Webhook does not.
-    if attempt == 0 and cached_id and response.status_code == 404 and _response_json(response).get("code") == 10003:
+    # Unknown Channel means the cached thread was deleted (Discord answers 400 for webhooks, 404 elsewhere).
+    # Unknown Webhook does not.
+    if attempt == 0 and cached_id and response.status_code in (400, 404) and _response_json(response).get("code") == 10003:
       cached_id = None  # Retry from memory even if the cache cannot be removed.
       try:
         thread_path.unlink(missing_ok=True)
@@ -292,7 +293,9 @@ def send(data: bytes, name: str, note: str, summary: dict, url: str | None = Non
     break
 
   if response.status_code not in (200, 204):
-    raise RuntimeError(f"{RECIPIENT}'s Discord refused the upload (HTTP {response.status_code}). Use Download instead.")
+    reason = str(_response_json(response).get("message") or "")[:120]
+    detail = f"HTTP {response.status_code}{f': {reason}' if reason else ''}"
+    raise RuntimeError(f"{RECIPIENT}'s Discord refused the upload ({detail}). Use Download instead.")
 
   if not explicit_thread and not cached_id:
     new_thread_id = _response_json(response).get("channel_id")
