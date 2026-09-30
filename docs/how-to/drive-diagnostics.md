@@ -25,7 +25,7 @@ The Discord webhook is built into `starpilot/system/diagnostics/bundle.py`, base
 it without a code change, write a new URL to `/data/diagnostics/webhook_url` on the comma.
 
 Use a webhook belonging to a Discord forum channel. The first upload creates a post named
-`Device <dongle ID>`; subsequent uploads add messages and attachments to that post. The device saves
+`<car fingerprint> <last 4 of dongle ID>` (`Device <last 4>` if no car is identified). Every message also lists the car and the head unit from the newest Starpilot Auto session log; subsequent uploads add messages and attachments to that post. The device saves
 the thread ID under `/data/diagnostics/threads/`, scoped to both the dongle ID and webhook. Changing
 either starts a separate post; switching back reuses its saved thread. A deleted thread is recreated
 with at most one retry. Old, unscoped `thread_id` files are ignored because their destination cannot

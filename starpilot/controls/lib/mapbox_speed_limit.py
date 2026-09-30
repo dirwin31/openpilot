@@ -6,7 +6,7 @@ import requests
 
 from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
-from openpilot.starpilot.common.starpilot_utilities import calculate_bearing_offset, is_url_pingable
+from openpilot.starpilot.common.starpilot_utilities import calculate_bearing_offset, is_url_pingable, lower_thread_priority
 
 
 FREE_MAPBOX_REQUESTS = 100_000
@@ -27,7 +27,7 @@ class MapboxSpeedLimit:
     self.limit = 0.0
     self.segment_distance = 0.0
     self.future = None
-    self.executor = ThreadPoolExecutor(max_workers=1)
+    self.executor = ThreadPoolExecutor(max_workers=1, initializer=lower_thread_priority)
     self.session = requests.Session()
     self.session.headers.update({"Accept-Language": "en"})
     self.session.headers.update({"User-Agent": "starpilot-mapbox-speed-limit-retriever/1.0 (https://github.com/FrogAi/StarPilot)"})

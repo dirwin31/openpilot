@@ -57,11 +57,12 @@ createApp({components:{StarpilotAutoIdentityPanel},template:'<div id="update-not
       await button.click()
       await page.getByText('Download unavailable; try manual installation.', {exact:true}).waitFor()
       assert.equal(await button.isEnabled(), true)
-      await page.locator('summary').filter({hasText:'Or have the comma download'}).click()
-      await page.locator('input[type=url]').fill('https://example.test/manual.apkm')
       fail = false
-      await page.getByRole('button', {name:'Download', exact:true}).click()
-      assert.equal(posts.at(-1), '/api/starpilot_auto/identity/download')
+      await page.getByText("On this phone or computer, upload the XAPK or APK from an APK mirror. Make sure it is the app itself, not a mirror's store installer.", {exact:true}).waitFor()
+      const upload = page.waitForResponse(response => new URL(response.url()).pathname === '/api/starpilot_auto/identity/upload')
+      await page.locator('input[type=file]').setInputFiles({name:'starpilot-auto.xapk',mimeType:'application/zip',buffer:Buffer.from('synthetic app package')})
+      await upload
+      assert.equal(posts.at(-1), '/api/starpilot_auto/identity/upload')
       job = {state:'idle'}
     }
     assert.equal(checks.length, 2, 'one check per page entry, none from progress polling')

@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import importlib
 import json
+import os
 import requests
 import time
 
@@ -11,10 +12,11 @@ from cereal import messaging
 from openpilot.common.api import Api, api_get
 from openpilot.common.gps import get_gps_location_service
 from openpilot.common.params import Params
-from openpilot.common.realtime import DT_MDL, Priority, Ratekeeper, config_realtime_process
+from openpilot.common.realtime import DT_MDL, Priority, Ratekeeper, config_realtime_process, set_core_affinity
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.system.sentry import capture_flm_tune_submission, capture_report
 from openpilot.system.athena.registration import UNREGISTERED_DONGLE_ID
+from openpilot.system.hardware import TICI
 from openpilot.system.hardware.hw import Paths
 
 from openpilot.starpilot.assets.model_manager import (
@@ -35,10 +37,12 @@ from openpilot.starpilot.common.safe_mode import (
 from openpilot.starpilot.common.starpilot_utilities import ThreadManager, flash_panda, is_url_pingable, lock_doors, use_konik_server
 from openpilot.starpilot.common.starpilot_variables import ERROR_LOGS_PATH, StarPilotVariables
 from openpilot.starpilot.controls.starpilot_planner import StarPilotPlanner, serialize_starpilot_toggles
+from openpilot.starpilot.system.starpilot_auto.telemetry import send_auto_telemetry
 from openpilot.starpilot.system.starpilot_stats import send_stats
 from openpilot.starpilot.system.starpilot_tracking import StarPilotTracking
 
 ASSET_CHECK_RATE = (1 / DT_MDL)
+PLANNER_CORE = 5
 DASHBOARD_ANALYSIS_REFRESH_RATE = 60
 DRIVE_STATS_SYNC_RATE = 30
 OFFROAD_GPS_MEMORY_REFRESH_SECONDS = 1.0
@@ -208,6 +212,7 @@ def transition_offroad(starpilot_planner, model_manager, theme_manager, thread_m
 
   if time_validated:
     thread_manager.run_with_lock(send_stats)
+    thread_manager.run_with_lock(send_auto_telemetry, report=False)
 
 def transition_onroad(error_log):
   get_dashboard_utilities().stop_dashboard_background_analysis()
@@ -275,10 +280,23 @@ def update_safe_mode_state(params, params_raw, params_memory, safe_mode_active, 
     apply_safe_mode(params, params_raw, params_memory, ensure_backup=False)
   return safe_mode_active
 
+def restore_planner_core(get_affinity=None, set_affinity=set_core_affinity) -> bool:
+  # Offroad power save takes cores 4-7 offline and the kernel drops our core-5 pin. This process never
+  # restarts between drives, so re-pin once the core is back, like selfdrive/ui/ui.py does. Unpinned, it
+  # runs SCHED_FIFO on the little cores above sensord and the locationd daemons.
+  if get_affinity is None:
+    if not TICI:
+      return False
+    get_affinity = os.sched_getaffinity
+  if get_affinity(0) == {PLANNER_CORE}:
+    return False
+  set_affinity([PLANNER_CORE])
+  return True
+
 def starpilot_thread():
   rate_keeper = Ratekeeper(1 / DT_MDL, None)
 
-  config_realtime_process(5, Priority.CTRL_LOW)
+  config_realtime_process(PLANNER_CORE, Priority.CTRL_LOW)
 
   pm = messaging.PubMaster(["starpilotPlan"])
   sm = messaging.SubMaster(["carControl", "carParams", "carState", "controlsState", "deviceState", "driverMonitoringState",
@@ -396,6 +414,7 @@ def starpilot_thread():
       next_dashboard_analysis_refresh = 0.0
 
     if rate_keeper.frame % ASSET_CHECK_RATE == 0:
+      restore_planner_core()
       check_assets(now, model_manager, theme_manager, thread_manager, params, params_memory, starpilot_toggles)
 
     safe_mode_active = update_safe_mode_state(
@@ -457,6 +476,7 @@ def starpilot_thread():
 
       if not started:
         thread_manager.run_with_lock(send_stats)
+        thread_manager.run_with_lock(send_auto_telemetry, report=False)
         thread_manager.run_with_lock(update_checks, (now, model_manager, theme_manager, thread_manager, params, params_memory, starpilot_toggles, True))
       else:
         run_update_checks = True

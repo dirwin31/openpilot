@@ -78,9 +78,46 @@ def device_summary() -> dict:
     params = Params()
     summary["dongle_id"] = params.get("DongleId", encoding="utf-8") or ""
     summary["offroad"] = params.get_bool("IsOffroad")
+    summary["car_fingerprint"] = _car_fingerprint(params)
   except Exception as error:
     summary["params_error"] = str(error)
+  try:
+    summary["head_unit"] = _head_unit_name()
+  except Exception as error:
+    summary["head_unit_error"] = str(error)
   return summary
+
+
+def _car_fingerprint(params) -> str:
+  try:
+    from cereal import car
+    cp_bytes = params.get("CarParamsPersistent")
+    if cp_bytes:
+      with car.CarParams.from_bytes(cp_bytes) as cp:
+        fingerprint = str(cp.carFingerprint or "").strip()
+        if fingerprint and fingerprint != "MOCK":
+          return fingerprint
+  except Exception:
+    pass
+  model = str(params.get("CarModel", encoding="utf-8") or "").strip()
+  return "" if model == "MOCK" else model
+
+
+def _head_unit_name(logs_to_check: int = 3) -> str:
+  """The car's head unit from the newest session log that identified it, or ''."""
+  from openpilot.starpilot.system.starpilot_auto import compat_report
+  for path in compat_report.session_logs()[:logs_to_check]:
+    car = compat_report.summarize(compat_report.load_events(path))["car"]
+    name = " ".join(part for part in (car.get("head_unit_make"), car.get("head_unit_model")) if part)
+    name = name or car.get("display_name") or car.get("bluetooth_name") or ""
+    if name:
+      return name
+  return ""
+
+
+def thread_title(summary: dict) -> str:
+  dongle_id = summary.get("dongle_id") or "device"
+  return f"{summary.get('car_fingerprint') or 'Device'} {dongle_id[-4:]}"[:100]
 
 
 def _bluetooth_status() -> dict:
@@ -204,6 +241,8 @@ def send(data: bytes, name: str, note: str, summary: dict, url: str | None = Non
     post = requests.post
   dongle_id = summary.get("dongle_id") or "device"
   lines = [f"**Diagnostics from {dongle_id}**",
+           f"Car: {summary.get('car_fingerprint') or 'unknown'}",
+           f"Head unit: {summary.get('head_unit') or 'unknown'}",
            f"Branch {summary.get('branch', '?')} @ {str(summary.get('commit', '?'))[:10]}",
            f"Note: {note.strip() or '(none)'}"]
   payload = {"content": "\n".join(lines)[:1900], "username": "StarPilot diagnostics", "allowed_mentions": {"parse": []}}
@@ -234,7 +273,7 @@ def send(data: bytes, name: str, note: str, summary: dict, url: str | None = Non
       query["thread_id"] = cached_id
     elif not explicit_thread:
       query.pop("thread_id", None)
-      payload["thread_name"] = f"Device {dongle_id}"
+      payload["thread_name"] = thread_title(summary)
     post_url = urlunsplit(parts._replace(query=urlencode(query)))
 
     try:

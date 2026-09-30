@@ -255,6 +255,7 @@ class CarController(CarControllerBase):
     self.bosch_braking = False
     self.bosch_gas_factor = self.param_store.get_float("HondaGasFactorParams", default=1.0)
     self.bosch_wind_factor = self.param_store.get_float("HondaWindFactorParams", default=1.0)
+    self.saved_bosch_factors = (self.bosch_gas_factor, self.bosch_wind_factor)
     self.bosch_wind_factor_before_brake = self.bosch_wind_factor
     self.bosch_gas_factor_before_gasmax = self.bosch_gas_factor
     self.bosch_wind_factor_before_gasmax = self.bosch_wind_factor
@@ -600,8 +601,7 @@ class CarController(CarControllerBase):
       ))
 
     if self.frame > 0 and self.frame % 6000 == 0:
-      self.param_store.put_float("HondaGasFactorParams", self.bosch_gas_factor)
-      self.param_store.put_float("HondaWindFactorParams", self.bosch_wind_factor)
+      self.persist_learned_factors()
 
     new_actuators = actuators.as_builder()
     new_actuators.speed = self.speed
@@ -613,3 +613,13 @@ class CarController(CarControllerBase):
 
     self.frame += 1
     return new_actuators, can_sends
+
+  def persist_learned_factors(self):
+    # Runs in card's 100 Hz loop, so the write must not block: a blocking put fsyncs twice and
+    # stalled card past selfdrived's 100 ms alive limit (commIssue). Skip unchanged values.
+    factors = (self.bosch_gas_factor, self.bosch_wind_factor)
+    if factors == self.saved_bosch_factors:
+      return
+    self.param_store.put_nonblocking("HondaGasFactorParams", self.bosch_gas_factor)
+    self.param_store.put_nonblocking("HondaWindFactorParams", self.bosch_wind_factor)
+    self.saved_bosch_factors = factors

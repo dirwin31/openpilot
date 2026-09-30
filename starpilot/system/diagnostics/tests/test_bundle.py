@@ -9,7 +9,8 @@ import pytest
 
 from openpilot.starpilot.system.diagnostics import bundle
 
-SUMMARY = {"dongle_id": "b0c4a280b2f96b86", "branch": "AAComma", "commit": "5abc56a29deadbeef"}
+SUMMARY = {"dongle_id": "b0c4a280b2f96b86", "branch": "AAComma", "commit": "5abc56a29deadbeef",
+           "car_fingerprint": "HONDA_CIVIC_2022", "head_unit": "Honda Display Audio"}
 
 
 @pytest.fixture(autouse=True)
@@ -114,9 +115,24 @@ def test_send_posts_zip_and_note_to_discord():
   url, kwargs = calls[0]
   payload = json.loads(kwargs["data"]["payload_json"])
   assert url == "https://example.invalid/hook?wait=true" and kwargs["files"]["files[0]"] == ("diag.zip", b"zip-bytes", "application/zip")
-  assert payload["thread_name"] == "Device b0c4a280b2f96b86"
+  assert payload["thread_name"] == "HONDA_CIVIC_2022 6b86"
   assert "Starpilot Auto dropped at 2:34" in payload["content"] and "b0c4a280b2f96b86" in payload["content"]
+  assert "Head unit: Honda Display Audio" in payload["content"] and "Car: HONDA_CIVIC_2022" in payload["content"]
   assert payload["allowed_mentions"] == {"parse": []}, "a tester's note must never ping anyone"
+
+
+def test_thread_title_falls_back_without_fingerprint():
+  assert bundle.thread_title({"dongle_id": "b0c4a280b2f96b86"}) == "Device 6b86"
+  assert bundle.thread_title({}) == "Device vice"
+
+
+def test_head_unit_name_uses_newest_identified_session(monkeypatch):
+  from openpilot.starpilot.system.starpilot_auto import compat_report
+  cars = {"new": {}, "old": {"head_unit_make": "Honda", "head_unit_model": "Display Audio"}}
+  monkeypatch.setattr(compat_report, "session_logs", lambda: ["new", "old"])
+  monkeypatch.setattr(compat_report, "load_events", lambda path: path)
+  monkeypatch.setattr(compat_report, "summarize", lambda path: {"car": cars[path]})
+  assert bundle._head_unit_name() == "Honda Display Audio"
 
 
 def test_send_persists_and_reuses_thread_id(tmp_path):
@@ -127,7 +143,7 @@ def test_send_persists_and_reuses_thread_id(tmp_path):
               post=lambda url, **kwargs: calls.append((url, kwargs)) or Response(200, {"channel_id": "999888777"}),
               thread_path=thread_path)
   assert calls[0][0] == "https://example.invalid/hook?wait=true"
-  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == "Device b0c4a280b2f96b86"
+  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == "HONDA_CIVIC_2022 6b86"
   assert json.loads(thread_path.read_text())["thread_id"] == "999888777"
 
   # Second send: reuses thread_id
@@ -155,7 +171,7 @@ def test_send_retries_on_404_if_thread_deleted(tmp_path):
   assert len(calls) == 2
   assert "thread_id=999888777" in calls[0][0]
   assert calls[1][0] == "https://example.invalid/hook?wait=true"
-  assert json.loads(calls[1][1]["data"]["payload_json"])["thread_name"] == "Device b0c4a280b2f96b86"
+  assert json.loads(calls[1][1]["data"]["payload_json"])["thread_name"] == "HONDA_CIVIC_2022 6b86"
   assert json.loads(thread_path.read_text())["thread_id"] == "123456789"
 
 
@@ -183,7 +199,7 @@ def test_send_checks_cache_identity_even_with_explicit_cache_path(tmp_path, chan
   bundle.send(b"zip", "diag.zip", "", summary, url=url, thread_path=thread_path,
               post=lambda url, **kwargs: calls.append((url, kwargs)) or Response(200, {"channel_id": "123456789"}))
   assert "thread_id=" not in calls[0][0]
-  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == f"Device {summary['dongle_id']}"
+  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == f"HONDA_CIVIC_2022 {summary['dongle_id'][-4:]}"
 
 
 def test_default_cache_keeps_separate_threads_for_each_dongle_and_webhook():
@@ -214,7 +230,7 @@ def test_send_does_not_reuse_unscoped_legacy_caches():
   bundle.send(b"zip", "diag.zip", "", SUMMARY, url="https://example.invalid/hook",
               post=lambda url, **kwargs: calls.append((url, kwargs)) or Response(200, {"channel_id": "333"}))
   assert calls[0][0] == "https://example.invalid/hook?wait=true"
-  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == f"Device {SUMMARY['dongle_id']}"
+  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == "HONDA_CIVIC_2022 6b86"
 
 
 @pytest.mark.parametrize("content", ["not-json", "999888777", "[]", '{"thread_id": "123"}'])

@@ -311,6 +311,30 @@ class TestHondaFingerprint:
     assert controller.bosch_gas_factor == pytest.approx(1.25)
     assert controller.bosch_wind_factor == pytest.approx(0.85)
 
+  def test_honda_learned_factors_persist_nonblocking_only_when_changed(self, monkeypatch):
+    toggles = get_test_toggles()
+    writes = []
+
+    class FakeParams:
+      def get_float(self, key, block=False, return_default=False, default=0.0):
+        return 1.0
+
+      def put_nonblocking(self, key, value):
+        writes.append((key, value))
+
+    monkeypatch.setattr("opendbc.car.honda.carcontroller.Params", lambda: FakeParams())
+
+    CP = CarInterface.get_params(CAR.HONDA_ACCORD, gen_empty_fingerprint(), [], True, False, False, toggles)
+    controller = CarController(DBC[CP.carFingerprint], CP)
+
+    controller.persist_learned_factors()
+    assert writes == []
+
+    controller.bosch_gas_factor = 1.1
+    controller.persist_learned_factors()
+    controller.persist_learned_factors()
+    assert writes == [("HondaGasFactorParams", 1.1), ("HondaWindFactorParams", 1.0)]
+
   def test_honda_bosch_controller_does_not_deepen_planner_braking(self, monkeypatch):
     toggles = get_test_toggles()
     CP = CarInterface.get_params(CAR.HONDA_HRV_3G, gen_empty_fingerprint(), [], True, False, False, toggles)
