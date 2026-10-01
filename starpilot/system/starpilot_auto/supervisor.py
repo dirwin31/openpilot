@@ -50,6 +50,7 @@ CAR_LINK_HOLD = 10.0         # a hands-free connection from the car counts as "c
 USB_HANDSHAKE_WAIT = 10.0    # the car connected but sent no AOA START this long -> present as an accessory directly
 USB_CONFIGURE_WAIT = 15.0    # slower receivers need time to enumerate after the AOA switch
 HFP_WAIT = 5.0               # after paging the car, wait this long for its hands-free link before the Starpilot Auto RFCOMM
+HFP_FRESH = 3.0              # a hands-free link from the car this recent still means "the car is reaching out now"
 DHU_PID_GLOB = "dhu-*.pid"   # under DATA_DIR, one per running tools/starpilot_auto/dhu_device.py
 
 STATE_LABELS = {
@@ -521,6 +522,27 @@ class Supervisor:
     if self._stop.wait(seconds):
       raise Cancelled()
 
+  def _car_link_fresh(self) -> bool:
+    return time.monotonic() - self._car_seen_at < HFP_FRESH
+
+  def _wait_backoff(self, delay: float, car_can_wake: bool) -> None:
+    """Sleep out a retry delay, but retry at once when the car opens hands-free to us.
+
+    That is the car reaching out (at startup, or when the driver taps Android Auto); it hangs
+    up again within a second, so waiting out a 30 s backoff would miss it.
+    """
+    if not car_can_wake:
+      self._wait(delay)
+      return
+    if not self._car_link_fresh():
+      self._hfp_link.clear()
+    deadline = time.monotonic() + delay
+    while (remaining := deadline - time.monotonic()) > 0:
+      if self._hfp_link.is_set():
+        self.log("retry_early", reason="car opened hands-free", skipped_s=round(remaining, 1))
+        return
+      self._wait(min(0.1, remaining))
+
   # ---------------------------------------------------------------- session
 
   def _run(self, generation: int, trigger: str = "manual") -> None:
@@ -566,7 +588,7 @@ class Supervisor:
         self._retry_at = time.monotonic() + delay
         self._set(state="backoff", attempt=attempt, retry_in=delay, mode=None)
         try:
-          self._wait(delay)
+          self._wait_backoff(delay, car_can_wake=not wired and not peer_stopped)
         except Cancelled:
           break
     finally:
@@ -607,7 +629,8 @@ class Supervisor:
     device = bluez.device(address)
     if device is None or not device["paired"]:
       raise RuntimeError("The car is not paired with this comma; pair it in Bluetooth settings")
-    self._hfp_link.clear()
+    if not self._car_link_fresh():
+      self._hfp_link.clear()  # keep a link the car just opened: it is why this attempt started
     bluez.connect_device(address)
     if config.get("phone_class", True) and not device["connected"]:
       # Head units treat a device as a phone once hands-free is up, and some refuse wireless

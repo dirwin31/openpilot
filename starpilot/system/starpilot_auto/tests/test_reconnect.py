@@ -206,3 +206,64 @@ def test_setup_help_distinguishes_transports_and_preserves_onroad_start():
   assert "wireless Starpilot Auto" in wireless and "confirm the code" in wireless
   assert "certificate" in recovery_hint({"error": "certificate expired"})
   assert "data-capable" in recovery_hint({"connection": "wired", "last_stage": "waiting_for_usb"})
+
+
+CAR_ADDRESS = "C4:B7:57:6E:AC:E2"
+
+
+def test_join_gives_the_reported_bssid_most_of_the_wait(monkeypatch):
+  from openpilot.starpilot.system.starpilot_auto import network
+  lease = network.NetworkLease(lambda *a, **k: None)
+  budgets = []
+
+  def once(attempt, timeout, cancelled):
+    budgets.append((attempt.bssid, timeout))
+    if attempt.bssid:
+      raise network.NetworkError("access point not up yet")
+    return "192.168.50.23"
+
+  monkeypatch.setattr(lease, "_acquire_once", once)
+  assert lease.acquire(credentials()) == "192.168.50.23"
+  assert budgets == [("AA:BB:CC:DD:EE:FF", 90.0), ("", 30.0)]
+
+
+def _wireless_backoff_harness(sup, monkeypatch, failure):
+  now = [100.0]
+  monkeypatch.setattr(supervisor.time, "monotonic", lambda: now[0])
+  monkeypatch.setattr(sup, "_lease", lambda: supervisor.NoLease())
+  sup.config["connection"] = "wireless"
+  sup.config["receiver_address"] = CAR_ADDRESS
+  starts, waits = [], []
+
+  def attempt(_):
+    starts.append(now[0])
+    if len(starts) == 2:
+      sup._stop.set()
+    raise failure
+
+  def wait(seconds):
+    waits.append(seconds)
+    now[0] += seconds
+    if len(starts) == 1 and now[0] - starts[0] >= 5 and not sup._hfp_link.is_set():
+      sup._hfp_connected(CAR_ADDRESS.lower())  # the car reaches out mid-backoff, e.g. the driver taps Android Auto
+    if sup._stop.is_set():
+      raise supervisor.Cancelled()
+
+  monkeypatch.setattr(sup, "_attempt", attempt)
+  monkeypatch.setattr(sup, "_wait", wait)
+  return starts, waits
+
+
+def test_car_opening_hands_free_ends_the_backoff_early(sup, monkeypatch):
+  monkeypatch.setattr(supervisor, "BACKOFF_SECONDS", (30.0,))
+  starts, _ = _wireless_backoff_harness(sup, monkeypatch, RuntimeError("car not answering"))
+  sup._run(1)
+  assert len(starts) == 2
+  assert starts[1] - starts[0] < 6  # retried when the car connected, not after the 30 s backoff
+
+
+def test_car_ending_projection_still_gets_its_full_pause(sup, monkeypatch):
+  from openpilot.starpilot.system.starpilot_auto.session import PeerRequestedStop
+  starts, waits = _wireless_backoff_harness(sup, monkeypatch, PeerRequestedStop("Head unit ended projection"))
+  sup._run(1)
+  assert waits[0] == supervisor.PEER_STOP_RETRY_SECONDS
