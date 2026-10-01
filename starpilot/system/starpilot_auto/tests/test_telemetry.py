@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -209,7 +210,12 @@ def test_failure_diagnostics_skip_healthy_sessions_and_failed_uploads(tmp_path):
 
   with pytest.raises(RuntimeError):
     telemetry.send_failure_diagnostics({"sessions": [failure()]}, SUMMARY, state, now=5, builder=lambda **_: b"zip", sender=broken)
-  assert not state.exists()  # a failed upload does not use up the failure or the daily allowance
+  saved = json.loads(state.read_text())  # a failed upload does not use up the failure or the daily allowance; it stays queued
+  assert saved["sent"] == {} and saved["uploads"] == [] and list(saved["queued"]) == ["failed:rfcomm:TimeoutError"]
+  calls = []
+  builder, sender = recorder(calls)
+  assert telemetry.send_failure_diagnostics({"sessions": []}, SUMMARY, state, now=6, builder=builder, sender=sender)
+  assert "failed at rfcomm (TimeoutError)" in [c for c in calls if c[0] == "send"][0][2]
 
 
 def test_send_report_hands_the_payload_to_the_callback(tmp_path):
@@ -224,3 +230,60 @@ def test_send_report_hands_the_payload_to_the_callback(tmp_path):
   assert telemetry.send_report(True, SUMMARY, "wired", "C3X", url="https://example.invalid", post=lambda *a, **k: Response(),
                                state_path=tmp_path / "state.json", log_dir=log_dir, sent=seen.append)
   assert telemetry.failed_sessions(seen[0])[0]["failed_stage"] == "usb_accessory"
+
+
+def test_heavy_features_are_plain_flags(tmp_path):
+  from types import SimpleNamespace
+  toggles = SimpleNamespace(vision_speed_limit_detection=True, v_asm_enabled=0, model_name="secret")
+  assert telemetry.heavy_features(toggles) == {"speed_limit_vision": True, "blind_spot_vision": False}
+  assert telemetry.heavy_features(SimpleNamespace()) == {"speed_limit_vision": False, "blind_spot_vision": False}
+  write_log(tmp_path, 1, STREAMING)
+  payload = telemetry.build_report(True, {}, SUMMARY, "wireless", tmp_path, "C3X",
+                                   features=telemetry.heavy_features(toggles))
+  assert payload["features"] == {"speed_limit_vision": True, "blind_spot_vision": False}
+
+
+def test_a_finished_session_is_reported_at_once_and_a_live_one_waits(tmp_path):
+  write_log(tmp_path, 1, STREAMING)
+  live = write_log(tmp_path, 2, STREAMING)
+  os.utime(live, (time.time(), time.time()))
+  assert [s["seq"] for s in report(tmp_path, True)["sessions"]] == [1]
+
+  with live.open("a") as log:  # the daemon appends session_stop when the session is over
+    log.write(json.dumps({"t": "2026-09-21T07:31:00+00:00", "event": "session_stop"}) + "\n")
+  os.utime(live, (time.time(), time.time()))
+  assert [s["seq"] for s in report(tmp_path, True)["sessions"]] == [1, 2]
+
+
+def test_periodic_retry_only_sends_when_there_is_something_new(tmp_path):
+  def retry(state):
+    return telemetry.build_report(True, state, SUMMARY, "wireless", tmp_path, "C3X", only_if_new=True)
+
+  assert retry({"last_enabled": True, "last_seq": 0}) is None  # no sessions and no on/off change: no heartbeat
+  assert retry({"last_enabled": False, "last_seq": 0})["event"] == "enabled"
+  write_log(tmp_path, 1, STREAMING)
+  assert [s["seq"] for s in retry({"last_enabled": True, "last_seq": 0})["sessions"]] == [1]
+  assert retry({"last_enabled": True, "last_seq": 1}) is None
+
+
+def test_a_backlog_goes_out_oldest_first_in_batches_without_skipping(tmp_path):
+  for n in range(1, telemetry.MAX_SESSIONS + 6):
+    write_log(tmp_path, n, STREAMING)
+  first = report(tmp_path, True, {"last_enabled": True, "last_seq": 0})
+  assert [s["seq"] for s in first["sessions"]] == list(range(1, telemetry.MAX_SESSIONS + 1))
+  second = report(tmp_path, True, {"last_enabled": True, "last_seq": telemetry.MAX_SESSIONS})
+  assert [s["seq"] for s in second["sessions"]] == list(range(telemetry.MAX_SESSIONS + 1, telemetry.MAX_SESSIONS + 6))
+
+
+def test_failures_found_while_driving_wait_for_the_car_to_be_off(tmp_path):
+  calls = []
+  builder, sender = recorder(calls)
+  state = tmp_path / "diag.json"
+  driving = telemetry.send_failure_diagnostics({"sessions": [failure()]}, SUMMARY, state, now=10, builder=builder, sender=sender,
+                                               car_off=False)
+  assert not driving and calls == []  # nothing is built or uploaded mid-drive
+  assert telemetry.send_failure_diagnostics({"sessions": [failure("dropped", "streaming", "TimeoutError")]}, SUMMARY, state, now=20,
+                                            builder=builder, sender=sender, car_off=True)
+  note = [c for c in calls if c[0] == "send"][0][2]
+  assert "failed at rfcomm (TimeoutError)" in note and "dropped at streaming (TimeoutError)" in note  # one upload carries both
+  assert not telemetry.send_failure_diagnostics({"sessions": []}, SUMMARY, state, now=30, builder=builder, sender=sender)

@@ -1,8 +1,9 @@
 """Anonymous Starpilot Auto usage report: is it on, wired or wireless, and how its sessions ended.
 
 Sent once per drive end and once per boot, alongside the existing StarPilot stats. It carries
-only enums, counters and the car/head-unit identity strings; never logs, Bluetooth addresses,
-Wi-Fi credentials or the identity. The device is identified by a hash of its dongle ID."""
+only enums, counters, on/off flags for the CPU- and memory-heavy features, and the car/head-unit
+identity strings; never logs, Bluetooth addresses, Wi-Fi credentials or the identity. The device is
+identified by a hash of its dongle ID."""
 from __future__ import annotations
 
 import hashlib
@@ -25,9 +26,21 @@ DIAGNOSTICS_STATE_PATH = identity_store.DATA_DIR / "failure_diagnostics.json"
 DIAGNOSTICS_KEY = "StarpilotAutoShareDiagnostics"  # on by default; the user turns it off in Settings
 DIAGNOSTICS_WINDOW_S = 24 * 3600  # the same kind of failure is reported once per window, however often it repeats
 DIAGNOSTICS_MAX_PER_WINDOW = 5    # and a device sends at most this many reports per window
+DIAGNOSTICS_MAX_QUEUED = 10       # kinds of failure waiting for the car to be off
 MAX_SESSIONS = 20
-LOG_SETTLE_S = 120  # a log written this recently may still be a live session
+LOG_SETTLE_S = 120  # a log written this recently may still be a live session, unless it already ended
+FINISHED_EVENT = '"event": "session_stop"'  # the daemon's last line in a finished session log
 TIMEOUT_S = 10
+# Features that each start their own background process, so they decide most of a device's CPU and memory use
+# (measured on a C3X drive, 2026-09-30). Report key -> starpilot toggle.
+HEAVY_FEATURES = {
+  "speed_limit_vision": "vision_speed_limit_detection",  # speed_limit_vision: ~150 MB, 30-45% of a little core
+  "blind_spot_vision": "v_asm_enabled",                  # adj_spot_monitor_vision: ~115 MB, ~30% of a little core
+}
+
+
+def heavy_features(toggles) -> dict[str, bool]:
+  return {key: bool(getattr(toggles, name, False)) for key, name in HEAVY_FEATURES.items()}
 
 
 def telemetry_url(override_path: Path = URL_OVERRIDE_PATH) -> str:
@@ -99,6 +112,15 @@ def session_facts(report: dict) -> dict:
   return {key: value for key, value in facts.items() if value is not None and (value is not False or key in ("hands_free", "wifi_joined"))}
 
 
+def _finished(path: Path) -> bool:
+  """True when the log's last line is the daemon's session_stop, so nothing more will be written to it."""
+  with path.open("rb") as log:
+    log.seek(0, os.SEEK_END)
+    log.seek(max(0, log.tell() - 512))
+    lines = log.read().decode(errors="replace").strip().splitlines()
+  return bool(lines) and FINISHED_EVENT in lines[-1]
+
+
 def session_record(path: Path) -> dict:
   """One session log reduced to enums and counters."""
   from openpilot.starpilot.system.starpilot_auto import compat_report
@@ -166,8 +188,12 @@ def _save_state(path: Path, state: dict) -> None:
 
 
 def build_report(enabled: bool, state: dict, summary: dict, connection: str, log_dir: Path,
-                 device_generation: str, now: float | None = None) -> dict | None:
-  """The payload to send, or None when there is nothing to say (never used, or the disable was already reported)."""
+                 device_generation: str, now: float | None = None, features: dict | None = None,
+                 only_if_new: bool = False) -> dict | None:
+  """The payload to send, or None when there is nothing to say (never used, or the disable was already reported).
+
+  Sessions go oldest first, at most MAX_SESSIONS per report; the rest follow in the next report. With ``only_if_new``
+  a report with no new sessions and no on/off change is not worth sending (the periodic retry uses this)."""
   last_enabled = state.get("last_enabled")
   if not enabled and last_enabled is not True:
     return None  # never turned on here, or the turn-off was already sent
@@ -180,15 +206,18 @@ def build_report(enabled: bool, state: dict, summary: dict, connection: str, log
     number = _session_number(path)
     if number <= last_seq:
       continue
+    if len(sessions) >= MAX_SESSIONS:
+      break  # the rest go in the next report
     try:
-      if now - path.stat().st_mtime < LOG_SETTLE_S:
-        break  # newer logs are newer still; report this one next time
+      if now - path.stat().st_mtime < LOG_SETTLE_S and not _finished(path):
+        break  # still being written, and newer logs are newer still; report this one next time
       sessions.append(session_record(path))
     except OSError:
       continue
-  sessions = sessions[-MAX_SESSIONS:]
 
   event = "heartbeat" if last_enabled is enabled else "enabled" if enabled else "disabled"
+  if only_if_new and event == "heartbeat" and not sessions:
+    return None
   head_unit = next((s["head_unit"] for s in reversed(sessions) if s["head_unit"]), {})
   return {
     "schema": SCHEMA,
@@ -202,18 +231,21 @@ def build_report(enabled: bool, state: dict, summary: dict, connection: str, log
     "commit": str(summary.get("commit", ""))[:10],
     "car_fingerprint": summary.get("car_fingerprint", ""),
     "head_unit": head_unit,
+    "features": features or {},
     "sessions": sessions,
   }
 
 
 def send_report(enabled: bool, summary: dict, connection: str, device_generation: str, url: str | None = None, post=None,
-                state_path: Path = STATE_PATH, log_dir: Path | None = None, sent=None) -> bool:
+                state_path: Path = STATE_PATH, log_dir: Path | None = None, sent=None, features: dict | None = None,
+                only_if_new: bool = False) -> bool:
   """Post the report if there is one; remember what was sent only after the server accepts it. ``sent`` gets the payload."""
   url = telemetry_url() if url is None else url
   if not url:
     return False
   state = _load_state(state_path)
-  payload = build_report(enabled, state, summary, connection, log_dir or identity_store.LOG_DIR, device_generation)
+  payload = build_report(enabled, state, summary, connection, log_dir or identity_store.LOG_DIR, device_generation, features=features,
+                         only_if_new=only_if_new)
   if payload is None:
     return False
   if post is None:
@@ -240,57 +272,70 @@ def failed_sessions(payload: dict) -> list[dict]:
 
 
 def send_failure_diagnostics(payload: dict, summary: dict, state_path: Path = DIAGNOSTICS_STATE_PATH, now: float | None = None,
-                             builder=None, sender=None) -> bool:
-  """Send the developer the diagnostics report without drives when a report holds a kind of failure not sent in the last day.
+                             builder=None, sender=None, car_off: bool = True) -> bool:
+  """Send the developer the diagnostics report without drives for each kind of failure not sent in the last day.
 
-  Several new kinds in one report share one upload. A kind already sent within the window is skipped, and a device sends at
-  most DIAGNOSTICS_MAX_PER_WINDOW reports per window, so a connection stuck in a retry loop cannot flood the channel."""
+  New kinds in ``payload`` are queued first, so one found while driving, or one whose upload failed, waits for the next
+  upload instead of being lost. Uploads happen only with the car off: nobody reads them mid-drive, and building the bundle
+  is work the comma should not do then. Queued kinds share one upload. A kind already sent within the window is skipped,
+  and a device sends at most DIAGNOSTICS_MAX_PER_WINDOW reports per window, so a connection stuck in a retry loop cannot
+  flood the channel."""
   now = time.time() if now is None else now
   state = _load_state(state_path)
   sent = {key: float(at) for key, at in (state.get("sent") or {}).items()
           if isinstance(at, (int, float)) and 0 <= now - at < DIAGNOSTICS_WINDOW_S}
   uploads = [float(at) for at in state.get("uploads") or [] if isinstance(at, (int, float)) and 0 <= now - at < DIAGNOSTICS_WINDOW_S]
-  if len(uploads) >= DIAGNOSTICS_MAX_PER_WINDOW:
-    return False
-  new: dict[str, dict] = {}
+  saved_queue = state.get("queued") or {}
+  queued = {key: kind for key, kind in saved_queue.items() if isinstance(kind, str) and key not in sent}
   for session in failed_sessions(payload):
     signature = failure_signature(session)
-    if signature not in sent and signature not in new:
-      new[signature] = session
-  if not new:
+    if signature not in sent and signature not in queued and len(queued) < DIAGNOSTICS_MAX_QUEUED:
+      queued[signature] = f"{session['outcome']} at {session['failed_stage'] or session['furthest_stage'] or 'start'} ({session['error_kind'] or 'no error'})"
+  if queued != saved_queue:
+    _save_state(state_path, {"sent": sent, "uploads": uploads, "queued": queued})
+  if not queued or not car_off or len(uploads) >= DIAGNOSTICS_MAX_PER_WINDOW:
     return False
 
   if builder is None or sender is None:
     from openpilot.starpilot.system.diagnostics import bundle
     builder, sender = builder or bundle.build, sender or bundle.send
   from openpilot.starpilot.system.diagnostics.bundle import auto_webhook_url, bundle_name
-  kinds = [f"{s['outcome']} at {s['failed_stage'] or s['furthest_stage'] or 'start'} ({s['error_kind'] or 'no error'})" for s in new.values()]
+  kinds = list(queued.values())
   note = f"Automatic report, new failure{'s' if len(kinds) > 1 else ''}: {'; '.join(kinds)}. No drives included."
   sender(builder(note=note, drives=0), bundle_name(summary), note, summary, url=auto_webhook_url())
-  _save_state(state_path, {"sent": {**sent, **dict.fromkeys(new, now)}, "uploads": [*uploads, now]})
+  _save_state(state_path, {"sent": {**sent, **dict.fromkeys(queued, now)}, "uploads": [*uploads, now], "queued": {}})
   return True
 
 
-def send_auto_telemetry() -> None:
+def send_auto_telemetry(toggles=None, only_if_new: bool = False, car_off: bool = True) -> None:
+  """Report Starpilot Auto use. Called at drive end, after boot, and every few minutes with ``only_if_new`` so sessions
+  still go out when the comma loses power with the car or had no internet earlier. ``toggles`` saves a settings reload.
+  Failure diagnostics found with the car on are queued and uploaded at the next call with ``car_off``."""
   try:
     if not telemetry_url():
       return
     from openpilot.common.params import Params
     from openpilot.system.hardware import HARDWARE
+    from openpilot.starpilot.common.starpilot_variables import get_starpilot_toggles
     from openpilot.starpilot.system.diagnostics.bundle import device_summary
     from openpilot.starpilot.system.starpilot_stats import get_device_generation
 
     params = Params()
     summary = device_summary()
 
+    share_diagnostics = params.get_bool(DIAGNOSTICS_KEY)
+
     def share_failure(payload):
-      if params.get_bool(DIAGNOSTICS_KEY):
+      if share_diagnostics:
         try:
-          send_failure_diagnostics(payload, summary)
+          send_failure_diagnostics(payload, summary, car_off=car_off)
         except Exception as error:
           print(f"Failed to send Starpilot Auto failure diagnostics: {error}")
 
-    send_report(params.get_bool(identity_store.ENABLED_KEY), summary, identity_store.load_config()["connection"],
-                get_device_generation(HARDWARE.get_device_type()), sent=share_failure)
+    reported = send_report(params.get_bool(identity_store.ENABLED_KEY), summary, identity_store.load_config()["connection"],
+                get_device_generation(HARDWARE.get_device_type()), sent=share_failure,
+                features=heavy_features(toggles or get_starpilot_toggles()), only_if_new=only_if_new)
+    if share_diagnostics and car_off and not reported:
+      share_failure({"sessions": []})  # nothing new to report, but failures queued while driving still go out
   except Exception as error:
     print(f"Failed to send Starpilot Auto telemetry: {error}")
