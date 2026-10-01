@@ -5,7 +5,7 @@ import { TroubleshootPanel } from "../components/TroubleshootPanel.js"
 import { GalaxyTabs } from "../components/GalaxyTabs.js"
 
 import { SystemMonitor } from "../components/SystemMonitor.js"
-import { SendDiagnosticsPanel } from "../components/SendDiagnosticsPanel.js?v=send-diagnostics-2"
+import { SendDiagnosticsPanel } from "../components/SendDiagnosticsPanel.js?v=send-diagnostics-3"
 import { StarpilotAutoDiagnosticsPanel } from "../components/StarpilotAutoDiagnosticsPanel.js?v=starpilot-auto-diagnostics-2"
 
 const TABS = {

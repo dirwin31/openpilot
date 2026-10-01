@@ -18,7 +18,6 @@ export const SendDiagnosticsPanel = {
     return { note: "", drives: 1, status: {}, starting: false, timer: null, pendingDownload: false }
   },
   computed: {
-    recipient() { return this.status.recipient || "Starpilot Auto Guy" },
     busy() { return this.starting || BUSY.includes(this.status.state) },
     driveChoices() {
       const available = Math.min(3, this.status.drives_available ?? 3)
@@ -83,7 +82,7 @@ export const SendDiagnosticsPanel = {
         <p v-if="status.offroad === false" class="gx-row__desc" style="margin:0;">The car is on: drive reports are available once it's turned off.</p>
         <div class="gx-car-display__tabs">
           <button v-if="status.send_available" type="button" class="gx-btn" :disabled="busy" @click="start('send')">
-            <i class="bi" :class="busy && status.action === 'send' ? 'bi-arrow-repeat gx-spin' : 'bi-send'"></i> Send to {{ recipient }}</button>
+            <i class="bi" :class="busy && status.action === 'send' ? 'bi-arrow-repeat gx-spin' : 'bi-send'"></i> Send report</button>
           <button type="button" class="gx-btn gx-btn--tonal" :disabled="busy" @click="start('download')">
             <i class="bi" :class="busy && status.action === 'download' ? 'bi-arrow-repeat gx-spin' : 'bi-download'"></i> Download</button>
         </div>

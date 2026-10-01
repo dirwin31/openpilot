@@ -1,11 +1,11 @@
-"""A diagnostics zip a tester can send to the developer (RECIPIENT) from The Galaxy.
+"""A diagnostics zip a tester can send to the developer from The Galaxy.
 
 Contents: the Starpilot Auto session logs (Bluetooth pairing, Wi-Fi handshake, streaming)
 with their reports and settings, the Bluetooth pairing prompt log and adapter status,
 and a one-page report for each of the last few drives (see drive_report.py). Never the
 Starpilot Auto identity or any Wi-Fi password.
 
-"Send to Starpilot Auto Guy" (RECIPIENT) posts the zip to a Discord webhook. The URL is built in, encoded so
+"Send report" posts the zip to a Discord webhook. The URL is built in, encoded so
 repository scanners don't pick it up; a URL in WEBHOOK_OVERRIDE_PATH on the device
 replaces it without a code change. Download is always available.
 """
@@ -29,13 +29,16 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-RECIPIENT = "Starpilot Auto Guy"  # who "Send to ..." delivers to, as testers see it
 REALDATA = Path("/data/media/0/realdata")
 DIAGNOSTICS_DIR = Path("/data/diagnostics")
 WEBHOOK_OVERRIDE_PATH = DIAGNOSTICS_DIR / "webhook_url"
 # base64 of the Discord webhook URL that receives tester diagnostics ("" = sending not set up).
 _WEBHOOK_B64 = "".join(("aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTU1NDI4MDc2NjU3NjI2NzMyNC9jelFvQ0VJUnFE",
                         "VWkxbXM5M3VvTzZ6TXVZRVJXUE5OTV90bWVKUEV3cXJjUjFUdHlMQ1lnSDNLeEtsb1NfamNIdlBCag=="))
+AUTO_WEBHOOK_OVERRIDE_PATH = DIAGNOSTICS_DIR / "auto_webhook_url"
+# base64 of the Discord webhook URL for automatic failure reports ("" = they go to the tester webhook above).
+_AUTO_WEBHOOK_B64 = "".join(("aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTU1NTAzNTcxODE2OTAwNjA4My85UG1NMk9TcT",
+                             "lRZW9sWF9WeHFfSG4wNjd4cVc2Y01kV3ltNUc1NFI4Y0pMd2RTaXE1Z2p6WDJBRjNjT2tYWkNZMFUyRA=="))
 DISCORD_FILE_LIMIT = 10 * 1024 * 1024 - 64 * 1024  # 10 MiB attachment limit, with room for the form fields
 MAX_DRIVES = 3
 DRIVE_REPORT_TIMEOUT_S = 900
@@ -50,6 +53,17 @@ def webhook_url(override_path: Path = WEBHOOK_OVERRIDE_PATH) -> str:
   if override:
     return override
   return base64.b64decode(_WEBHOOK_B64).decode() if _WEBHOOK_B64 else ""
+
+
+def auto_webhook_url(override_path: Path = AUTO_WEBHOOK_OVERRIDE_PATH) -> str:
+  """Where automatic failure reports go, so they stay out of the thread the manual Send Diagnostics uses."""
+  try:
+    override = override_path.read_text().strip()
+  except OSError:
+    override = ""
+  if override:
+    return override
+  return base64.b64decode(_AUTO_WEBHOOK_B64).decode() if _AUTO_WEBHOOK_B64 else webhook_url()
 
 
 def recent_routes(realdata: Path = REALDATA, count: int = MAX_DRIVES) -> list[str]:
@@ -115,9 +129,14 @@ def _head_unit_name(logs_to_check: int = 3) -> str:
   return ""
 
 
+def device_tag(summary: dict) -> str:
+  """The first 8 characters of the hashed device ID the Starpilot Auto telemetry dashboard shows."""
+  from openpilot.starpilot.system.starpilot_auto.telemetry import device_hash
+  return device_hash(summary.get("dongle_id") or "")[:8]
+
+
 def thread_title(summary: dict) -> str:
-  dongle_id = summary.get("dongle_id") or "device"
-  return f"{summary.get('car_fingerprint') or 'Device'} {dongle_id[-4:]}"[:100]
+  return f"{summary.get('car_fingerprint') or 'Device'} {device_tag(summary)}"[:100]
 
 
 def _bluetooth_status() -> dict:
@@ -240,7 +259,7 @@ def send(data: bytes, name: str, note: str, summary: dict, url: str | None = Non
     import requests
     post = requests.post
   dongle_id = summary.get("dongle_id") or "device"
-  lines = [f"**Diagnostics from {dongle_id}**",
+  lines = [f"**Diagnostics from {device_tag(summary)}**",
            f"Car: {summary.get('car_fingerprint') or 'unknown'}",
            f"Head unit: {summary.get('head_unit') or 'unknown'}",
            f"Branch {summary.get('branch', '?')} @ {str(summary.get('commit', '?'))[:10]}",
@@ -279,7 +298,7 @@ def send(data: bytes, name: str, note: str, summary: dict, url: str | None = Non
     try:
       response = post(post_url, data={"payload_json": json.dumps(payload)}, files={"files[0]": (name, data, "application/zip")}, timeout=120)
     except Exception as error:
-      raise RuntimeError(f"Could not reach {RECIPIENT}: {error}. Check the internet connection, or use Download.") from error
+      raise RuntimeError(f"Could not send the report: {error}. Check the internet connection, or use Download.") from error
 
     # Unknown Channel means the cached thread was deleted (Discord answers 400 for webhooks, 404 elsewhere).
     # Unknown Webhook does not.
@@ -295,7 +314,7 @@ def send(data: bytes, name: str, note: str, summary: dict, url: str | None = Non
   if response.status_code not in (200, 204):
     reason = str(_response_json(response).get("message") or "")[:120]
     detail = f"HTTP {response.status_code}{f': {reason}' if reason else ''}"
-    raise RuntimeError(f"{RECIPIENT}'s Discord refused the upload ({detail}). Use Download instead.")
+    raise RuntimeError(f"The report was refused ({detail}). Use Download instead.")
 
   if not explicit_thread and not cached_id:
     new_thread_id = _response_json(response).get("channel_id")
@@ -321,7 +340,7 @@ class DiagnosticsJob:
 
   def status(self) -> dict:
     with self._lock:
-      return {**self._state, "send_available": bool(webhook_url()), "recipient": RECIPIENT}
+      return {**self._state, "send_available": bool(webhook_url())}
 
   def result(self) -> tuple[str, bytes] | None:
     with self._lock:
@@ -350,13 +369,13 @@ class DiagnosticsJob:
       with self._lock:
         self._data = data
       if action == "send":
-        self._set(state="sending", message=f"Sending to {RECIPIENT}", name=name, bytes=len(data))
+        self._set(state="sending", message="Sending report", name=name, bytes=len(data))
         try:
           warning = self._sender(data, name, note, summary)
         except Exception as error:
           self._set(state="send_failed", message=str(error)[:400])  # the zip is still there to download
           return
-        self._set(state="sent", message=f"Sent to {RECIPIENT}. {warning or 'Thanks!'}")
+        self._set(state="sent", message=f"Report sent. {warning or 'Thanks!'}")
       else:
         self._set(state="ready", message="Ready to download", name=name, bytes=len(data))
     except Exception as error:

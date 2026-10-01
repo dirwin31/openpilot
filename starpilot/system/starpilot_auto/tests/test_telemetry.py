@@ -59,6 +59,34 @@ def test_session_record_holds_no_free_text(tmp_path):
   assert "AA:BB" not in text and "Danny" not in text
 
 
+def test_session_record_says_where_a_session_got_to(tmp_path):
+  events = [(0, "session_start", {"receiver": "Danny's Civic"}), (1, "stage", {"state": "rfcomm"}), (2, "hfp_connected", {}),
+            (2, "rfcomm_channel", {"channel": 8}), (4, "stage", {"state": "joining_wifi"}), (4, "stage", {"state": "rfcomm"}),
+            (9, "stage", {"state": "authenticating"}),
+            (10, "tls_failed", {"reason": "CERTIFICATE_VERIFY_FAILED", "error": "AA:BB:CC:DD:EE:FF bad cert for Danny"}),
+            (11, "attempt_failed", {"stage": "authenticating", "error": "x", "kind": "SSLError"})]
+  record = telemetry.session_record(write_log(tmp_path, 1, events))
+  assert record["stages"] == [["rfcomm", 1.0], ["joining_wifi", 4.0], ["authenticating", 9.0]]
+  assert record["facts"] == {"hands_free": True, "rfcomm_channel": 8, "tls_failed_reason": "CERTIFICATE_VERIFY_FAILED", "focus_lost": 0}
+  assert "AA:BB" not in json.dumps(record) and "Danny" not in json.dumps(record)
+
+
+def test_reconnect_errors_after_the_car_ends_the_projection_are_not_drops(tmp_path):
+  events = STREAMING[:-1] + [
+    (30, "session_ended", {"reason": "Head unit ended projection (reason 1)"}),
+    (60, "attempt_failed", {"stage": "connecting_bluetooth", "error": "connecting to car: TimeoutError", "kind": "TimeoutError"}),
+    (73, "attempt_failed", {"stage": "rfcomm", "error": "Host is down", "kind": "OSError"}),
+  ]
+  record = telemetry.session_record(write_log(tmp_path, 1, events))
+  assert record["outcome"] == "streamed" and record["drops"] == 0 and record["failures"] == 0 and record["error_kind"] == ""
+  assert record["facts"]["ended_by_car"] is True
+
+  stalled = STREAMING[:-1] + [(20, "attempt_failed", {"stage": "streaming", "error": "stall", "kind": "TimeoutError"}),
+                              (30, "session_ended", {"reason": "Head unit ended projection (reason 1)"})]
+  record = telemetry.session_record(write_log(tmp_path, 2, stalled))
+  assert record["outcome"] == "dropped" and record["drops"] == 1  # a stall before the car left still counts
+
+
 def report(tmp_path, enabled, state=None, now=None):
   return telemetry.build_report(enabled, state or {}, SUMMARY, "wireless", tmp_path, "C3X", now=now)
 
@@ -119,3 +147,80 @@ def test_state_advances_only_after_the_server_accepts(tmp_path):
 
 def test_no_url_means_no_request(tmp_path):
   assert telemetry.send_report(True, SUMMARY, "wireless", "C3X", url="", state_path=tmp_path / "s.json", post=lambda *a, **k: 1 / 0) is False
+
+
+
+def failure(outcome="failed", stage="rfcomm", error="TimeoutError"):
+  return {"outcome": outcome, "failed_stage": stage, "furthest_stage": stage, "error_kind": error}
+
+
+def recorder(calls):
+  def builder(note, drives):
+    calls.append(("build", drives, note))
+    return b"zip"
+
+  def sender(data, name, note, summary, url=None):
+    calls.append(("send", data, note, url))
+  return builder, sender
+
+
+def test_each_new_kind_of_failure_is_sent_once_a_day_without_drives(tmp_path):
+  calls = []
+  builder, sender = recorder(calls)
+  state = tmp_path / "diag.json"
+  send = lambda sessions, now: telemetry.send_failure_diagnostics({"sessions": sessions}, SUMMARY, state, now=now, builder=builder, sender=sender)
+
+  assert send([failure()], 1000)
+  assert calls[0][1] == 0 and "failed at rfcomm (TimeoutError)" in calls[0][2]
+  assert calls[1][3] and calls[1][3].startswith("https://discord.com/api/webhooks/")
+  assert not send([failure(), failure()], 2000)  # the same failure again: already reported today
+  assert send([failure(stage="authenticating", error="SSLError")], 3000)  # a different failure is new
+  assert "failed at authenticating (SSLError)" in calls[-1][2]
+  assert send([failure()], 1000 + 86401)  # a day later the first kind is new again
+  assert len([c for c in calls if c[0] == "send"]) == 3
+
+
+def test_several_new_failures_share_one_report(tmp_path):
+  calls = []
+  builder, sender = recorder(calls)
+  assert telemetry.send_failure_diagnostics({"sessions": [failure(), failure("dropped", "streaming", "TimeoutError")]}, SUMMARY,
+                                            tmp_path / "diag.json", now=10, builder=builder, sender=sender)
+  sends = [c for c in calls if c[0] == "send"]
+  assert len(sends) == 1 and "new failures:" in sends[0][2]
+  assert "dropped at streaming (TimeoutError)" in sends[0][2] and "failed at rfcomm (TimeoutError)" in sends[0][2]
+
+
+def test_reports_are_capped_per_day(tmp_path):
+  calls = []
+  builder, sender = recorder(calls)
+  state = tmp_path / "diag.json"
+  sent = [telemetry.send_failure_diagnostics({"sessions": [failure(error=f"Error{n}")]}, SUMMARY, state, now=100 + n,
+                                             builder=builder, sender=sender) for n in range(8)]
+  assert sent == [True] * telemetry.DIAGNOSTICS_MAX_PER_WINDOW + [False] * (8 - telemetry.DIAGNOSTICS_MAX_PER_WINDOW)
+
+
+def test_failure_diagnostics_skip_healthy_sessions_and_failed_uploads(tmp_path):
+  state = tmp_path / "diag.json"
+  streamed = {"sessions": [{"outcome": "streamed", "failed_stage": "", "furthest_stage": "streaming", "error_kind": ""}]}
+  assert not telemetry.send_failure_diagnostics(streamed, SUMMARY, state, builder=lambda **_: b"", sender=lambda *_, **__: None)
+
+  def broken(*_, **__):
+    raise RuntimeError("discord down")
+
+  with pytest.raises(RuntimeError):
+    telemetry.send_failure_diagnostics({"sessions": [failure()]}, SUMMARY, state, now=5, builder=lambda **_: b"zip", sender=broken)
+  assert not state.exists()  # a failed upload does not use up the failure or the daily allowance
+
+
+def test_send_report_hands_the_payload_to_the_callback(tmp_path):
+  log_dir = tmp_path / "logs"
+  log_dir.mkdir()
+  write_log(log_dir, 1, [(0, "session_start", {"receiver": "usb"}), (1, "attempt_failed", {"stage": "usb_accessory", "error": "x", "kind": "BootstrapTimeout"})])
+
+  class Response:
+    status_code = 204
+
+  seen = []
+  assert telemetry.send_report(True, SUMMARY, "wired", "C3X", url="https://example.invalid", post=lambda *a, **k: Response(),
+                               state_path=tmp_path / "state.json", log_dir=log_dir, sent=seen.append)
+  assert telemetry.failed_sessions(seen[0])[0]["failed_stage"] == "usb_accessory"

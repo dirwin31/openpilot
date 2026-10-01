@@ -21,6 +21,10 @@ SCHEMA = 1
 TELEMETRY_URL = "https://telemetry.didesigns.fyi/v1/starpilot-auto/report"  # https endpoint that receives the report; "" = not sent
 URL_OVERRIDE_PATH = identity_store.DATA_DIR / "telemetry_url"
 STATE_PATH = identity_store.DATA_DIR / "telemetry.json"
+DIAGNOSTICS_STATE_PATH = identity_store.DATA_DIR / "failure_diagnostics.json"
+DIAGNOSTICS_KEY = "StarpilotAutoShareDiagnostics"  # on by default; the user turns it off in Settings
+DIAGNOSTICS_WINDOW_S = 24 * 3600  # the same kind of failure is reported once per window, however often it repeats
+DIAGNOSTICS_MAX_PER_WINDOW = 5    # and a device sends at most this many reports per window
 MAX_SESSIONS = 20
 LOG_SETTLE_S = 120  # a log written this recently may still be a live session
 TIMEOUT_S = 10
@@ -50,6 +54,51 @@ def _session_number(path: Path) -> int:
   return int(match[1]) if match else 0
 
 
+CAR_ENDED = "Head unit ended projection"  # the car closed the projection itself, as it does when it is switched off
+SAFE_TOKEN = re.compile(r"[A-Za-z0-9_.-]{1,40}")  # an enum-like word; anything with spaces, colons or quotes is dropped
+VIDEO_MODE = re.compile(r"(\d+)x(\d+) @ (\d+) fps")
+
+
+def _token(value) -> str | None:
+  return value if isinstance(value, str) and SAFE_TOKEN.fullmatch(value) else None
+
+
+def _count(value) -> int | None:
+  return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 100_000 else None
+
+
+def stage_timings(events: list[dict], started: str) -> list[list]:
+  """[stage, seconds since the session started] for the first time each connection stage was entered."""
+  from openpilot.starpilot.system.starpilot_auto.compat_report import STAGE_ORDER
+  seen: dict[str, float | None] = {}
+  for event in events:
+    state = event.get("state")
+    if event["event"] == "stage" and state in STAGE_ORDER and state not in seen:
+      seen[state] = _seconds(started, event.get("t", ""))
+  return [[stage, seconds] for stage, seconds in seen.items()]
+
+
+def session_facts(report: dict) -> dict:
+  """What the session established before it ended, as booleans, counters and enum-like words: where a failure sat, without a log."""
+  bluetooth, wifi, tls, usb = report["bluetooth"], report["wifi"], report["tls"], report["usb"]
+  mode = VIDEO_MODE.search(str(report["video"].get("chosen", "")))
+  facts = {
+    "hands_free": bluetooth.get("hands_free"),
+    "rfcomm_channel": _count(bluetooth.get("rfcomm_channel")),
+    "wifi_joined": wifi.get("joined"),
+    "wifi_security": _token(wifi.get("security")),
+    "tls_established": "version" in tls or None,
+    "tls_version": _token(tls.get("version")),
+    "tls_failed_reason": _token(tls.get("failed")),
+    "auth_rejected_status": _count(tls.get("rejected_status")),
+    "usb_started_as": _token(usb.get("started_as")),
+    "usb_no_handshake_s": _count(int(usb["no_handshake_after_s"])) if isinstance(usb.get("no_handshake_after_s"), (int, float)) else None,
+    "video_mode": f"{mode[1]}x{mode[2]}@{mode[3]}" if mode else None,
+    "focus_lost": _count(report["focus"]["lost"]),
+  }
+  return {key: value for key, value in facts.items() if value is not None and (value is not False or key in ("hands_free", "wifi_joined"))}
+
+
 def session_record(path: Path) -> dict:
   """One session log reduced to enums and counters."""
   from openpilot.starpilot.system.starpilot_auto import compat_report
@@ -57,7 +106,10 @@ def session_record(path: Path) -> dict:
   report = compat_report.summarize(events)
   started = events[0].get("t", "") if events else ""
   first_frame = next((event["t"] for event in events if event["event"] == "video_acknowledged"), "")
-  failures = [event for event in events if event["event"] == "attempt_failed"]
+  # Once the car ends the projection (it was switched off), the reconnect attempts that follow are not drops.
+  car_ended = next((index for index, event in enumerate(events) if first_frame and event["event"] == "session_ended"
+                    and str(event.get("reason", "")).startswith(CAR_ENDED) and event.get("t", "") >= first_frame), None)
+  failures = [event for index, event in enumerate(events) if event["event"] == "attempt_failed" and (car_ended is None or index < car_ended)]
   drops = [event for event in failures if first_frame and event.get("t", "") >= first_frame]
 
   if first_frame:
@@ -82,9 +134,13 @@ def session_record(path: Path) -> dict:
     "drops": len(drops),
     "time_to_first_frame_s": _seconds(started, first_frame) if first_frame else None,
     "streamed_s": _seconds(first_frame, events[-1].get("t", "")) if first_frame else None,
+    "stages": stage_timings(events, started),
+    "facts": session_facts(report),
     "head_unit": {key: car[key] for key in ("head_unit_make", "head_unit_model", "head_unit_software_version",
                                             "car_make", "car_model", "car_year") if car.get(key)},
   }
+  if car_ended is not None:
+    record["facts"]["ended_by_car"] = True
   return record
 
 
@@ -151,8 +207,8 @@ def build_report(enabled: bool, state: dict, summary: dict, connection: str, log
 
 
 def send_report(enabled: bool, summary: dict, connection: str, device_generation: str, url: str | None = None, post=None,
-                state_path: Path = STATE_PATH, log_dir: Path | None = None) -> bool:
-  """Post the report if there is one; remember what was sent only after the server accepts it."""
+                state_path: Path = STATE_PATH, log_dir: Path | None = None, sent=None) -> bool:
+  """Post the report if there is one; remember what was sent only after the server accepts it. ``sent`` gets the payload."""
   url = telemetry_url() if url is None else url
   if not url:
     return False
@@ -168,6 +224,50 @@ def send_report(enabled: bool, summary: dict, connection: str, device_generation
     raise RuntimeError(f"telemetry endpoint answered HTTP {response.status_code}")
   last_seq = max([int(state.get("last_seq", 0)), *(session["seq"] for session in payload["sessions"])])
   _save_state(state_path, {"last_enabled": enabled, "last_seq": last_seq})
+  if sent is not None:
+    sent(payload)
+  return True
+
+
+def failure_signature(session: dict) -> str:
+  """What kind of failure a session had: its outcome, where it stopped and the error class."""
+  return f"{session['outcome']}:{session['failed_stage'] or session['furthest_stage'] or 'start'}:{session['error_kind'] or 'none'}"
+
+
+def failed_sessions(payload: dict) -> list[dict]:
+  """The failed or dropped sessions in a report, newest first."""
+  return [s for s in reversed(payload["sessions"]) if s["outcome"] in ("failed", "dropped")]
+
+
+def send_failure_diagnostics(payload: dict, summary: dict, state_path: Path = DIAGNOSTICS_STATE_PATH, now: float | None = None,
+                             builder=None, sender=None) -> bool:
+  """Send the developer the diagnostics report without drives when a report holds a kind of failure not sent in the last day.
+
+  Several new kinds in one report share one upload. A kind already sent within the window is skipped, and a device sends at
+  most DIAGNOSTICS_MAX_PER_WINDOW reports per window, so a connection stuck in a retry loop cannot flood the channel."""
+  now = time.time() if now is None else now
+  state = _load_state(state_path)
+  sent = {key: float(at) for key, at in (state.get("sent") or {}).items()
+          if isinstance(at, (int, float)) and 0 <= now - at < DIAGNOSTICS_WINDOW_S}
+  uploads = [float(at) for at in state.get("uploads") or [] if isinstance(at, (int, float)) and 0 <= now - at < DIAGNOSTICS_WINDOW_S]
+  if len(uploads) >= DIAGNOSTICS_MAX_PER_WINDOW:
+    return False
+  new: dict[str, dict] = {}
+  for session in failed_sessions(payload):
+    signature = failure_signature(session)
+    if signature not in sent and signature not in new:
+      new[signature] = session
+  if not new:
+    return False
+
+  if builder is None or sender is None:
+    from openpilot.starpilot.system.diagnostics import bundle
+    builder, sender = builder or bundle.build, sender or bundle.send
+  from openpilot.starpilot.system.diagnostics.bundle import auto_webhook_url, bundle_name
+  kinds = [f"{s['outcome']} at {s['failed_stage'] or s['furthest_stage'] or 'start'} ({s['error_kind'] or 'no error'})" for s in new.values()]
+  note = f"Automatic report, new failure{'s' if len(kinds) > 1 else ''}: {'; '.join(kinds)}. No drives included."
+  sender(builder(note=note, drives=0), bundle_name(summary), note, summary, url=auto_webhook_url())
+  _save_state(state_path, {"sent": {**sent, **dict.fromkeys(new, now)}, "uploads": [*uploads, now]})
   return True
 
 
@@ -180,7 +280,17 @@ def send_auto_telemetry() -> None:
     from openpilot.starpilot.system.diagnostics.bundle import device_summary
     from openpilot.starpilot.system.starpilot_stats import get_device_generation
 
-    send_report(Params().get_bool(identity_store.ENABLED_KEY), device_summary(), identity_store.load_config()["connection"],
-                get_device_generation(HARDWARE.get_device_type()))
+    params = Params()
+    summary = device_summary()
+
+    def share_failure(payload):
+      if params.get_bool(DIAGNOSTICS_KEY):
+        try:
+          send_failure_diagnostics(payload, summary)
+        except Exception as error:
+          print(f"Failed to send Starpilot Auto failure diagnostics: {error}")
+
+    send_report(params.get_bool(identity_store.ENABLED_KEY), summary, identity_store.load_config()["connection"],
+                get_device_generation(HARDWARE.get_device_type()), sent=share_failure)
   except Exception as error:
     print(f"Failed to send Starpilot Auto telemetry: {error}")
