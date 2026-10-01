@@ -11,6 +11,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AlwaysAllowUploads", {PERSISTENT, BOOL, "0", std::nullopt, 0, SETTINGS_SIMPLE}},
     {"AlwaysOnDM", {PERSISTENT, BOOL}},
     {"StarpilotAutoEnabled", {PERSISTENT, BOOL, "0", std::nullopt, 0, SETTINGS_SIMPLE}},
+    {"StarpilotAutoShareDiagnostics", {PERSISTENT, BOOL, "1", std::nullopt, 0, SETTINGS_SIMPLE}},
     {"ApiCache_Device", {PERSISTENT, STRING}},
     {"AssistNowToken", {PERSISTENT, STRING}},
     {"AthenadPid", {PERSISTENT, INT}},

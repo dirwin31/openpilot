@@ -15,6 +15,7 @@ import pyray as rl
 from openpilot.selfdrive.ui.mici.layouts.settings import starpilot_auto_state as state
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigMultiToggle, BigToggle, GreyBigButton
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationDialog, BigDialog, BigMultiOptionDialog
+from openpilot.common.params import Params
 from openpilot.starpilot.system.starpilot_auto.sdp import STARPILOT_AUTO_WIRELESS_UUID
 from openpilot.starpilot.system.starpilot_auto.connection_help import recovery_hint, setup_instructions
 from openpilot.system.ui.lib.application import gui_app
@@ -64,6 +65,8 @@ class StarpilotAutoLayoutMici(NavScroller):
     # Short titles: a multi-toggle's title shares its width with the pills.
     self._connection_toggle = BigMultiToggle("Link Type", list(state.CONNECTION_OPTIONS), select_callback=self._connection_tapped)
     self._view_toggle = BigMultiToggle("Display", list(state.VIEW_OPTIONS), select_callback=self._view_tapped)
+    self._params = Params()
+    self._share_toggle = BigToggle("Help Other\nTesters", "On", toggle_callback=self._share_tapped)
     self._pair_btn = BigButton("Pair New Car", "Pair while parked")
     self._pair_btn.set_click_callback(self._pair)
     self._setup_btn = BigButton("Setup Help", "Tap to read")
@@ -71,7 +74,7 @@ class StarpilotAutoLayoutMici(NavScroller):
     self._error_btn = BigButton("Last Error", "Tap to read")
     self._error_btn.set_click_callback(self._show_error)
     self._scroller.add_widgets([self._connect_btn, self._car_btn, self._auto_toggle, self._connection_toggle,
-                                self._view_toggle, self._pair_btn, self._setup_btn, self._error_btn])
+                                self._view_toggle, self._pair_btn, self._setup_btn, self._error_btn, self._share_toggle])
     self._refresh()
 
   def show_event(self):
@@ -120,6 +123,9 @@ class StarpilotAutoLayoutMici(NavScroller):
     self._connection_toggle.set_enabled(idle_ok)
     _set_value(self._view_toggle, self._shown("view", state.view_value(status)))
     self._view_toggle.set_enabled(bool(status) and not busy)
+    share = self._params.get_bool("StarpilotAutoShareDiagnostics")
+    self._share_toggle.set_checked(share)
+    _set_value(self._share_toggle, "On" if share else "Off")
     self._pair_btn.set_enabled(not busy)
     items = [self._connect_btn]
     if state.show_car(status):
@@ -130,6 +136,7 @@ class StarpilotAutoLayoutMici(NavScroller):
     items.append(self._setup_btn)
     if state.show_error(status):
       items.append(self._error_btn)
+    items.append(self._share_toggle)  # last, so it is there to find but not in the way
     if self._scroller.items != items:
       self._scroller.items[:] = items
 
@@ -155,6 +162,9 @@ class StarpilotAutoLayoutMici(NavScroller):
     manager = self._manager()
     if manager is not None:
       self._confirm(state.auto_connect_title(enabled), "auto", enabled, lambda: manager.set_auto_connect(enabled))
+
+  def _share_tapped(self, enabled: bool) -> None:
+    self._params.put_bool("StarpilotAutoShareDiagnostics", enabled)
 
   def _connection_tapped(self, connection: str) -> None:
     manager = self._manager()

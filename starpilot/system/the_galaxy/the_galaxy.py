@@ -191,6 +191,7 @@ from openpilot.starpilot.system.starpilot_auto import apk_identity
 from openpilot.starpilot.system.starpilot_auto import car_screen as starpilot_auto_car_screen_module
 from openpilot.starpilot.system.starpilot_auto import compat_report as starpilot_auto_compat_report
 from openpilot.starpilot.system.starpilot_auto import connection_help as starpilot_auto_connection_help
+from openpilot.starpilot.system.starpilot_auto import identity as starpilot_auto_identity
 from openpilot.starpilot.system.starpilot_auto.protocol import StarpilotAutoClient
 from openpilot.starpilot.system.diagnostics import bundle as diagnostics_bundle
 from openpilot.starpilot.system.bluetooth import BluetoothClient
@@ -224,6 +225,9 @@ VASM_CONFIGURATION_KEYS = {"VASMEnabled", "VASMConfidenceThreshold", "VASMSmooth
 PIP_PREVIEW_CONFIGURATION_KEYS = {"PIPPreviewEnabled", "PIPPreviewMask", "PIPPreviewShowOnBlinker", "PIPPreviewShowOnBSM", "PIPPreviewInvert"}
 MODEL_SMOOTHING_KEYS = {"LatSmoothSeconds", "LongSmoothSeconds"}
 GALAXY_DEVELOPER_ONLY_KEYS = {"TurnSteeringLimitMuteSpeed"}
+# The existing upload settings that stop uploads while driving; uploads resume once parked.
+# DeviceManagement gates NoUploads, and AlwaysAllowUploads overrides both.
+STARPILOT_AUTO_UPLOAD_SETTINGS = starpilot_auto_identity.UPLOAD_SETTINGS
 PULSE_GLIDE_BUTTON_KEYS = {
   "CancelButtonControl", "DistanceButtonControl",
   "LongCancelButtonControl", "LongDistanceButtonControl",
@@ -5741,7 +5745,7 @@ def setup(app):
     return send_file(io.BytesIO(starpilot_auto_compat_report.bundle()), as_attachment=True, mimetype="application/zip",
                      download_name=f"starpilot-auto-{stamp}.zip")
 
-  # "Send to Starpilot Auto Guy": one zip of Starpilot Auto/pairing logs, Bluetooth pairing prompts and recent drive
+  # "Send report": one zip of Starpilot Auto/pairing logs, Bluetooth pairing prompts and recent drive
   # reports, sent to the developer's Discord or downloaded. Built off the request thread; poll status.
   @app.route("/api/diagnostics/status", methods=["GET"])
   def diagnostics_status():
@@ -6805,6 +6809,21 @@ def setup(app):
         return jsonify({
           "message": f"Parameter '{key}' updated successfully. The driving stack will restart shortly.",
           "updated": {key: enabled},
+        }), 200
+
+      if key == "StarpilotAutoEnabled":
+        enabled = str_val.strip() in ("1", "true", "True")
+        updated = {"StarpilotAutoEnabled": enabled}
+        if enabled:
+          # Uploading while projecting competes with Starpilot Auto for CPU and bandwidth; keep uploads to while parked.
+          updated.update(STARPILOT_AUTO_UPLOAD_SETTINGS)
+          for upload_key, upload_value in STARPILOT_AUTO_UPLOAD_SETTINGS.items():
+            params.put_bool(upload_key, upload_value)
+        params.put_bool("StarpilotAutoEnabled", enabled)
+        update_starpilot_toggles()
+        return jsonify({
+          "message": "Starpilot Auto enabled. Uploads now wait until the car is parked." if enabled else "Starpilot Auto disabled.",
+          "updated": updated,
         }), 200
 
       if key == "ForceOffroad":

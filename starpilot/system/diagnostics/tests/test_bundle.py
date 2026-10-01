@@ -115,15 +115,16 @@ def test_send_posts_zip_and_note_to_discord():
   url, kwargs = calls[0]
   payload = json.loads(kwargs["data"]["payload_json"])
   assert url == "https://example.invalid/hook?wait=true" and kwargs["files"]["files[0]"] == ("diag.zip", b"zip-bytes", "application/zip")
-  assert payload["thread_name"] == "HONDA_CIVIC_2022 6b86"
-  assert "Starpilot Auto dropped at 2:34" in payload["content"] and "b0c4a280b2f96b86" in payload["content"]
+  assert payload["thread_name"] == "HONDA_CIVIC_2022 700dba10"
+  assert "Starpilot Auto dropped at 2:34" in payload["content"] and "**Diagnostics from 700dba10**" in payload["content"]
+  assert "b0c4a280b2f96b86" not in payload["content"]
   assert "Head unit: Honda Display Audio" in payload["content"] and "Car: HONDA_CIVIC_2022" in payload["content"]
   assert payload["allowed_mentions"] == {"parse": []}, "a tester's note must never ping anyone"
 
 
 def test_thread_title_falls_back_without_fingerprint():
-  assert bundle.thread_title({"dongle_id": "b0c4a280b2f96b86"}) == "Device 6b86"
-  assert bundle.thread_title({}) == "Device vice"
+  assert bundle.thread_title({"dongle_id": "b0c4a280b2f96b86"}) == "Device 700dba10"
+  assert bundle.thread_title({}) == f"Device {bundle.device_tag({})}"
 
 
 def test_head_unit_name_uses_newest_identified_session(monkeypatch):
@@ -143,7 +144,7 @@ def test_send_persists_and_reuses_thread_id(tmp_path):
               post=lambda url, **kwargs: calls.append((url, kwargs)) or Response(200, {"channel_id": "999888777"}),
               thread_path=thread_path)
   assert calls[0][0] == "https://example.invalid/hook?wait=true"
-  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == "HONDA_CIVIC_2022 6b86"
+  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == "HONDA_CIVIC_2022 700dba10"
   assert json.loads(thread_path.read_text())["thread_id"] == "999888777"
 
   # Second send: reuses thread_id
@@ -172,7 +173,7 @@ def test_send_retries_if_thread_deleted(tmp_path, status):
   assert len(calls) == 2
   assert "thread_id=999888777" in calls[0][0]
   assert calls[1][0] == "https://example.invalid/hook?wait=true"
-  assert json.loads(calls[1][1]["data"]["payload_json"])["thread_name"] == "HONDA_CIVIC_2022 6b86"
+  assert json.loads(calls[1][1]["data"]["payload_json"])["thread_name"] == "HONDA_CIVIC_2022 700dba10"
   assert json.loads(thread_path.read_text())["thread_id"] == "123456789"
 
 
@@ -200,7 +201,7 @@ def test_send_checks_cache_identity_even_with_explicit_cache_path(tmp_path, chan
   bundle.send(b"zip", "diag.zip", "", summary, url=url, thread_path=thread_path,
               post=lambda url, **kwargs: calls.append((url, kwargs)) or Response(200, {"channel_id": "123456789"}))
   assert "thread_id=" not in calls[0][0]
-  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == f"HONDA_CIVIC_2022 {summary['dongle_id'][-4:]}"
+  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == f"HONDA_CIVIC_2022 {bundle.device_tag(summary)}"
 
 
 def test_default_cache_keeps_separate_threads_for_each_dongle_and_webhook():
@@ -231,7 +232,7 @@ def test_send_does_not_reuse_unscoped_legacy_caches():
   bundle.send(b"zip", "diag.zip", "", SUMMARY, url="https://example.invalid/hook",
               post=lambda url, **kwargs: calls.append((url, kwargs)) or Response(200, {"channel_id": "333"}))
   assert calls[0][0] == "https://example.invalid/hook?wait=true"
-  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == "HONDA_CIVIC_2022 6b86"
+  assert json.loads(calls[0][1]["data"]["payload_json"])["thread_name"] == "HONDA_CIVIC_2022 700dba10"
 
 
 @pytest.mark.parametrize("content", ["not-json", "999888777", "[]", '{"thread_id": "123"}'])
@@ -346,7 +347,7 @@ def test_job_download_flow():
   assert job.result() is None
   job.start("download", "note", 1)
   status = _wait(job)
-  assert status["state"] == "ready" and status["bytes"] == 3 and status["recipient"] == "Starpilot Auto Guy"
+  assert status["state"] == "ready" and status["bytes"] == 3
   name, data = job.result()
   assert data == b"zip" and name.startswith("starpilot-diagnostics-b0c4a280b2f96b86-")
 
@@ -358,12 +359,12 @@ def test_job_send_success_and_failure_keeps_the_zip():
   assert _wait(job)["state"] == "sent" and sent[0][0] == b"zip"
 
   def offline(*_):
-    raise RuntimeError("Could not reach Starpilot Auto Guy")
+    raise RuntimeError("Could not send the report")
 
   job = bundle.DiagnosticsJob(builder=lambda **_: b"zip", sender=offline, summary=lambda: SUMMARY)
   job.start("send")
   status = _wait(job)
-  assert status["state"] == "send_failed" and "Could not reach" in status["message"]
+  assert status["state"] == "send_failed" and "Could not send the report" in status["message"]
   assert job.result()[1] == b"zip", "a failed send can still be downloaded"
 
 
@@ -372,7 +373,7 @@ def test_job_shows_cache_warning_after_successful_upload():
   job.start("send")
   status = _wait(job)
   assert status["state"] == "sent"
-  assert status["message"] == f"Sent to {bundle.RECIPIENT}. {bundle.THREAD_CACHE_WARNING}"
+  assert status["message"] == f"Report sent. {bundle.THREAD_CACHE_WARNING}"
   assert job.result()[1] == b"zip"
 
 
@@ -395,4 +396,12 @@ def test_builder_failure_is_reported():
   job = bundle.DiagnosticsJob(builder=broken, summary=lambda: SUMMARY)
   job.start("download")
   assert _wait(job) | {"send_available": None} == {"state": "error", "message": "disk full", "action": "download", "name": "",
-                                                   "bytes": 0, "send_available": None, "recipient": "Starpilot Auto Guy"}
+                                                   "bytes": 0, "send_available": None}
+
+
+def test_automatic_reports_use_their_own_webhook(tmp_path):
+  assert bundle.auto_webhook_url(tmp_path / "missing").startswith("https://discord.com/api/webhooks/")
+  assert bundle.auto_webhook_url(tmp_path / "missing") != bundle.webhook_url(tmp_path / "missing")
+  override = tmp_path / "auto"
+  override.write_text("https://example.invalid/auto\n")
+  assert bundle.auto_webhook_url(override) == "https://example.invalid/auto"

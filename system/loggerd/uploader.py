@@ -18,7 +18,6 @@ from openpilot.common.realtime import set_core_affinity
 from openpilot.system.hardware.hw import Paths
 from openpilot.system.loggerd.xattr_cache import getxattr, setxattr
 from openpilot.common.swaglog import cloudlog
-from openpilot.starpilot.system.starpilot_auto.protocol import StarpilotAutoClient
 
 NetworkType = log.DeviceState.NetworkType
 UPLOAD_ATTR_NAME = 'user.upload'
@@ -33,31 +32,6 @@ MAX_UPLOAD_SIZES = {
 allow_sleep = bool(int(os.getenv("UPLOADER_SLEEP", "1")))
 force_wifi = os.getenv("FORCEWIFI") is not None
 fake_upload = os.getenv("FAKEUPLOAD") is not None
-
-# Starpilot Auto session states from joining the car's Wi-Fi until the session ends.
-# The car's Wi-Fi has no internet (the route stays on cellular), and uploading
-# over cellular competes with projection and openpilot for CPU while driving.
-STARPILOT_AUTO_CONNECTED_STATES = {"joining_wifi", "connecting_tcp", "authenticating", "negotiating", "streaming", "suspended", "usb_accessory"}
-UNMETERED_NETWORKS = (NetworkType.wifi, NetworkType.ethernet)
-
-
-class StarpilotAutoMonitor:
-  """Whether an Starpilot Auto session is connected, asked of starpilot_autod at most every ``interval`` seconds."""
-
-  def __init__(self, client: StarpilotAutoClient | None = None, interval: float = 5.0):
-    self.client = client or StarpilotAutoClient(timeout=0.5)
-    self.interval = interval
-    self.checked_at = -float("inf")
-    self.connected = False
-
-  def is_connected(self, now: float) -> bool:
-    if now - self.checked_at >= self.interval:
-      self.checked_at = now
-      try:
-        self.connected = self.client.available and self.client.status().get("state") in STARPILOT_AUTO_CONNECTED_STATES
-      except Exception:
-        self.connected = False
-    return self.connected
 
 
 class FakeRequest:
@@ -276,8 +250,6 @@ def main(exit_event: threading.Event | None = None) -> None:
 
   sm = messaging.SubMaster(['deviceState'])
   uploader = Uploader(dongle_id, Paths.log_root())
-  starpilot_auto = StarpilotAutoMonitor()
-  paused_for_starpilot_auto = False
 
   backoff = 0.1
   while not exit_event.is_set():
@@ -288,15 +260,6 @@ def main(exit_event: threading.Event | None = None) -> None:
     if network_type == NetworkType.none:
       if allow_sleep:
         time.sleep(60 if offroad else 5)
-      continue
-
-    pause = network_type not in UNMETERED_NETWORKS and starpilot_auto.is_connected(time.monotonic())
-    if pause != paused_for_starpilot_auto:
-      cloudlog.event("upload_paused_starpilot_auto" if pause else "upload_resumed_starpilot_auto", network_type=str(network_type))
-      paused_for_starpilot_auto = pause
-    if pause:
-      if allow_sleep:
-        time.sleep(5)
       continue
 
     success = uploader.step(sm['deviceState'].networkType.raw, sm['deviceState'].networkMetered and not always_allow_uploads)

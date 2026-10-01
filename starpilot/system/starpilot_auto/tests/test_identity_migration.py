@@ -99,3 +99,34 @@ def test_env_override_skips_data_migration(tmp_path, monkeypatch):
   (legacy / "extra").write_text("x")
   identity.migrate_legacy(legacy_dir=legacy, params=FakeParams(tmp_path))
   assert (legacy / "extra").exists()
+
+
+class UploadParams:
+  def __init__(self, **values):
+    self.values = values
+
+  def get_bool(self, key):
+    return bool(self.values.get(key, False))
+
+  def put_bool(self, key, value):
+    assert isinstance(value, bool)
+    self.values[key] = value
+
+
+def test_devices_already_using_starpilot_auto_get_the_upload_settings_once(tmp_path):
+  marker = tmp_path / "data" / "upload_settings_applied"
+  params = UploadParams(**{identity.ENABLED_KEY: True, "NoUploads": False, "AlwaysAllowUploads": True})
+  assert identity.apply_upload_settings_once(params, marker)
+  assert {key: params.values[key] for key in identity.UPLOAD_SETTINGS} == identity.UPLOAD_SETTINGS
+  assert marker.exists()
+
+  params.values["NoUploads"] = False  # the tester chooses to allow uploads again
+  assert not identity.apply_upload_settings_once(params, marker)
+  assert params.values["NoUploads"] is False, "a later choice is kept"
+
+
+def test_upload_settings_are_left_alone_when_starpilot_auto_is_off(tmp_path):
+  marker = tmp_path / "upload_settings_applied"
+  params = UploadParams(**{identity.ENABLED_KEY: False, "NoUploads": False})
+  assert not identity.apply_upload_settings_once(params, marker)
+  assert params.values == {identity.ENABLED_KEY: False, "NoUploads": False} and marker.exists()

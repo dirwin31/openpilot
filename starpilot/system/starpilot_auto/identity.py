@@ -21,6 +21,9 @@ CERT_NAME, KEY_NAME, ROOT_NAME = "phone-cert.pem", "phone-key.pem", "root-cert.p
 EXPIRY_WARNING_DAYS = 14
 
 ENABLED_KEY = "StarpilotAutoEnabled"
+# Uploading while projecting competes with Starpilot Auto for CPU and bandwidth, so turning it on keeps uploads to while parked.
+UPLOAD_SETTINGS = {"DeviceManagement": True, "NoUploads": True, "DisableOnroadUploads": True, "AlwaysAllowUploads": False}
+UPLOAD_SETTINGS_MARKER = DATA_DIR / "upload_settings_applied"
 LEGACY_ENABLED_KEY = "AndroidAutoEnabled"
 LEGACY_DATA_DIR = Path("/data/android_auto")
 
@@ -63,6 +66,35 @@ def migrate_enabled_flag(params=None) -> None:
       path.unlink(missing_ok=True)
   except Exception:
     pass
+
+
+def apply_upload_settings_once(params=None, marker: Path | None = None) -> bool:
+  """Give a device that had Starpilot Auto on before the upload settings existed the same settings Galaxy applies when it is
+  turned on. Runs once per device, so a tester who later allows uploads again keeps that choice."""
+  marker = marker or UPLOAD_SETTINGS_MARKER
+  if marker.exists():
+    return False
+  if params is None:
+    try:
+      from openpilot.common.params import Params
+      params = Params()
+    except Exception:
+      return False
+  try:
+    applied = params.get_bool(ENABLED_KEY)
+    if applied:
+      for key, value in UPLOAD_SETTINGS.items():
+        params.put_bool(key, value)
+      try:
+        from openpilot.common.params import Params
+        Params(memory=True).put_bool("StarPilotTogglesUpdated", True)  # what update_starpilot_toggles() does, without its imports
+      except Exception:
+        pass
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("1\n")
+    return applied
+  except Exception:
+    return False
 
 
 def migrate_legacy(data_dir: Path | None = None, legacy_dir: Path | None = None, params=None) -> None:

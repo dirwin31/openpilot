@@ -50,7 +50,7 @@ def test_status_before_anything_is_prepared(monkeypatch):
   response = client.get("/api/diagnostics/status")
   status = response.get_json()
   assert response.status_code == 200 and response.headers["Cache-Control"].startswith("no-store")
-  assert status["state"] == "idle" and status["recipient"] == "Starpilot Auto Guy" and status["drives_available"] == 1 and status["offroad"]
+  assert status["state"] == "idle" and status["drives_available"] == 1 and status["offroad"]
   assert client.get("/api/diagnostics/download").status_code == 404
 
 
@@ -71,10 +71,10 @@ def test_send_flow_and_failed_send_can_still_download(monkeypatch):
   client, calls = _client(monkeypatch)
   assert client.post("/api/diagnostics/start", json={"action": "send", "note": "hi", "drives": 0}).status_code == 202
   status = _settle(client)
-  assert status["state"] == "sent" and "Starpilot Auto Guy" in status["message"] and calls["send"][0][1] == "hi"
+  assert status["state"] == "sent" and "Report sent" in status["message"] and calls["send"][0][1] == "hi"
 
   def offline(*_):
-    raise RuntimeError("Could not reach Starpilot Auto Guy")
+    raise RuntimeError("Could not send the report")
 
   client, _ = _client(monkeypatch, sender=offline)
   client.post("/api/diagnostics/start", json={"action": "send", "drives": 0})
@@ -103,7 +103,7 @@ def test_logs_page_opens_on_the_starpilot_auto_tab():
   api = (JS_ROOT / "api.js").read_text()
   assert logs.index('starpilotAuto: "Starpilot Auto"') < logs.index('troubleshoot: "Troubleshoot"'), "first tab is the default"
   assert "<SendDiagnosticsPanel />" in logs and "<StarpilotAutoDiagnosticsPanel />" in logs
-  assert "Logs.js?v=send-diagnostics-2" in (JS_ROOT / "app.js").read_text()
-  assert "Send to {{ recipient }}" in panel
+  assert "Logs.js?v=send-diagnostics-3" in (JS_ROOT / "app.js").read_text()
+  assert "Send report</button>" in panel
   assert "/api/diagnostics/start" in api and "/api/diagnostics/status" in api
   assert "/api/diagnostics/download" in panel and "fetch(" not in panel and "status.send_available" in panel

@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Any
 
-from openpilot.starpilot.system.starpilot_auto.identity import migrate_legacy
+from openpilot.starpilot.system.starpilot_auto.identity import apply_upload_settings_once, migrate_legacy
 from openpilot.starpilot.system.starpilot_auto.protocol import STARPILOT_AUTO_SOCKET_PATH
 from openpilot.starpilot.system.starpilot_auto.supervisor import Supervisor
 
@@ -117,6 +117,7 @@ def main() -> int:
   parser.add_argument("--synthetic", action="store_true", help="with --once: send a moving test pattern instead of the UI")
   args = parser.parse_args()
   migrate_legacy()
+  apply_upload_settings_once()
   if args.once:
     return run_once(args.duration, args.synthetic)
 

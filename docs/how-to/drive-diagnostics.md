@@ -5,10 +5,10 @@ connection is written to the drive's **rlog**. rlogs survive unplugging the comm
 few seconds of a drive are lost. The swaglog files in `/data/log` don't reliably survive: they are
 uploaded and then deleted.
 
-## Testers: Send to Starpilot Auto Guy
+## Testers: Send report
 
 Testers don't need SSH. On a phone connected to the comma, open The Galaxy, then **Logs & Diagnostics →
-Starpilot Auto**. Describe what happened, choose how many recent drives to include, and tap **Send to Starpilot Auto Guy**. The zip (usually under 1 MB) arrives in Starpilot Auto Guy's Discord channel with the note and the device's
+Starpilot Auto**. Describe what happened, choose how many recent drives to include, and tap **Send report**. The zip (usually under 1 MB) arrives in the developer's Discord channel with the note and the device's
 dongle ID. **Download** saves the same zip to the phone instead, for when there's no internet.
 
 What the zip contains:
