@@ -8,7 +8,7 @@ import os
 import requests
 import time
 
-from cereal import messaging
+from cereal import log, messaging
 from openpilot.common.api import Api, api_get
 from openpilot.common.gps import get_gps_location_service
 from openpilot.common.params import Params
@@ -45,6 +45,9 @@ ASSET_CHECK_RATE = (1 / DT_MDL)
 PLANNER_CORE = 5
 DASHBOARD_ANALYSIS_REFRESH_RATE = 60
 DRIVE_STATS_SYNC_RATE = 30
+# Starpilot Auto sessions are retried this often, onroad too, while any are unsent: a comma that loses power with the car
+# never gets a drive-end send for its last session, and one without internet earlier sends once it has some.
+AUTO_TELEMETRY_RETRY_SECONDS = 5 * 60
 OFFROAD_GPS_MEMORY_REFRESH_SECONDS = 1.0
 OFFROAD_GPS_PERSIST_REFRESH_SECONDS = 30.0
 TOGGLE_BROADCAST_INTERVAL_FRAMES = int(1 / DT_MDL)
@@ -212,7 +215,7 @@ def transition_offroad(starpilot_planner, model_manager, theme_manager, thread_m
 
   if time_validated:
     thread_manager.run_with_lock(send_stats)
-    thread_manager.run_with_lock(send_auto_telemetry, report=False)
+    thread_manager.run_with_lock(send_auto_telemetry, (starpilot_toggles,), report=False)
 
 def transition_onroad(error_log):
   get_dashboard_utilities().stop_dashboard_background_analysis()
@@ -323,6 +326,7 @@ def starpilot_thread():
   drive_stats_session = requests.Session()
   next_dashboard_analysis_refresh = 0.0
   next_drive_stats_sync = 0.0
+  next_auto_telemetry_retry = 0.0
   periodic_update_phase = get_update_check_phase_seconds(params_raw)
   next_periodic_update_check = get_next_periodic_update_check(time.monotonic(), periodic_update_phase)
   last_offroad_gps_memory_write = 0.0
@@ -406,6 +410,11 @@ def starpilot_thread():
     elif started:
       next_drive_stats_sync = 0.0
 
+    has_internet = sm["deviceState"].networkType != log.DeviceState.NetworkType.none
+    if time_validated and has_internet and monotonic_now >= next_auto_telemetry_retry:
+      thread_manager.run_with_lock(send_auto_telemetry, (starpilot_toggles, True, not started), report=False)
+      next_auto_telemetry_retry = monotonic_now + AUTO_TELEMETRY_RETRY_SECONDS
+
     if not started and time_validated:
       if monotonic_now >= next_dashboard_analysis_refresh:
         thread_manager.run_with_lock(refresh_dashboard_analysis, report=False)
@@ -476,7 +485,7 @@ def starpilot_thread():
 
       if not started:
         thread_manager.run_with_lock(send_stats)
-        thread_manager.run_with_lock(send_auto_telemetry, report=False)
+        thread_manager.run_with_lock(send_auto_telemetry, (starpilot_toggles,), report=False)
         thread_manager.run_with_lock(update_checks, (now, model_manager, theme_manager, thread_manager, params, params_memory, starpilot_toggles, True))
       else:
         run_update_checks = True
