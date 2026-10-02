@@ -299,6 +299,23 @@ class Supervisor:
     except Exception as error:
       self.log("trust_failed", error=str(error))
 
+  def forget_receiver(self, address: str) -> bool:
+    """The car was unpaired from the comma: drop it as the chosen car so it leaves the car pickers and
+    auto-connect stops paging it. Called by the Bluetooth service when the pairing is deleted."""
+    from openpilot.starpilot.system.starpilot_auto.bt_sockets import normalize_address
+    address = normalize_address(address)
+    if self.config["receiver_address"].upper() != address:
+      return False
+    if self._session_alive():
+      self.stop()
+    with self._lock:
+      cache = dict(self.config["rfcomm_cache"])
+      cache.pop(address, None)
+      self.config.update(receiver_address="", receiver_name="", rfcomm_cache=cache)
+      identity_store.save_config(self.config)
+    self.log("car_forgotten", address=address)
+    return True
+
   def set_view(self, view: str) -> None:
     """Choose what the car shows; applies from the next projection session."""
     if view not in ("car", "mirror"):
