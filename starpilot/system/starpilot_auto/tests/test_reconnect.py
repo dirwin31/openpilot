@@ -274,6 +274,8 @@ def test_forget_receiver_clears_only_the_chosen_car(sup):
   sup.config.update(receiver_address=CAR_ADDRESS, receiver_name="Honda CIVIC", rfcomm_cache={CAR_ADDRESS: 6, "AA:BB:CC:DD:EE:01": 3})
   assert not sup.forget_receiver("AA:BB:CC:DD:EE:01")  # some other device: the chosen car stays
   assert sup.config["receiver_address"] == CAR_ADDRESS
+  assert "AA:BB:CC:DD:EE:01" not in sup.config["rfcomm_cache"]  # but its saved channel goes
+  sup.config["rfcomm_cache"]["AA:BB:CC:DD:EE:01"] = 3
   assert sup.forget_receiver(CAR_ADDRESS.lower())
   assert sup.config["receiver_address"] == "" and sup.config["receiver_name"] == ""
   assert sup.config["rfcomm_cache"] == {"AA:BB:CC:DD:EE:01": 3}

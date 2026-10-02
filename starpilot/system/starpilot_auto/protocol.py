@@ -81,10 +81,12 @@ def forget_car(address: str, client: StarpilotAutoClient | None = None) -> bool:
   from openpilot.starpilot.system.starpilot_auto import identity
   address = address.strip().upper()
   config = identity.load_config()
-  if str(config.get("receiver_address", "")).upper() != address:
-    return False
+  chosen = str(config.get("receiver_address", "")).upper() == address
   cache = dict(config.get("rfcomm_cache") or {})
-  cache.pop(address, None)
-  config.update(receiver_address="", receiver_name="", rfcomm_cache=cache)
+  if cache.pop(address, None) is None and not chosen:
+    return False
+  config["rfcomm_cache"] = cache
+  if chosen:
+    config.update(receiver_address="", receiver_name="")
   identity.save_config(config)
-  return True
+  return chosen

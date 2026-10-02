@@ -129,6 +129,11 @@ export const StarpilotAutoConnectionPanel = {
   },
   template: `
     <div class="gx-car-display gx-starpilot-auto-connection">
+      <div v-if="!wired" class="gx-row">
+        <div class="gx-row__info"><span class="gx-row__label">Pair a New Car</span><span class="gx-row__desc">{{ offroad ? 'Opens Bluetooth and makes the comma ready for the Car.' : 'Park and go offroad to pair a new Car.' }}</span></div>
+        <button type="button" class="gx-btn gx-btn--tonal" :disabled="!offroad || !!busy" @click="pairNewCar">Pair</button>
+      </div>
+
       <div class="gx-row">
         <div class="gx-row__info"><span class="gx-row__label">{{ running ? 'Disconnect' : 'Connect' }}</span><span class="gx-row__desc">{{ statusText }}</span></div>
         <button type="button" class="gx-btn" :class="running ? 'gx-btn--danger' : ''" :disabled="loading || !canConnect || !!busy" @click="toggleConnection">
@@ -166,10 +171,6 @@ export const StarpilotAutoConnectionPanel = {
         </div>
       </div>
 
-      <div v-if="!wired" class="gx-row">
-        <div class="gx-row__info"><span class="gx-row__label">Pair a New Car</span><span class="gx-row__desc">{{ offroad ? 'Opens Bluetooth and makes the comma ready for the Car.' : 'Park and go offroad to pair a new Car.' }}</span></div>
-        <button type="button" class="gx-btn gx-btn--tonal" :disabled="!offroad || !!busy" @click="pairNewCar">Pair</button>
-      </div>
 
       <details class="gx-row gx-row--stack">
         <summary><span class="gx-row__label">Setup Help</span></summary>

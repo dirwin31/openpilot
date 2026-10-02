@@ -304,17 +304,21 @@ class Supervisor:
     auto-connect stops paging it. Called by the Bluetooth service when the pairing is deleted."""
     from openpilot.starpilot.system.starpilot_auto.bt_sockets import normalize_address
     address = normalize_address(address)
-    if self.config["receiver_address"].upper() != address:
-      return False
-    if self._session_alive():
+    chosen = self.config["receiver_address"].upper() == address
+    if chosen and self._session_alive():
       self.stop()
     with self._lock:
       cache = dict(self.config["rfcomm_cache"])
+      if not chosen and cache.pop(address, None) is None:
+        return False  # nothing of this device was kept
       cache.pop(address, None)
-      self.config.update(receiver_address="", receiver_name="", rfcomm_cache=cache)
+      self.config["rfcomm_cache"] = cache
+      if chosen:
+        self.config.update(receiver_address="", receiver_name="")
       identity_store.save_config(self.config)
-    self.log("car_forgotten", address=address)
-    return True
+    if chosen:
+      self.log("car_forgotten", address=address)
+    return chosen
 
   def set_view(self, view: str) -> None:
     """Choose what the car shows; applies from the next projection session."""
