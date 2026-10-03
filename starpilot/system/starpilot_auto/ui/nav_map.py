@@ -40,6 +40,8 @@ from openpilot.starpilot.navigation.destination_store import parse_destination_j
 from openpilot.starpilot.navigation.offline_maps import OfflineMaps
 from openpilot.starpilot.navigation.mapbox_usage import shared_usage
 from openpilot.starpilot.navigation.map_tiles import (
+  FAILURE_KEY,
+  FAILURE_NETWORK,
   LIGHT_STYLE,
   TILE_SIZE,
   TileKey,
@@ -105,9 +107,10 @@ DESIRE_ROUTE = rl.Color(52, 199, 120, 255)
 DESIRE_DRIVER = rl.Color(64, 150, 255, 255)
 DESIRE_HINT = rl.Color(232, 170, 70, 255)
 BADGE_WARN = rl.Color(232, 170, 70, 255)
-OFFLINE_COLLAPSE_SECONDS = 10.0  # the offline badge's words, then just its icon
+OFFLINE_COLLAPSE_SECONDS = 10.0  # the offline badge's words for this long after the map opens, then just its icon
 OFFLINE_BADGE_HEIGHT = 56.0
 OFFLINE_BADGE_GAP = 12.0
+ATHENA_ONLINE_SECONDS = 80.0  # an athena ping this recent means the internet is up (as the sidebar shows)
 THEME_CYCLE = ("auto", "light", "dark")
 THEME_NAMES = {"auto": "Auto", "light": "Light", "dark": "Dark"}
 TOAST_SECONDS = 3.5
@@ -269,10 +272,13 @@ class TileTextures:
       now = time.monotonic()
       if now - self._token_checked > TOKEN_REFRESH_SECONDS:
         self._token_checked = now
+        previous = self._token
         try:
           self._token = str(self._params.get("MapboxPublicKey", encoding="utf-8") or "").strip()
         except Exception:
           self._token = ""
+        if self._token != previous and self.service is not None and self.service.failure == FAILURE_KEY:
+          self.service.network_restored()  # a new key: try it now rather than after the rejection's backoff
       return self._token
 
   def want(self, keys: Sequence[TileKey]) -> None:
@@ -565,6 +571,8 @@ class NavMapView(Widget):
     self.toast_anchor: rl.Rectangle | None = None  # that button: its popup hangs below it
     self._toast: tuple[str, float] | None = None  # (text, hide at)
     self._offline_since: float | None = None
+    self._shown_at = -math.inf  # the offline badge's words only show just after the map opens
+    self._network: str | None = None  # network_kind() at the last update; None before deviceState arrives
     self._tiles: TileTextures | None = None
     self._sm = None
     self._params_memory = Params(memory=True)
@@ -683,7 +691,8 @@ class NavMapView(Widget):
 
   def show_event(self):
     super().show_event()
-    self._offline_since = None  # each showing gets its full offline badge again
+    self._offline_since = None
+    self._shown_at = time.monotonic()  # each opening gets the offline badge's words again
 
   @property
   def theme(self) -> str:
@@ -799,10 +808,7 @@ class NavMapView(Widget):
 
     self._update_acquisition(now)
 
-    if not self._offline_badge_shown():
-      self._offline_since = None
-    elif self._offline_since is None:
-      self._offline_since = now
+    self._update_offline_badge(now)
 
     overlay = self._overlay_content(now)
     if overlay != self._overlay_state:
@@ -1388,19 +1394,47 @@ class NavMapView(Widget):
       return "Waiting for GPS", "The map appears once the car has a location."
     return None
 
-  def _offline_badge_shown(self) -> bool:
-    """Offline with a Mapbox key; without one the missing key is the badge."""
-    return self._tiles is not None and self._tiles.has_token and self._tiles.service.offline
+  @staticmethod
+  def _device_state():
+    sm = ui_state.sm
+    return sm["deviceState"] if sm.valid.get("deviceState", False) else None
+
+  def _actually_offline(self, device_state, network: str | None) -> bool:
+    """No network at all, or a tile couldn't connect and nothing since says the internet is
+    back. Online with every tile already saved, nothing fails, so there's no badge. Without a
+    Mapbox key the missing key is the badge; a rejected key or a Mapbox outage isn't offline."""
+    if self._tiles is None or not self._tiles.has_token:
+      return False
+    if network == "none":
+      return True
+    service = self._tiles.service
+    if service.failure != FAILURE_NETWORK:
+      return False
+    ping = device_state.lastAthenaPingTime / 1e9 if device_state is not None else 0.0
+    return not (ping > service.failure_at and time.monotonic() - ping < ATHENA_ONLINE_SECONDS)
+
+  def _update_offline_badge(self, now: float) -> None:
+    device_state = self._device_state()
+    network = None if device_state is None else network_kind(device_state)
+    if self._network == "none" and network not in (None, "none") and self._tiles is not None:
+      self._tiles.service.network_restored()  # back online: clears the failure and retries now
+    self._network = network
+    if not self._actually_offline(device_state, network):
+      self._offline_since = None
+    elif self._offline_since is None:
+      self._offline_since = now
 
   def _offline_collapsed(self, now: float) -> bool:
-    return self._offline_since is not None and now - self._offline_since >= OFFLINE_COLLAPSE_SECONDS
+    return self._offline_since is not None and now - self._shown_at >= OFFLINE_COLLAPSE_SECONDS
 
   def _status_badges(self) -> tuple[tuple[tuple[str, rl.Color], ...], float | None]:
     """(badges, progress of the last badge's bar or None) for the top-right corner."""
     badges = []
     if self._tiles is not None and not self._tiles.has_token:
       badges.append(("Add a Mapbox key in The Galaxy", BADGE_WARN))
-    elif self.offline_anchor is None and self._offline_badge_shown():
+    elif self._tiles is not None and self._tiles.service.failure == FAILURE_KEY:
+      badges.append(("Check the Mapbox key in The Galaxy", BADGE_WARN))
+    elif self.offline_anchor is None and self._offline_since is not None:
       badges.append(("Offline • cached map", BADGE_WARN))
     progress = None
     if self._gps is not None and not self._gps.fresh and not self._preview_active:
@@ -1464,8 +1498,7 @@ class NavMapView(Widget):
     if self._tiles is None or self._preview_active or not self._navigation_requested or not self._tiles.has_token:
       return None
     status = self._tiles.offline_status()
-    sm = ui_state.sm
-    device_state = sm["deviceState"] if sm.valid.get("deviceState", False) else None
+    device_state = self._device_state()
     return route_download(status.get("route") or {}, network_kind(device_state),
                           bool(status.get("offline")) or self._tiles.service.offline)
 
@@ -1514,8 +1547,7 @@ class NavMapView(Widget):
     y = rect.y + pad
     card_width = min(rect.width - 2 * pad, 760.0)
     status_width = 0.0
-    top_right_offline = self.offline_anchor is None and self._tiles is not None and self._tiles.service.offline
-    if top_right_offline or (self._tiles is not None and self._gps is not None and not self._gps.fresh):
+    if self._status_badges()[0]:
       status_width = 330.0
     card_width = min(card_width, rect.width - 2 * pad - status_width - self.status_inset)
 
