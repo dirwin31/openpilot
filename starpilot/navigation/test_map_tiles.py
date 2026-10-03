@@ -1,6 +1,7 @@
 import os
 import time
 
+import pytest
 import requests
 
 from openpilot.starpilot.navigation.map_tiles import (
@@ -140,6 +141,32 @@ def test_offline_backs_off_instead_of_spinning(tmp_path):
   assert wait_for(lambda: service.offline)
   time.sleep(0.3)
   assert len(session.calls) == 1
+  service.close()
+
+
+@pytest.mark.parametrize("session, failure", [
+  (FakeSession(error=requests.ConnectionError("offline")), "network"),
+  (FakeSession(response=FakeResponse(401, b"")), "key"),
+  (FakeSession(response=FakeResponse(503, b"")), "server"),
+])
+def test_failure_says_why(tmp_path, session, failure):
+  service = make_service(tmp_path, session)
+  service.want([TileKey(15, 9, 9)])
+  assert wait_for(lambda: service.failure == failure)
+  service.network_restored()
+  assert service.failure is None and not service.offline
+  service.close()
+
+
+def test_a_download_clears_the_failure(tmp_path):
+  session = FakeSession(error=requests.ConnectionError("offline"))
+  service = make_service(tmp_path, session)
+  service.want([TileKey(15, 9, 9)])
+  assert wait_for(lambda: service.failure == "network")
+  session.error = None
+  service._offline_until = 0.0
+  service.want([TileKey(15, 9, 10)])
+  assert wait_for(lambda: service.failure is None)
   service.close()
 
 

@@ -40,7 +40,7 @@ def gps_state(latitude, longitude, bearing=0.0, speed=0.0, updated=None, has_fix
 
 def test_prepared_render_polls_once_and_next_frame_is_fresh(view, monkeypatch):
   calls = []
-  view._tiles = SimpleNamespace(upload=lambda: calls.append("upload"), service=SimpleNamespace(offline=False), has_token=True,
+  view._tiles = SimpleNamespace(upload=lambda: calls.append("upload"), service=SimpleNamespace(offline=False, failure=None), has_token=True,
                                 offline_status=dict)
   view._sm = SimpleNamespace(update=lambda _: calls.append("poll"),
                              updated=dict.fromkeys(("navRoute", "navInstruction", "starpilotModelV2"), False))
@@ -224,7 +224,7 @@ class _FakeNavSM(dict):
 def test_ending_a_route_clears_the_line_before_navigationd_does(view, monkeypatch):
   monkeypatch.setattr(nav_map.ui_state, "started", False)
   sm = view._sm = _FakeNavSM()
-  view._tiles = SimpleNamespace(upload=lambda: 0, service=SimpleNamespace(offline=False), has_token=True, offline_status=dict)
+  view._tiles = SimpleNamespace(upload=lambda: 0, service=SimpleNamespace(offline=False, failure=None), has_token=True, offline_status=dict)
   destination = json.dumps({"name": "Home", "latitude": 36.4, "longitude": -115.2})
   points = [(36.3, -115.3 + i * 0.001) for i in range(50)]
 
@@ -627,7 +627,7 @@ def test_network_kind_reads_device_state():
 
 def test_route_download_shows_only_while_driving_a_route(view, monkeypatch):
   status = {"route": {"total": 100, "remaining": 40}}
-  view._tiles = SimpleNamespace(service=SimpleNamespace(offline=False), has_token=True, offline_status=lambda: status)
+  view._tiles = SimpleNamespace(service=SimpleNamespace(offline=False, failure=None), has_token=True, offline_status=lambda: status)
   class SubMaster:
     valid = {"deviceState": True}
 
@@ -643,13 +643,37 @@ def test_route_download_shows_only_while_driving_a_route(view, monkeypatch):
   assert view._route_download() is None, "not over a route preview"
 
 
-def test_offline_badge_sits_under_the_anchor_and_collapses(view, monkeypatch):
+class _DeviceSM:
+  def __init__(self, network="wifi", ping=0.0):
+    self.valid = {"deviceState": True}
+    self.network, self.ping = network, ping
+
+  def __getitem__(self, key):
+    return SimpleNamespace(networkType=self.network, lastAthenaPingTime=int(self.ping * 1e9))
+
+
+def _offline_view(view, monkeypatch, failure="network"):
   monkeypatch.setattr(nav_map.ui_state, "started", False)
+  device = _DeviceSM()
+  monkeypatch.setattr(nav_map.ui_state, "sm", device)
   view._sm = _FakeNavSM()
-  service = SimpleNamespace(offline=True)
+  restored = []
+
+  def network_restored():
+    restored.append(True)
+    service.failure = None
+
+  service = SimpleNamespace(offline=True, failure=failure, failure_at=100.0, network_restored=network_restored)
   view._tiles = SimpleNamespace(upload=lambda: 0, service=service, has_token=True, offline_status=dict)
   clock = [100.0]
   monkeypatch.setattr(nav_map.time, "monotonic", lambda: clock[0])
+  view._poll_gps = lambda now: None
+  view.show_event()
+  return service, device, clock, restored
+
+
+def test_offline_badge_sits_under_the_anchor_and_collapses(view, monkeypatch):
+  service, _, clock, _ = _offline_view(view, monkeypatch)
 
   view._update_state()
   assert ("Offline • cached map", nav_map.BADGE_WARN) in view._status_badges()[0], "no anchor: top-right as before"
@@ -672,11 +696,62 @@ def test_offline_badge_sits_under_the_anchor_and_collapses(view, monkeypatch):
   view._nav, view._nav_received = {"primary": "Main St"}, clock[0]
   assert view.offline_badge_lift(clock[0]) == nav_map.OFFLINE_BADGE_HEIGHT + nav_map.OFFLINE_BADGE_GAP
 
-  service.offline = False
-  view._poll_gps = lambda now: None
-  view._overlay_content = lambda now: (view._offline_since,)
+  clock[0] += nav_map.OFFLINE_COLLAPSE_SECONDS
+  service.offline = False  # the tile service's backoff lapsed; the failure stands until something works
   view._update_state()
-  assert view._offline_since is None and view.offline_badge_lift(clock[0]) == 0.0
+  assert view._overlay_state[-2] is True, "a lapsed backoff keeps the icon, no flicker"
+
+  service.failure = None  # a tile downloaded
+  view._update_state()
+  assert view._offline_since is None and view.offline_badge_lift(clock[0]) == 0.0, "online again: gone at once"
+  service.failure = "network"
+  view._update_state()
+  assert view._overlay_state[-2] is True, "offline again while the map stays open: the icon, never the words"
+
+
+def test_offline_badge_only_when_actually_offline(view, monkeypatch):
+  service, device, clock, restored = _offline_view(view, monkeypatch, failure=None)
+  view.offline_anchor = nav_map.rl.Rectangle(700, 700, 96, 96)
+  view._update_state()
+  assert view._offline_since is None, "online with every tile saved: nothing failed, no badge"
+
+  for failure in ("server", "key"):
+    service.failure = failure
+    view._update_state()
+    assert view._offline_since is None, f"a {failure} failure is not offline"
+  assert ("Check the Mapbox key in The Galaxy", nav_map.BADGE_WARN) in view._status_badges()[0]
+
+  service.failure = None
+  device.network = "none"
+  view._update_state()
+  assert view._offline_since is not None, "no network at all: offline, even with the tiles saved"
+  device.network = "wifi"
+  view._update_state()
+  assert restored and view._offline_since is None, "the network back: the tiles retry and the badge clears"
+
+  service.failure, service.failure_at = "network", clock[0]
+  device.ping = clock[0] - 5
+  view._update_state()
+  assert view._offline_since is not None, "a ping from before the failure proves nothing"
+  clock[0] += 3
+  device.ping = clock[0]
+  view._update_state()
+  assert view._offline_since is None, "athena reached the internet after the failure: online"
+  clock[0] += nav_map.ATHENA_ONLINE_SECONDS
+  view._update_state()
+  assert view._offline_since is not None, "and that ping has gone stale"
+
+
+def test_new_mapbox_key_retries_a_rejected_one(monkeypatch):
+  tiles = nav_map.TileTextures.__new__(nav_map.TileTextures)
+  key = ["old"]
+  tiles._params = SimpleNamespace(get=lambda name, encoding=None: key[0])
+  tiles._token, tiles._token_checked, tiles._token_lock = "old", -math.inf, nav_map.threading.Lock()
+  restored = []
+  tiles.service = SimpleNamespace(failure="key", network_restored=lambda: restored.append(True))
+  assert tiles._read_token() == "old" and not restored
+  key[0], tiles._token_checked = "new", -math.inf
+  assert tiles._read_token() == "new" and restored == [True]
 
 
 def test_style_problem_says_why_the_other_map_cant_show(monkeypatch, tmp_path):

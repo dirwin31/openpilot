@@ -41,6 +41,7 @@ MIN_FREE_DISK_BYTES = 1024 * 1024 * 1024  # never fill /data for a map
 REFRESH_AGE_SECONDS = 30 * 24 * 3600      # re-fetch stale tiles in the background when online
 OFFLINE_BACKOFF_SECONDS = 20.0
 AUTH_BACKOFF_SECONDS = 300.0
+FAILURE_NETWORK, FAILURE_KEY, FAILURE_SERVER = "network", "key", "server"
 MISSING_RETRY_SECONDS = 600.0
 PREFETCH_INTERVAL_SECONDS = 0.35          # at most ~3 background downloads a second
 REQUEST_TIMEOUT = (4.0, 8.0)
@@ -313,6 +314,10 @@ class TileService:
     self._missing: dict[TileKey, float] = {}
     self._results: deque[tuple[TileKey, Any]] = deque()
     self._offline_until = 0.0
+    # Why the last request failed: FAILURE_NETWORK, FAILURE_KEY or FAILURE_SERVER, until one
+    # succeeds or the network comes back. Only FAILURE_NETWORK means the device is offline.
+    self.failure: str | None = None
+    self.failure_at = -math.inf
     self._last_prefetch = 0.0
     self._stopped = False
     self.stats = {"network": 0, "disk": 0, "prefetched": 0, "failed": 0, "write_failed": 0}
@@ -507,6 +512,7 @@ class TileService:
     except requests.RequestException:
       with self._cond:
         self._offline_until = self._clock() + OFFLINE_BACKOFF_SECONDS
+        self._set_failure(FAILURE_NETWORK)
       return None
 
     status = response.status_code
@@ -514,22 +520,29 @@ class TileService:
       self._usage.add("tiles", nbytes=len(response.content or b"") if status == 200 else 0)
     if status == 200 and image_extension(response.content) is not None:
       self.stats["network"] += 1
+      self.failure = None
       return response.content
     self.stats["failed"] += 1
     with self._cond:
       if status in (401, 403):
         self._offline_until = self._clock() + AUTH_BACKOFF_SECONDS
+        self._set_failure(FAILURE_KEY)
       elif status == 429 or status >= 500:
         self._offline_until = self._clock() + OFFLINE_BACKOFF_SECONDS
+        self._set_failure(FAILURE_SERVER)
       else:
         self._missing[key] = self._clock() + MISSING_RETRY_SECONDS
         if status == 404:
           self.not_found.add(key)
     return None
 
+  def _set_failure(self, failure: str) -> None:
+    self.failure, self.failure_at = failure, self._clock()
+
   def network_restored(self) -> None:
-    """Retry everything that failed while offline."""
+    """Retry everything that failed while offline (or with a key since replaced)."""
     with self._cond:
       self._offline_until = 0.0
+      self.failure = None
       self._missing.clear()
       self._cond.notify_all()
