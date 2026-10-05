@@ -112,6 +112,10 @@ class LatControlPID(LatControl):
     self.modified_civic_steering_pressed_prev = False
     self.prev_output_torque = 0.0
 
+  def reset(self):
+    super().reset()
+    self.pid.reset()
+
   def update_honda_lateral_pid_gain_scale(self, starpilot_toggles):
     if not self.is_honda_pid_lateral:
       return
@@ -146,6 +150,8 @@ class LatControlPID(LatControl):
       self.modified_civic_steering_pressed_filter_s = 0.0
       self.modified_civic_steering_pressed_prev = False
       self.prev_output_torque = 0.0
+      # controlsd's LaC.reset() only cleared sat_time, so the integrator carried into the next engagement
+      self.pid.reset()
 
     else:
       # offset does not contribute to resistive torque

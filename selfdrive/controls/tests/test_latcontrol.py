@@ -2030,6 +2030,24 @@ class TestLatControl:
     assert controller.pid._k_p[1] == pytest.approx([value * 2.0 for value in base_kp_v])
     assert controller.pid._k_i[1] == pytest.approx([value * 1.25 for value in base_ki_v])
 
+  def test_pid_integrator_clears_on_disengage_and_reset(self):
+    controller, VM, CS, params, starpilot_toggles = self._build_pid_controller(HONDA.HONDA_CIVIC_2022)
+    CS.steeringAngleDeg = -0.2  # small enough that P alone doesn't saturate and block integration
+    for _ in range(300):
+      controller.update(True, CS, VM, params, False, 0.0, False, 0.2, None, None, starpilot_toggles)
+    assert abs(controller.pid.i) > 0.01
+
+    controller.update(False, CS, VM, params, False, 0.0, False, 0.2, None, None, starpilot_toggles)
+    assert controller.pid.i == 0.0
+
+    for _ in range(300):
+      controller.update(True, CS, VM, params, False, 0.0, False, 0.2, None, None, starpilot_toggles)
+    assert abs(controller.pid.i) > 0.01
+    controller.sat_time = 1.0
+    controller.reset()
+    assert controller.pid.i == 0.0
+    assert controller.sat_time == 0.0
+
   def test_honda_accord_torque_tune_uses_quick_curve_unwind(self):
     controller, _, _, _, _ = self._build_torque_controller(HONDA.HONDA_ACCORD, force_torque=True)
 

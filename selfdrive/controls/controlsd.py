@@ -8,7 +8,7 @@ from cereal import car, custom, log
 import cereal.messaging as messaging
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
-from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
+from openpilot.common.realtime import config_realtime_process, DT_CTRL, DT_MDL, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
@@ -398,6 +398,11 @@ class Controls:
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    # First-order hold on the model action; see the ramp in state_control()
+    self.model_curvature_held = 0.0
+    self.model_curvature_from = 0.0
+    self.model_curvature_target = 0.0
+    self.model_curvature_elapsed = 0.0
     self.lc_smooth_release = 0.0
     self.lane_centering = LaneCenteringController()
     self.lc_entry_sign = 0.0
@@ -583,10 +588,30 @@ class Controls:
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
-    if self.sm.valid['lateralManeuverPlan']:
+    lateral_maneuver_active = self.sm.valid['lateralManeuverPlan']
+    if lateral_maneuver_active:
       new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
     else:
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
+
+    # modeld publishes its action at 20 Hz while this loop runs at 100 Hz, so holding the newest value
+    # steps the target once per model frame. clip_curvature's allowance is MAX_LATERAL_JERK / v_ego**2, so
+    # below ~20 mph it doesn't bind and the staircase reaches the rack as jitter. Ramp from the currently
+    # commanded value to each new action across the model frame instead (from trung791997/openpilot bfb7dfca).
+    if CC.latActive and not lateral_maneuver_active:
+      if self.sm.updated['modelV2']:
+        self.model_curvature_from = self.model_curvature_held
+        self.model_curvature_target = new_desired_curvature
+        self.model_curvature_elapsed = 0.0
+      self.model_curvature_elapsed += DT_CTRL
+      blend = min(self.model_curvature_elapsed / DT_MDL, 1.0)
+      self.model_curvature_held = self.model_curvature_from + blend * (self.model_curvature_target - self.model_curvature_from)
+      new_desired_curvature = self.model_curvature_held
+    else:
+      self.model_curvature_held = new_desired_curvature
+      self.model_curvature_from = new_desired_curvature
+      self.model_curvature_target = new_desired_curvature
+      self.model_curvature_elapsed = 0.0
 
     # Low-speed turn-intent hold (see CURVATURE_HOLD_* above). Curvature sign convention
     # here is positive for RIGHT turns (pauseturn log: left turn at +148 deg steering

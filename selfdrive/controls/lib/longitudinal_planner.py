@@ -9,6 +9,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.starpilot.common.model_versions import is_tinygrad_model_version
+from openpilot.starpilot.common.starpilot_variables import get_longitudinal_actuator_delay
 from openpilot.starpilot.controls.lib.starpilot_vcruise import FT_TO_M, OFFSET_FT_MAX, OFFSET_FT_MIN
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, get_safe_obstacle_distance
@@ -127,7 +128,21 @@ STANDSTILL_STOPPED_LEAD_GUARD_MIN_BRAKE = 0.16
 STANDSTILL_STOPPED_LEAD_GUARD_MAX_BRAKE = 0.26
 LEAD_DEPART_ACCEL_HOLD_TIME = 1.2
 LEAD_DEPART_ACCEL_HOLD_MAX_EGO_SPEED = 2.0
-CLOSE_LEAD_BRAKE_CAP_MAX_TTC = 25.0
+# Engagement horizon for the close-lead brake cap. Was 25.0 s, which is not "close" by any reading of
+# the name: on Peter route 000001eb at 5:48 it engaged on a lead 71.1 m away at 15.2 s TTC and pulled
+# commanded accel from +0.89 to -0.32 while the MPC itself still reported source `cruise`. 8.0 s sits
+# with this file's other lead-safety horizons (RAW_LEAD_SAFETY_TTC 7.0, FCW_MAX_TTC 4.0) and still
+# engages on the genuine close approaches (000001e8 at 9:00 gates at 5.5 s) and keeps the
+# existing 9.2 s vision-approach behaviour, while clearing 000001eb 5:48 (15.2 s) and its
+# rubber-banding neighbour (17.6 s) with margin.
+CLOSE_LEAD_BRAKE_CAP_MAX_TTC = 10.0
+
+# The cap used to be a step: nothing below required_decel 0.2, full demand at and above it. That
+# discontinuity is the accel->decel->accel cycling reported as rubber banding -- 000001eb at 5:48
+# shows it toggling off/on/off inside 1.2 s as required_decel crosses 0.2. Ramp the demand in over a
+# band instead, so a marginal geometry produces a marginal cap rather than a step.
+CLOSE_LEAD_BRAKE_CAP_RAMP_MIN = 0.2
+CLOSE_LEAD_BRAKE_CAP_RAMP_FULL = 0.5
 INSIDE_GAP_CLOSING_MIN_EGO_SPEED = 8.0
 INSIDE_GAP_CLOSING_MIN_LEAD_SPEED = 5.0
 INSIDE_GAP_CLOSING_MIN_SPEED = 0.5
@@ -538,18 +553,19 @@ def get_planner_v_ego(CP, car_state):
   return float(v_ego)
 
 
-def get_accel_from_plan_classic(CP, speeds, accels, vEgoStopping):
+def get_accel_from_plan_classic(CP, speeds, accels, vEgoStopping, actuator_delay=None):
   if len(speeds) == CONTROL_N:
+    delay = max(DT_MDL, float(CP.longitudinalActuatorDelay if actuator_delay is None else actuator_delay))
     v_target_now = np.interp(DT_MDL, CONTROL_N_T_IDX, speeds)
     a_target_now = np.interp(DT_MDL, CONTROL_N_T_IDX, accels)
 
-    v_target = np.interp(CP.longitudinalActuatorDelay + DT_MDL, CONTROL_N_T_IDX, speeds)
+    v_target = np.interp(delay + DT_MDL, CONTROL_N_T_IDX, speeds)
     if v_target != v_target_now:
-      a_target = 2 * (v_target - v_target_now) / CP.longitudinalActuatorDelay - a_target_now
+      a_target = 2 * (v_target - v_target_now) / delay - a_target_now
     else:
       a_target = a_target_now
 
-    v_target_1sec = np.interp(CP.longitudinalActuatorDelay + DT_MDL + 1.0, CONTROL_N_T_IDX, speeds)
+    v_target_1sec = np.interp(delay + DT_MDL + 1.0, CONTROL_N_T_IDX, speeds)
   else:
     v_target = 0.0
     v_target_1sec = 0.0
@@ -579,6 +595,7 @@ def get_accel_from_plan(speeds, accels, action_t=DT_MDL, vEgoStopping=0.05):
 class LongitudinalPlanner:
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
+    self.longitudinal_actuator_delay = max(DT_MDL, float(CP.longitudinalActuatorDelay))
     self.mpc = LongitudinalMpc(dt=dt)
     self.fcw = False
     self.dt = dt
@@ -745,7 +762,7 @@ class LongitudinalPlanner:
       return None
 
     lead_brake = max(0.0, -float(lead.aLeadK))
-    reaction_t = max(self.CP.longitudinalActuatorDelay, self.dt)
+    reaction_t = max(self.longitudinal_actuator_delay, self.dt)
     closing_speed = max(0.0, v_ego - lead.vLead)
     projected_closing_speed = closing_speed + lead_brake * reaction_t
     if projected_closing_speed < 0.1 and lead_brake < 0.5:
@@ -757,11 +774,21 @@ class LongitudinalPlanner:
     projected_ttc = available_gap / max(projected_closing_speed, 0.1)
     if projected_ttc > CLOSE_LEAD_BRAKE_CAP_MAX_TTC:
       return None
-    required_decel = (projected_closing_speed ** 2) / (2.0 * available_gap) + 0.7 * lead_brake
-    if required_decel < 0.2:
+    # Lead braking is counted ONCE. To null a closing speed c over a usable gap d while the lead
+    # decelerates at b, the ego demand is c^2/(2d) + b. Using the lead-brake-inflated
+    # projected_closing_speed in the quadratic term AND adding b again double-counted it: on
+    # 000001e8 at 9:00 that inflated the demand from 4.27 to 4.87 m/s^2. The quadratic term is the
+    # smaller one either way -- at that sample aLeadK supplied 85% of the total -- so this makes the
+    # cap correct, not gentle. A spurious aLeadK still dominates it; that is an input problem, and
+    # deliberately not something this function pretends to solve.
+    required_decel = (closing_speed ** 2) / (2.0 * available_gap) + 0.7 * lead_brake
+
+    ramp = float(np.clip((required_decel - CLOSE_LEAD_BRAKE_CAP_RAMP_MIN) /
+                         (CLOSE_LEAD_BRAKE_CAP_RAMP_FULL - CLOSE_LEAD_BRAKE_CAP_RAMP_MIN), 0.0, 1.0))
+    if ramp <= 0.0:
       return None
 
-    return max(accel_min, -required_decel)
+    return max(accel_min, -required_decel * ramp)
 
   @staticmethod
   def get_inside_gap_closing_lead_accel_cap(lead, v_ego, accel_min, t_follow):
@@ -816,7 +843,7 @@ class LongitudinalPlanner:
       return None
 
     lead_brake = max(0.0, -float(lead.aLeadK))
-    reaction_t = max(self.CP.longitudinalActuatorDelay, self.dt)
+    reaction_t = max(self.longitudinal_actuator_delay, self.dt)
     closing_speed = max(0.0, v_ego - lead.vLead)
     projected_closing_speed = closing_speed + lead_brake * reaction_t
     if projected_closing_speed < VISION_LEAD_APPROACH_MIN_CLOSING_SPEED:
@@ -871,7 +898,7 @@ class LongitudinalPlanner:
     lead_prob = float(getattr(lead, "modelProb", 0.0))
 
     lead_brake = max(0.0, -float(lead.aLeadK))
-    reaction_t = max(self.CP.longitudinalActuatorDelay, self.dt)
+    reaction_t = max(self.longitudinal_actuator_delay, self.dt)
     closing_speed = max(0.0, v_ego - lead.vLead)
     projected_closing_speed = closing_speed + lead_brake * reaction_t
     closing_ratio = projected_closing_speed / max(float(v_ego), 0.1)
@@ -1040,7 +1067,7 @@ class LongitudinalPlanner:
       return None
 
     lead_brake = max(0.0, -float(lead.aLeadK))
-    reaction_t = max(self.CP.longitudinalActuatorDelay, self.dt)
+    reaction_t = max(self.longitudinal_actuator_delay, self.dt)
     closing_speed = max(0.0, v_ego - lead.vLead)
     projected_closing_speed = closing_speed + lead_brake * reaction_t
     if projected_closing_speed < VISION_SLOW_LEAD_MIN_CLOSING_SPEED:
@@ -1070,7 +1097,7 @@ class LongitudinalPlanner:
 
   def tracked_vision_lead_approach_needs_immediate_brake(self, lead, v_ego, approach_cap):
     lead_brake = max(0.0, -float(getattr(lead, "aLeadK", 0.0)))
-    reaction_t = max(self.CP.longitudinalActuatorDelay, self.dt)
+    reaction_t = max(self.longitudinal_actuator_delay, self.dt)
     projected_closing_speed = max(0.0, v_ego - float(lead.vLead)) + lead_brake * reaction_t
     bypass_distance = max(VISION_LEAD_APPROACH_CONFIRM_BYPASS_DISTANCE_MIN,
                           VISION_LEAD_APPROACH_CONFIRM_BYPASS_DISTANCE_TIME * float(v_ego))
@@ -1094,7 +1121,7 @@ class LongitudinalPlanner:
           desired_gap = float(desired_follow_distance(v_ego, lead.vLead, base_t_follow))
           approach_window = max(LEAD_APPROACH_TFOLLOW_WINDOW_MIN, LEAD_APPROACH_TFOLLOW_WINDOW_GAIN * float(v_ego))
           if float(lead.dRel) <= desired_gap + approach_window:
-            reaction_t = max(self.CP.longitudinalActuatorDelay, self.dt)
+            reaction_t = max(self.longitudinal_actuator_delay, self.dt)
             projected_closing_speed = closing_speed + 0.5 * lead_brake * reaction_t
             gap_to_follow = max(float(lead.dRel) - desired_gap, 0.0)
             time_to_follow = gap_to_follow / max(projected_closing_speed, 0.1)
@@ -1876,7 +1903,7 @@ class LongitudinalPlanner:
       return None
 
     lead_brake = max(0.0, -float(getattr(lead, "aLeadK", 0.0)))
-    reaction_t = max(self.CP.longitudinalActuatorDelay, self.dt)
+    reaction_t = max(self.longitudinal_actuator_delay, self.dt)
     projected_closing_speed = max(0.0, float(v_ego) - float(lead.vLead)) + lead_brake * reaction_t
     if projected_closing_speed < TRACKED_VISION_MODEL_FLOOR_MIN_CLOSING_SPEED:
       return None
@@ -1918,7 +1945,7 @@ class LongitudinalPlanner:
     if lead_brake > TRACKED_VISION_MODEL_CAP_MAX_LEAD_BRAKE:
       return None
 
-    reaction_t = max(self.CP.longitudinalActuatorDelay, self.dt)
+    reaction_t = max(self.longitudinal_actuator_delay, self.dt)
     projected_closing_speed = max(0.0, float(v_ego) - float(lead.vLead)) + lead_brake * reaction_t
     if not (TRACKED_VISION_MODEL_CAP_MIN_CLOSING_SPEED <= projected_closing_speed <= TRACKED_VISION_MODEL_CAP_MAX_CLOSING_SPEED):
       return None
@@ -2023,6 +2050,7 @@ class LongitudinalPlanner:
         self.nap_adaptive_accel = self._preap_params.get_bool("NAPAdaptiveAccel")
 
     self.generation = getattr(starpilot_toggles, "model_version", None)
+    self.longitudinal_actuator_delay = max(DT_MDL, get_longitudinal_actuator_delay(self.CP, starpilot_toggles))
     experimental_mode = bool(sm['selfdriveState'].experimentalMode)
     self.mode = 'blended' if experimental_mode else 'acc'
     self.mpc.mode = 'acc'
@@ -2438,7 +2466,7 @@ class LongitudinalPlanner:
     classic_model = bool(getattr(starpilot_toggles, "classic_model", False))
     tinygrad_model = bool(getattr(starpilot_toggles, "tinygrad_model", False))
     experimental_mlsim = bool(tinygrad_model and self.mlsim and self.mode != 'acc')
-    action_t = self.CP.longitudinalActuatorDelay + DT_MDL
+    action_t = self.longitudinal_actuator_delay + DT_MDL
     prev_output_a_target = float(self.output_a_target)
     model_launch_accel = None
     if self.model_launch_armed and not bool(sm['modelV2'].action.shouldStop):
@@ -2446,7 +2474,8 @@ class LongitudinalPlanner:
 
     if classic_model:
       output_a_target, output_should_stop = get_accel_from_plan_classic(
-        self.CP, self.v_desired_trajectory, self.a_desired_trajectory, starpilot_toggles.vEgoStopping)
+        self.CP, self.v_desired_trajectory, self.a_desired_trajectory, starpilot_toggles.vEgoStopping,
+        actuator_delay=self.longitudinal_actuator_delay)
     elif tinygrad_model:
       output_a_target_mpc, output_should_stop_mpc = get_accel_from_plan(
         self.v_desired_trajectory, self.a_desired_trajectory,
