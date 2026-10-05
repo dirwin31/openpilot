@@ -269,6 +269,7 @@ class LongControl:
         output_accel -= starpilot_toggles.stoppingDecelRate * DT_CTRL
       output_accel = self.vehicle_tuning.shape_stopping_accel(
         output_accel, a_target, should_stop, CS.vEgo, has_lead, starpilot_toggles.stopAccel, leads=leads,
+        civic_stop_let_off=getattr(starpilot_toggles, "civic_stop_let_off", False),
       )
       output_accel = self._apply_moving_stop_target_follow(output_accel, a_target, should_stop, CS, starpilot_toggles)
       self.reset(preserve_stop_release=True)

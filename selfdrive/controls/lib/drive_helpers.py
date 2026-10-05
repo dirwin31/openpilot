@@ -110,3 +110,25 @@ def get_curvature_from_plan(yaws, yaw_rates, t_idxs, vego, action_t):
   psi_target = np.interp(action_t, t_idxs, yaws)
   psi_rate = yaw_rates[0]
   return curv_from_psis(psi_target, psi_rate, vego, action_t)
+
+
+class ModelCurvatureRamp:
+  """First-order hold on the model's curvature action (from trung791997/openpilot bfb7dfca via civictunesv1).
+
+  modeld publishes at 20 Hz while controls run at 100 Hz, so holding the newest value steps the target once
+  per model frame. clip_curvature's jerk allowance scales with 1/v_ego**2, so below ~20 mph it doesn't bind
+  and the staircase reaches the rack as jitter. Ramp from the held value to each new action across a frame.
+  """
+  def __init__(self):
+    self.reset(0.0)
+
+  def reset(self, value):
+    self.held = self.start = self.target = float(value)
+    self.elapsed = 0.0
+
+  def update(self, target, model_updated):
+    if model_updated:
+      self.start, self.target, self.elapsed = self.held, float(target), 0.0
+    self.elapsed += DT_CTRL
+    self.held = self.start + min(self.elapsed / DT_MDL, 1.0) * (self.target - self.start)
+    return self.held

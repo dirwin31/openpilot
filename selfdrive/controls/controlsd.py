@@ -20,6 +20,7 @@ from opendbc.car.nissan.values import CAR as NISSAN_CAR
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import (
   MAX_LATERAL_JERK,
+  ModelCurvatureRamp,
   clip_curvature,
   get_kona_non_scc_lateral_active,
   get_lateral_active,
@@ -398,6 +399,7 @@ class Controls:
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    self.model_curvature_ramp = ModelCurvatureRamp() if self.CP.carFingerprint == "HONDA_CIVIC_2022" else None
     self.lc_smooth_release = 0.0
     self.lane_centering = LaneCenteringController()
     self.lc_entry_sign = 0.0
@@ -449,7 +451,10 @@ class Controls:
       self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_pose)
 
     if hasattr(self.LaC, "pid") and self.CP.lateralTuning.which() != "pid":
-      self.LaC.pid._k_p = self.starpilot_toggles.steerKp
+      if hasattr(self.LaC, "apply_steer_kp"):
+        self.LaC.apply_steer_kp(self.starpilot_toggles.steerKp)
+      else:
+        self.LaC.pid._k_p = self.starpilot_toggles.steerKp
 
     if self.sm.updated['liveDelay'] and hasattr(self.LaC, "update_live_delay"):
       self.LaC.update_live_delay(self.sm['liveDelay'].lateralDelay)
@@ -587,6 +592,13 @@ class Controls:
       new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
     else:
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
+
+    # 2022+ Civic: smooth the 20 Hz model curvature steps into this 100 Hz loop (see ModelCurvatureRamp).
+    if self.model_curvature_ramp is not None:
+      if CC.latActive and not self.sm.valid['lateralManeuverPlan']:
+        new_desired_curvature = self.model_curvature_ramp.update(new_desired_curvature, self.sm.updated['modelV2'])
+      else:
+        self.model_curvature_ramp.reset(new_desired_curvature)
 
     # Low-speed turn-intent hold (see CURVATURE_HOLD_* above). Curvature sign convention
     # here is positive for RIGHT turns (pauseturn log: left turn at +148 deg steering

@@ -438,7 +438,14 @@ class StarPilotAcceleration:
       self.min_accel = get_profile_min_accel_floor(deceleration_profile)
       self.min_accel = self._shape_min_accel_for_slc(v_ego, sm, starpilot_toggles, deceleration_profile, self.min_accel)
 
-    gear_state = "eco" if eco_gear else ("sport" if sport_gear else "normal")
+    # 2022+ Civic: Curve Speed Control may slow at least at the Standard cruise rate even on ECO. On route
+    # 000000e8 (2026-10-04) CSC targeted 41-45 mph ~7 s before two curves, but ECO's -0.5 m/s^2 left the car
+    # at ~50 mph, past the ~2.2 m/s^2 its steering can hold, and the driver took over.
+    if (getattr(starpilot_toggles, "car_model", "") == "HONDA_CIVIC_2022" and
+        getattr(self.starpilot_planner.starpilot_vcruise, "csc_controlling_speed", False)):
+      self.min_accel = min(self.min_accel, A_CRUISE_MIN)
+
+    gear_state ="eco" if eco_gear else ("sport" if sport_gear else "normal")
     mapping_enabled = starpilot_toggles.map_acceleration or starpilot_toggles.map_deceleration
     if gear_state != self.last_gear_state and mapping_enabled:
       self.last_gear_state = gear_state

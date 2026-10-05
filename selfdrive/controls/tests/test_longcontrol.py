@@ -1684,3 +1684,53 @@ def test_leaving_experimental_does_not_reset_mode_transition_timer():
     lc.update_mpc_mode(False)
 
   assert not lc.transitioning
+
+
+def _civic_2022_tuning():
+  return vehicle_tunes.LongControlVehicleTuning(make_longcontrol_cp(brand="honda", carFingerprint="HONDA_CIVIC_2022"))
+
+
+def test_civic_2022_stop_let_off_eases_toward_plan():
+  tuning = _civic_2022_tuning()
+  # Logged finish: stopping ramp at -1.72 while the planner eased to -0.72 at 1.0 m/s.
+  assert tuning.shape_stopping_accel(-1.72, -0.72, True, 1.0, False, -3.55, civic_stop_let_off=True) == pytest.approx(-0.80)
+  assert tuning.shape_stopping_accel(-2.02, -0.33, True, 0.5, False, -3.55, civic_stop_let_off=True) == pytest.approx(-0.55)
+
+
+def test_civic_2022_stop_let_off_never_brakes_less_than_plan():
+  tuning = _civic_2022_tuning()
+  assert tuning.shape_stopping_accel(-1.7, -2.5, True, 1.0, False, -3.55, civic_stop_let_off=True) == pytest.approx(-2.5)
+  assert tuning.shape_stopping_accel(-0.3, -0.2, True, 1.0, False, -3.55, civic_stop_let_off=True) == pytest.approx(-0.3)
+
+
+def test_civic_2022_stop_let_off_holds_once_stopped():
+  tuning = _civic_2022_tuning()
+  assert tuning.shape_stopping_accel(-0.55, -0.3, True, 0.0, False, -3.55, civic_stop_let_off=True) == pytest.approx(-1.0)
+  assert tuning.shape_stopping_accel(-2.0, -0.3, True, 0.0, False, -3.55, civic_stop_let_off=True) == pytest.approx(-2.0)
+
+
+def test_civic_2022_stop_let_off_scope():
+  tuning = _civic_2022_tuning()
+  for kwargs in ({"civic_stop_let_off": False}, {"civic_stop_let_off": True, "has_lead": True}):
+    has_lead = kwargs.pop("has_lead", False)
+    assert tuning.shape_stopping_accel(-1.72, -0.72, True, 1.0, has_lead, -3.55, **kwargs) == pytest.approx(-1.72)
+  assert tuning.shape_stopping_accel(-1.72, -0.72, True, 2.5, False, -3.55, civic_stop_let_off=True) == pytest.approx(-1.72)
+  other = vehicle_tunes.LongControlVehicleTuning(make_longcontrol_cp(brand="honda", carFingerprint="HONDA_ACCORD"))
+  assert other.shape_stopping_accel(-1.72, -0.72, True, 1.0, False, -3.55, civic_stop_let_off=True) == pytest.approx(-1.72)
+
+
+def test_civic_2022_longcontrol_stop_finishes_softer_and_holds():
+  CP = make_longcontrol_cp(brand="honda", carFingerprint="HONDA_CIVIC_2022")
+  toggles = make_toggles(stopAccel=-3.55, stoppingDecelRate=0.3, vEgoStopping=0.55, civic_stop_let_off=True)
+  lc = LongControl(CP)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -1.2
+  CS = car.CarState.new_message()
+
+  outputs = []
+  for v_ego, a_target in ((1.8, -1.1), (1.0, -0.72), (0.5, -0.33), (0.0, -0.3)):
+    CS.vEgo = v_ego
+    outputs.append(lc.update(True, CS, a_target, True, [-3.5, 2.0], toggles))
+  assert outputs[1] == pytest.approx(-0.80, abs=1e-6)
+  assert outputs[2] == pytest.approx(-0.55, abs=1e-6)
+  assert outputs[3] <= -1.0

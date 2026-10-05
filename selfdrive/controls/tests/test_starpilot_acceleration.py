@@ -279,3 +279,21 @@ def test_pulse_and_glide_is_inert_when_disabled():
   assert accel.pulse_glide_coasting is False
   assert accel.pulse_glide_target is None
   assert accel.min_accel == pytest.approx(A_CRUISE_MIN)
+
+
+@pytest.mark.parametrize("car_model, csc_controlling, expected", [
+  ("HONDA_CIVIC_2022", True, A_CRUISE_MIN),
+  ("HONDA_CIVIC_2022", False, A_CRUISE_MIN_ECO),
+  ("HONDA_ACCORD", True, A_CRUISE_MIN_ECO),
+])
+def test_civic_2022_curve_speed_control_slows_at_least_standard_rate_on_eco(car_model, csc_controlling, expected):
+  planner = FakePlanner(v_cruise=55.0 * CV.MPH_TO_MS, slc_target=60.0 * CV.MPH_TO_MS)
+  planner.starpilot_vcruise.csc_controlling_speed = csc_controlling
+  accel = StarPilotAcceleration(planner)
+
+  sm = make_sm(set_speed_kph=100.0)
+  sm["selfdriveState"] = SimpleNamespace(personality=1)
+  accel.update(57.0 * CV.MPH_TO_MS, sm,
+               make_toggles(deceleration_profile=DECELERATION_PROFILES["ECO"], car_model=car_model))
+
+  assert accel.min_accel == pytest.approx(expected)

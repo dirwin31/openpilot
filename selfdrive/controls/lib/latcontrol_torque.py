@@ -135,6 +135,7 @@ class LatControlTorque(LatControl):
     self.is_tucson_4th_gen = CP.carFingerprint in TUCSON_4TH_GEN_CARS
     self.is_civic_bosch_modified = CP.carFingerprint == HONDA_CAR.HONDA_CIVIC_BOSCH and bool(CP.flags & HondaFlags.EPS_MODIFIED)
     self.is_honda_accord = CP.carFingerprint == HONDA_CAR.HONDA_ACCORD
+    self.is_honda_civic_2022 = CP.carFingerprint == HONDA_CAR.HONDA_CIVIC_2022
     self.is_silverado = CP.carFingerprint in SILVERADO_CARS
     self.is_gmc_yukon_cc = CP.carFingerprint in GMC_YUKON_CC_CARS
     self.is_ram_1500 = CP.carFingerprint in RAM_1500_CARS
@@ -152,6 +153,8 @@ class LatControlTorque(LatControl):
     if self.is_honda_accord:
       self.pid._k_p = [self.pid._k_p[0], [*self.pid._k_p[1][:-1], HONDA_ACCORD_TORQUE_KP]]
       self.pid._k_i = [self.pid._k_i[0], [HONDA_ACCORD_TORQUE_KI] * len(self.pid._k_i[1])]
+    if self.is_honda_civic_2022:
+      self.pid._k_p = get_honda_civic_2022_kp_schedule(KP)
     if self.is_palisade:
       self.torque_params.latAccelFactor *= PALISADE_BASE_LAT_ACCEL_FACTOR_MULT
     if self.is_ioniq_5:
@@ -218,6 +221,13 @@ class LatControlTorque(LatControl):
     self.torque_params.latAccelOffset = latAccelOffset
     self.torque_params.friction = friction
     self.update_limits()
+
+  def apply_steer_kp(self, steer_kp):
+    # steer_kp is StarPilot's flat [[0], [SteerKP]] toggle schedule
+    if self.is_honda_civic_2022:
+      self.pid._k_p = get_honda_civic_2022_kp_schedule(steer_kp[1][-1])
+    else:
+      self.pid._k_p = steer_kp
 
   def update_limits(self):
     self.pid.set_limits(self.lateral_accel_from_torque(self.steer_max, self.torque_params),

@@ -4228,3 +4228,16 @@ def test_near_duplicate_lead_source_hysteresis_skips_distinct_leads():
 
   assert lead_0_bias == 0.0
   assert lead_1_bias == 0.0
+
+
+def test_civic_2022_model_launch_allows_stronger_takeoff():
+  model_v = np.minimum(2.5 * T_IDXS_MPC, 15.0)
+  model_a = np.where(model_v < 15.0, 2.5, 0.0)
+
+  default_launch = LongitudinalPlanner.get_model_launch_accel(model_v, model_a, action_t=0.55, v_ego=0.0)
+  civic_launch = LongitudinalPlanner.get_model_launch_accel(model_v, model_a, action_t=0.55, v_ego=0.0, max_accel=2.0)
+  assert default_launch == pytest.approx(1.5)
+  assert civic_launch == pytest.approx(2.0)
+
+  assert LongitudinalPlanner(CarInterface.get_non_essential_params(CAR.HONDA_CIVIC_2022)).model_launch_max_accel == pytest.approx(2.0)
+  assert LongitudinalPlanner(CarInterface.get_non_essential_params(CAR.HONDA_CIVIC)).model_launch_max_accel == pytest.approx(1.5)

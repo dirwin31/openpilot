@@ -73,6 +73,16 @@ VOLKSWAGEN_TAOS_COMFORT_STOP_MIN_TTC = 4.0
 VOLKSWAGEN_TAOS_COMFORT_STOP_MAX_CLOSING_SPEED = 1.5
 VOLKSWAGEN_TAOS_COMFORT_STOP_CAP_BP = [0.0, 0.5, 1.0, 2.0, 3.5, VOLKSWAGEN_TAOS_COMFORT_STOP_MAX_SPEED]
 VOLKSWAGEN_TAOS_COMFORT_STOP_CAP_V = [-0.45, -0.55, -0.65, -0.80, -0.95, -1.10]
+# 2022+ Civic stop let-off (CivicStopLetOff). In the stopping state the brake ramps toward
+# stopAccel while the car is still rolling, so stops finished at -1.6 to -2.0 m/s^2 even as
+# the planner eased to -0.3 to -0.7 (stop-sign rlogs, 2026-10-04). Below ~4.5 mph cap the
+# brake on the driver's own let-off curve (-1.0 at 2 mph, about -0.5 at the stop), never
+# weaker than the planner's target; once stopped, hold firmly straight away.
+HONDA_CIVIC_2022_STOP_LETOFF_MAX_SPEED = 2.0  # m/s
+HONDA_CIVIC_2022_STOP_LETOFF_STOPPED_SPEED = 0.15  # m/s
+HONDA_CIVIC_2022_STOP_LETOFF_CAP_BP = [HONDA_CIVIC_2022_STOP_LETOFF_STOPPED_SPEED, 0.5, 1.0, HONDA_CIVIC_2022_STOP_LETOFF_MAX_SPEED]
+HONDA_CIVIC_2022_STOP_LETOFF_CAP_V = [-0.45, -0.55, -0.80, -1.10]
+HONDA_CIVIC_2022_STOP_HOLD_MIN = -1.0
 
 
 def get_bolt_acc_pedal_friction_bias(output_accel, a_target, v_ego):
@@ -162,6 +172,9 @@ class LongControlVehicleTuning:
     self.is_hyundai_santa_fe_2022 = bool(
       CP.brand == "hyundai" and str(getattr(CP, "carFingerprint", "")) == "HYUNDAI_SANTA_FE_2022"
     )
+    self.is_honda_civic_2022 = bool(
+      CP.brand == "honda" and str(getattr(CP, "carFingerprint", "")) == "HONDA_CIVIC_2022"
+    )
     self.is_volkswagen_taos = bool(
       CP.brand == "volkswagen" and
       str(getattr(CP, "carFingerprint", "")) == str(VOLKSWAGEN_CAR.VOLKSWAGEN_TAOS_MK1)
@@ -186,8 +199,19 @@ class LongControlVehicleTuning:
     self.bolt_start_handoff_frames = 0
     self.subaru_stop_release_frames = 0
 
-  def shape_stopping_accel(self, output_accel, a_target, should_stop, v_ego, has_lead, stop_accel, leads=None):
+  def shape_stopping_accel(self, output_accel, a_target, should_stop, v_ego, has_lead, stop_accel, leads=None,
+                           civic_stop_let_off=False):
     """Shape low-speed stop braking without overriding urgent targets."""
+    if self.is_honda_civic_2022 and civic_stop_let_off and should_stop and not has_lead:
+      if v_ego <= HONDA_CIVIC_2022_STOP_LETOFF_STOPPED_SPEED:
+        return min(float(output_accel), HONDA_CIVIC_2022_STOP_HOLD_MIN)
+      if v_ego <= HONDA_CIVIC_2022_STOP_LETOFF_MAX_SPEED:
+        let_off_cap = float(interp(v_ego, HONDA_CIVIC_2022_STOP_LETOFF_CAP_BP, HONDA_CIVIC_2022_STOP_LETOFF_CAP_V))
+        desired = min(let_off_cap, float(a_target))
+        if output_accel < desired:
+          return desired
+        return min(float(output_accel), float(a_target))
+
     if self.is_volkswagen_taos and should_stop and has_lead and v_ego < VOLKSWAGEN_TAOS_COMFORT_STOP_MAX_SPEED:
       comfort_lead = next((
         lead for lead in (leads or ())

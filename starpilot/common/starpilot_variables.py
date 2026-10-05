@@ -834,6 +834,9 @@ class StarPilotVariables:
     toggle.stoppingDecelRate = self.get_value("StoppingDecelRate", cast=float, condition=advanced_longitudinal_tuning, default=toggle.stoppingDecelRate, min=0.001, max=1)
     toggle.vEgoStarting = self.get_value("VEgoStarting", cast=float, condition=advanced_longitudinal_tuning, default=toggle.vEgoStarting, min=0.01, max=1)
     toggle.vEgoStopping = self.get_value("VEgoStopping", cast=float, condition=advanced_longitudinal_tuning, default=toggle.vEgoStopping, min=0.01, max=1)
+    # cast=None so an unwritten key reads as its registered default (on); get_bool would read it as off.
+    toggle.civic_stop_let_off = bool(self.get_value("CivicStopLetOff", cast=None, default=False,
+                                                    condition=toggle.openpilot_longitudinal and toggle.car_model == "HONDA_CIVIC_2022"))
 
     toggle.alert_volume_controller = self.get_value("AlertVolumeControl")
     toggle.below_steer_speed_volume = self.get_value("BelowSteerSpeedVolume", cast=float, condition=toggle.alert_volume_controller)

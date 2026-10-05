@@ -1135,6 +1135,17 @@
         "settings_tier": "advanced"
       },
       {
+        "key": "CivicStopLetOff",
+        "label": "Civic Stop Let-Off",
+        "description": "2022+ Civic: ease off the brake over the last few mph of a stop with no car ahead, like a driver does, instead of squeezing harder. Never brakes less than openpilot's plan asks for, and holds firmly once stopped.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "vehicle_makes": [
+          "Honda"
+        ],
+        "settings_tier": "advanced"
+      },
+      {
         "key": "ConditionalExperimental",
         "label": "Conditional Experimental Mode",
         "description": "Automatically switch to \"Experimental Mode\" when set conditions are met. Allows the model to handle challenging situations with smarter decision making.",

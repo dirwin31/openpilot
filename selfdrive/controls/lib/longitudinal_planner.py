@@ -92,6 +92,8 @@ MODEL_LAUNCH_DISARM_SPEED = 2.0
 MODEL_LAUNCH_COMMIT_TIME = 3.5
 MODEL_LAUNCH_MOVING_SPEED = 1.2
 MODEL_LAUNCH_MAX_ACCEL = 1.5
+# 2022+ Civic: its drivers launch at ~2.0 m/s^2; 1.5 made every launch from a stop feel slow (route 000000e8).
+HONDA_CIVIC_2022_MODEL_LAUNCH_MAX_ACCEL = 2.0
 RAW_LEAD_SAFETY_MIN_CLOSING_SPEED = 0.5
 RAW_LEAD_SAFETY_TTC = 7.0
 RAW_LEAD_SAFETY_DISTANCE = 40.0
@@ -579,6 +581,8 @@ def get_accel_from_plan(speeds, accels, action_t=DT_MDL, vEgoStopping=0.05):
 class LongitudinalPlanner:
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
+    self.model_launch_max_accel = (HONDA_CIVIC_2022_MODEL_LAUNCH_MAX_ACCEL if CP.carFingerprint == "HONDA_CIVIC_2022"
+                                   else MODEL_LAUNCH_MAX_ACCEL)
     self.mpc = LongitudinalMpc(dt=dt)
     self.fcw = False
     self.dt = dt
@@ -716,7 +720,7 @@ class LongitudinalPlanner:
     return x, v, a, j, throttle_prob
 
   @staticmethod
-  def get_model_launch_accel(model_v, model_a, action_t, v_ego):
+  def get_model_launch_accel(model_v, model_a, action_t, v_ego, max_accel=MODEL_LAUNCH_MAX_ACCEL):
     if len(model_v) != len(T_IDXS_MPC) or len(model_a) != len(T_IDXS_MPC):
       return None
     if float(np.interp(MODEL_LAUNCH_COMMIT_TIME, T_IDXS_MPC, model_v)) <= MODEL_LAUNCH_DISARM_SPEED:
@@ -736,7 +740,7 @@ class LongitudinalPlanner:
     accel_cap = float(np.interp(
       float(v_ego),
       [MODEL_LAUNCH_MOVING_SPEED, MODEL_LAUNCH_DISARM_SPEED],
-      [MODEL_LAUNCH_MAX_ACCEL, 0.0],
+      [max_accel, 0.0],
     ))
     return float(np.clip(a_launch, 0.0, accel_cap))
 
@@ -2442,7 +2446,8 @@ class LongitudinalPlanner:
     prev_output_a_target = float(self.output_a_target)
     model_launch_accel = None
     if self.model_launch_armed and not bool(sm['modelV2'].action.shouldStop):
-      model_launch_accel = self.get_model_launch_accel(model_launch_v, model_launch_a, action_t, scene_v_ego)
+      model_launch_accel = self.get_model_launch_accel(model_launch_v, model_launch_a, action_t, scene_v_ego,
+                                                        max_accel=self.model_launch_max_accel)
 
     if classic_model:
       output_a_target, output_should_stop = get_accel_from_plan_classic(

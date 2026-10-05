@@ -80,6 +80,18 @@ HONDA_ACCORD_TORQUE_KI = 0.15
 HONDA_ACCORD_TURN_FF_REDUCTION_MAX = 0.10
 HONDA_ACCORD_TURN_FF_ONSET = 0.45
 HONDA_ACCORD_TURN_FF_WIDTH = 0.12
+# 2022+ Civic: StarPilot's flat SteerKP override left the torque P gain 2-3x below
+# latcontrol_torque's KP_INTERP schedule at 17-56 mph (route logs, 2026-10-04), so the
+# wheel lagged the plan ~0.66 s in town. Restore the schedule from 7.5 m/s up; crawl
+# speeds and the highway end keep the SteerKP toggle value.
+HONDA_CIVIC_2022_KP_SPEEDS = [5.0, 7.5, 10.0, 15.0, 30.0]  # m/s
+HONDA_CIVIC_2022_KP_MID = [5.5, 3.5, 2.0]  # KP_INTERP at 7.5, 10, 15 m/s
+
+
+def get_honda_civic_2022_kp_schedule(steer_kp: float) -> list[list[float]]:
+  return [list(HONDA_CIVIC_2022_KP_SPEEDS), [steer_kp, *HONDA_CIVIC_2022_KP_MID, steer_kp]]
+
+
 VOLT_STANDARD_CARS = (
   GM_CAR.CHEVROLET_VOLT,
   GM_CAR.CHEVROLET_VOLT_2019,

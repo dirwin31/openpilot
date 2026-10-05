@@ -2037,6 +2037,20 @@ class TestLatControl:
     assert controller.pid._k_p[1][-1] == pytest.approx(HONDA_ACCORD_TORQUE_KP)
     assert controller.pid._k_i[1] == pytest.approx([HONDA_ACCORD_TORQUE_KI] * len(controller.pid._k_i[1]))
 
+  def test_honda_civic_2022_keeps_speed_scheduled_kp(self):
+    controller, _, _, _, _ = self._build_torque_controller(HONDA.HONDA_CIVIC_2022, force_torque=True)
+
+    assert controller.is_honda_civic_2022
+    controller.apply_steer_kp([[0], [0.75]])
+    speeds, gains = controller.pid._k_p
+    assert dict(zip(speeds, gains, strict=True)) == pytest.approx({5.0: 0.75, 7.5: 5.5, 10.0: 3.5, 15.0: 2.0, 30.0: 0.75})
+
+  def test_flat_steer_kp_override_unchanged_for_other_torque_cars(self):
+    controller, _, _, _, _ = self._build_torque_controller(HONDA.HONDA_ACCORD, force_torque=True)
+
+    controller.apply_steer_kp([[0], [0.75]])
+    assert controller.pid._k_p == [[0], [0.75]]
+
   def test_honda_accord_steer_ratio_calibration(self):
     expected_scale = 14.0 / 16.33
     assert get_honda_accord_steer_ratio_scale(0.0) == pytest.approx(expected_scale)

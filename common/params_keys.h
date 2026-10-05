@@ -229,6 +229,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"CarMake", {PERSISTENT, STRING, "mock", "mock", 0, SETTINGS_SIMPLE}},
     {"CarModel", {PERSISTENT, STRING, "MOCK", "MOCK", 0, SETTINGS_SIMPLE}},
     {"CarModelName", {PERSISTENT, STRING, "", "", 0}},
+    {"CivicStopLetOff", {PERSISTENT, BOOL, "1", "1", 2}},
     {"CECurves", {PERSISTENT, BOOL, "0", "0", 1, SETTINGS_SIMPLE}},
     {"CECurvesLead", {PERSISTENT, BOOL, "0", "0", 1}},
     {"CELead", {PERSISTENT, BOOL, "1", "0", 1, SETTINGS_SIMPLE}},
