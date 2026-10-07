@@ -19,21 +19,19 @@ from openpilot.selfdrive.ui.onroad.alert_renderer import (
   Alert,
   AlertRenderer,
 )
-from openpilot.selfdrive.ui.onroad.hud_renderer import COLORS, CRUISE_DISABLED_CHAR, FONT_SIZES, HudRenderer
+from openpilot.selfdrive.ui.onroad.hud_renderer import COLORS, FONT_SIZES, HudRenderer
 from openpilot.selfdrive.ui.onroad.starpilot.compass import get_compass_text
 from openpilot.selfdrive.ui.onroad.starpilot.navigation_card import NavigationCardRenderer
 from openpilot.selfdrive.ui.onroad.starpilot.pip_sidecam import PipSideCamera
-from openpilot.selfdrive.ui.onroad.starpilot import slc_speed_limit as slc
-from openpilot.selfdrive.ui.onroad.starpilot.slc_speed_limit import render_speed_limit_at
-from openpilot.selfdrive.ui.onroad.starpilot.widget_style import CONTROL_BORDER, CONTROL_WIDTH, WIDGET_ANCHOR_OFFSET, draw_control_card
+from openpilot.selfdrive.ui.onroad.starpilot.widget_style import WIDGET_ANCHOR_OFFSET
+from openpilot.selfdrive.ui.onroad.starpilot.widgets.unified_speed import UNIFIED_WIDTH
 from openpilot.selfdrive.ui.onroad.starpilot.widgets import (
   AetherGaugeWidget,
   DriverMonitorWidget,
-  SetSpeedWidget,
-  SpeedLimitWidget,
   StoppedTimerWidget,
+  UnifiedSpeedWidget,
 )
-from openpilot.selfdrive.ui.ui_state import UIStatus, ui_state
+from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import FONT_SCALE, font_fallback, gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import draw_text_with_shadow, measure_text_cached
@@ -64,15 +62,8 @@ CONTROL_TOP = 45  # the MAX card's and the steering wheel's top edge, below the 
 SPEED_UNIT_GAP = 22  # between the speed's ink and the unit's
 # The experimental icon's dark outline (offset px, alpha), outer ring first; see ExpButton.ICON_OUTLINE.
 EXP_ICON_OUTLINE = ((6, 60), (3, 150))
-# MAX and LIMIT cards are laid out by glyph ink, not line boxes: a line box carries ~19%
-# empty space above digits, which left a gap under the label and the value off centre.
-CARD_INK_MARGIN = 16        # card edge to the label's ink; the value's space ends as far from the bottom
-CARD_VALUE_INSET = 10       # the value's ink keeps this clear of the card's sides
-SET_SPEED_VALUE_FONT = 120  # the value fills the space under the label
-LIMIT_OFFSET_VALUE_FONT = 100  # leaves room for the offset chip
-LIMIT_CHIP_LIFT = 6         # the offset chip's bottom margin matches the label's top one
 # The stop / curve gauge draws nothing in the top 25px of the comma's box (the curve's road
-# starts there); the car trims it so the road sits one column gap under the LIMIT card.
+# starts there); the car trims it so the road sits one column gap under the speed card.
 GAUGE_TOP_TRIM = 25.0
 # A smaller driver-monitoring icon. The bookmark button is a status-column slot (developer_sidebar.py).
 DM_SIZE = 160
@@ -80,15 +71,15 @@ DM_ICON_SIZE = round(DMOJI_SIZE * DM_SIZE / 192)  # the comma draws a 128 icon i
 BOOKMARK_ICON_SIZE = 64
 BOOKMARK_FLASH_SECONDS = 1.2
 BOOKMARK_COUNTER = "WheelButtonBookmarkCounter"
-# The next-turn card on the left clears the MAX / LIMIT column by the margin it keeps on the right.
-DIRECTIONS_LEFT_X = WIDGET_ANCHOR_OFFSET + CONTROL_WIDTH / 2 + 40
+# The next-turn card on the left clears the speed card by the margin it keeps on the right.
+DIRECTIONS_LEFT_X = WIDGET_ANCHOR_OFFSET + UNIFIED_WIDTH / 2 + 40
 
 
 def top_center_span(rect: rl.Rectangle) -> tuple[float, float]:
-  """(left, right) of the space between the MAX card and the steering wheel. The speed and the
-  Stopped timer centre in it: the wheel sits closer to its edge than MAX does to its own, so the
-  pane's centre would put them nearer MAX."""
-  left = rect.x + WIDGET_ANCHOR_OFFSET + CONTROL_WIDTH / 2
+  """(left, right) of the space between the speed card and the steering wheel. The speed and the
+  Stopped timer centre in it: the wheel sits closer to its edge than the card does to its own, so
+  the pane's centre would put them nearer the card."""
+  left = rect.x + WIDGET_ANCHOR_OFFSET + UNIFIED_WIDTH / 2
   right = rect.x + rect.width - RIGHT_COLUMN_ANCHOR - EXP_BUTTON_SIZE / 2
   return left, right
 
@@ -122,25 +113,12 @@ def text_ink(font: rl.Font | None, text: str, font_size: float) -> rl.Rectangle:
   return ink
 
 
-def fit_font_size(font: rl.Font | None, text: str, font_size: int, width: float) -> int:
-  """``font_size``, shrunk until the text's ink fits ``width`` (three digits in km/h)."""
-  ink_width = text_ink(font, text, font_size).width
-  return font_size if ink_width <= width else max(1, int(font_size * width / ink_width))
-
 
 def draw_ink(font: rl.Font | None, text: str, font_size: float, center_x: float, ink_top: float, color: rl.Color) -> float:
   """Draw ``text`` with its ink centred on ``center_x`` and starting at ``ink_top``; return the ink's bottom."""
   ink = text_ink(font, text, font_size)
   rl.draw_text_ex(font, text, rl.Vector2(center_x - ink.x - ink.width / 2, ink_top - ink.y), font_size, 0, color)
   return ink_top + ink.height
-
-
-def draw_card_value(font: rl.Font | None, text: str, font_size: int, rect: rl.Rectangle, top: float, bottom: float,
-                    color: rl.Color) -> None:
-  """A card's value, as large as fits, centred between ``top`` and ``bottom`` by its ink."""
-  font_size = fit_font_size(font, text, font_size, rect.width - 2 * CARD_VALUE_INSET)
-  ink = text_ink(font, text, font_size)
-  draw_ink(font, text, font_size, rect.x + rect.width / 2, top + (bottom - top - ink.height) / 2, color)
 
 
 def lateral_pause_rect(camera_rect: rl.Rectangle, display_width: float) -> rl.Rectangle:
@@ -332,64 +310,13 @@ class CarStoppedTimerWidget(StoppedTimerWidget):
     return STOPPED_COLOR
 
 
-class CarSetSpeedWidget(SetSpeedWidget):
-  """MAX laid out like the speed-limit card below it: the label tight to the top edge,
-  the value large and centred in the space left under it."""
-
-  def _render(self, rect: rl.Rectangle) -> None:
-    draw_control_card(rect)
-    hud = self.hud_renderer
-    max_color, value_color = COLORS.GREY, COLORS.DARK_GREY
-    if hud.is_cruise_set:
-      value_color = COLORS.WHITE
-      if ui_state.status == UIStatus.ENGAGED:
-        max_color = COLORS.ENGAGED
-      elif ui_state.status in (UIStatus.DISENGAGED, UIStatus.OVERRIDE):
-        max_color = COLORS.DISENGAGED
-
-    label_bottom = draw_ink(self._font_semi_bold, tr("MAX"), FONT_SIZES.max_speed, rect.x + rect.width / 2,
-                            rect.y + CARD_INK_MARGIN, max_color)
-    value = CRUISE_DISABLED_CHAR if not hud.is_cruise_set else str(round(hud.set_speed))
-    draw_card_value(self._font_bold, value, SET_SPEED_VALUE_FONT, rect, label_bottom, rect.y + rect.height - CARD_INK_MARGIN,
-                    value_color)
-
-
-class CarSpeedLimitWidget(SpeedLimitWidget):
-  """The US card shares MAX's layout, so the two stacked cards line up; the pending
-  sign and the round Vienna sign are the comma's."""
+class CarUnifiedSpeedWidget(UnifiedSpeedWidget):
+  """Without the per-source list beside the map or when the turn card is on the left."""
 
   directions_on_left = False  # set each frame by the view
 
-  def _render(self, rect: rl.Rectangle) -> None:
-    state = self._slc_state
-    if state is None:
-      return
-    # Beside the map the per-source list is noise; the sign alone is enough. The turn card
-    # on the left takes the list's place.
-    expanded = ui_state.ui_params.get_bool("SpeedLimitSources") and not ui_state.nav_map_beside_road and \
-               not self.directions_on_left
-    if state["use_vienna"] or (state["speed_limit_changed"] and state["unconfirmed_valid"]):
-      self._sign_rect = render_speed_limit_at(state, rect, expanded)
-      return
-    self._draw_card(state, rect)
-    if expanded:
-      slc._draw_sources_bubble(state, rect)
-    self._sign_rect = rect
-
-  @staticmethod
-  def _draw_card(state: dict, rect: rl.Rectangle) -> None:
-    border = slc._speed_limit_pulse_color(CONTROL_BORDER, CONTROL_BORDER.a)
-    text_color = slc._speed_limit_pulse_color(rl.Color(255, 255, 255, 255), 255)
-    draw_control_card(rect, border=border)
-    label_color = slc._source_label_color(255, is_overridden=state["slc_overridden_speed"] != 0)
-    label_bottom = draw_ink(slc._get_semi_bold(), slc._active_source_label(state), slc.FONT_SOURCE, rect.x + rect.width / 2,
-                            rect.y + CARD_INK_MARGIN, label_color)
-    bottom, font_size = rect.y + rect.height - CARD_INK_MARGIN, SET_SPEED_VALUE_FONT
-    if state["show_offset"]:
-      chip_area = rl.Rectangle(rect.x, rect.y, rect.width, rect.height - LIMIT_CHIP_LIFT)
-      slc._draw_offset_chip(chip_area, state["offset_str"], text_color)
-      bottom, font_size = rect.y + rect.height - LIMIT_CHIP_LIFT - slc.OFFSET_CHIP_BOTTOM - slc.OFFSET_CHIP_HEIGHT, LIMIT_OFFSET_VALUE_FONT
-    draw_card_value(slc._get_bold(), state["speed_limit_str"], font_size, rect, label_bottom, bottom, text_color)
+  def _show_sources(self) -> bool:
+    return super()._show_sources() and not ui_state.nav_map_beside_road and not self.directions_on_left
 
 
 class CarNavigationCardRenderer(NavigationCardRenderer):

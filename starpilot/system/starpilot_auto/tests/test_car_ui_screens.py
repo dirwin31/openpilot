@@ -185,12 +185,12 @@ def test_stopped_timer_replaces_speed_in_full_and_split_camera_panes(monkeypatch
     timer_ink = onroad_widgets.text_ink(None, "01:01", timer[3])
     assert timer[2].y + timer_ink.y == pytest.approx(rect.y + onroad_widgets.CONTROL_TOP + label_ink.height +
                                                      CarStoppedTimerWidget.LINE_GAP)
-    # Centred between the MAX card's right edge and the steering wheel's left edge (as far from
+    # Centred between the speed card's right edge and the steering wheel's left edge (as far from
     # each), where the speed it replaces sits, and clear of both.
-    max_right = rect.x + onroad_widgets.WIDGET_ANCHOR_OFFSET + onroad_widgets.CONTROL_WIDTH / 2
+    max_right = rect.x + onroad_widgets.WIDGET_ANCHOR_OFFSET + onroad_widgets.UNIFIED_WIDTH / 2
     wheel_left = rect.x + rect.width - onroad_widgets.RIGHT_COLUMN_ANCHOR - onroad_widgets.EXP_BUTTON_SIZE / 2
     center = (max_right + wheel_left) / 2
-    assert center > rect.x + rect.width / 2, "the wheel hugs its edge more than MAX does"
+    assert center > rect.x + rect.width / 2, "the wheel hugs its edge more than the speed card does"
     assert abs(label[2].x + len("Stopped") * label[3] * 0.55 / 2 - center) < 1
     assert abs(timer[2].x + len("01:01") * timer[3] * 0.55 / 2 - center) < 1
     left = max_right + CarStoppedTimerWidget.HORIZONTAL_MARGIN
@@ -291,25 +291,6 @@ def test_logo_and_blank_slots_keep_their_places(status_sidebar, monkeypatch):
   assert draws[2][1] - draws[1][1] == step / 2
 
 
-def test_car_max_card_puts_the_label_at_the_top_edge(monkeypatch):
-  monkeypatch.setattr(onroad_widgets, "measure_text_cached",
-                      lambda _font, text, size: SimpleNamespace(x=len(text) * size * 0.55, y=size * 0.8))
-  monkeypatch.setattr(onroad_widgets, "draw_control_card", lambda rect: None)
-  monkeypatch.setattr(onroad_widgets, "tr", lambda text: text)
-  draws = []
-  monkeypatch.setattr(onroad_widgets.rl, "draw_text_ex", lambda font, text, pos, size, spacing, color: draws.append((text, pos, size)))
-  widget = onroad_widgets.CarSetSpeedWidget.__new__(onroad_widgets.CarSetSpeedWidget)
-  widget._font_semi_bold = widget._font_bold = None
-  widget.hud_renderer = SimpleNamespace(is_cruise_set=True, set_speed=65.0)
-  rect = rl.Rectangle(58, 45, 176, 196)
-  widget._render(rect)
-  (label, label_pos, label_size), (value, value_pos, value_size) = draws
-  assert (label, value) == ("MAX", "65")
-  assert label_pos.y == rect.y + onroad_widgets.CARD_INK_MARGIN
-  label_bottom, value_bottom = label_pos.y + label_size * 0.8, value_pos.y + value_size * 0.8
-  bottom = rect.y + rect.height - onroad_widgets.CARD_INK_MARGIN
-  assert abs((value_pos.y - label_bottom) - (bottom - value_bottom)) < 1e-6, "value centred below"
-
 
 class _GlyphFont(SimpleNamespace):
   """Two glyphs with the proportions of Inter's digits: ink from 19% to 81% of the line box,
@@ -335,35 +316,6 @@ def test_card_text_is_placed_by_its_ink(monkeypatch):
   assert draws[0].y == 200 - 19, "the line box's empty top is not counted"
   assert draws[0].x + ink.x + ink.width / 2 == 500, "centred by ink, not by advance"
 
-
-def test_car_limit_card_matches_the_max_card(monkeypatch):
-  monkeypatch.setattr(onroad_widgets, "measure_text_cached",
-                      lambda _font, text, size: SimpleNamespace(x=len(text) * size * 0.55, y=size * 0.8))
-  monkeypatch.setattr(onroad_widgets, "draw_control_card", lambda rect, **kwargs: None)
-  chips = []
-  monkeypatch.setattr(onroad_widgets.slc, "_draw_offset_chip", lambda rect, text, color: chips.append(rect))
-  monkeypatch.setattr(onroad_widgets.slc, "_get_bold", lambda: None)
-  monkeypatch.setattr(onroad_widgets.slc, "_get_semi_bold", lambda: None)
-  monkeypatch.setattr(onroad_widgets.slc, "tr", lambda text: text)
-  draws = []
-  monkeypatch.setattr(onroad_widgets.rl, "draw_text_ex", lambda font, text, pos, size, spacing, color: draws.append((text, pos, size)))
-  rect = rl.Rectangle(58, 256, 176, 196)
-  state = {"slc_overridden_speed": 0, "speed_limit_source": "Map Data", "show_offset": False, "offset_str": "+5",
-           "speed_limit_str": "45"}
-  onroad_widgets.CarSpeedLimitWidget._draw_card(state, rect)
-  (label, label_pos, _), (value, value_pos, value_size) = draws
-  assert (label, value) == ("MAP", "45")
-  assert label_pos.y == rect.y + onroad_widgets.CARD_INK_MARGIN and value_size == onroad_widgets.SET_SPEED_VALUE_FONT
-  assert chips == []
-
-  draws.clear()
-  onroad_widgets.CarSpeedLimitWidget._draw_card({**state, "show_offset": True}, rect)
-  (_, label_pos, label_size), (_, value_pos, value_size) = draws
-  chip_top = rect.y + rect.height - onroad_widgets.LIMIT_CHIP_LIFT - onroad_widgets.slc.OFFSET_CHIP_BOTTOM - onroad_widgets.slc.OFFSET_CHIP_HEIGHT
-  label_bottom, value_bottom = label_pos.y + label_size * 0.8, value_pos.y + value_size * 0.8
-  assert abs((value_pos.y - label_bottom) - (chip_top - value_bottom)) < 1e-6, "value centred between label and chip"
-  chip_bottom = chips[0].y + chips[0].height - onroad_widgets.slc.OFFSET_CHIP_BOTTOM
-  assert rect.y + rect.height - chip_bottom == onroad_widgets.CARD_INK_MARGIN, "chip as far from the bottom as the label from the top"
 
 
 def test_unavailable_gpu_sample_is_not_reported_as_zero(status_sidebar):
@@ -640,7 +592,7 @@ def test_directions_card_follows_the_directions_side(monkeypatch, left):
   x = card._card_x(rect, 560)
   if left:
     assert x == int(rect.x + onroad_widgets.DIRECTIONS_LEFT_X)
-    # clear of the MAX / LIMIT column
-    assert x > rect.x + onroad_widgets.WIDGET_ANCHOR_OFFSET + onroad_widgets.CONTROL_WIDTH / 2
+    # clear of the speed card
+    assert x > rect.x + onroad_widgets.WIDGET_ANCHOR_OFFSET + onroad_widgets.UNIFIED_WIDTH / 2
   else:
     assert x == int(rect.x + rect.width - 560 - 40)

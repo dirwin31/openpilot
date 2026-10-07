@@ -10,11 +10,10 @@ so each widget is initialized and registered once:
   * a larger labeled lateral-pause badge above the torque bar
   * a compact "Stopped mm:ss" timer in place of the speed, with a smaller
     steering-wheel button moved toward the edge to give it room
-  * MAX laid out like the speed-limit card (label at the top edge, large value)
   * with the map beside the road: no turn card (the map shows it larger) and the
-    speed-limit sign without its per-source list; without it, the turn card on the
+    speed card without its per-source list; without it, the turn card on the
     side the car's Directions Side setting picks
-  * the stop / curve gauge tight under the LIMIT card
+  * the stop / curve gauge tight under the speed card
   * a smaller driver-monitoring icon (the bookmark button is a status-column slot)
   * the camera can be turned off from the car's settings
 """
@@ -38,9 +37,8 @@ from openpilot.starpilot.system.starpilot_auto.ui.onroad_widgets import (
   CarDriverStateRenderer,
   CarHudRenderer,
   CarPipSideCamera,
-  CarSetSpeedWidget,
-  CarSpeedLimitWidget,
   CarStoppedTimerWidget,
+  CarUnifiedSpeedWidget,
   NoFavoriteMenu,
   RIGHT_COLUMN_ANCHOR,
   lateral_pause_rect,
@@ -75,11 +73,8 @@ class CarOnroadView(StarPilotOnroadView):
   def _create_favorite_menu(self):
     return NoFavoriteMenu()
 
-  def _create_set_speed_widget(self):
-    return CarSetSpeedWidget(self._hud_renderer)
-
-  def _create_speed_limit_widget(self):
-    return CarSpeedLimitWidget()
+  def _create_unified_speed_widget(self):
+    return CarUnifiedSpeedWidget(self._hud_renderer)
 
   def _create_stopped_timer_widget(self):
     return CarStoppedTimerWidget(self.is_in_reverse)
@@ -114,9 +109,9 @@ class CarOnroadView(StarPilotOnroadView):
       finally:
         rl.end_scissor_mode()
 
-  def _render_slc(self):
-    self._speed_limit_widget.directions_on_left = self._hud_renderer.directions_on_left
-    super()._render_slc()
+  def _render_speed_card(self):
+    self._unified_speed_widget.directions_on_left = self._hud_renderer.directions_on_left
+    super()._render_speed_card()
 
   def _render_bottom_row_widgets(self):
     # Hide if any alert (stock or StarPilot) is active

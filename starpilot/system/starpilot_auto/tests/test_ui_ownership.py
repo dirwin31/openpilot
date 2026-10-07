@@ -71,6 +71,7 @@ def test_pairing_keeps_dark_responsive_car_presentation(monkeypatch, size):
   monkeypatch.setattr(car.gui_app, "font", lambda *_args: None)
   monkeypatch.setattr(car, "wrap_text", lambda *_args: ["Pair device"])
   monkeypatch.setattr(native, "wrap_text", lambda *_args: ["Pair device"])
+  monkeypatch.setattr(native, "measure_text_cached", lambda _font, text, size: SimpleNamespace(x=len(text) * size / 2, y=size))
   for name in ("draw_rectangle_rounded", "draw_rectangle_rounded_lines_ex", "draw_text_ex"):
     monkeypatch.setattr(rl, name, lambda *_args: None)
   colors = []
@@ -153,21 +154,21 @@ def test_onroad_factories_register_car_widgets_once(monkeypatch):
 
   monkeypatch.setattr(native.AugmentedRoadView, "__init__", init_road)
   monkeypatch.setattr(native.gui_app, "font", lambda *_args: None)
-  for name in ("TorqueBar", "SetSpeedWidget", "SteeringWheelWidget", "PedalIconsWidget",
+  for name in ("TorqueBar", "SteeringWheelWidget", "PedalIconsWidget",
                "PersonalityButtonWidget", "ModelSourceWidget"):
     monkeypatch.setattr(native, name, FakeWidget)
   builds = {}
-  for name in ("CarPipSideCamera", "CarSpeedLimitWidget", "CarStoppedTimerWidget", "NoFavoriteMenu",
+  for name in ("CarPipSideCamera", "CarUnifiedSpeedWidget", "CarStoppedTimerWidget", "NoFavoriteMenu",
                "CarAetherGaugeWidget", "CarDriverMonitorWidget"):
     builds[name] = Mock(side_effect=FakeWidget)
     monkeypatch.setattr(car, name, builds[name])
-  for name in ("PipSideCamera", "SpeedLimitWidget", "StoppedTimerWidget", "FavoriteRadialMenu",
+  for name in ("PipSideCamera", "UnifiedSpeedWidget", "StoppedTimerWidget", "FavoriteRadialMenu",
                "AetherGaugeWidget", "DriverMonitorWidget"):
     monkeypatch.setattr(native, name, Mock(side_effect=AssertionError("constructed a discarded native widget")))
   view = car.CarOnroadView()
   for factory in builds.values():
     assert factory.call_count == 1
-  for widget in (view._pip_sidecam, view._speed_limit_widget, view._stopped_timer_widget,
+  for widget in (view._pip_sidecam, view._unified_speed_widget, view._stopped_timer_widget,
                  view._aethergauge_widget, view._driver_monitor_widget):
     assert view._children.count(widget) == 1
-  assert view.layout_manager.zones["left"].count(view._speed_limit_widget) == 1
+  assert view.layout_manager.zones["left"].count(view._unified_speed_widget) == 1

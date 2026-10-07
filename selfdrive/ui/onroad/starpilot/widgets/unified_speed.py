@@ -335,7 +335,7 @@ class UnifiedSpeedWidget(LayoutWidget):
     if state is None or presentation.confirmation_pending:
       drawer.reset()
     else:
-      drawer.update(ui_state.ui_params.get_bool("SpeedLimitSources"), rl.get_time())
+      drawer.update(self._show_sources(), rl.get_time())
     if drawer.width > 0:
       drawer.draw_frame(rect, (limit_bounds or rect).y, CONTROL_BG, UNIFIED_ACCENT)
     else:
@@ -406,6 +406,9 @@ class UnifiedSpeedWidget(LayoutWidget):
           self._draw_speed_limit_border(rect, limit_bounds, vision_color)
       if drawer.width > 0:
         drawer.draw_contents(state, rect, (limit_bounds or rect).y)
+
+  def _show_sources(self) -> bool:
+    return ui_state.ui_params.get_bool("SpeedLimitSources")
 
   def _handle_mouse_press(self, mouse_pos) -> None:
     limit = self._speed_limit_bounds(self.rect)
