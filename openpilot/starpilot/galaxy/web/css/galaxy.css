@@ -1453,6 +1453,10 @@ input[type="checkbox"]:disabled { opacity: .4; cursor: not-allowed; }
 .gx-aa-checks .gx-aa-check--active::before { border-top-color: var(--primary); animation: gx-spin .9s linear infinite; }
 .gx-aa-checks .gx-aa-check--failed { color: var(--error); }
 .gx-aa-checks .gx-aa-check--failed::before { content: "✕"; border: 0; background: var(--error); color: var(--on-error); }
+.gx-aa-google, .gx-aa-google__form { display: grid; gap: var(--sp-3); min-width: 0; }
+.gx-aa-google__form label { display: grid; gap: var(--sp-1); }
+.gx-aa-google__form .gx-field { width: 100%; min-width: 0; }
+.gx-aa-google__form label:has(input[type="checkbox"]) { display: block; }
 .gx-aa-sheet__done { display: grid; justify-items: center; gap: var(--sp-3); text-align: center; padding-block: var(--sp-3); }
 .gx-aa-sheet__done > i { font-size: 3.5rem; }
 .gx-aa-sheet__done .gx-aa-checks { width: auto; text-align: left; }
@@ -1522,3 +1526,9 @@ progress { max-width: 100%; accent-color: var(--primary); }
 
 /* Descriptions are ordinary page content; notices communicate changing state. */
 .gx-settings-tabs > button[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); }
+.gx-google-browser { margin-block: 1rem; }
+.gx-google-browser__view { max-width: 480px; margin-inline: auto; }
+.gx-google-browser__view img { display: block; width: 100%; aspect-ratio: 2 / 3; touch-action: none; user-select: none; border-radius: 8px; background: white; }
+.gx-google-browser__origin { overflow-wrap: anywhere; font-size: .85rem; margin: .5rem 0; }
+.gx-google-browser__keyboard { display: block; margin-block: .75rem; }
+.gx-google-browser__keyboard input { width: 100%; box-sizing: border-box; }

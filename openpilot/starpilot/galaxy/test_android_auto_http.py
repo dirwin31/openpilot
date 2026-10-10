@@ -56,6 +56,7 @@ def api(tmp_path):
                                                                      'message': 'Package status'},
                            bluetooth_enabled=lambda: state['bluetooth_enabled'], install_ready=lambda: state['install_ready'],
                            service_ready=lambda: True, set_enabled=set_enabled, enable_bluetooth=enable_bluetooth)
+  state['setup_owner'] = setup
   class FakeClient:
     def __init__(self):
       self.calls = []
@@ -440,3 +441,63 @@ def test_outgoing_car_selection_requires_current_pairing_session_and_valid_addre
   state['parked'] = True
   assert request('POST', '/api/android-auto/pairing/cancel', '{}', cookie=cookie, content_type='application/json')[0] == 200
   assert select() == 409
+
+
+def test_google_import_is_authenticated_bounded_and_validated(api):
+  request, job, state, _ = api
+  job.start_google_import = Mock(side_effect=lambda **kwargs: setattr(job, 'running', True))
+  path = '/api/android-auto/google-import'
+  valid = {'email': 'a@example.com', 'token': 'oauth2_4/test', 'remember': False}
+  assert request('POST', path, json.dumps(valid), content_type='application/json')[0] == 401
+  _, _, headers = request('POST', '/api/auth/login', '{"password":"password123"}', content_type='application/json')
+  cookie = headers['Set-Cookie'].split(';', 1)[0]
+  for payload in (None, [], {}, {'email': 1, 'token': 'oauth2_4/test'}, {**valid, 'remember': 1},
+                  {**valid, 'token': 'not-a-token'}, {**valid, 'url': 'http://elsewhere'}):
+    assert request('POST', path, json.dumps(payload), cookie=cookie, content_type='application/json')[0] == 400
+  assert request('POST', path, json.dumps({**valid, 'token': 'x' * 5000}), cookie=cookie, content_type='application/json')[0] == 413
+  state.update(parked=False, enabled=False)
+  code, status, _ = request('POST', path, json.dumps(valid), cookie=cookie, content_type='application/json')
+  assert code == 202 and status['import']['state'] == 'running'
+  assert 'oauth2_4/test' not in json.dumps(status)
+  assert request('POST', path, json.dumps(valid), cookie=cookie, content_type='application/json')[0] == 409
+  assert request('POST', '/api/android-auto/google-forget', '{}', cookie=cookie, content_type='application/json')[0] == 409
+  job.start_google_import.assert_called_once()
+
+
+def test_browser_api_auth_ownership_park_and_import_exclusion(api, monkeypatch, tmp_path):
+  from openpilot.starpilot.system.android_auto.tests.test_google_browser import FakeProcess, wait_for
+  from openpilot.starpilot.system.android_auto import play_resolver
+  request, job, state, _ = api
+  service = state['setup_owner']
+  process = FakeProcess()
+  service.browser.factory = lambda: process
+  service.browser.available = lambda: True
+  binary = tmp_path / 'playlink'
+  binary.touch()
+  monkeypatch.setattr(play_resolver, 'BINARY', binary)
+  path = '/api/android-auto/google-browser'
+  start = {'operation': 'start', 'email': 'user@example.com', 'remember': False}
+  assert request('POST', path, json.dumps(start), content_type='application/json')[0] == 401
+  _, _, headers = request('POST', '/api/auth/login', '{"password":"password123"}', content_type='application/json')
+  cookie = headers['Set-Cookie'].split(';', 1)[0]
+  def action(value, auth=cookie):
+    return request('POST', path, json.dumps(value), cookie=auth, content_type='application/json')
+  for value in (None, [], {'operation': 'start'}, {**start, 'url': 'https://other'}, {**start, 'remember': 1}):
+    assert action(value)[0] in (400, 409)
+  state['parked'] = False
+  assert action(start)[0] == 409 and not process.calls
+  state['parked'] = True
+  code, browser, _ = action(start)
+  assert code == 200
+  wait_for(lambda: service.browser.state == 'signing_in')
+  assert request('POST', '/api/android-auto/upload', b'package', cookie=cookie)[0] == 409
+  assert action({'operation': 'frame', 'id': 'stale'})[0] == 409
+  code, frame, headers = action({'operation': 'frame', 'id': browser['id']})
+  assert code == 200 and frame['frame'] == 'frame'
+  assert headers['Cache-Control'] == 'no-store'
+  _, _, second = request('POST', '/api/auth/login', '{"password":"password123"}', content_type='application/json')
+  assert action({'operation': 'frame', 'id': browser['id']}, second['Set-Cookie'].split(';', 1)[0])[0] == 409
+  assert action({'operation': 'input', 'id': browser['id'], 'input': {'kind': 'Runtime.evaluate'}})[0] == 409
+  assert action({'operation': 'stop', 'id': browser['id']})[0] == 200
+  wait_for(lambda: not service.browser.busy())
+  assert process.closed and not job.calls

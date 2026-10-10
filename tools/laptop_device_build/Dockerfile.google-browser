@@ -1,0 +1,12 @@
+# Build-time only: the device runs the exported rootfs through bubblewrap with
+# Chromium's sandbox enabled. AGNOS does not need Docker.
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+ARG CHROMIUM_VERSION=154.0.8037.92-1~deb12u1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium=${CHROMIUM_VERSION} bubblewrap xvfb x11-xkb-utils xkb-data ca-certificates fonts-liberation \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+COPY tools/google_browser/session.sh /usr/local/bin/google-browser
+RUN chmod 755 /usr/local/bin/google-browser \
+    && mkdir -p /session /proc /dev /tmp /output \
+    && dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > /usr/local/share/google-browser-packages.tsv \
+    && test "$(uname -sm)" = "Linux aarch64"

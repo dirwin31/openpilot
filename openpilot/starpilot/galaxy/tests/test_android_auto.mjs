@@ -393,3 +393,25 @@ connectingPage.runtime = { running: true, state: 'connecting_bluetooth' }
 assert.equal(connectingPage.projecting, false)
 connectingPage.runtime.state = 'streaming'
 assert.equal(connectingPage.projecting, true)
+
+// Google import keeps session material out of page state after submission.
+const { googleInstallChecks } = await import('../web/js/android-auto.js')
+const googlePage = page({ ...setup, googlePlay: { available: true, remembered: false } })
+googlePage.googleEmail = 'user@example.com'
+googlePage.googleToken = 'oauth2_4/test-private'
+googlePage.googleRemember = false
+let googleCall
+googlePage.feed = { async googleImport(...args) { googleCall = args; assert.equal(googlePage.googleToken, ''); return true } }
+assert.equal(await googlePage.googleImport(), true)
+assert.deepEqual(googleCall, ['user@example.com', 'oauth2_4/test-private', false])
+googlePage.googleToken = 'another-private-value'
+googlePage.closeInstall()
+assert.equal(googlePage.googleToken, '')
+assert.deepEqual(googleInstallChecks({ state: 'running', stage: 'resolving' }).map(c => c.status), ['done', 'active', 'pending', 'pending'])
+assert.deepEqual(googleInstallChecks({ state: 'failed', stage: 'downloading' }).map(c => c.status), ['done', 'done', 'failed', 'pending'])
+assert.match(googleInstallChecks({ state: 'running', stage: 'downloading', downloaded: 5, total: 10 })[2].label, /50%/)
+assert(googleInstallChecks({ state: 'done', stage: 'done' }).every(c => c.status === 'done'))
+assert.match(AndroidAutoPage.template, /Manual File Upload/)
+assert.match(AndroidAutoPage.template, /Forget saved Google sign-in/)
+assert.match(AndroidAutoPage.template, /Manage package/)
+console.log('Google Play import: credential clearing, progress, retry and manual fallback passed')
