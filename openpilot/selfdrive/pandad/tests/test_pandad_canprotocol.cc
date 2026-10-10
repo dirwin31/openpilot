@@ -1,4 +1,5 @@
 #include <climits>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
@@ -8,7 +9,7 @@
 #include "selfdrive/pandad/panda.h"
 
 struct PandaTest : public Panda {
-  PandaTest(int can_list_size, cereal::PandaState::PandaType hw_type);
+  PandaTest(int can_list_size, cereal::PandaState::PandaType hw_type, uint32_t offset=0);
   void test_can_send();
   void test_can_recv(uint32_t chunk_size = 0);
   void test_chunked_can_recv();
@@ -20,7 +21,7 @@ struct PandaTest : public Panda {
   capnp::List<cereal::CanData>::Reader can_data_list;
 };
 
-PandaTest::PandaTest(int can_list_size_, cereal::PandaState::PandaType hw_type_) : can_list_size(can_list_size_), Panda() {
+PandaTest::PandaTest(int can_list_size_, cereal::PandaState::PandaType hw_type_, uint32_t offset) : can_list_size(can_list_size_), Panda(offset) {
   this->hw_type = hw_type_;
   int data_limit = ((hw_type == cereal::PandaState::PandaType::RED_PANDA) ? std::size(dlc_to_len) : 9);
   // prepare test data
@@ -38,7 +39,7 @@ PandaTest::PandaTest(int can_list_size_, cereal::PandaState::PandaType hw_type_)
     uint32_t id = i % data_limit;
     const std::string &dat = test_data[dlc_to_len[id]];
     can.setAddress(i);
-    can.setSrc(i % 3);
+    can.setSrc(i % 3 + bus_offset);
     can.setDat(kj::ArrayPtr((uint8_t *)dat.data(), dat.size()));
     total_pakets_size += sizeof(can_header) + dat.size();
   }
@@ -96,6 +97,7 @@ void PandaTest::test_can_recv(uint32_t rx_chunk_size) {
   CHECK(frames.size() == can_list_size);
   for (int i = 0; i < frames.size(); ++i) {
     CHECK(frames[i].address == i);
+    CHECK(frames[i].src == i % 3 + bus_offset);
     CHECK(test_data.find(frames[i].dat.size()) != test_data.end());
     const std::string &dat = test_data[frames[i].dat.size()];
     CHECK(memcmp(dat.data(), frames[i].dat.data(), dat.size()) == 0);
@@ -155,20 +157,78 @@ void test_firmware_selection() {
   CHECK(!FirmwarePanda(Type::DOS, 0x11).up_to_date());
 }
 
+
+class RoutingPanda : public Panda {
+public:
+  explicit RoutingPanda(uint32_t offset) : Panda(offset) {}
+  using Panda::pack_can_buffer;
+  using Panda::unpack_can_buffer;
+  using Panda::calculate_checksum;
+};
+
+void test_disjoint_bus_blocks_and_return_flags() {
+  MessageBuilder message;
+  auto list = message.initEvent().initSendcan(12);
+  for (uint32_t bus = 0; bus < 12; ++bus) {
+    list[bus].setAddress(0x100 + bus);
+    list[bus].setSrc(bus);
+    const std::array<uint8_t, 8> data{(uint8_t)bus, 1, 2, 3, 4, 5, 6, 7};
+    list[bus].setDat(kj::arrayPtr(data.data(), data.size()));
+  }
+  for (uint32_t offset : {0U, 4U, 8U}) {
+    RoutingPanda panda(offset);
+    std::vector<uint8_t> bytes;
+    panda.pack_can_buffer(list.asReader(), [&](uint8_t *data, size_t size) { bytes.insert(bytes.end(), data, data + size); });
+    const size_t packet_size = sizeof(can_header) + 8;
+    CHECK(bytes.size() == 4 * packet_size);
+    for (uint32_t local = 0; local < 4; ++local) {
+      can_header header;
+      memcpy(&header, bytes.data() + local * packet_size, sizeof(header));
+      CHECK(header.bus == local && header.addr == 0x100 + offset + local);
+    }
+    for (uint32_t flags : {0U, CAN_RETURNED_BUS_OFFSET, CAN_REJECTED_BUS_OFFSET}) {
+      auto encoded = bytes;
+      for (uint32_t local = 0; local < 4; ++local) {
+        can_header header;
+        auto *packet = encoded.data() + local * packet_size;
+        memcpy(&header, packet, sizeof(header));
+        header.returned = flags == CAN_RETURNED_BUS_OFFSET;
+        header.rejected = flags == CAN_REJECTED_BUS_OFFSET;
+        header.checksum = 0;
+        memcpy(packet, &header, sizeof(header));
+        header.checksum = panda.calculate_checksum(packet, packet_size);
+        memcpy(packet, &header, sizeof(header));
+      }
+      uint32_t size = encoded.size(); std::vector<can_frame> frames;
+      CHECK(panda.unpack_can_buffer(encoded.data(), size, frames));
+      CHECK(frames.size() == 4);
+      for (uint32_t local = 0; local < 4; ++local) {
+        CHECK(frames[local].src == offset + local + flags);
+        CHECK(frames[local].address == 0x100 + offset + local);
+        CHECK((uint8_t)frames[local].dat[0] == offset + local);
+      }
+    }
+  }
+}
+
 void test_can_protocol() {
+  test_disjoint_bus_blocks_and_return_flags();
   test_firmware_selection();
   for (auto hw_type : {cereal::PandaState::PandaType::DOS, cereal::PandaState::PandaType::RED_PANDA}) {
+    for (uint32_t offset : {0U, 4U, 8U}) {
     for (int can_list_size : {1, 3, 5, 9, 10, 18, 19, 20, 30, 60, 100, 200}) {
-      PandaTest send_test(can_list_size, hw_type);
+      PandaTest send_test(can_list_size, hw_type, offset);
       send_test.test_can_send();
 
-      PandaTest receive_test(can_list_size, hw_type);
+      PandaTest receive_test(can_list_size, hw_type, offset);
       receive_test.test_can_recv();
 
-      PandaTest chunked_receive_test(can_list_size, hw_type);
+      PandaTest chunked_receive_test(can_list_size, hw_type, offset);
       for (uint32_t chunk_size : {1U, 63U, 64U, 65U}) chunked_receive_test.test_can_recv(chunk_size);
     }
   }
+}
+
 }
 
 int main() {

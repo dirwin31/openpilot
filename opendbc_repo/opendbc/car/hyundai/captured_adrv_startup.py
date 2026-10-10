@@ -6,21 +6,30 @@ from opendbc.can.parser import MAX_BAD_COUNTER
 from opendbc.car.hyundai.ecu_startup import HyundaiECUStartup, Outcome
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.canfd_owner import topology_index
 
 
 def first_generation(cp):
+  owner = topology_index(cp)
+  if owner is None:
+    return False
+  buses = CanBus(cp)
+  offset = 4 * owner
   excluded = (HyundaiFlags.CANFD_ANGLE_STEERING | HyundaiFlags.CANFD_LKA_STEER_MSG_ALT |
               HyundaiFlags.CANFD_ALT_BUTTONS | HyundaiFlags.CANFD_CAMERA_SCC | HyundaiFlags.CCNC |
               HyundaiFlags.HYBRID)
   return (cp.flags & HyundaiFlags.CANFD and
           cp.flags & HyundaiFlags.EV and cp.flags & HyundaiFlags.CANFD_LKA_STEER_MSG and
-          not cp.flags & excluded and CanBus(cp).ACAN == 0 and CanBus(cp).ECAN == 1 and
+          not cp.flags & excluded and (buses.ACAN, buses.ECAN, buses.CAM) == (offset, offset + 1, offset + 2) and
           not cp.passive and not cp.dashcamOnly and not cp.notCar)
 
 
 class CapturedADRVStartup(HyundaiECUStartup):
   def __init__(self, cp, callbacks, *, label, template_type):
-    super().__init__(cp, callbacks, address=0x730, bus=1, label=label)
+    buses = CanBus(cp)
+    super().__init__(cp, callbacks, address=0x730, bus=buses.ECAN, label=label)
+    self.template_bus = buses.ACAN
+    self.camera_bus = buses.CAM
     self.template_type = template_type
     self.template = None
 
@@ -35,7 +44,7 @@ class CapturedADRVStartup(HyundaiECUStartup):
         if not floor < stamp <= now or now - stamp > 150_000_000:
           continue
         for msg in packet:
-          if msg.src != 0 or msg.address != 0x51:
+          if msg.src != self.template_bus or msg.address != 0x51:
             continue
           try:
             candidate = self.template_type.capture(bytes(msg.dat))
@@ -66,7 +75,7 @@ class CapturedADRVStartup(HyundaiECUStartup):
       return False
     pt = ci.can_parsers[Bus.pt]
     cam = ci.can_parsers[Bus.cam]
-    if pt.bus != 1 or cam.bus != 2:
+    if pt.bus != self.bus or cam.bus != self.camera_bus:
       return False
     names = ['ACCELERATOR', 'TCS', 'WHEEL_SPEEDS', 'MDPS', 'CRUISE_BUTTONS', ci.CS.gear_msg_canfd]
     if not ci.CP.openpilotLongitudinalControl:

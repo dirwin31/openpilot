@@ -69,6 +69,42 @@ def current_intent(sm, *, car_state_ns: int, now_ns: int, previous: IntentState 
   return intent
 
 
+def native_inventory_matches_cp(state, CP) -> bool:
+  """Bind the selected serial to the ordered same-read configuration inventory.
+
+  Historical v1 wires retain single-Panda compatibility only; they carry no
+  inventory qualification. Multi-Panda admission requires coherent production v2
+  with the exact configuration and one owner.
+  The source PandaStates stamp is BOOTTIME provenance, never a monotonic lease.
+  """
+  if not state.pandaInventory:
+    return state.sourcePandaStatesMonoTime == 0 and len(CP.safetyConfigs) == 1
+  try:
+    slots = state.pandaInventory
+    configs = CP.safetyConfigs
+    if state.sourcePandaStatesMonoTime <= 0 or not 1 <= len(slots) <= 2 or len(slots) != len(configs):
+      return False
+    serials = [slot.hardwareSerial for slot in slots]
+    if any(not serial for serial in serials) or len(set(serials)) != len(serials):
+      return False
+    owners = []
+    for index, (slot, config) in enumerate(zip(slots, configs, strict=True)):
+      if slot.safetyRxChecksInvalid or slot.heartbeatLost or slot.faults:
+        return False
+      if (slot.slotIndex != index or slot.safetyModel != int(config.safetyModel.raw) or
+          slot.safetyParam != int(config.safetyParam) or slot.alternativeExperience != int(CP.alternativeExperience)):
+        return False
+      if str(config.safetyModel) in ('silent', 'noOutput'):
+        if slot.safetyParam != 0 or slot.controlsAllowed:
+          return False
+      else:
+        owners.append(slot)
+    return bool(len(owners) == 1 and owners[0].hardwareSerial == state.pandaSerial and
+                owners[0].safetyModel == state.safetyModel and owners[0].safetyParam == state.safetyParam)
+  except (AttributeError, TypeError, ValueError, OverflowError, IndexError):
+    return False
+
+
 def current_native(sm, CP, *, now_ns: int, axis_session_id: str | None = None):
   if not (sm.valid[SAFETY_SERVICE] and sm.alive[SAFETY_SERVICE] and sm.seen[SAFETY_SERVICE]):
     return None
@@ -76,11 +112,16 @@ def current_native(sm, CP, *, now_ns: int, axis_session_id: str | None = None):
   if state is None:
     return None
   if (not native_matches_cp(CP, int(state.safetyModel), int(state.safetyParam)) or
+      not native_inventory_matches_cp(state, CP) or
       not state.compatible or int(state.protocolVersion) != 1 or not state.pandaSerial or not state.axisSessionId or
       (axis_session_id is not None and str(state.axisSessionId) != axis_session_id) or
       int(sm.logMonoTime[SAFETY_SERVICE]) > now_ns or
       now_ns - int(sm.logMonoTime[SAFETY_SERVICE]) > SAFETY_MAX_AGE_NS or
       int(state.observedMonoTime) > now_ns or now_ns > int(state.validUntilMonoTime)):
+    return None
+  if state.pandaInventory and (int(sm.logMonoTime[SAFETY_SERVICE]) != state.observedMonoTime or
+                               state.observedMonoTime <= 0 or
+                               state.validUntilMonoTime - state.observedMonoTime > SAFETY_MAX_AGE_NS):
     return None
   return state
 

@@ -17,6 +17,7 @@ from opendbc.car.hyundai.classic_scc_aol import (
   native_accepts as classic_native_accepts,
   native_profile_supported as classic_native_profile_supported,
 )
+from opendbc.car.hyundai.canfd_owner import config_index
 from opendbc.car.hyundai.canfd_stock_aol import (
   qualified as qualified_canfd_stock, qualified_long as qualified_canfd_long,
   LONG_AOL_WORDS as CANFD_LONG_AOL_WORDS, STOCK_AOL_MARKER, STOCK_AOL_WORDS,
@@ -159,6 +160,13 @@ def _policy_for(CP) -> AolVehiclePolicy:
   )
 
 
+def aol_safety_config(CP):
+  if len(CP.safetyConfigs) == 1:
+    return CP.safetyConfigs[0]
+  owner = config_index(CP)
+  return CP.safetyConfigs[owner] if owner is not None else None
+
+
 def policy_for(CP) -> AolVehiclePolicy:
   policy = _policy_for(CP)
   marked = (
@@ -169,8 +177,8 @@ def policy_for(CP) -> AolVehiclePolicy:
     or (qualified_non_scc(CP) and CP.alternativeExperience == AOL_EXPERIENCE
         and CP.safetyConfigs[0].safetyParam == aol_word(CP))
   )
-  if policy.runtime_supported and marked and len(CP.safetyConfigs) == 1:
-    config = CP.safetyConfigs[0]
+  config = aol_safety_config(CP)
+  if policy.runtime_supported and marked and config is not None:
     if native_accepts_cp(CP, int(config.safetyModel.raw), int(config.safetyParam)):
       policy = replace(policy, ordinary_axis_ack_required=True, full_axis_runtime_required=True)
   return policy
@@ -200,9 +208,9 @@ def native_accepts_cp(CP, model: int, param: int) -> bool:
   if qualified_classic_scc(CP, marked_only=True):
     return classic_native_accepts(CP, model, param)
   if qualified_canfd_long(CP, marked_only=True):
-    return model == int(car.CarParams.SafetyModel.hyundaiCanfd) and param == CP.safetyConfigs[0].safetyParam
+    return model == int(car.CarParams.SafetyModel.hyundaiCanfd) and param == aol_safety_config(CP).safetyParam
   if qualified_canfd_stock(CP, marked_only=True):
-    return model == int(car.CarParams.SafetyModel.hyundaiCanfd) and param == CP.safetyConfigs[0].safetyParam
+    return model == int(car.CarParams.SafetyModel.hyundaiCanfd) and param == aol_safety_config(CP).safetyParam
   if qualified_non_scc(CP):
     return CP.alternativeExperience == AOL_EXPERIENCE and model == int(car.CarParams.SafetyModel.hyundai) and param == aol_word(CP)
   return (

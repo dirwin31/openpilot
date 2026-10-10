@@ -149,6 +149,8 @@ static bool ford_lka_curvature_checks(int desired_curvature, bool active) {
   return violation;
 }
 
+#include "opendbc/bluepilot_lateral/safety/ford_bp.h"
+
 static void ford_rx_hook(const CANPacket_t *msg) {
   ford_aol_rx(msg);
   // Update in motion state from standstill signal
@@ -217,6 +219,7 @@ static void ford_rx_hook(const CANPacket_t *msg) {
     // Physical combined cancel/resume switch, not the outgoing resume signal.
     ford_cancel_resume_button = (msg->data[2] & 0x20U) != 0U;
   }
+  ford_bp_rx(msg);
 }
 
 static bool ford_tx_hook(const CANPacket_t *msg) {
@@ -284,7 +287,7 @@ static bool ford_tx_hook(const CANPacket_t *msg) {
   }
 
   // Safety check for Lane_Assist_Data1 action
-  if (msg->addr == FORD_Lane_Assist_Data1) {
+  if ((msg->addr == FORD_Lane_Assist_Data1) && !ford_bp_enabled) {
     if (ford_mach_e_extended || ford_explorer_extended) {
       tx &= (msg->data[4] & 0x1U) == 0U;
     }
@@ -348,7 +351,7 @@ static bool ford_tx_hook(const CANPacket_t *msg) {
   }
 
   // Safety check for LateralMotionControl action
-  if (msg->addr == FORD_LateralMotionControl) {
+  if ((msg->addr == FORD_LateralMotionControl) && !ford_bp_enabled) {
     // Signal: LatCtl_D_Rq
     bool steer_control_enabled = ((msg->data[4] >> 2) & 0x7U) != 0U;
     unsigned int raw_curvature = (msg->data[0] << 3) | (msg->data[1] >> 5);
@@ -388,7 +391,7 @@ static bool ford_tx_hook(const CANPacket_t *msg) {
   }
 
   // Safety check for LateralMotionControl2 action
-  if (msg->addr == FORD_LateralMotionControl2) {
+  if ((msg->addr == FORD_LateralMotionControl2) && !ford_bp_enabled) {
     // Signal: LatCtl_D2_Rq
     bool steer_control_enabled = ((msg->data[0] >> 4) & 0x7U) != 0U;
     unsigned int raw_curvature = (msg->data[2] << 3) | (msg->data[3] >> 5);
@@ -472,6 +475,10 @@ static bool ford_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  if (ford_bp_enabled) {
+    if (msg->addr == FORD_Lane_Assist_Data1) { tx &= ford_bp_lka(msg); }
+    if ((msg->addr == FORD_LateralMotionControl) || (msg->addr == FORD_LateralMotionControl2)) { tx &= ford_bp_lateral(msg); }
+  }
   ford_aol_tx(msg, tx);
   return tx;
 }
@@ -571,11 +578,13 @@ static safety_config ford_init(uint16_t param) {
 #ifdef ALLOW_DEBUG
   ford_mach_e_extended |= (param == 19U) && (((unsigned int)alternative_experience == 0U) || (((unsigned int)alternative_experience == 32U) && ford_aol_param_valid(param)));
 #endif
-  ford_stock_switch = (((unsigned int)alternative_experience == 0U) || (((unsigned int)alternative_experience == 32U) && ford_aol_param_valid(param))) &&
+  const bool bp_config_valid = ford_bp_configure(param);
+  ford_stock_switch = ((((unsigned int)alternative_experience == 0U) || (((unsigned int)alternative_experience == 32U) && ford_aol_param_valid(param))) &&
                       ((param == 2U) || (param == 8U) || (param == 10U) || (param == 12U) ||
                        ((param == 18U) && ford_mach_e_extended) ||
                        ((param == 32U) && ford_explorer_extended) ||
-                       ((param == 66U) && ford_generic_canfd_extended));
+                       ((param == 66U) && ford_generic_canfd_extended))) ||
+                      (ford_bp_enabled && ((param & 1U) == 0U));
   ford_cancel_resume_button = false;
   ford_mach_e_path_angle_last = 0;
   ford_mach_e_announced = false;
@@ -615,6 +624,7 @@ static safety_config ford_init(uint16_t param) {
   if (ford_explorer_extended && (param == 32U)) {
     SET_TX_MSGS(FORD_STOCK_TX_MSGS, ret);
   }
+  if (ford_bp_enabled && (param == 128U)) { SET_TX_MSGS(FORD_STOCK_TX_MSGS, ret); }
   if (ford_stock_switch) {
     if (ford_lka_steering) {
       SET_RX_CHECKS(ford_stock_lka_rx_checks, ret);
@@ -622,7 +632,7 @@ static safety_config ford_init(uint16_t param) {
       SET_RX_CHECKS(ford_stock_rx_checks, ret);
     }
   }
-  if ((mach_e_namespace && !ford_mach_e_extended) ||
+  if (!bp_config_valid || (mach_e_namespace && !ford_mach_e_extended) ||
       (explorer_namespace && !ford_explorer_extended) ||
       (generic_canfd_namespace && !ford_generic_canfd_extended)) {
     ret.tx_msgs = NULL;

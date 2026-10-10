@@ -8,22 +8,35 @@
 static constexpr uint64_t now = 1000000000ULL;
 
 int main() {
-  const AolSafetyWireFields fields = {1, true, 100, 200, 5, 34, true, false, true, false, "panda", "axis"};
+  const AolSafetyWireFields fields = {1, true, 100, 200, 5, 34, true, false, true, false, "panda", "axis",
+    {now + 9000000000ULL, {{0, "panda", 5, 34, 0, true, false, false, 0}}}};
   auto bytes = encode_aol_safety_wire(fields);
   assert(!bytes.empty() && bytes.size() <= 512);
   capnp::MallocMessageBuilder event_builder;
   auto event = event_builder.initRoot<cereal::Event>();
   event.setAolSafetyWire(kj::arrayPtr(bytes.data(), bytes.size()));
   assert(event.isAolSafetyWire());
-  std::string hex;
-  char pair[3];
-  for (uint8_t value : bytes) {
-    std::snprintf(pair, sizeof(pair), "%02x", value);
-    hex += pair;
-  }
-  assert(hex == "00000000090000000000000004000200010b0100010005006400000000000000"
-                "c80000000000000022000000000000000500000032000000050000002a000000"
-                "70616e64610000006178697300000000");
+  auto aligned = kj::heapArray<capnp::word>(bytes.size() / sizeof(capnp::word));
+  std::memcpy(aligned.begin(), bytes.data(), bytes.size());
+  capnp::FlatArrayMessageReader current(aligned.asPtr());
+  auto wire = current.getRoot<cereal::AolAxisState::SafetyWire>();
+  assert(wire.getVersion() == 2U && wire.getPandaSerial() == "panda");
+  assert(wire.getSourcePandaStatesMonoTime() == now + 9000000000ULL);
+  assert(wire.getPandaInventory().size() == 1U);
+  assert(wire.getPandaInventory()[0].getHardwareSerial() == "panda");
+  assert(wire.getPandaInventory()[0].getSafetyParam() == 34U);
+  // Historic exact v1 bytes remain readable after adding the custom fields.
+  const uint64_t legacy_words[] = {
+    0x0000000900000000ULL, 0x0002000400000000ULL, 0x0005000100010b01ULL,
+    0x0000000000000064ULL, 0x00000000000000c8ULL, 0x0000000000000022ULL,
+    0x0000003200000005ULL, 0x0000002a00000005ULL, 0x00000061646e6170ULL,
+    0x0000000073697861ULL
+  };
+  capnp::FlatArrayMessageReader legacy(kj::arrayPtr(reinterpret_cast<const capnp::word *>(legacy_words),
+                                                  sizeof(legacy_words) / sizeof(capnp::word)));
+  auto old_wire = legacy.getRoot<cereal::AolAxisState::SafetyWire>();
+  assert(old_wire.getVersion() == 1U && old_wire.getPandaSerial() == "panda");
+  assert(old_wire.getSourcePandaStatesMonoTime() == 0U && old_wire.getPandaInventory().size() == 0U);
   for (uint8_t value : bytes) std::printf("%02x", value);
   std::printf("\n");
   auto bad = fields;
@@ -31,6 +44,18 @@ int main() {
   assert(encode_aol_safety_wire(bad).empty());
   bad = fields;
   bad.valid_until_mono_time = 99;
+  assert(encode_aol_safety_wire(bad).empty());
+  bad = fields;
+  bad.inventory = {};
+  assert(encode_aol_safety_wire(bad).empty());
+  bad = fields;
+  bad.inventory.slots[0].hardware_serial = std::string(97, 'x');
+  assert(encode_aol_safety_wire(bad).empty());
+  bad = fields;
+  bad.inventory.slots.push_back({1, "auxiliary", 19, 0, 0, false, false, false, 0});
+  auto pair_bytes = encode_aol_safety_wire(bad);
+  assert(!pair_bytes.empty() && pair_bytes.size() <= 512U);
+  bad.inventory.slots.push_back({2, "third", 19, 0, 0, false, false, false, 0});
   assert(encode_aol_safety_wire(bad).empty());
   capnp::MallocMessageBuilder intent_builder;
   auto intent = intent_builder.initRoot<cereal::AolAxisState::IntentWire>();

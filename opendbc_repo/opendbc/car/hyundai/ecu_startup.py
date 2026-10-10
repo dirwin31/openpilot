@@ -1,12 +1,24 @@
 """Hyundai prepublication ECU transaction; sent disable is not confirmed ownership."""
 from enum import Enum
+from collections.abc import Callable
+from typing import TypedDict, cast
 from copy import deepcopy
 import time
 
 from opendbc.car import structs
 from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.hyundai.values import HyundaiSafetyFlags
+from opendbc.car.hyundai.canfd_owner import config_index
 from opendbc.car.isotp_parallel_query import IsoTpParallelQuery
+
+
+class PreparedSafetyConfig(TypedDict):
+  safetyParam: int
+
+
+class PreparedParams(TypedDict):
+  safetyConfigs: list[PreparedSafetyConfig]
+  alternativeExperience: int
 
 
 class Outcome(Enum):
@@ -60,7 +72,8 @@ class HyundaiECUStartup:
     self.callbacks[1](frames)
 
   def _restore(self):
-    if not self.admission():
+    admission = cast(Callable[[], bool], self.admission)
+    if not admission():
       return False
     recv, send = self.callbacks
     session = self._query(send, recv, self.bus, [(self.address, None)], [b'\x10\x03'], [b'\x50\x03'])
@@ -126,11 +139,12 @@ class HyundaiECUStartup:
       return
     from opendbc.car.hyundai.ev6_aol import qualified as ev6_aol_qualified
     if self.outcome is Outcome.SENT_UNCONFIRMED and ev6_aol_qualified(ci.CP, marked_only=True):
-      expected = deepcopy(self.prepared_cp)
+      expected = deepcopy(cast(PreparedParams, self.prepared_cp))
       configs = expected.get('safetyConfigs', [])
-      if len(configs) != 1 or configs[0]['safetyParam'] != 0x15 or expected['alternativeExperience'] != 0:
+      owner = config_index(ci.CP)
+      if owner is None or len(configs) != owner + 1 or configs[owner]['safetyParam'] != 0x15 or expected['alternativeExperience'] != 0:
         raise RuntimeError('EV6 prepared LONG profile cannot be finalized')
-      configs[0]['safetyParam'] |= 0x0800
+      configs[owner]['safetyParam'] |= 0x0800
       expected['alternativeExperience'] = 32
       if ci.CP.to_dict() != expected:
         raise RuntimeError('EV6 AOL finalization changed unrelated CarParams')
@@ -140,11 +154,12 @@ class HyundaiECUStartup:
     if (self.outcome not in (Outcome.STOCK_UNTOUCHED, Outcome.STOCK_RESTORED) or
         not stock_aol_qualified(ci.CP, marked_only=True)):
       raise RuntimeError('Hyundai startup does not admit this AOL configuration')
-    expected = deepcopy(self.prepared_cp)
+    expected = deepcopy(cast(PreparedParams, self.prepared_cp))
     configs = expected.get('safetyConfigs', [])
-    if len(configs) != 1 or configs[0]['safetyParam'] not in (0x11, 0x91):
+    owner = config_index(ci.CP)
+    if owner is None or len(configs) != owner + 1 or configs[owner]['safetyParam'] not in (0x11, 0x91):
       raise RuntimeError('Hyundai startup stock profile cannot be finalized')
-    configs[0]['safetyParam'] |= 0x0800
+    configs[owner]['safetyParam'] |= 0x0800
     if ci.CP.to_dict() != expected:
       raise RuntimeError('Hyundai AOL finalization changed unrelated CarParams')
     self.prepared_cp = expected

@@ -798,6 +798,22 @@ struct AolAxisState @0xfc6241ed8877b611 {
     requestedLongitudinal @11 :Bool;
     pandaSerial @12 :Text;
     axisSessionId @13 :Text;
+    # Exact source Event stamp uses pandad BOOTTIME, for provenance only.
+    # Inventory shares the wire's CLOCK_MONOTONIC observed/expiry lease.
+    sourcePandaStatesMonoTime @14 :UInt64;
+    pandaInventory @15 :List(PandaSlot);
+
+    struct PandaSlot {
+      slotIndex @0 :UInt16;
+      hardwareSerial @1 :Text;
+      safetyModel @2 :UInt16;
+      safetyParam @3 :UInt16;
+      alternativeExperience @4 :UInt16;
+      controlsAllowed @5 :Bool;
+      safetyRxChecksInvalid @6 :Bool;
+      heartbeatLost @7 :Bool;
+      faults @8 :UInt32;
+    }
   }
 
   struct IntentWire {

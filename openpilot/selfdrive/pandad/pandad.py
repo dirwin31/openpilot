@@ -108,13 +108,18 @@ def main() -> None:
 
       panda_serials = Panda.list()
       if len(panda_serials):
-        assert len(panda_serials) == 1
         cloudlog.info(f"{len(panda_serials)} panda found, connecting - {panda_serials}")
-        flash_panda(panda_serials[0])
+        for serial in panda_serials:
+          flash_panda(serial)
+        ordering = []
+        for serial in panda_serials:
+          with Panda(serial) as panda:
+            ordering.append((not panda.is_internal(), panda.get_type(), panda.get_usb_serial()))
+        panda_serials = [serial for _, _, serial in sorted(ordering)]
 
         # run real pandad
         os.environ['MANAGER_DAEMON'] = 'pandad'
-        process = subprocess.Popen(["./pandad", panda_serials[0]], cwd=os.path.join(BASEDIR, "openpilot/selfdrive/pandad"))
+        process = subprocess.Popen(["./pandad", *panda_serials], cwd=os.path.join(BASEDIR, "openpilot/selfdrive/pandad"))
         process.wait()
     # TODO: wrap all panda exceptions in a base panda exception
     except (usb1.USBErrorNoDevice, usb1.USBErrorPipe):

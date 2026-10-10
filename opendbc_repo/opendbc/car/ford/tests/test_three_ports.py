@@ -55,6 +55,7 @@ class TestFordThreePorts(unittest.TestCase):
       with self.subTest(candidate=candidate):
         stock = params(candidate)
         self.assertFalse(stock.openpilotLongitudinalControl)
+        self.assertEqual(stock.steerActuatorDelay, 0.05 if candidate == CAR.FORD_TRANSIT_MK5 else 0.22)
         self.assertTrue(stock.safetyConfigs[-1].safetyParam & FordSafetyFlags.NEW_PORT)
         self.assertFalse(stock.safetyConfigs[-1].safetyParam & FordSafetyFlags.LONG_CONTROL)
         requested = params(candidate, alpha=True)
@@ -62,14 +63,16 @@ class TestFordThreePorts(unittest.TestCase):
         self.assertTrue(requested.safetyConfigs[-1].safetyParam & FordSafetyFlags.LONG_CONTROL)
         if candidate == CAR.FORD_MONDEO_MK5:
           self.assertFalse(params(candidate, alpha=True, release=True).openpilotLongitudinalControl)
+    self.assertEqual(params(CAR.FORD_MUSTANG_MACH_E_MK1).steerActuatorDelay, 0.22)
     self.assertFalse(params(CAR.FORD_BRONCO_SPORT_MK1).openpilotLongitudinalControl)
     self.assertTrue(params(CAR.FORD_BRONCO_SPORT_MK1, alpha=True).openpilotLongitudinalControl)
 
   def test_real_edge_angle_and_mondeo_gear_parsers(self):
-    for candidate, source_name, source_values in (
+    cases: tuple[tuple[CAR, str, dict[str, float]], ...] = (
       (CAR.FORD_EDGE_MK2, "TransGearData", {"GearLvrPos_D_Actl": 4}),
       (CAR.FORD_MONDEO_MK5, "Gear_Shift_by_Wire_FD1", {"TrnRng_D_RqGsm": 4}),
-    ):
+    )
+    for candidate, source_name, source_values in cases:
       with self.subTest(candidate=candidate):
         cp = params(candidate)
         self.assertEqual(cp.transmissionType, structs.CarParams.TransmissionType.automatic)

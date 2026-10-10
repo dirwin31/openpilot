@@ -49,7 +49,8 @@ private:
   std::unique_ptr<PandaCommsHandle> handle;
 
 public:
-  Panda(std::string serial);
+  Panda(std::string serial, uint32_t bus_offset=0);
+  const uint32_t bus_offset;
 
   cereal::PandaState::PandaType hw_type = cereal::PandaState::PandaType::UNKNOWN;
 
@@ -93,9 +94,9 @@ protected:
   uint8_t receive_buffer[RECV_SIZE + sizeof(can_header) + 64];
   uint32_t receive_buffer_size = 0;
 
-  Panda() {}
-  Panda(std::unique_ptr<PandaCommsHandle> comms, cereal::PandaState::PandaType type)
-    : handle(std::move(comms)), hw_type(type) {}
+  Panda(uint32_t bus_offset=0) : bus_offset(bus_offset) {}
+  Panda(std::unique_ptr<PandaCommsHandle> comms, cereal::PandaState::PandaType type, uint32_t offset=0)
+    : handle(std::move(comms)), bus_offset(offset), hw_type(type) {}
   void pack_can_buffer(const capnp::List<cereal::CanData>::Reader &can_data_list,
                          std::function<void(uint8_t *, size_t)> write_func);
   bool unpack_can_buffer(uint8_t *data, uint32_t &size, std::vector<can_frame> &out_vec);

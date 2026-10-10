@@ -20,6 +20,21 @@ WIRE_VERSION = 1
 MAX_WIRE_BYTES = 512
 MAX_WIRE_WORDS = (MAX_WIRE_BYTES - 8) // 8
 MAX_ID_BYTES = 96
+SAFETY_INVENTORY_VERSION = 2
+MAX_PANDA_SLOTS = 2
+
+
+@dataclass(frozen=True)
+class PandaSlot:
+  slotIndex: int
+  hardwareSerial: str
+  safetyModel: int
+  safetyParam: int
+  alternativeExperience: int
+  controlsAllowed: bool = False
+  safetyRxChecksInvalid: bool = False
+  heartbeatLost: bool = False
+  faults: int = 0
 
 
 @dataclass(frozen=True)
@@ -36,6 +51,8 @@ class SafetyState:
   requestedLongitudinal: bool
   pandaSerial: str
   axisSessionId: str
+  sourcePandaStatesMonoTime: int = 0
+  pandaInventory: tuple[PandaSlot, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -59,7 +76,7 @@ def _bounded_id(value: str) -> str:
   return value
 
 
-def _payload(raw_value, schema, kind: int):
+def _payload(raw_value, schema, kind: int, versions=(WIRE_VERSION,)):
   if not isinstance(raw_value, (bytes, bytearray, memoryview)):
     return None
   byte_count = raw_value.nbytes if isinstance(raw_value, memoryview) else len(raw_value)
@@ -73,7 +90,7 @@ def _payload(raw_value, schema, kind: int):
     if segment_count_minus_one != 0 or segment_words > MAX_WIRE_WORDS or len(raw) != 8 + 8 * segment_words:
       return None
     with schema.from_bytes(raw, traversal_limit_in_words=MAX_WIRE_WORDS, nesting_limit=4) as decoded:
-      if int(decoded.kind) != kind or int(decoded.version) != WIRE_VERSION:
+      if int(decoded.kind) != kind or int(decoded.version) not in versions:
         return None
       return decoded.to_dict()
   except (ValueError, OverflowError, RuntimeError, UnicodeDecodeError, capnp.KjException):
@@ -97,15 +114,25 @@ def _memoized(decode):
 
 @_memoized
 def decode_safety(raw: bytes) -> SafetyState | None:
-  value = _payload(raw, custom.AolAxisState.SafetyWire, SAFETY_KIND)
+  value = _payload(raw, custom.AolAxisState.SafetyWire, SAFETY_KIND, (WIRE_VERSION, SAFETY_INVENTORY_VERSION))
   if value is None:
     return None
   try:
+    source_ns = int(value.get('sourcePandaStatesMonoTime', 0))
+    inventory = tuple(PandaSlot(int(slot['slotIndex']), _bounded_id(str(slot.get('hardwareSerial', ''))),
+                               int(slot['safetyModel']), int(slot['safetyParam']), int(slot['alternativeExperience']),
+                               bool(slot['controlsAllowed']), bool(slot['safetyRxChecksInvalid']),
+                               bool(slot['heartbeatLost']), int(slot['faults']))
+                      for slot in value.get('pandaInventory', ()))
+    if (int(value['version']) == WIRE_VERSION and (source_ns or inventory) or
+        int(value['version']) == SAFETY_INVENTORY_VERSION and
+        (source_ns <= 0 or not 1 <= len(inventory) <= MAX_PANDA_SLOTS)):
+      return None
     result = SafetyState(int(value['protocolVersion']), bool(value['compatible']), int(value['observedMonoTime']),
                          int(value['validUntilMonoTime']), int(value['safetyModel']), int(value['safetyParam']),
                          bool(value['lateralAllowed']), bool(value['longitudinalAllowed']), bool(value['requestedLateral']),
                          bool(value['requestedLongitudinal']), _bounded_id(str(value.get('pandaSerial', ''))),
-                         _bounded_id(str(value.get('axisSessionId', ''))))
+                         _bounded_id(str(value.get('axisSessionId', ''))), source_ns, inventory)
     if result.validUntilMonoTime < result.observedMonoTime:
       return None
     return result
@@ -148,14 +175,25 @@ def encode_intent(value: IntentState) -> bytes:
 def encode_safety(value: SafetyState) -> bytes:
   _bounded_id(value.pandaSerial)
   _bounded_id(value.axisSessionId)
+  inventory = value.pandaInventory
+  inventory_version = bool(inventory or value.sourcePandaStatesMonoTime)
+  if inventory_version and (value.sourcePandaStatesMonoTime <= 0 or not 1 <= len(inventory) <= MAX_PANDA_SLOTS):
+    raise ValueError('AOL Panda inventory is invalid')
+  for slot in inventory:
+    _bounded_id(slot.hardwareSerial)
   message = custom.AolAxisState.SafetyWire.new_message(
-    kind=SAFETY_KIND, version=WIRE_VERSION, protocolVersion=value.protocolVersion,
+    kind=SAFETY_KIND, version=SAFETY_INVENTORY_VERSION if inventory_version else WIRE_VERSION,
+    protocolVersion=value.protocolVersion,
     compatible=value.compatible, observedMonoTime=value.observedMonoTime,
     validUntilMonoTime=value.validUntilMonoTime, safetyModel=value.safetyModel,
     safetyParam=value.safetyParam, lateralAllowed=value.lateralAllowed,
     longitudinalAllowed=value.longitudinalAllowed, requestedLateral=value.requestedLateral,
     requestedLongitudinal=value.requestedLongitudinal, pandaSerial=value.pandaSerial,
-    axisSessionId=value.axisSessionId)
+    axisSessionId=value.axisSessionId, sourcePandaStatesMonoTime=value.sourcePandaStatesMonoTime,
+    pandaInventory=[{'slotIndex': slot.slotIndex, 'hardwareSerial': slot.hardwareSerial, 'safetyModel': slot.safetyModel,
+                     'safetyParam': slot.safetyParam, 'alternativeExperience': slot.alternativeExperience,
+                     'controlsAllowed': slot.controlsAllowed, 'safetyRxChecksInvalid': slot.safetyRxChecksInvalid,
+                     'heartbeatLost': slot.heartbeatLost, 'faults': slot.faults} for slot in inventory])
   data = message.to_bytes()
   if len(data) > MAX_WIRE_BYTES:
     raise ValueError('AOL safety payload exceeds wire bound')

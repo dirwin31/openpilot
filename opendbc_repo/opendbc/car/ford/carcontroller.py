@@ -1,6 +1,8 @@
 import math
 import numpy as np
 from opendbc.can import CANPacker
+from opendbc.bluepilot_lateral import BluePilotLateral
+from opendbc.bluepilot_lateral.hosts.starpilot import qualified as angle_qualified
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, apply_hysteresis, structs
 from opendbc.car.ford import fordcan
 from opendbc.car.ford.manual_turn import ManualTurnLatch
@@ -15,6 +17,7 @@ from opendbc.car.ford.generic_canfd_lateral import (
   GenericCanfdLateralController, qualified as generic_canfd_qualified, bounded_command as generic_canfd_bounded_command,
 )
 from opendbc.car.ford.mache_lateral import MachELateralController, FordLateralResult, bounded_command, qualified as mache_qualified
+from opendbc.car.ford.new_port_curvature import create_controller as create_new_port_curvature, bounded_command as new_port_bounded_command
 from opendbc.car.ford.values import CarControllerParams, FordFlags, FordSafetyFlags, CAR
 from opendbc.car.interfaces import CarControllerBase, V_CRUISE_MAX
 
@@ -66,6 +69,7 @@ class CarController(CarControllerBase):
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.CAN = fordcan.CanBus(CP)
 
+    self.bp_lat = BluePilotLateral(CP) if angle_qualified(CP) else None
     self.manual_turn = ManualTurnLatch() if CP.carFingerprint == CAR.FORD_MUSTANG_MACH_E_MK1 and not CP.flags & FordFlags.LKA_STEERING else None
     self.stock_cruise_button = FordStockCruiseButton()
     self.manual_turn_inputs = None
@@ -73,6 +77,7 @@ class CarController(CarControllerBase):
     self.mache_extended_announced = False
     self.generic_canfd = generic_canfd_qualified(CP)
     self.classic_lateral = GenericCanfdLateralController(CP) if self.generic_canfd else create_classic_controller(CP)
+    self.new_port_curvature = create_new_port_curvature(CP)
     self.classic_extended_announced = False
     self.classic_profile = any(s.safetyModel == structs.CarParams.SafetyModel.ford and
                                 s.safetyParam & (FordSafetyFlags.CLASSIC_EXTENDED | FordSafetyFlags.GENERIC_CANFD_EXTENDED) for s in CP.safetyConfigs)
@@ -93,7 +98,7 @@ class CarController(CarControllerBase):
 
   def update(self, CC, CS, now_nanos):
     can_sends = []
-    if (self.mache_lateral is not None or self.classic_lateral is not None) and self.manual_turn_inputs is not None:
+    if (self.mache_lateral is not None or self.classic_lateral is not None or self.new_port_curvature is not None) and self.manual_turn_inputs is not None:
       self.manual_turn_inputs.update()
       self.manual_turn_inputs.apply_blend_settings(self)
 
@@ -130,7 +135,10 @@ class CarController(CarControllerBase):
 
     ### lateral control ###
     # send steer msg at 20Hz
-    if (self.frame % CarControllerParams.STEER_STEP) == 0 and self.CP.flags & FordFlags.LKA_STEERING:
+    if (self.frame % CarControllerParams.STEER_STEP) == 0 and self.bp_lat is not None:
+      can_sends += self.bp_lat.step_lateral(CC, CS, self.packer, self.CAN, self.frame, now_nanos)
+      self.apply_curvature_last = self.bp_lat.apply_curvature_last
+    elif (self.frame % CarControllerParams.STEER_STEP) == 0 and self.CP.flags & FordFlags.LKA_STEERING:
       # Preserve the stock LMC heartbeat without requesting lateral action.
       can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, False, 0., 0., 0., 0.,
                                                   stock_lmc=CS.lateral_motion_control))
@@ -175,6 +183,22 @@ class CarController(CarControllerBase):
         can_sends.append(create_extended_classic_lat_ctl_msg(
           self.packer, self.CAN, lateral.active, lateral.ramp_type, lateral.precision_type,
           -lateral.curvature, -lateral.curvature_rate))
+    elif (self.frame % CarControllerParams.STEER_STEP) == 0 and self.new_port_curvature is not None:
+      inputs = self.manual_turn_inputs.lateral_snapshot(CS.out.vEgoRaw) if self.manual_turn_inputs is not None else None
+      self.new_port_curvature.set_inputs(*(inputs if inputs is not None else
+        (None, (), 0.2, self.manual_turn_inputs.enabled if self.manual_turn_inputs is not None else True)))
+      previous = self.new_port_curvature.curvature_last
+      demanded = self.new_port_curvature.update(CC, CS, actuators)
+      lateral = new_port_bounded_command(self.new_port_curvature, demanded, previous, CS.out.vEgoRaw,
+                                        -CS.out.yawRate / max(CS.out.vEgoRaw, 0.1))
+      self.new_port_curvature_demand = demanded
+      self.apply_curvature_last = lateral.curvature
+      if self.CP.flags & FordFlags.CANFD:
+        counter = (self.frame // CarControllerParams.STEER_STEP) % 0x10
+        can_sends.append(fordcan.create_lat_ctl2_msg(self.packer, self.CAN, int(lateral.active), 0., 0.,
+                                                    -lateral.curvature, 0., counter))
+      else:
+        can_sends.append(fordcan.create_lat_ctl_msg(self.packer, self.CAN, lateral.active, 0., 0., -lateral.curvature, 0.))
     elif (self.frame % CarControllerParams.STEER_STEP) == 0:
       lateral_active = CC.latActive and not self.mache_profile and not self.classic_profile
       manual_turn = False
@@ -222,7 +246,9 @@ class CarController(CarControllerBase):
 
     # send lka msg at 33Hz
     if (self.frame % CarControllerParams.LKA_STEP) == 0:
-      if self.CP.flags & FordFlags.LKA_STEERING:
+      if self.bp_lat is not None:
+        can_sends += self.bp_lat.step_lka(self.packer, self.CAN, now_nanos)
+      elif self.CP.flags & FordFlags.LKA_STEERING:
         source_age_ns = now_nanos - CS.lkas_available_ts_nanos
         lka_active = (CC.latActive and CS.lkas_available and 0 <= source_age_ns <= 100_000_000 and
                       (CS.out.cruiseState.enabled or qualified_aol(self.CP, marked_only=True)) and

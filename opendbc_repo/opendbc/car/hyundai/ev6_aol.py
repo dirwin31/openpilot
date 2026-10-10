@@ -1,5 +1,6 @@
 """First-generation EV6 physical authorization for the existing torque lease."""
 from opendbc.car.hyundai.canfd_stock_aol import _base_word
+from opendbc.car.hyundai.canfd_owner import config_index
 from opendbc.car.hyundai.ev6_startup import eligible
 from opendbc.car.hyundai.values import Buttons
 
@@ -9,7 +10,7 @@ def qualified(cp, *, marked_only=False):
     return False
   if _base_word(cp, experiences=(0, 32)) != 0x11:
     return False
-  word = cp.safetyConfigs[0].safetyParam
+  word = cp.safetyConfigs[config_index(cp)].safetyParam
   return (word == 0x815 and cp.alternativeExperience == 32) or (
     not marked_only and word == 0x15 and cp.alternativeExperience == 0)
 

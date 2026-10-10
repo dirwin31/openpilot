@@ -16,3 +16,6 @@ if arch != "Darwin":
 
   if GetOption('extras') or any(target.startswith('openpilot/selfdrive/pandad/tests/') for target in COMMAND_LINE_TARGETS):
     env.Program('tests/test_pandad_canprotocol', ['tests/test_pandad_canprotocol.cc'], LIBS=[panda] + libs)
+
+  if GetOption('extras') or any(target.startswith('openpilot/selfdrive/pandad/tests/') for target in COMMAND_LINE_TARGETS):
+    env.Program('tests/test_panda_owner', ['tests/test_panda_owner.cc', 'panda_safety.cc'], LIBS=[panda] + libs)

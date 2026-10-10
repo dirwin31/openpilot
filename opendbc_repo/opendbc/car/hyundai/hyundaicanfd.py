@@ -1,4 +1,5 @@
 import math
+from typing import cast
 
 import numpy as np
 from opendbc.car import CanBusBase, CanData
@@ -213,8 +214,8 @@ def create_acc_control(packer, CAN, enabled, accel_last, accel, stopping, gas_ov
     object_distance, object_relative, object_valid, object_status = 1., 0., 0, 2
   else:
     visible = bool(lead_visible)
-    object_distance = float(np.clip(lead_distance if visible else 0., 0., 204.7))
-    object_relative = float(np.clip(lead_rel_speed if visible else 0., -16.4, 34.7))
+    object_distance = float(np.clip(cast(float, lead_distance) if visible else 0., 0., 204.7))
+    object_relative = float(np.clip(cast(float, lead_rel_speed) if visible else 0., -16.4, 34.7))
     object_valid = int(not visible)
     object_status = 0 if not (enabled and visible) else 1 if gas_override else 2
 
@@ -392,11 +393,15 @@ def create_adrv_messages(packer, CAN, frame, *, template=None, drive_gear=False,
   values = {
   }
   from opendbc.car.hyundai.gv70_template import GV70Template
-  if isinstance(template, GV70Template):
-    ret.append(template.frame(frame, drive_gear, CAN.ACAN, speed=speed))
+  if template is not None:
+    if type(CAN.ACAN) is not int or type(CAN.offset) is not int:
+      raise ValueError('Captured ADRV requires integer CAN routing')
+    local_bus = CAN.ACAN - CAN.offset
+    packet = (template.frame(frame, drive_gear, local_bus, speed=speed) if isinstance(template, GV70Template) else
+              template.frame(frame, drive_gear, local_bus))
+    ret.append(CanData(packet.address, packet.dat, CAN.ACAN))
   else:
-    ret.append(template.frame(frame, drive_gear, CAN.ACAN) if template is not None else
-               packer.make_can_msg("ADRV_0x51", CAN.ACAN, values))
+    ret.append(packer.make_can_msg("ADRV_0x51", CAN.ACAN, values))
 
   ret.extend(create_fca_warning_light(packer, CAN, frame))
 

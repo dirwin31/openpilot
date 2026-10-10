@@ -48,6 +48,7 @@ class FordSafetyFlags(IntFlag):
   MACH_E_EXTENDED = 16
   CLASSIC_EXTENDED = 32
   EXPLORER_EXTENDED = CLASSIC_EXTENDED  # Existing public profile spelling.
+  BLUEPILOT_ANGLE = 128
   GENERIC_CANFD_EXTENDED = 64
 
 

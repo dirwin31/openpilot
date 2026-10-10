@@ -27,6 +27,9 @@ class FordStockCruiseButton:
 
 
 def qualified(CP) -> bool:
+  from opendbc.bluepilot_lateral.hosts.starpilot import qualified as angle_qualified
+  if angle_qualified(CP):
+    return not CP.openpilotLongitudinalControl
   if CP.alternativeExperience == 32 and len(CP.safetyConfigs) != 1:
     return False
   """Existing stock profiles with the paired physical-driver button contract."""

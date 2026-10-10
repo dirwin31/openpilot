@@ -30,9 +30,11 @@ class VehicleStartupPreferences:
   gm_camera_pedal: bool = True
   toyota_filter: bool = True
   gm_longitudinal_tune: int = 0
+  ford_lateral_mode: int = 0
 
   @classmethod
   def read(cls, params, *, enabled: bool):
+    from openpilot.starpilot.car.ford.lateral_preferences import selected as ford_mode
     from openpilot.starpilot.car.gm.tune_preferences import selected_tune
     from openpilot.starpilot.car.tesla.preap_preferences import stock_configuration
     preap_stock = stock_configuration(params)
@@ -73,7 +75,7 @@ class VehicleStartupPreferences:
                   read_saved(params, 'AlwaysOnLateral', 8) == (b'1', True) and
                   read_saved(params, 'TeslaAOLScreenTap', 8) == (b'1', True))
     screen_brake = read_saved(params, 'TeslaAOLDisengageOnBrake', 8) == (b'1', True)
-    return cls(tesla_screen=screen, tesla_screen_brake=screen_brake, toyota_auto_hold=toyota,
+    return cls(ford_lateral_mode=ford_mode(params, enabled=enabled), tesla_screen=screen, tesla_screen_brake=screen_brake, toyota_auto_hold=toyota,
                gm_longitudinal_tune=selected_tune(params, enabled=enabled),
                volt_sng=volt_sng, gm_auto_hold=gm_auto_hold, volt_one_pedal=volt_one_pedal,
                gm_camera_pedal=bool(enabled and not disable_bolt and readable and safe in (None, b"0")),
@@ -144,6 +146,8 @@ class VehicleStartupPreferences:
     apply_volt_one_pedal(cp, self.volt_one_pedal and not self.disable_bolt_long, self.gm_auto_hold)
     if cp.brand == "toyota":
       apply_toyota_auto_hold(cp, self.toyota_auto_hold)
+    from opendbc.bluepilot_lateral.hosts.starpilot import select as select_ford_lateral
+    select_ford_lateral(cp, self.ford_lateral_mode)
     return cp
 
   def finalize(self, cp) -> None:

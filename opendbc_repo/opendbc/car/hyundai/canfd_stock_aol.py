@@ -3,6 +3,7 @@
 from opendbc.car.structs import CarParams
 from opendbc.car.hyundai.values import CAR, HyundaiFlags
 from opendbc.car.hyundai.hyundaicanfd import CanBus
+from opendbc.car.hyundai.canfd_owner import config_index
 
 STOCK_AOL_MARKER = 0x0800
 STOCK_EV_CARS = frozenset(
@@ -29,6 +30,7 @@ STOCK_AOL_WORDS = frozenset(
 
 
 def _base_word(cp, *, experiences=(0,)):
+  owner = config_index(cp)
   allowed = (
     HyundaiFlags.CANFD
     | HyundaiFlags.EV
@@ -59,8 +61,7 @@ def _base_word(cp, *, experiences=(0,)):
     or cp.steerControlType != CarParams.SteerControlType.torque
     or not cp.flags & HyundaiFlags.CANFD
     or int(cp.flags) & ~int(allowed)
-    or len(cp.safetyConfigs) != 1
-    or cp.safetyConfigs[0].safetyModel != CarParams.SafetyModel.hyundaiCanfd
+    or owner is None
   ):
     return None
   # EV identity is static; hybrid fuel is selected by the actual 0xFA fingerprint.
@@ -74,7 +75,8 @@ def _base_word(cp, *, experiences=(0,)):
   if (ev and hybrid) or (alt_lka and not lka) or (lka and camera):
     return None
   bus = CanBus(cp)
-  if (bus.ACAN, bus.ECAN, bus.CAM) != ((0, 1, 2) if lka else (1, 0, 2)):
+  offset = 4 * owner
+  if (bus.ACAN - offset, bus.ECAN - offset, bus.CAM - offset) != ((0, 1, 2) if lka else (1, 0, 2)):
     return None
   word = (1 if ev else 2 if hybrid else 0) | (16 if lka else 0) | (128 if alt_lka else 0)
   word |= (32 if alt_buttons else 0) | (8 if camera else 0)
@@ -89,7 +91,7 @@ def qualified(cp, *, marked_only=False):
   word = _base_word(cp)
   if word is None or cp.openpilotLongitudinalControl or not cp.pcmCruise:
     return False
-  return cp.safetyConfigs[0].safetyParam in ((word | STOCK_AOL_MARKER,) if marked_only else (word, word | STOCK_AOL_MARKER))
+  return cp.safetyConfigs[config_index(cp)].safetyParam in ((word | STOCK_AOL_MARKER,) if marked_only else (word, word | STOCK_AOL_MARKER))
 
 
 LONG_AOL_WORDS = frozenset((0x0815, 0x0895))

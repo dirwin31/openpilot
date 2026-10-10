@@ -53,6 +53,7 @@ from openpilot.starpilot.saved_source import read_saved
 from openpilot.starpilot.ui.wheel_feature import WheelFeature, PREFIX as WHEEL_PREFIX
 from openpilot.starpilot.longitudinal.output_max import KEY as OUTPUT_MAX_KEY
 from openpilot.starpilot.ui.tesla_screen_feature import TeslaScreenFeature, KEYS as TESLA_SCREEN_KEYS
+from openpilot.starpilot.ui.ford_lateral_feature import FordLateralFeature
 from openpilot.starpilot.ui.gm_tune_feature import GmTuneFeature, GmTruckFeature, GmEvPresetFeature
 from openpilot.starpilot.car.gm.tune_preferences import KEY as GM_TUNE_KEY
 from openpilot.starpilot.car.gm.radar_recovery import KEY as RADAR_RECOVERY_KEY
@@ -800,6 +801,7 @@ class FeatureSettingsOwner:
                              vehicle_fingerprint=self.vehicle_fingerprint(), dependencies=learning.sources))
     elif page == FeaturePage.TORQUE:
       title = "Steering and Torque"
+      rows.extend(FordLateralFeature(self).rows(parked))
       controller_row = self.controller.row()
       if controller_row is not None:
         rows.append(controller_row)
@@ -1120,6 +1122,8 @@ class FeatureSettingsOwner:
       return self._apply_reverse_cruise(request)
     if key in LATERAL_PAUSE_KEYS:
       return self._apply_lateral_pause(request)
+    if key == "FordLateralMode":
+      return FordLateralFeature(self).apply(request)
     if key == "TurnAssist":
       return self._apply_turn_assist(request)
     if key == 'LateralControllerSelection':

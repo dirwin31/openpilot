@@ -6,6 +6,7 @@ THIRD_PARTY_NOTICES.md.
 """
 
 from dataclasses import replace
+from typing import Protocol
 
 import numpy as np
 
@@ -23,7 +24,7 @@ class ExplorerLateralController(FordLateralController):
     super().__init__(CP)
     self.manual_turn_detected = False
 
-  def _manual_turn(self, CC, CS, desired, driver_assisting) -> bool:
+  def _manual_turn(self, CC, CS, desired: float, driver_assisting: bool = False) -> bool:
     self.manual_turn_detected = super()._manual_turn(CC, CS, desired, driver_assisting)
     return self.manual_turn_detected
 
@@ -47,7 +48,13 @@ def qualified(CP) -> bool:
   return safety.safetyModel == structs.CarParams.SafetyModel.ford and safety.safetyParam == expected
 
 
-def bounded_command(owner: ExplorerLateralController, demanded: FordLateralResult,
+class CurvatureOwner(Protocol):
+  manual_turn_detected: bool
+  curvature_last: float
+  path_angle_last: float
+
+
+def bounded_command(owner: CurvatureOwner, demanded: FordLateralResult,
                     previous: float, speed: float, measured: float, *, absolute_cap: float | None = None) -> FordLateralResult:
   """Keep classic demand inside the modern common ISO/jerk envelope."""
   limits = CarControllerParams.CURVATURE_LIMITS

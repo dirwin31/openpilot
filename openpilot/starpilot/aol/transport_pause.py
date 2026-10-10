@@ -1,7 +1,7 @@
 """Reason-qualified intent retention; this module never grants an axis."""
 from openpilot.cereal import log
-from openpilot.starpilot.aol.runtime import AXIS_MAX_AGE_NS, SAFETY_MAX_AGE_NS, current_native
-from openpilot.starpilot.aol.wire import decode_intent
+from openpilot.starpilot.aol.runtime import AXIS_MAX_AGE_NS, SAFETY_MAX_AGE_NS, current_native, native_inventory_matches_cp
+from openpilot.starpilot.aol.wire import SafetyState, decode_intent
 
 
 def cp_identity(cp):
@@ -20,9 +20,23 @@ def healthy_transport(sm, cp, cs, session, now_ns, native=None):
         native.requestedLateral and not native.lateralAllowed or
         native.requestedLongitudinal and not native.longitudinalAllowed):
       return False
+    coherent = bool(native.pandaInventory)
+    if coherent and (int(sm.logMonoTime['aolSafetyWire']) != native.observedMonoTime or
+                     not 0 < native.observedMonoTime <= now_ns <= native.validUntilMonoTime or
+                     now_ns - native.observedMonoTime > SAFETY_MAX_AGE_NS or
+                     native.validUntilMonoTime - native.observedMonoTime > SAFETY_MAX_AGE_NS):
+      return False
+    if coherent and (not native_inventory_matches_cp(native, cp) or
+                     any(p.safetyRxChecksInvalid or p.heartbeatLost or p.faults or
+                         (native.requestedLongitudinal and str(config.safetyModel) not in ('silent', 'noOutput') and
+                          not p.controlsAllowed)
+                         for p, config in zip(native.pandaInventory, cp.safetyConfigs, strict=True))):
+      return False
+    # v2 carries exact producer-read health under its monotonic 200ms lease.
+    # The independently conflated BOOTTIME PandaStates is a latest veto only.
     stamp = int(sm.logMonoTime['pandaStates'])
     if not (sm.seen['pandaStates'] and sm.valid['pandaStates'] and sm.alive['pandaStates'] and
-            0 < stamp <= now_ns and now_ns - stamp <= SAFETY_MAX_AGE_NS):
+            stamp > 0 and (coherent or stamp <= now_ns and now_ns - stamp <= SAFETY_MAX_AGE_NS)):
       return False
     pandas = sm['pandaStates']
     if not cp.safetyConfigs or len(pandas) != len(cp.safetyConfigs):
@@ -93,8 +107,60 @@ class TransportPauseFeedback:
     self.pending_event = 0
     self.awaiting = False
     self.failed = False
+    self.lateral_baseline_ns = 0
+    self.lateral_inventory = None
+    self.lateral_native_ns = 0
+    self.longitudinal_cancel_ns = 0
+    self.last_cancel_source_ns = 0
 
-  def observe(self, sm, cp, cs, now_ns, *, latched=True):
+  def _longitudinal_cancel_current(self, sm, cp, cs, axis, now_ns, *, latched, cancel_source_ns, withdrawal_required=True) -> SafetyState | None:
+    """Retain existing intent during Cancel's bounded LONG withdrawal handshake."""
+    from opendbc.car.hyundai.ev6_aol import qualified
+    from opendbc.car.structs import car
+
+    if (not latched or self.failed or self.paused or self.pending_event or
+        not self.session or str(axis.sessionId) != self.session or not qualified(cp, marked_only=True) or
+        not self.lateral_baseline_ns or not 0 <= now_ns - self.lateral_baseline_ns <= AXIS_MAX_AGE_NS or
+        str(axis.faultReason) != 'none' or not axis.nativeAcknowledged or
+        not axis.desiredLateral or not axis.lateralActive or cs.accFaulted or
+        not cs.canValid or cs.canTimeout or cs.steerFaultTemporary or cs.steerFaultPermanent):
+      return None
+    cancel = any(e.type == car.CarState.ButtonEvent.Type.cancel and e.pressed for e in cs.buttonEvents)
+    fresh_cancel = bool(cancel and self.last_cancel_source_ns < cancel_source_ns <= now_ns and
+                        now_ns - cancel_source_ns <= AXIS_MAX_AGE_NS)
+    if not self.longitudinal_cancel_ns and not fresh_cancel:
+      return None
+    if not withdrawal_required and (self.longitudinal_cancel_ns or not fresh_cancel):
+      return None
+    if self.longitudinal_cancel_ns and not 0 <= now_ns - self.longitudinal_cancel_ns <= SAFETY_MAX_AGE_NS:
+      return None
+    event_ns = int(sm.logMonoTime['onroadEvents'])
+    if (not sm.seen['onroadEvents'] or not sm.valid['onroadEvents'] or not sm.alive['onroadEvents'] or
+        not 0 < event_ns <= now_ns or now_ns - event_ns > 1_500_000_000 or
+        any(e.immediateDisable or e.softDisable for e in sm['onroadEvents'])):
+      return None
+    native = current_native(sm, cp, now_ns=now_ns, axis_session_id=self.session)
+    if (native is None or not native.pandaInventory or not native.requestedLateral or not native.lateralAllowed or
+        not native.requestedLongitudinal or withdrawal_required and native.longitudinalAllowed or
+        native.observedMonoTime < self.lateral_native_ns or
+        not native_inventory_matches_cp(native, cp) or
+        (native.pandaSerial, tuple(p.hardwareSerial for p in native.pandaInventory)) != self.lateral_inventory):
+      return None
+    stamp = int(sm.logMonoTime['pandaStates'])
+    pandas = sm['pandaStates']
+    if (not sm.seen['pandaStates'] or not sm.valid['pandaStates'] or not sm.alive['pandaStates'] or stamp <= 0 or
+        len(pandas) != len(cp.safetyConfigs)):
+      return None
+    # controlsAllowed represents the withdrawn normal/LONG axis here. Preserve
+    # every latest raw configuration/fault veto and exact producer-read inventory.
+    current_pandas = all(int(p.safetyModel.raw) == int(c.safetyModel.raw) and p.safetyParam == c.safetyParam and
+                         p.alternativeExperience == cp.alternativeExperience and not p.safetyRxChecksInvalid and
+                         not p.heartbeatLost and not p.faults and
+                         (str(c.safetyModel) not in ('silent', 'noOutput') or not p.controlsAllowed)
+                         for p, c in zip(pandas, cp.safetyConfigs, strict=True))
+    return native if current_pandas else None
+
+  def observe(self, sm, cp, cs, now_ns, *, latched=True, cancel_source_ns=0):
     self.qualified = False
     self.awaiting = False
     try:
@@ -109,20 +175,44 @@ class TransportPauseFeedback:
                      axis.qualified and axis.sessionId and axis.sequence > 0 and stamp == axis.observedMonoTime and
                      0 < stamp <= now_ns <= axis.validUntilMonoTime and now_ns - stamp <= AXIS_MAX_AGE_NS and
                      axis.validUntilMonoTime - stamp <= AXIS_MAX_AGE_NS and axis.faultSessionId == axis.sessionId and
-                     cp_identity(cp) == self.cp and healthy_transport(sm, cp, cs, str(axis.sessionId), now_ns))
+                     cp_identity(cp) == self.cp)
       continuity = bool(not self.session or axis.sessionId == self.session and
                         (axis.sequence > self.sequence or axis.sequence == self.sequence and signature == self.signature))
       baseline = bool(reason == 'none' and axis.nativeAcknowledged and
                       0 < axis.sourceCarStateMonoTime <= stamp and
                       stamp - axis.sourceCarStateMonoTime <= AXIS_MAX_AGE_NS)
+      transport_healthy = healthy_transport(sm, cp, cs, str(axis.sessionId), now_ns)
+      cancel_native = (self._longitudinal_cancel_current(sm, cp, cs, axis, now_ns, latched=latched,
+                                                        cancel_source_ns=cancel_source_ns)
+                       if current and continuity and baseline and not transport_healthy else None)
+      current = bool(current and (transport_healthy or cancel_native is not None))
       if current and baseline and not latched:
         self.session = ''
         self.pending_event = 0
         self.failed = False
+        self.longitudinal_cancel_ns = 0
         continuity = True
       if self.failed:
+        self.longitudinal_cancel_ns = 0
         return True
+      if cancel_native is not None:
+        # This is neither transport-pause provenance nor an event exemption.
+        # Runtime still requires an exact independent native ACK for each axis.
+        if not self.longitudinal_cancel_ns:
+          self.longitudinal_cancel_ns = int(cancel_source_ns)
+          self.last_cancel_source_ns = int(cancel_source_ns)
+        self.lateral_baseline_ns = now_ns
+        self.lateral_native_ns = int(cancel_native.observedMonoTime)
+        self.sequence = int(axis.sequence)
+        self.signature = signature
+        return False
+      if transport_healthy:
+        native = current_native(sm, cp, now_ns=now_ns, axis_session_id=str(axis.sessionId))
+        if (not latched or native is not None and not native.requestedLongitudinal or
+            self.longitudinal_cancel_ns and now_ns - self.longitudinal_cancel_ns > SAFETY_MAX_AGE_NS):
+          self.longitudinal_cancel_ns = 0
       if not current or not continuity or reason not in ('none', 'transportPause'):
+        self.longitudinal_cancel_ns = 0
         hard = (self.paused or bool(self.pending_event) or reason == 'critical' or
                 bool(self.session and (latched or not continuity)))
         self.paused = False
@@ -159,7 +249,24 @@ class TransportPauseFeedback:
           self.paused = False
           self.failed = True
           return True
+        # Remember a real physical occurrence before its native wire arrives.
+        # Duplicate Card observations and held/released samples cannot renew it.
+        cancel_pending = self._longitudinal_cancel_current(sm, cp, cs, axis, now_ns, latched=latched,
+          cancel_source_ns=cancel_source_ns, withdrawal_required=False)
+        if cancel_pending is not None:
+          self.longitudinal_cancel_ns = int(cancel_source_ns)
+          self.last_cancel_source_ns = int(cancel_source_ns)
         self.session = str(axis.sessionId)
+        native = current_native(sm, cp, now_ns=now_ns, axis_session_id=self.session)
+        lateral_baseline = bool(axis.desiredLateral and axis.lateralActive and native is not None and
+                                native.pandaInventory and native.requestedLateral and native.lateralAllowed)
+        self.lateral_baseline_ns = now_ns if lateral_baseline else 0
+        if lateral_baseline and native is not None:
+          self.lateral_native_ns = int(native.observedMonoTime)
+          self.lateral_inventory = (native.pandaSerial, tuple(p.hardwareSerial for p in native.pandaInventory))
+        else:
+          self.lateral_native_ns = 0
+          self.lateral_inventory = None
         self.paused = False
       else:
         provenance = bool(known and not axis.lateralActive and not axis.longitudinalActive and
@@ -189,6 +296,7 @@ class TransportPauseFeedback:
       self.signature = signature
       return False
     except (AttributeError, KeyError, IndexError, TypeError, ValueError):
+      self.longitudinal_cancel_ns = 0
       hard = self.paused or bool(self.pending_event) or bool(self.session and latched)
       self.paused = False
       self.pending_event = 0

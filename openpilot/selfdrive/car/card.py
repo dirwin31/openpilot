@@ -52,6 +52,9 @@ from opendbc.car.ford.aol import (
   temporary_restriction as ford_temporary_restriction,
 )
 from opendbc.car.hyundai.canfd_angle_aol import native_observation, temporary_restriction, qualified as qualified_angle_aol
+from opendbc.car.hyundai.canfd_owner import config_index as hyundai_canfd_config_index
+from opendbc.car.hyundai.captured_adrv_startup import CapturedADRVStartup
+from openpilot.starpilot.car.hyundai.aol import aol_safety_config as hyundai_aol_safety_config
 from openpilot.starpilot.aol.runtime import current_native
 from openpilot.starpilot.aol.vehicle import create_intent as create_aol_intent, native_latch_rejected, policy_for as aol_policy_for
 from openpilot.starpilot.aol.wire import IntentState, encode_intent
@@ -346,7 +349,10 @@ class Car:
     self.aol_sequence = 0
     self.aol_process_fault_context = AolProcessFaultContext() if self.aol_replay else None
     if self.aol_qualified:
-      self.CP.safetyConfigs[0].safetyParam |= aol_policy.safety_param_addition
+      config = hyundai_aol_safety_config(self.CP) if self.CP.brand == 'hyundai' else self.CP.safetyConfigs[0]
+      if config is None:
+        raise RuntimeError('AOL requires the exact vehicle safety configuration')
+      config.safetyParam |= aol_policy.safety_param_addition
       self.CP.alternativeExperience |= aol_policy.alternative_experience_addition
     self.vehicle_startup.finalize_aol_configuration(self.CI)
     self.aol_transport_feedback = TransportPauseFeedback(self.CP) if self.aol_replay else None
@@ -446,12 +452,15 @@ class Car:
     self.timing_mark('can_receive_start')
     can_strs = messaging.drain_sock_raw(self.can_sock, wait_for_one=True)
     self.timing_mark('can_receive_end')
+    can_received_ns = time.monotonic_ns()
     can_list = can_capnp_to_list(can_strs)
     self.timing_mark('can_decode_end')
 
     # Update carState from CAN
     CS = self.CI.update(can_list)
     self.timing_mark('interface_update_end')
+    cancel_boot_ns = (time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+                      if getattr(self.CI.CS, 'ev6_aol_source_healthy', False) else 0)
     self.observe_ioniq6_long_authority(can_list, CS)
     self.timing_mark('ioniq_authority_end')
     media_owner = getattr(self, 'ioniq6_media', None)
@@ -480,6 +489,8 @@ class Car:
 
     self.slc_receipts = []
     now_ns = int(self.can_log_mono_time) if REPLAY and hasattr(self, 'can_log_mono_time') else time.monotonic_ns()
+    self._aol_can_observation = (CS, can_received_ns,
+                                 max((stamp for stamp, _ in can_list), default=0), cancel_boot_ns)
     self.refresh_slc_configuration(now_ns)
     evidence = getattr(self.CI.CS, 'dashboard_limit', None) if self.slc_replay else None
     observation = evidence.observation if evidence is not None else None
@@ -520,7 +531,7 @@ class Car:
       if getattr(self, 'aol_transport_feedback', None) is None:
         self.aol_transport_feedback = TransportPauseFeedback(self.CP)
       transport_reset = self.aol_transport_feedback.observe(self.sm, self.CP, CS, now_ns,
-        latched=self.aol_card_intent.allowed_latch)
+        latched=self.aol_card_intent.allowed_latch, cancel_source_ns=self.aol_cancel_source(CS, now_ns))
       fault_active = True if transport_reset else None
       event_ns = int(self.sm.logMonoTime['onroadEvents'])
       if (getattr(self.aol_card_intent, 'requires_fault_observation', self.aol_card_intent.explicit_latch) and
@@ -705,12 +716,34 @@ class Car:
       self.v_cruise_helper.initialize_v_cruise(self.CS_prev, self.experimental_mode,
                                             resume=self.vehicle_startup.consume_cruise_resume())
 
+  def aol_cancel_source(self, CS, now_ns: int) -> int:
+    """Bind Cancel to this parsed CAN batch and its local monotonic receipt."""
+    from opendbc.car.hyundai.values import Buttons
+    state = getattr(getattr(self, 'CI', None), 'CS', None)
+    observation = getattr(self, '_aol_can_observation', None)
+    if (state is None or observation is None or observation[0] is not CS or
+        not getattr(state, 'ev6_aol_source_healthy', False)):
+      return 0
+    _, received_ns, can_source_ns, boot_ns = observation
+    stamp = int(state.ev6_aol_sample_stamp_ns)
+    # Parser source and CAN batch use the producer clock; compare only those.
+    # The fixed intent-retention deadline uses the local MONOTONIC receipt.
+    if (not 0 < received_ns <= now_ns or now_ns - received_ns > 30_000_000 or
+        not 0 < stamp <= can_source_ns <= boot_ns or
+        boot_ns - stamp > min(int(state.ev6_aol_timeout_ns), 30_000_000) or
+        can_source_ns - stamp > min(int(state.ev6_aol_timeout_ns), 30_000_000) or
+        not any(e.type == structs.CarState.ButtonEvent.Type.cancel and e.pressed for e in CS.buttonEvents) or
+        not any(cruise == Buttons.CANCEL for _, _, cruise in state.ev6_aol_samples)):
+      return 0
+    return received_ns
+
   def aol_disarming_fault(self, CS, event_ns: int, now_ns: int) -> bool:
     from openpilot.starpilot.car.gm.aol import intent_disarming_fault
     if getattr(self, 'aol_transport_feedback', None) is None:
       self.aol_transport_feedback = TransportPauseFeedback(self.CP)
     if self.aol_transport_feedback.observe(self.sm, self.CP, CS, now_ns,
-        latched=getattr(getattr(self, 'aol_card_intent', None), 'allowed_latch', True)):
+        latched=getattr(getattr(self, 'aol_card_intent', None), 'allowed_latch', True),
+        cancel_source_ns=self.aol_cancel_source(CS, now_ns)):
       return True
     return intent_disarming_fault(self.CP, self.sm['onroadEvents'], CS,
       temporary_ui_process_failure=self.aol_process_fault_context.temporary_ui_failure(event_ns, now_ns),
@@ -1029,10 +1062,12 @@ class Car:
     sm = self.sm
     stamp, receipt = int(sm.logMonoTime['pandaStates']), int(sm.recv_time['pandaStates'] * 1e9)
     pandas = sm['pandaStates']
+    owner = getattr(self.vehicle_startup, 'owner', None)
+    count = 2 if isinstance(owner, CapturedADRVStartup) and hyundai_canfd_config_index(owner.cp) == 1 else 1
     return bool(not self.params.get_bool('IsOffroad') and not self.params.get_bool('ControlsReady') and
                 sm.seen['pandaStates'] and sm.valid['pandaStates'] and sm.alive['pandaStates'] and
                 0 < stamp <= boot and boot - stamp <= 300_000_000 and
-                0 < receipt <= now and now - receipt <= 300_000_000 and len(pandas) == 1 and
+                0 < receipt <= now and now - receipt <= 300_000_000 and len(pandas) == count and
                 all(ps.safetyModel == structs.CarParams.SafetyModel.elm327 and ps.safetyParam == 1 and
                     not ps.controlsAllowed and not ps.safetyRxChecksInvalid and
                     (ps.ignitionLine or ps.ignitionCan) for ps in pandas))

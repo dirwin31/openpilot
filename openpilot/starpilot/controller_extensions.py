@@ -37,7 +37,7 @@ class ManualTurnInputs:
     return tuple(settings)
 
   def apply_blend_settings(self, controller):
-    for name in ("mache_lateral", "classic_lateral"):
+    for name in ("mache_lateral", "classic_lateral", "new_port_curvature"):
       owner = getattr(controller, name, None)
       if owner is not None and self._applied_blends.get(owner) != self.blend_settings:
         owner.set_blend_settings(*self.blend_settings)
@@ -87,6 +87,33 @@ class ManualTurnInputs:
       if math.isfinite(value):
         delay = float(np.clip(value, 0.2, 0.4))
     return self.sm["modelV2"], ModelConstants.T_IDXS, delay, self.enabled
+
+  def native_permission(self, cp, *, max_age_ns):
+    """Exact current public Panda acknowledgment for the optional angle owner."""
+    if not self.track_assist_permission:
+      return False
+    try:
+      # Drain happens in update(); capture one SM snapshot before sampling clocks.
+      pandas = self.sm["pandaStates"]
+      stamp = int(self.sm.logMonoTime["pandaStates"])
+      receipt = int(self.sm.recv_time["pandaStates"] * 1e9)
+      now, boot = time.monotonic_ns(), time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+      if (not self.sm.seen["pandaStates"] or not self.sm.all_checks(["pandaStates"]) or
+          not 0 < stamp <= boot <= stamp + max_age_ns or
+          not 0 < receipt <= now <= receipt + max_age_ns):
+        return False
+      if len(pandas) != len(cp.safetyConfigs):
+        return False
+      for i, (panda, config) in enumerate(zip(pandas, cp.safetyConfigs, strict=True)):
+        if (panda.safetyModel != config.safetyModel or panda.safetyParam != config.safetyParam or
+            panda.alternativeExperience != cp.alternativeExperience or panda.safetyRxChecksInvalid or
+            panda.heartbeatLost or len(panda.faults) or str(panda.faultStatus) != "none"):
+          return False
+        if bool(panda.controlsAllowed) != (i == len(pandas) - 1):
+          return False
+      return True
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+      return False
 
   def assist_permission(self):
     if not self.track_assist_permission:
@@ -164,9 +191,17 @@ def configure_controller(CI, params):
       getattr(controller, "manual_turn", None) is not None):
     controller.manual_turn_inputs = ManualTurnInputs(params, track_assist_permission=bool(cp.flags & FordFlags.CANFD))
 
+  from opendbc.bluepilot_lateral.hosts.starpilot import qualified as angle_qualified
+  if controller is not None and angle_qualified(cp) and getattr(controller, "bp_lat", None) is not None:
+    controller.bp_lat.host.inputs = ManualTurnInputs(params, track_assist_permission=True)
+
   from opendbc.car.ford.classic_lateral import qualified as classic_qualified
   from opendbc.car.ford.generic_canfd_lateral import qualified as generic_canfd_qualified
   if controller is not None and (classic_qualified(cp) or generic_canfd_qualified(cp)) and getattr(controller, "classic_lateral", None) is not None:
+    controller.manual_turn_inputs = ManualTurnInputs(params)
+
+  from opendbc.car.ford.new_port_curvature import qualified as new_port_curvature_qualified
+  if controller is not None and new_port_curvature_qualified(cp) and getattr(controller, "new_port_curvature", None) is not None:
     controller.manual_turn_inputs = ManualTurnInputs(params)
 
   if controller is not None and cp.brand == "ford" and getattr(controller, "manual_turn_inputs", None) is not None:
