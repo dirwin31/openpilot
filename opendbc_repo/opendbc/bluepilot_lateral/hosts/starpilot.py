@@ -20,7 +20,7 @@ TRUCKS = CANFD - {CAR.FORD_ESCAPE_MK4_5, CAR.FORD_MUSTANG_MACH_E_MK1}
 def mode_word(cp, *, selected):
   if (cp.brand != "ford" or cp.passive or cp.dashcamOnly or cp.notCar or cp.alternativeExperience != 0 or
       cp.steerControlType != structs.CarParams.SteerControlType.angle or
-      cp.pcmCruise == cp.openpilotLongitudinalControl or len(cp.safetyConfigs) not in (1, 2)):
+      not cp.pcmCruise or len(cp.safetyConfigs) not in (1, 2)):
     return None
   if len(cp.safetyConfigs) == 2 and (cp.safetyConfigs[0].safetyModel != structs.CarParams.SafetyModel.noOutput or
                                    cp.safetyConfigs[0].safetyParam != 0):

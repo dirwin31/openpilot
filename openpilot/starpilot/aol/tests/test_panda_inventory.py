@@ -214,18 +214,20 @@ class _Ev6CancelCaller:
     self.packers = {bus: CANPacker(parser.dbc.name) for bus, parser in self.card.CI.can_parsers.items()}
     self.counters = {}
     self.drive = next(value for value, name in self.card.CI.CS.shifter_values.items() if name == 'D')
-    self.card.RI = SimpleNamespace(update=lambda _: None)
+    self._observation_stubs = {
+      'RI': SimpleNamespace(update=lambda _: None),
+      'timing_mark': lambda _: None,
+      'observe_ioniq6_long_authority': lambda *_: None,
+      'update_vehicle_state_context': lambda _: None,
+      'refresh_slc_configuration': self._stop_after_observation,
+    }
     self.card.can_sock = object()
-    self.card.timing_mark = lambda _: None
-    self.card.observe_ioniq6_long_authority = lambda *_: None
-    self.card.update_vehicle_state_context = lambda _: None
     self.card.can_rcv_cum_timeout_counter = 0
     services = ['aolAxisState', 'aolSafetyWire', 'pandaStates', 'onroadEvents']
     self.card.sm = messaging.SubMaster(services, ignore_avg_freq=services)
     self.card.aol_transport_feedback = TransportPauseFeedback(self.cp)
     self.card.aol_process_fault_context = AolProcessFaultContext()
     self.card.aol_card_intent = Ev6CardIntent(AolSettings(True, 0., AOL_TOGGLE, 0, (0, 0, 0), (0, 0, 0)))
-    self.card.refresh_slc_configuration = self._stop_after_observation
     self.sequence = 0
     self.last_now = 0
 
@@ -255,7 +257,15 @@ class _Ev6CancelCaller:
       logMonoTime=self.clock.clock_gettime_ns(self.clock.CLOCK_BOOTTIME) + stamp_delta)
     for target, (address, data, bus) in zip(can.can, frames, strict=True):
       target.address, target.dat, target.src = address, data, bus
-    with mock.patch('openpilot.selfdrive.car.card.messaging.drain_sock_raw', return_value=[can.to_bytes()]):
+    with (
+      mock.patch('openpilot.selfdrive.car.card.messaging.drain_sock_raw', return_value=[can.to_bytes()]),
+      mock.patch.multiple(self.card, create=True,
+        RI=self._observation_stubs['RI'],
+        timing_mark=self._observation_stubs['timing_mark'],
+        observe_ioniq6_long_authority=self._observation_stubs['observe_ioniq6_long_authority'],
+        update_vehicle_state_context=self._observation_stubs['update_vehicle_state_context'],
+        refresh_slc_configuration=self._observation_stubs['refresh_slc_configuration']),
+    ):
       with pytest.raises(_CancelObservationReady):
         self.card.state_update()
     self.cs = self.card._aol_can_observation[0]

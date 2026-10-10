@@ -16,7 +16,7 @@ class FordContext:
     self.owner = owner
 
   def sample(self) -> AuthorityContext:
-    return AuthorityContext(self.owner.parked, self.owner.cp, self.owner.cp.to_bytes())
+    return AuthorityContext(self.owner.parked, self.owner.cp, self.owner.cp.as_reader().as_builder().to_bytes())
 
 
 class TestFordAngleSettings(unittest.TestCase):
@@ -96,9 +96,14 @@ class TestFordAngleSettings(unittest.TestCase):
         self.cp.safetyConfigs[-1].safetyParam = 128
       else:
         self.parked = False
+      if change == "vehicle":
+        with self.assertRaises(SettingsChanged):
+          self.gateway.confirm(intent["intent"], "ford-session", b"ford-generation")
+      else:
+        self.assertFalse(self.gateway.confirm(intent["intent"], "ford-session", b"ford-generation"))
+      self.assertEqual(Path(self.params.get_param_path("FordLateralMode")).read_bytes(), b"invalid" if change == "saved" else b"0")
       with self.assertRaises(SettingsChanged):
         self.gateway.confirm(intent["intent"], "ford-session", b"ford-generation")
-      self.assertEqual(Path(self.params.get_param_path("FordLateralMode")).read_bytes(), b"invalid" if change == "saved" else b"0")
 
   def test_invalid_saved_choice_can_only_repair_to_current_curvature(self):
     path = Path(self.params.get_param_path("FordLateralMode"))

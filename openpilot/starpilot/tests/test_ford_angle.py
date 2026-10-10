@@ -6,6 +6,8 @@ No authority, measurement, desired-history or angle-ready test setters are used.
 import os
 import ctypes
 import hashlib
+import shutil
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -96,16 +98,53 @@ class TestFordAngleStartup(unittest.TestCase):
         self.params.put_bool("IsReleaseBranch", release, block=True)
         host, constructed, published = self.start(identity)
         word = (130 if identity in CANFD else 128) + int(published.openpilotLongitudinalControl)
-        self.assertEqual(constructed[0][0], word)
+        self.assertEqual(constructed, [(word, True)])
         self.assertEqual(published.safetyConfigs[-1].safetyParam, word)
-        self.assertEqual(published.pcmCruise, not published.openpilotLongitudinalControl)
-        if release and identity in CANFD:
-          self.assertEqual(word, 130)
+        self.assertEqual(published.openpilotLongitudinalControl, not release)
+        self.assertTrue(published.pcmCruise)
+        self.assertEqual(published.alternativeExperience, 0)
+        self.assertTrue(qualified(published))
+        self.assertIsNotNone(host.CI.CC.bp_lat)
+        self.assertEqual(self.params.get("FordLateralMode"), 1)
+
+  def test_actual_factory_alpha_long_angle_admission_and_exact_config_denials(self):
+    from opendbc.car.ford.interface import CarInterface
+    for identity in (CAR.FORD_BRONCO_SPORT_MK1, CAR.FORD_MUSTANG_MACH_E_MK1):
+      for alpha in (False, True):
+        for release in (False, True):
+          with self.subTest(identity=identity, alpha=alpha, release=release):
+            observed = gen_empty_fingerprint()
+            observed[0][0x5A] = 8
+            observed[2].update({0x3D6: 8, 0x186: 8})
+            cp = CarInterface.get_params(identity, observed, [], alpha, release, False)
+            long = alpha and (identity not in CANFD or not release)
+            self.assertEqual(cp.openpilotLongitudinalControl, long)
+            self.assertTrue(cp.pcmCruise)
+            self.assertEqual(cp.alternativeExperience, 0)
+            self.assertEqual(cp.flags, int(FordFlags.CANFD) if identity in CANFD else 0)
+            self.assertEqual(cp.safetyConfigs[-1].safetyParam, (18 if identity in CANFD else 32) + int(long))
+            self.assertTrue(select(cp, 1))
+            self.assertEqual(cp.safetyConfigs[-1].safetyParam, (130 if identity in CANFD else 128) + int(long))
+            self.assertTrue(qualified(cp))
+            for field, value in (("pcmCruise", False), ("alternativeExperience", 32), ("passive", True),
+                                 ("dashcamOnly", True), ("notCar", True), ("brand", "hyundai"),
+                                 ("flags", 128), ("steerControlType", structs.CarParams.SteerControlType.torque)):
+              invalid = cp.as_reader().as_builder()
+              setattr(invalid, field, value)
+              self.assertFalse(qualified(invalid), field)
+            for field, value in (("safetyModel", structs.CarParams.SafetyModel.noOutput),
+                                 ("safetyParam", cp.safetyConfigs[-1].safetyParam ^ 1)):
+              invalid = cp.as_reader().as_builder()
+              setattr(invalid.safetyConfigs[-1], field, value)
+              self.assertFalse(qualified(invalid), field)
+
 
 
 class TestFordAngleJoined(unittest.TestCase):
   def test_saved_card_controls_parser_and_actual_native_trace_both_signs(self):
     safety = libsafety_py.libsafety
+    native_debug = safety.set_safety_hooks(structs.CarParams.SafetyModel.allOutput, 0) == 0
+    safety.set_safety_hooks(structs.CarParams.SafetyModel.noOutput, 0)
     sources = ("BrakeSysFeatures", "EngVehicleSpThrottle2", "Yaw_Data_FD1", "EngBrakeData",
                "EngVehicleSpThrottle", "DesiredTorqBrk", "Steering_Data_FD1")
     faults = [("crc", source) for source in (sources[0], sources[2])] + \
@@ -119,25 +158,34 @@ class TestFordAngleJoined(unittest.TestCase):
                      CAR.FORD_MUSTANG_MACH_E_MK1, CAR.FORD_F_150_MK14):
       scenarios = [("angle", None), ("default0", None)]
       if identity in (CAR.FORD_BRONCO_SPORT_MK1, CAR.FORD_MUSTANG_MACH_E_MK1):
-        scenarios += [("aux", None)] + faults
-      for kind, source in scenarios:
+        scenarios += [("aux", None)] + faults + [("alpha", None), ("alpha_cruise", None), ("alpha_buttons", None)]
+      for scenario, source in scenarios:
+        alpha_requested = scenario.startswith("alpha")
+        kind = "angle" if scenario == "alpha" else scenario.removeprefix("alpha_")
         for direction in (-1, 1):
-          with self.subTest(identity=identity, direction=direction, kind=kind, source=source), OpenpilotPrefix(), \
+          with self.subTest(identity=identity, direction=direction, kind=scenario, source=source), OpenpilotPrefix(), \
                patch.dict(os.environ, {"REPLAY": "1", "SIMULATION": "1"}), \
                patch("openpilot.selfdrive.controls.controlsd.messaging.PubMaster"):
             params = Params()
             helper = TestFordAngleStartup()
             helper.setUp()
             auxiliary = None
+            auxiliary_directory = None
             try:
               helper.params = helper.helper.params = params
-              for key, value in (("SafeMode", False), ("AlwaysOnLateral", False), ("AlphaLongitudinalEnabled", False),
-                                 ("IsReleaseBranch", False), ("OpenpilotEnabledToggle", True)):
+              for key, value in (("SafeMode", False), ("AlwaysOnLateral", False), ("AlphaLongitudinalEnabled", alpha_requested),
+                                 ("IsReleaseBranch", alpha_requested and not native_debug), ("OpenpilotEnabledToggle", True)):
                 params.put_bool(key, value, block=True)
               selected = kind != "default0"
               host, _, cp = helper.start(identity, selected, auxiliary=kind == "aux")
               offset = 4 if kind == "aux" else 0
               self.assertEqual(qualified(cp), selected)
+              alpha_active = alpha_requested and native_debug
+              self.assertEqual(cp.openpilotLongitudinalControl, alpha_active)
+              self.assertTrue(cp.pcmCruise)
+              if alpha_requested:
+                self.assertEqual(cp.safetyConfigs[-1].safetyParam, (130 if identity in CANFD else 128) + int(alpha_active))
+                self.assertTrue(params.get_bool("AlphaLongitudinalEnabled"))
               controls = Controls()
               native = physical.TestFordAolDriverIntent()
               native.setUp()
@@ -154,13 +202,17 @@ class TestFordAngleJoined(unittest.TestCase):
                 self.assertEqual(cp.safetyConfigs[0].safetyParam, 0)
                 self.assertEqual(host.CI.CC.CAN.main, 4)
                 self.assertEqual(host.CI.CC.CAN.camera, 6)
-                # Root supplies a distinct, hash-equal copy of the selected native flavor.
-                main_file, aux_file = Path(os.environ["FORD_MAIN_LIBRARY"]), Path(os.environ["FORD_AUX_LIBRARY"])
+                # Copy the actual library selected by the public test runner,
+                # so the noOutput Panda has independent native static storage.
+                main_file = Path(libsafety_py.libpath)
+                auxiliary_directory = tempfile.TemporaryDirectory()
+                aux_file = Path(auxiliary_directory.name) / "libsafety-auxiliary.so"
+                shutil.copyfile(main_file, aux_file)
                 self.assertNotEqual(main_file.resolve(), aux_file.resolve())
                 self.assertEqual(hashlib.sha256(main_file.read_bytes()).digest(), hashlib.sha256(aux_file.read_bytes()).digest())
                 auxiliary = libsafety_py.ffi.dlopen(str(aux_file))
                 auxiliary_handle = ctypes.CDLL(str(aux_file))
-                self.assertEqual(auxiliary.set_safety_hooks(cp.safetyConfigs[0].safetyModel, cp.safetyConfigs[0].safetyParam), 0)
+                self.assertEqual(auxiliary.set_safety_hooks(int(cp.safetyConfigs[0].safetyModel.raw), cp.safetyConfigs[0].safetyParam), 0)
                 auxiliary.init_tests()
                 auxiliary.set_alternative_experience(0)
                 self.assertFalse(auxiliary.get_controls_allowed())
@@ -176,7 +228,11 @@ class TestFordAngleJoined(unittest.TestCase):
               observed_health = False
               path_seen, resumed, withdraw_seen = [], False, False
               paired_cancel, paired_resume = False, False
+              alpha_button_cancelled = alpha_button_acc_off = False
+              alpha_cancel_event_seen = alpha_cancel_requested = alpha_physical_rearmed = False
               tx_rejected, invalid_rx = 0, 0
+              counter_rx: list[tuple[int, int, bool]] = []
+              long_positive = long_recovered = long_withdrawn = False
 
               def bind(host, selected, baseline, providers, sent, validity):
                 providers.clear()
@@ -199,7 +255,7 @@ class TestFordAngleJoined(unittest.TestCase):
                 received.clear()
 
                 def rx(name, values, *, failing=failing, kind=kind, source=source, tick=tick,
-                       received=received, offset=offset, native=native):
+                       received=received, offset=offset, native=native, counter_rx=counter_rx):
                   nonlocal invalid_rx
                   if failing and kind == "freshness" and name == source:
                     return
@@ -210,6 +266,11 @@ class TestFordAngleJoined(unittest.TestCase):
                       values[signal] = 0
                     elif kind == "counter":
                       values["VehVActlBrk_No_Cnt" if name == sources[0] else "VehRollYaw_No_Cnt"] = 0
+                  if kind == "counter" and name == source and tick >= 180:
+                    # The recovered sender continues from its last transmitted fault counter, zero.
+                    brake_counter = name == sources[0]
+                    signal = "VehVActlBrk_No_Cnt" if brake_counter else "VehRollYaw_No_Cnt"
+                    values[signal] = ((native.tick - 180) // (2 if brake_counter else 1)) % (16 if brake_counter else 256)
                   if failing and kind == "gas" and name == "EngVehicleSpThrottle":
                     values["ApedPos_Pc_ActlArb"] = 50
                   if failing and kind == "brake" and name == "EngBrakeData":
@@ -223,6 +284,9 @@ class TestFordAngleJoined(unittest.TestCase):
                     data[3 if name == sources[0] else 4] ^= 1
                     frame = (addr, bytes(data), bus)
                   accepted = safety.safety_rx_hook(libsafety_py.make_CANPacket(frame[0], frame[2], frame[1]))
+                  if kind == "counter" and name == source and tick >= 120:
+                    counter = (frame[1][2] >> 2) & 0xF if name == sources[0] else frame[1][5]
+                    counter_rx.append((tick, counter, bool(accepted)))
                   if not accepted:
                     invalid_rx += 1
                   if not (failing and kind in ("crc", "quality", "counter") and name == source):
@@ -252,13 +316,23 @@ class TestFordAngleJoined(unittest.TestCase):
                   received.append(frame)
                   self.assertTrue(safety.get_relay_malfunction())
                 safety.safety_tick()
-                extra: tuple[tuple[str, int, dict[str, float]], ...] = (("SteeringPinion_Data", 0, {"StePinCompAnEst_D_Qf": 3}),
+                extra: tuple[tuple[str, int, dict[str, float]], ...] = (("SteeringPinion_Data", 0, {"StePinCompAnEst_D_Qf": 3, "StePinComp_An_Est": 0.0}),
                          ("Cluster_Info1_FD1", 0, {"AccEnbl_B_RqDrv": 1}),
                          ("BodyInfo_3_FD1", 0, {}), ("RCMStatusMessage2_FD1", 0, {"FirstRowBuckleDriver": 1}),
                          ("INSTRUMENT_PANEL", 0, {}), ("IPMA_Data", 2, {}),
                          ("ACCDATA", 2, {}), ("ACCDATA_2", 2, {}), ("ACCDATA_3", 2, {}))
                 received.extend(native.packer.make_can_msg(name, bus + offset, values) for name, bus, values in extra)
                 state = host.CI.update([(now, list(received))])
+                self.assertEqual(state.steeringAngleDeg, 0.0)
+                if alpha_active and kind == "buttons":
+                  # This component feed consumes the actual parsed Cancel event; the full SD loop is qualified separately.
+                  if any(event.type == structs.CarState.ButtonEvent.Type.cancel and event.pressed for event in state.buttonEvents):
+                    alpha_button_cancelled = alpha_cancel_event_seen = True
+                  if alpha_button_cancelled and not state.cruiseState.enabled:
+                    alpha_button_acc_off = True
+                  elif alpha_button_acc_off and state.cruiseState.enabled:
+                    alpha_button_cancelled = alpha_button_acc_off = False
+                    alpha_physical_rearmed = True
                 if tick < 40:
                   continue
                 if kind in ("angle", "default0", "aux"):
@@ -306,27 +380,42 @@ class TestFordAngleJoined(unittest.TestCase):
                     observed_relay = safety.get_relay_malfunction()
                     observed_health = safety.safety_config_valid()
                     events.append(pandas.as_reader())
-                  lane.feed(controls, now, tick, speed=15., active=observed_allowed and not observed_relay,
-                            enabled=observed_allowed and not observed_relay)
+                  # feed already publishes these services. Replace its synthetic
+                  # state/model/delay before one update, preserving one sample per tick.
+                  feed_events = []
+                  component_enabled = observed_allowed and not observed_relay and not alpha_button_cancelled
+                  with patch.object(controls.sm, "update_msgs", side_effect=lambda _time, events, collector=feed_events: collector.extend(events)):
+                    lane.feed(controls, now, tick, speed=15., active=component_enabled, enabled=component_enabled)
                   car_state = messaging.new_message("carState", valid=True, logMonoTime=now)
                   car_state.carState = state
-                  controls.sm.update_msgs(now / 1e9, [car_state.as_reader()])
                   preview = messaging.new_message("modelV2", valid=True, logMonoTime=now)
                   preview.modelV2 = lane.model()
                   preview.modelV2.action.desiredCurvature = direction * .0008
                   preview.modelV2.orientationRate.z = [direction * .0008 * 15.] * 33
                   delay = messaging.new_message("lateralDelay", valid=True, logMonoTime=now)
                   delay.lateralDelay.lateralDelay = .1
-                  controls.sm.update_msgs(now / 1e9, [preview.as_reader(), delay.as_reader()])
+                  controls.sm.update_msgs(now / 1e9, [
+                    *[event for event in feed_events if event.which() not in ("carState", "modelV2", "lateralDelay")],
+                    car_state.as_reader(), preview.as_reader(), delay.as_reader()])
                   for owner in providers:
                     owner.sm.update_msgs(now / 1e9, [preview.as_reader(), delay.as_reader(), *events] if owner.track_assist_permission else
                                          [preview.as_reader(), delay.as_reader()])
-                  command, _ = controls.state_control()
+                  command, controller_log = controls.state_control()
                   if kind in ("angle", "default0", "aux"):
                     self.assertTrue(command.enabled and command.latActive)
-                  control_event = messaging.new_message("carControl", valid=True, logMonoTime=now)
-                  control_event.carControl = command
-                  host.sm.update_msgs(now / 1e9, [control_event.as_reader()])
+                  control_events = []
+                  def capture_control(service, event, collector=control_events):
+                    if service == "carControl":
+                      collector.append(messaging.log_from_bytes(event.to_bytes()))
+                  with patch.object(controls.pm, "send", side_effect=capture_control):
+                    controls.publish(command, controller_log)
+                  self.assertEqual(len(control_events), 1)
+                  self.assertEqual(control_events[0].carControl.to_dict(), command.to_dict())
+                  self.assertEqual(control_events[0].valid, state.canValid)
+                  host.sm.update_msgs(now / 1e9, control_events)
+                  command = host.sm["carControl"]
+                  if alpha_active and kind == "buttons":
+                    alpha_cancel_requested |= bool(command.cruiseControl.cancel)
                   host.can_log_mono_time = now
                   sent.clear()
                   validity.clear()
@@ -340,6 +429,33 @@ class TestFordAngleJoined(unittest.TestCase):
                   paired_cancel |= any(data[1] & 1 for _, data in button_frames)
                   paired_resume |= any(data[3] & 2 for _, data in button_frames)
                 for addr, data, bus in sent:
+                  if addr == 0x186:
+                    self.assertTrue(alpha_active)
+                    self.assertEqual(bus, offset)
+                    accepted_long = bool(safety.safety_tx_hook(libsafety_py.make_CANPacket(addr, bus - offset, data)))
+                    gas = ((data[6] & 3) << 8) | data[7]
+                    accel = ((data[0] & 31) << 8) | data[1]
+                    gas_pred = ((data[2] & 3) << 8) | data[3]
+                    if accepted_long and gas > 500:
+                      self.assertTrue(command.longActive and safety.get_controls_allowed() and
+                                      safety.safety_config_valid() and not safety.get_relay_malfunction())
+                      self.assertGreater(command.actuators.accel, 0)
+                      self.assertGreater(accel * .0039 - 20., 0)
+                      self.assertLessEqual(gas, 700)
+                      self.assertTrue(4231 <= accel <= 5641)
+                      self.assertEqual(gas_pred, 0)
+                      self.assertAlmostEqual(gas * .01 - 5., host.CI.CC.gas, delta=.01)
+                      self.assertAlmostEqual(accel * .0039 - 20., host.CI.CC.accel, delta=.0039)
+                      long_positive = True
+                      long_recovered |= tick >= 240
+                    if 140 <= tick < (160 if kind == "buttons" else 180) and kind in ("cruise", "buttons"):
+                      self.assertFalse(accepted_long and gas > 0)
+                      long_withdrawn = True
+                    if not accepted_long:
+                      self.assertTrue(120 <= tick < 230 and
+                                      (not safety.get_controls_allowed() or not safety.safety_config_valid() or
+                                       safety.get_relay_malfunction()))
+                    continue
                   if addr not in (0x83, 0x3CA, 0x3D3, 0x3D6):
                     continue
                   packet = libsafety_py.make_CANPacket(addr, bus - offset, data)
@@ -375,16 +491,38 @@ class TestFordAngleJoined(unittest.TestCase):
                     self.assertTrue(safety.get_controls_allowed() and safety.safety_config_valid() and not safety.get_relay_malfunction())
                 if tick >= 260:
                   self.assertTrue(safety.get_controls_allowed() and safety.safety_config_valid() and not safety.get_relay_malfunction())
+              if alpha_active:
+                self.assertTrue(long_positive and long_recovered, "Actual Controls/sender/native Alpha Long never accepted positive acceleration/recovery")
+                if kind in ("cruise", "buttons"):
+                  self.assertTrue(long_withdrawn, "Physical ACC withdrawal did not block native active longitudinal output")
               if selected:
                 self.assertTrue(path_seen, "Production sender never produced an active signed angle")
-                self.assertTrue(all(value * direction < 0 for value in path_seen))
+                self.assertTrue(all(value * direction < 0 for value in path_seen),
+                                (identity, scenario, source, direction, min(path_seen), max(path_seen), tuple(path_seen[:8])))
                 self.assertTrue(resumed, "Actual factory/physical cruise rearm did not resume accepted angle")
               if kind not in ("angle", "default0", "aux"):
                 self.assertTrue(withdraw_seen, "Fault did not withdraw production angle")
+              if kind == "counter":
+                cadence = 2 if source == sources[0] else 1
+                modulus = 16 if source == sources[0] else 256
+                fault_ticks = range(120 + cadence - 1, 180, cadence)
+                recovery_ticks = range(180 + cadence - 1, 340, cadence)
+                # Five consecutive wrong counters reject RX; every recovered sequential sample is accepted.
+                self.assertEqual(counter_rx,
+                                 [(tick, 0, i < 4) for i, tick in enumerate(fault_ticks)] +
+                                 [(tick, (i + 1) % modulus, True) for i, tick in enumerate(recovery_ticks)],
+                                 (identity, direction, source))
               if kind in ("crc", "quality", "counter"):
                 self.assertGreater(invalid_rx, 0)
               if kind == "buttons":
-                self.assertTrue(paired_cancel and paired_resume)
+                button_context = (identity, scenario, direction, cp.safetyConfigs[-1].safetyParam,
+                                  alpha_cancel_event_seen, alpha_cancel_requested, alpha_physical_rearmed,
+                                  paired_cancel, paired_resume)
+                if alpha_active:
+                  self.assertTrue(alpha_cancel_event_seen and alpha_cancel_requested and alpha_physical_rearmed and paired_cancel, button_context)
+                  self.assertFalse(paired_resume, button_context)
+                else:
+                  self.assertTrue(paired_cancel and paired_resume, button_context)
               self.assertEqual(Path(params.get_param_path("FordLateralMode")).read_bytes(), b"1" if selected else b"0")
             finally:
               helper.doCleanups()
@@ -393,3 +531,5 @@ class TestFordAngleJoined(unittest.TestCase):
               if auxiliary is not None:
                 auxiliary.set_alternative_experience(0)
                 auxiliary.set_safety_hooks(structs.CarParams.SafetyModel.noOutput, 0)
+              if auxiliary_directory is not None:
+                auxiliary_directory.cleanup()

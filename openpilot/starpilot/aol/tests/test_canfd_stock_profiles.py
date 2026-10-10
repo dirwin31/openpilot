@@ -55,9 +55,42 @@ class TestCanfdStockProfiles(unittest.TestCase):
     bad = cp.as_reader().as_builder()
     bad.carFingerprint = CAR.HYUNDAI_IONIQ_6
     self.assertFalse(qualified(bad))
-    bad = cp.as_reader().as_builder()
-    bad.safetyConfigs = [structs.CarParams.SafetyConfig(safetyModel='noOutput'), cp.safetyConfigs[0]]
-    self.assertFalse(qualified(bad))
+    owner = cp.safetyConfigs[0]
+    auxiliary = structs.CarParams.SafetyConfig(safetyModel='noOutput')
+    for configs in ([owner, owner], [owner, auxiliary], [auxiliary, owner, owner],
+                    [structs.CarParams.SafetyConfig(safetyModel='silent'), owner],
+                    [structs.CarParams.SafetyConfig(safetyModel='noOutput', safetyParam=1), owner],
+                    [auxiliary, structs.CarParams.SafetyConfig(safetyModel='hyundai', safetyParam=0x11)]):
+      bad = cp.as_reader().as_builder()
+      bad.safetyConfigs = configs
+      self.assertFalse(qualified(bad))
+
+  def test_supported_two_panda_layout_binds_only_exact_native_owner(self):
+    for identity in (CAR.KIA_EV6, CAR.GENESIS_GV70_ELECTRIFIED_1ST_GEN):
+      for release in (False, True):
+        with self.subTest(identity=identity, release=release):
+          cp = params(identity, release=release)
+          self.assertEqual(len(cp.safetyConfigs), 1)
+          self.assertEqual(str(cp.safetyConfigs[0].safetyModel), 'hyundaiCanfd')
+          self.assertEqual(cp.safetyConfigs[0].safetyParam, 0x11)
+          owner = structs.CarParams.SafetyConfig(safetyModel=str(cp.safetyConfigs[0].safetyModel),
+                                                safetyParam=int(cp.safetyConfigs[0].safetyParam))
+          cp.safetyConfigs = [structs.CarParams.SafetyConfig(safetyModel='noOutput'), owner]
+          self.assertTrue(qualified(cp))
+          policy = policy_for(cp)
+          self.assertTrue(policy.explicit_latch)
+          self.assertEqual(policy.safety_param_addition, 0x800)
+          cp.safetyConfigs[-1].safetyParam |= policy.safety_param_addition
+          self.assertTrue(qualified(cp, marked_only=True))
+          model = int(cp.safetyConfigs[-1].safetyModel.raw)
+          self.assertTrue(native_accepts_cp(cp, model, 0x811))
+          self.assertFalse(native_accepts_cp(cp, int(cp.safetyConfigs[0].safetyModel.raw), 0))
+          self.assertFalse(native_accepts_cp(cp, model, 0x891))
+          for word in (0x15, 0x815, 0x811 | 0x4000):
+            bad = cp.as_reader().as_builder()
+            bad.safetyConfigs[-1].safetyParam = word
+            self.assertFalse(qualified(bad))
+            self.assertFalse(native_accepts_cp(bad, model, word))
 
   def test_physical_intent_neutral_press_cancel_and_health(self):
     for identity in STOCK_EV_CARS:

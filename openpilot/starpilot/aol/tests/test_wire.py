@@ -4,6 +4,7 @@ import unittest
 import struct
 from unittest.mock import Mock, patch
 
+from opendbc.car import structs
 from openpilot.cereal import custom, messaging
 from openpilot.starpilot.aol.runtime import current_native
 from openpilot.starpilot.aol.wire import (IntentState, SafetyState, MAX_WIRE_BYTES, decode_intent,
@@ -13,7 +14,7 @@ from openpilot.starpilot.aol.wire import (IntentState, SafetyState, MAX_WIRE_BYT
 class AolWireTests(unittest.TestCase):
   @patch('openpilot.starpilot.aol.runtime.native_matches_cp', return_value=True)
   def test_native_safety_event_uses_python_monotonic_clock(self, _profile):
-    cp = None
+    cp = structs.CarParams(safetyConfigs=[structs.CarParams.SafetyConfig(safetyModel='hondaBoschGiraffe', safetyParam=34)])
     mono_ns = 1_000_000_000
 
     def event(event_ns: int, payload_ns: int):

@@ -92,10 +92,12 @@ ffi.cdef("void mutation_set_active_mutant(int id); int mutation_get_active_mutan
 class LibSafety:
   pass
 libsafety: LibSafety
+libpath: str
 
 def load(path):
-  global libsafety
+  global libsafety, libpath
   libsafety = ffi.dlopen(str(path))
+  libpath = str(Path(path).resolve())
 
 def __getattr__(name):
   if name == "libsafety":
