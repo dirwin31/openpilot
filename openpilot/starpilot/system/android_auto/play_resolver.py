@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from openpilot.starpilot.system.android_auto.browser_package import RUNTIME
+from openpilot.starpilot.system.android_auto.play_package import RUNTIME
 
 BINARY = RUNTIME / 'playlink'
 TOKEN_PATH = Path('/data/starpilot/aa_token')

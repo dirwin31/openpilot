@@ -5,8 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from openpilot.starpilot.galaxy.browser_install import BrowserInstall, Paused, checked_url, download
-from tools.google_browser.tests.test_install import package
+from openpilot.starpilot.galaxy.play_install import Paused, PlayInstall, checked_url, download
 
 
 def wait(job):
@@ -16,11 +15,9 @@ def wait(job):
 
 @pytest.fixture
 def provision(tmp_path):
-  archive, checksum = package(tmp_path)
   helper = b'\x7fELF\x02' + bytes(13) + (183).to_bytes(2, 'little')
-  contents = {'browser': archive.read_bytes(), 'resolver': helper}
-  manifest = {'id': 'release-1', 'browser': {'sha256': checksum, 'bytes': len(contents['browser']), 'url': 'browser'},
-              'resolver': {'sha256': hashlib.sha256(helper).hexdigest(), 'bytes': len(helper), 'url': 'resolver'}}
+  contents = {'resolver': helper}
+  manifest = {'id': 'release-1', 'resolver': {'sha256': hashlib.sha256(helper).hexdigest(), 'bytes': len(helper), 'url': 'resolver'}}
   state = {'ready': False, 'parked': True}
   calls = []
   def fetch(asset, destination, check, progress):
@@ -28,13 +25,13 @@ def provision(tmp_path):
     check()
     destination.write_bytes(contents[asset['url']])
     progress(asset['bytes'])
-  job = BrowserInstall(ready=lambda: state['ready'], parked=lambda: state['parked'], destination=tmp_path / 'installed' / 'release-1',
+  job = PlayInstall(ready=lambda: state['ready'], parked=lambda: state['parked'], destination=tmp_path / 'installed' / 'release-1',
                        package=manifest, enabled=True, fetch=fetch)
   yield job, state, calls
   job.close()
 
 
-def test_waits_for_setup_then_installs_once_without_launching_browser(provision):
+def test_waits_for_setup_then_installs_once(provision):
   job, state, calls = provision
   job.maintain()
   assert job.thread is None and not calls
@@ -46,11 +43,11 @@ def test_waits_for_setup_then_installs_once_without_launching_browser(provision)
   wait(job)
   assert job.status() == {'state': 'ready', 'percent': 100}
   assert job.installed()
-  assert calls == ['browser', 'resolver']
+  assert calls == ['resolver']
   assert not list(job.destination.parent.glob('.download-*'))
   job.maintain()
-  assert calls == ['browser', 'resolver']
-  restarted = BrowserInstall(ready=lambda: False, parked=lambda: False, destination=job.destination,
+  assert calls == ['resolver']
+  restarted = PlayInstall(ready=lambda: False, parked=lambda: False, destination=job.destination,
                              package=job.package, enabled=True, fetch=Mock(side_effect=AssertionError))
   restarted.maintain()
   assert restarted.status()['state'] == 'ready'
@@ -123,3 +120,27 @@ def test_download_checks_permission_before_consuming_body(tmp_path, monkeypatch)
     raise Paused()
   with pytest.raises(Paused):
     download({'url': 'https://github.com/release/file', 'bytes': 7, 'sha256': '0'*64}, tmp_path / 'download', paused, lambda _: None)
+
+
+def test_retry_delay_starts_short_and_caps_at_five_minutes(provision):
+  job, _, _ = provision
+  delays = []
+  for _ in range(6):
+    before = time.monotonic()
+    job._retry_later()
+    delays.append(round(job.retry_at - before))
+  assert delays == [30, 60, 120, 240, 300, 300]
+  assert job.status()['state'] == 'retrying'
+
+
+
+def test_rejects_resolver_that_is_not_arm64(provision):
+  job, state, _ = provision
+  state['ready'] = True
+  def fetch(asset, destination, check, progress):
+    destination.write_bytes(b'#!/bin/sh\n')
+  job.fetch = fetch
+  job.maintain()
+  wait(job)
+  assert job.status()['state'] == 'retrying'
+  assert not job.destination.exists()

@@ -292,9 +292,9 @@ console.log('Remote-capable binary uploader: progress, credentials, failure, tim
 // renders an inert DOM node and hides every setup control in real browsers.
 const { compile } = await import('../web/vendor/vue/vue.esm-browser.js')
 const render = compile(AndroidAutoPage.template, { decodeEntities: value => value })
-const vm = page(setup)
+const vm = page({ ...setup, identity: { ...setup.identity, installed: false } })
 vm.mode = 'local'
-vm.installOpen = true  // the package picker lives in the install sheet
+vm.installOpen = true  // the package picker lives in the install sheet, shown only before setup
 const tree = render(vm, [])
 const tags = []
 function visit(node) {
@@ -305,6 +305,14 @@ function visit(node) {
 visit(tree)
 assert(!tags.includes('template'), 'setup cannot live inside an inert template element')
 assert(tags.includes('input') && tags.includes('button'), 'setup renders package selection and actions')
+// Once installed, Manage package shows status and removal only; setup needs removal first.
+const managed = page({ ...setup, identity: { ...setup.identity, installed: true }, googlePlay: { available: true, remembered: true } })
+managed.installOpen = true
+const managedTags = []
+const collect = (node) => { if (!node || typeof node !== 'object') return; if (typeof node.type === 'string') managedTags.push(node.type); if (Array.isArray(node.children)) node.children.forEach(collect) }
+collect(render(managed, []))
+assert(!managedTags.includes('input'), 'manage view offers no setup inputs')
+assert(managedTags.includes('dl'), 'manage view shows status and renewal')
 for (const [field, reason] of [['installReady', /display|encoder/],
                              ['serviceReady', /service/], ['bluetoothEnabled', /Bluetooth/], ['parked', /Park/]]) {
   const blocked = page({ ...setup, [field]: false })
@@ -411,7 +419,42 @@ assert.deepEqual(googleInstallChecks({ state: 'running', stage: 'resolving' }).m
 assert.deepEqual(googleInstallChecks({ state: 'failed', stage: 'downloading' }).map(c => c.status), ['done', 'done', 'failed', 'pending'])
 assert.match(googleInstallChecks({ state: 'running', stage: 'downloading', downloaded: 5, total: 10 })[2].label, /50%/)
 assert(googleInstallChecks({ state: 'done', stage: 'done' }).every(c => c.status === 'done'))
-assert.match(AndroidAutoPage.template, /Manual File Upload/)
-assert.match(AndroidAutoPage.template, /Forget saved Google sign-in/)
+assert.match(AndroidAutoPage.template, /Upload a file/)
+assert.match(AndroidAutoPage.template, /Turn off automatic renewal/)
+assert.match(AndroidAutoPage.template, /Remove Android Auto support/)
+assert.match(AndroidAutoPage.template, /will just sit and spin/)
+assert.equal(AndroidAutoPage.computed.renewLabel.call({ setup: { googlePlay: { remembered: true } } }), 'Auto-renew on')
+assert.equal(AndroidAutoPage.computed.renewLabel.call({ setup: { googlePlay: { remembered: false } } }), 'Auto-renew off')
 assert.match(AndroidAutoPage.template, /Manage package/)
+const { cleanToken, tokenProblem } = await import('../web/js/android-auto.js')
+assert.equal(cleanToken('  "oauth2_4/abc-DEF_123"  '), 'oauth2_4/abc-DEF_123')
+assert.equal(cleanToken('oauth_token=oauth2_4/abc;'), 'oauth2_4/abc')
+assert.equal(cleanToken('oauth2_4%2Fabc'), 'oauth2_4/abc')
+assert.equal(tokenProblem(''), '')
+assert.equal(tokenProblem('oauth2_4/abc'), '')
+assert.match(tokenProblem('SAPISID-value'), /oauth2_4\//)
+assert.match(tokenProblem('oauth2_4/abc def'), /spaces/)
+const cleaning = page({ ...setup, googlePlay: { available: true, remembered: false } })
+Object.assign(cleaning, { googleEmail: 'user@example.com', googleToken: ' "oauth2_4/pasted" ', googleRemember: true })
+let cleanedCall
+cleaning.feed = { async googleImport(...args) { cleanedCall = args; return true } }
+assert.equal(await cleaning.googleImport(), true)
+assert.deepEqual(cleanedCall, ['user@example.com', 'oauth2_4/pasted', true])
+// Auto-renew is on by default, and turning it on later always saves the renewal credential.
+assert.equal(AndroidAutoPage.data().googleRemember, true)
+const renewal = page({ ...setup, identity: { ...setup.identity, installed: true }, googlePlay: { available: true, remembered: false } })
+Object.assign(renewal, { googleRemember: false, installMethod: 'manual', googleToken: 'stale' })
+renewal.startRenewal()
+assert.equal(renewal.renewing, true)
+assert.equal(renewal.installMethod, 'google')
+assert.equal(renewal.googleToken, '')
+Object.assign(renewal, { googleEmail: 'user@example.com', googleToken: 'oauth2_4/renew', googleRemember: false })
+let renewCall
+renewal.feed = { async googleImport(...args) { renewCall = args; return true } }
+assert.equal(await renewal.googleImport(), true)
+assert.deepEqual(renewCall, ['user@example.com', 'oauth2_4/renew', true])
+renewal.closeInstall()
+assert.equal(renewal.renewing, false)
+assert.match(AndroidAutoPage.template, /Turn on automatic renewal/)
+assert.match(AndroidAutoPage.template, /Use a computer for this/)
 console.log('Google Play import: credential clearing, progress, retry and manual fallback passed')
