@@ -497,13 +497,13 @@ void long_acados_create_5_set_nlp_in(long_solver_capsule* capsule, const int N, 
     double* zu_e = zluemem+NSN*3;
 
     // change only the non-zero elements:
+    
 
+    
 
+    
 
-
-
-
-
+    
 
     ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, N, "Zl", Zl_e);
     ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, N, "Zu", Zu_e);
@@ -608,7 +608,7 @@ void long_acados_create_5_set_nlp_in(long_solver_capsule* capsule, const int N, 
 
     // set up soft bounds for nonlinear constraints
     int* idxsh_e = malloc(NSHN * sizeof(int));
-
+    
     idxsh_e[0] = 0;
     idxsh_e[1] = 1;
     idxsh_e[2] = 2;
@@ -616,7 +616,7 @@ void long_acados_create_5_set_nlp_in(long_solver_capsule* capsule, const int N, 
     double* lush_e = calloc(2*NSHN, sizeof(double));
     double* lsh_e = lush_e;
     double* ush_e = lush_e + NSHN;
-
+    
 
     ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, N, "idxsh", idxsh_e);
     ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, N, "lsh", lsh_e);
@@ -635,9 +635,9 @@ void long_acados_create_5_set_nlp_in(long_solver_capsule* capsule, const int N, 
     double* luh_e = calloc(2*NHN, sizeof(double));
     double* lh_e = luh_e;
     double* uh_e = luh_e + NHN;
+    
 
-
-
+    
     uh_e[0] = 10000.0;
     uh_e[1] = 10000.0;
     uh_e[2] = 10000.0;
@@ -645,7 +645,7 @@ void long_acados_create_5_set_nlp_in(long_solver_capsule* capsule, const int N, 
 
     ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, N, "nl_constr_h_fun_jac", &capsule->nl_constr_h_e_fun_jac);
     ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, N, "nl_constr_h_fun", &capsule->nl_constr_h_e_fun);
-
+    
     ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, N, "lh", lh_e);
     ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, N, "uh", uh_e);
     free(luh_e);
@@ -965,7 +965,7 @@ int long_acados_update_params(long_solver_capsule* capsule, int stage, double *p
     
         capsule->nl_constr_h_e_fun_jac.set_param(&capsule->nl_constr_h_e_fun_jac, p);
         capsule->nl_constr_h_e_fun.set_param(&capsule->nl_constr_h_e_fun, p);
-
+    
     }
 
     return solver_status;
@@ -1026,7 +1026,7 @@ int long_acados_update_params_sparse(long_solver_capsule * capsule, int stage, i
         capsule->cost_y_e_fun_jac_ut_xt.set_param_sparse(&capsule->cost_y_e_fun_jac_ut_xt, n_update, idx, p);
         capsule->cost_y_e_hess.set_param_sparse(&capsule->cost_y_e_hess, n_update, idx, p);
         // constraints
-
+    
         capsule->nl_constr_h_e_fun_jac.set_param_sparse(&capsule->nl_constr_h_e_fun_jac, n_update, idx, p);
         capsule->nl_constr_h_e_fun.set_param_sparse(&capsule->nl_constr_h_e_fun, n_update, idx, p);
     

@@ -258,6 +258,7 @@ enum class Mode_b63a8514b8adccf9: uint16_t {
 };
 CAPNP_DECLARE_ENUM(Mode, b63a8514b8adccf9);
 CAPNP_DECLARE_SCHEMA(aa8ad10b494a5535);
+CAPNP_DECLARE_SCHEMA(d588f23cdc13abdb);
 CAPNP_DECLARE_SCHEMA(c255773d8fee1e7d);
 CAPNP_DECLARE_SCHEMA(a042ddb70aba3ea9);
 CAPNP_DECLARE_SCHEMA(96f223681662db77);
@@ -1097,9 +1098,25 @@ struct AolAxisState::SafetyWire {
   class Reader;
   class Builder;
   class Pipeline;
+  struct PandaSlot;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(aa8ad10b494a5535, 4, 2)
+    CAPNP_DECLARE_STRUCT_HEADER(aa8ad10b494a5535, 5, 3)
+    #if !CAPNP_LITE
+    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
+    #endif  // !CAPNP_LITE
+  };
+};
+
+struct AolAxisState::SafetyWire::PandaSlot {
+  PandaSlot() = delete;
+
+  class Reader;
+  class Builder;
+  class Pipeline;
+
+  struct _capnpPrivate {
+    CAPNP_DECLARE_STRUCT_HEADER(d588f23cdc13abdb, 2, 1)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -7189,6 +7206,11 @@ public:
   inline bool hasAxisSessionId() const;
   inline  ::capnp::Text::Reader getAxisSessionId() const;
 
+  inline  ::uint64_t getSourcePandaStatesMonoTime() const;
+
+  inline bool hasPandaInventory() const;
+  inline  ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>::Reader getPandaInventory() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -7267,6 +7289,16 @@ public:
   inline void adoptAxisSessionId(::capnp::Orphan< ::capnp::Text>&& value);
   inline ::capnp::Orphan< ::capnp::Text> disownAxisSessionId();
 
+  inline  ::uint64_t getSourcePandaStatesMonoTime();
+  inline void setSourcePandaStatesMonoTime( ::uint64_t value);
+
+  inline bool hasPandaInventory();
+  inline  ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>::Builder getPandaInventory();
+  inline void setPandaInventory( ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>::Reader value);
+  inline  ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>::Builder initPandaInventory(unsigned int size);
+  inline void adoptPandaInventory(::capnp::Orphan< ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>>&& value);
+  inline ::capnp::Orphan< ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>> disownPandaInventory();
+
 private:
   ::capnp::_::StructBuilder _builder;
   template <typename, ::capnp::Kind>
@@ -7280,6 +7312,127 @@ private:
 class AolAxisState::SafetyWire::Pipeline {
 public:
   typedef SafetyWire Pipelines;
+
+  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
+  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
+      : _typeless(kj::mv(typeless)) {}
+
+private:
+  ::capnp::AnyPointer::Pipeline _typeless;
+  friend class ::capnp::PipelineHook;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+};
+#endif  // !CAPNP_LITE
+
+class AolAxisState::SafetyWire::PandaSlot::Reader {
+public:
+  typedef PandaSlot Reads;
+
+  Reader() = default;
+  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
+
+  inline ::capnp::MessageSize totalSize() const {
+    return _reader.totalSize().asPublic();
+  }
+
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const {
+    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
+  }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint16_t getSlotIndex() const;
+
+  inline bool hasHardwareSerial() const;
+  inline  ::capnp::Text::Reader getHardwareSerial() const;
+
+  inline  ::uint16_t getSafetyModel() const;
+
+  inline  ::uint16_t getSafetyParam() const;
+
+  inline  ::uint16_t getAlternativeExperience() const;
+
+  inline bool getControlsAllowed() const;
+
+  inline bool getSafetyRxChecksInvalid() const;
+
+  inline bool getHeartbeatLost() const;
+
+  inline  ::uint32_t getFaults() const;
+
+private:
+  ::capnp::_::StructReader _reader;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::List;
+  friend class ::capnp::MessageBuilder;
+  friend class ::capnp::Orphanage;
+};
+
+class AolAxisState::SafetyWire::PandaSlot::Builder {
+public:
+  typedef PandaSlot Builds;
+
+  Builder() = delete;  // Deleted to discourage incorrect usage.
+                       // You can explicitly initialize to nullptr instead.
+  inline Builder(decltype(nullptr)) {}
+  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
+  inline operator Reader() const { return Reader(_builder.asReader()); }
+  inline Reader asReader() const { return *this; }
+
+  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
+#if !CAPNP_LITE
+  inline ::kj::StringTree toString() const { return asReader().toString(); }
+#endif  // !CAPNP_LITE
+
+  inline  ::uint16_t getSlotIndex();
+  inline void setSlotIndex( ::uint16_t value);
+
+  inline bool hasHardwareSerial();
+  inline  ::capnp::Text::Builder getHardwareSerial();
+  inline void setHardwareSerial( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initHardwareSerial(unsigned int size);
+  inline void adoptHardwareSerial(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownHardwareSerial();
+
+  inline  ::uint16_t getSafetyModel();
+  inline void setSafetyModel( ::uint16_t value);
+
+  inline  ::uint16_t getSafetyParam();
+  inline void setSafetyParam( ::uint16_t value);
+
+  inline  ::uint16_t getAlternativeExperience();
+  inline void setAlternativeExperience( ::uint16_t value);
+
+  inline bool getControlsAllowed();
+  inline void setControlsAllowed(bool value);
+
+  inline bool getSafetyRxChecksInvalid();
+  inline void setSafetyRxChecksInvalid(bool value);
+
+  inline bool getHeartbeatLost();
+  inline void setHeartbeatLost(bool value);
+
+  inline  ::uint32_t getFaults();
+  inline void setFaults( ::uint32_t value);
+
+private:
+  ::capnp::_::StructBuilder _builder;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::ToDynamic_;
+  friend class ::capnp::Orphanage;
+  template <typename, ::capnp::Kind>
+  friend struct ::capnp::_::PointerHelpers;
+};
+
+#if !CAPNP_LITE
+class AolAxisState::SafetyWire::PandaSlot::Pipeline {
+public:
+  typedef PandaSlot Pipelines;
 
   inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
   inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
@@ -17503,6 +17656,200 @@ inline void AolAxisState::SafetyWire::Builder::adoptAxisSessionId(
 inline ::capnp::Orphan< ::capnp::Text> AolAxisState::SafetyWire::Builder::disownAxisSessionId() {
   return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
       ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t AolAxisState::SafetyWire::Reader::getSourcePandaStatesMonoTime() const {
+  return _reader.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t AolAxisState::SafetyWire::Builder::getSourcePandaStatesMonoTime() {
+  return _builder.getDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
+}
+inline void AolAxisState::SafetyWire::Builder::setSourcePandaStatesMonoTime( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool AolAxisState::SafetyWire::Reader::hasPandaInventory() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline bool AolAxisState::SafetyWire::Builder::hasPandaInventory() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>::Reader AolAxisState::SafetyWire::Reader::getPandaInventory() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>>::get(_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>::Builder AolAxisState::SafetyWire::Builder::getPandaInventory() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>>::get(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline void AolAxisState::SafetyWire::Builder::setPandaInventory( ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>::Builder AolAxisState::SafetyWire::Builder::initPandaInventory(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>>::init(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), size);
+}
+inline void AolAxisState::SafetyWire::Builder::adoptPandaInventory(
+    ::capnp::Orphan< ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>> AolAxisState::SafetyWire::Builder::disownPandaInventory() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::cereal::AolAxisState::SafetyWire::PandaSlot,  ::capnp::Kind::STRUCT>>::disown(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+
+inline  ::uint16_t AolAxisState::SafetyWire::PandaSlot::Reader::getSlotIndex() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t AolAxisState::SafetyWire::PandaSlot::Builder::getSlotIndex() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
+}
+inline void AolAxisState::SafetyWire::PandaSlot::Builder::setSlotIndex( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool AolAxisState::SafetyWire::PandaSlot::Reader::hasHardwareSerial() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool AolAxisState::SafetyWire::PandaSlot::Builder::hasHardwareSerial() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader AolAxisState::SafetyWire::PandaSlot::Reader::getHardwareSerial() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder AolAxisState::SafetyWire::PandaSlot::Builder::getHardwareSerial() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void AolAxisState::SafetyWire::PandaSlot::Builder::setHardwareSerial( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder AolAxisState::SafetyWire::PandaSlot::Builder::initHardwareSerial(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), size);
+}
+inline void AolAxisState::SafetyWire::PandaSlot::Builder::adoptHardwareSerial(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> AolAxisState::SafetyWire::PandaSlot::Builder::disownHardwareSerial() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline  ::uint16_t AolAxisState::SafetyWire::PandaSlot::Reader::getSafetyModel() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t AolAxisState::SafetyWire::PandaSlot::Builder::getSafetyModel() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
+}
+inline void AolAxisState::SafetyWire::PandaSlot::Builder::setSafetyModel( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t AolAxisState::SafetyWire::PandaSlot::Reader::getSafetyParam() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t AolAxisState::SafetyWire::PandaSlot::Builder::getSafetyParam() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
+}
+inline void AolAxisState::SafetyWire::PandaSlot::Builder::setSafetyParam( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint16_t AolAxisState::SafetyWire::PandaSlot::Reader::getAlternativeExperience() const {
+  return _reader.getDataField< ::uint16_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint16_t AolAxisState::SafetyWire::PandaSlot::Builder::getAlternativeExperience() {
+  return _builder.getDataField< ::uint16_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void AolAxisState::SafetyWire::PandaSlot::Builder::setAlternativeExperience( ::uint16_t value) {
+  _builder.setDataField< ::uint16_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool AolAxisState::SafetyWire::PandaSlot::Reader::getControlsAllowed() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS);
+}
+
+inline bool AolAxisState::SafetyWire::PandaSlot::Builder::getControlsAllowed() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS);
+}
+inline void AolAxisState::SafetyWire::PandaSlot::Builder::setControlsAllowed(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<64>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool AolAxisState::SafetyWire::PandaSlot::Reader::getSafetyRxChecksInvalid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<65>() * ::capnp::ELEMENTS);
+}
+
+inline bool AolAxisState::SafetyWire::PandaSlot::Builder::getSafetyRxChecksInvalid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<65>() * ::capnp::ELEMENTS);
+}
+inline void AolAxisState::SafetyWire::PandaSlot::Builder::setSafetyRxChecksInvalid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<65>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool AolAxisState::SafetyWire::PandaSlot::Reader::getHeartbeatLost() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<66>() * ::capnp::ELEMENTS);
+}
+
+inline bool AolAxisState::SafetyWire::PandaSlot::Builder::getHeartbeatLost() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<66>() * ::capnp::ELEMENTS);
+}
+inline void AolAxisState::SafetyWire::PandaSlot::Builder::setHeartbeatLost(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<66>() * ::capnp::ELEMENTS, value);
+}
+
+inline  ::uint32_t AolAxisState::SafetyWire::PandaSlot::Reader::getFaults() const {
+  return _reader.getDataField< ::uint32_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+
+inline  ::uint32_t AolAxisState::SafetyWire::PandaSlot::Builder::getFaults() {
+  return _builder.getDataField< ::uint32_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
+}
+inline void AolAxisState::SafetyWire::PandaSlot::Builder::setFaults( ::uint32_t value) {
+  _builder.setDataField< ::uint32_t>(
+      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
 }
 
 inline  ::uint8_t AolAxisState::IntentWire::Reader::getKind() const {
