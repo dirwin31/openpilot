@@ -686,3 +686,17 @@ input[type="range"].gx-slider:active::-moz-range-thumb {
 @media (pointer: coarse) { .gx-layout__resize { display: none; } }
 .gx-layout__color { scroll-margin-bottom: 16px; }
 html.gx-maker-open, html.gx-maker-open body { touch-action: manipulation; }
+
+/* Display options: compact rows, small dropdowns and tight group headings. */
+.gx-layout__inspector .gx-layout__display { gap: 0; }
+.gx-layout__display > .gx-layout__subhead, .gx-layout__display > .gx-note { margin-bottom: 8px; }
+.gx-layout__display .gx-row { min-height: 48px; padding: 4px 4px; gap: 10px; }
+.gx-layout__display .gx-row .gx-field { min-height: 38px; padding-block: 5px; flex: 0 1 44%; }
+.gx-layout__display .gx-row__desc { font-size: var(--fs-xs); }
+.gx-layout__display .gx-layout__display-group { margin: 14px 0 4px; }
+.gx-layout__display .gx-layout__display-group + .gx-row { border-top: 0; }
+.gx-layout__inspector .gx-select__button { min-height: 40px; padding-block: 7px; }
+.gx-layout__display .gx-row .gx-select__button { min-height: 36px; padding-block: 5px; }
+.gx-layout__display .gx-row .gx-field { min-height: 0; padding-block: 0; }
+/* Maker pages give the app bar a solid backdrop, so nothing scrolls visibly behind the search. */
+html.gx-maker-open .gx-appbar { background: var(--background); }
