@@ -42,7 +42,7 @@ def bound_state(cp, *, now=NOW, serial='authority-panda', session='authority-ses
                      serial, session, now + BOOT_OFFSET, slots)
 
 
-def sm_for(cp, state, *, stamp=None, panda_stamp=None):
+def sm_for(cp, state, *, stamp=None, panda_stamp=None, faults=()):
   services = ['aolSafetyWire', 'pandaStates']
   sm = messaging.SubMaster(services, ignore_avg_freq=services)
   native = messaging.new_message('aolSafetyWire', 0, valid=True,
@@ -54,6 +54,7 @@ def sm_for(cp, state, *, stamp=None, panda_stamp=None):
     panda.safetyModel, panda.safetyParam = config.safetyModel, config.safetyParam
     panda.alternativeExperience = cp.alternativeExperience
     panda.controlsAllowed = str(config.safetyModel) not in ('silent', 'noOutput')
+    panda.faults = list(faults)
   sm.update_msgs((NOW - 1_000_000) / 1e9, [native.as_reader(), pandas.as_reader()])
   return sm
 
@@ -70,6 +71,21 @@ def test_present_inventory_rejects_borrowed_or_malformed_owner(mutation):
   bad = replace(state, pandaSerial='borrowed-same-profile') if mutation == 'serial' else replace(
     state, pandaInventory=(replace(state.pandaInventory[0], **changes[mutation]),))
   assert current_native(sm_for(cp, bad), cp, now_ns=NOW, axis_session_id=state.axisSessionId) is None
+
+
+@pytest.mark.parametrize('fault, blocks', [('interruptRateCan2', False), ('interruptRateUsb', False),
+                                          ('relayMalfunction', True), ('registerDivergent', True),
+                                          ('heartbeatLoopWatchdog', True)])
+def test_latched_interrupt_rate_faults_do_not_block_native(fault, blocks):
+  # Honda Bosch Civic latches interruptRateCan2 every drive; it must not read as a lost native ack.
+  cp = configured_cp()
+  value = log.PandaState.FaultType.schema.enumerants[fault]
+  state = bound_state(cp)
+  state = replace(state, pandaInventory=tuple(replace(p, faults=1 << value) for p in state.pandaInventory))
+  sm = sm_for(cp, state, faults=[fault])
+  native = current_native(sm, cp, now_ns=NOW, axis_session_id=state.axisSessionId)
+  assert (native is None) == blocks
+  assert healthy_transport(sm, cp, car_state(), state.axisSessionId, NOW) == (not blocks)
 
 
 @pytest.mark.parametrize('boundary', ['at_200ms', 'past_200ms', 'future', 'wrong_session', 'wrong_event', 'extended_lease'])
