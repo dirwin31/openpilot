@@ -137,7 +137,7 @@ let makerPagesOpen = 0
 const DRAG_SLOP = 6
 
 // Android Auto display switches, independent of the comma screen's preferences.
-const PROJECTION_DISPLAY_SWITCHES = ["blindSpotBorder", "signalBorder", "blindSpotCamera"]
+const PROJECTION_DISPLAY_SWITCHES = ["blindSpotBorder", "signalBorder", "blindSpotCamera", "hidePersonalityAlerts", "wheelPedalFeedback"]
 
 export function validDocument(document, metadata) {
   if (!object(document)) return false
@@ -1045,7 +1045,7 @@ export const OnroadLayoutPage = {
       const before = clone(this.state.draft)
       this.state.draft[key] = value === "On"
       this.recordChange(before)
-      this.state.notice = "Save to apply the display settings on Android Auto."
+      this.state.notice = "Save to apply the screen options on Android Auto."
     },
     setFavoriteDisplay(display) {
       if (!this.editable || this.state.drag || this.state.layerDrag || !this.selectedWidget?.iconSize ||
@@ -1501,7 +1501,7 @@ export const OnroadLayoutPage = {
                 <button class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'widgets'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'widgets'">Widgets</button>
                 <button class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'edit'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'edit'"><span>Edit<span class="gx-layout__long"> widget</span></span></button>
                 <button v-if="!projection" class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'road'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'road'"><span>Road<span class="gx-layout__long"> colors</span></span></button>
-                <button v-if="projection || displayGroups.length" class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'display'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'display'">Display</button>
+                <button v-if="projection || displayGroups.length" class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'display'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'display'">Options</button>
               </nav>
               <div v-show="state.inspectorPanel === 'widgets'" class="gx-layout__panel">
               <div ref="widgetsHelp" class="gx-layout__subhead gx-layout__help-anchor"><h3>Widgets</h3><span>{{ activeWidgets.length }} active</span>
@@ -1571,6 +1571,8 @@ export const OnroadLayoutPage = {
                 <p v-if="selectedWidget.note" class="gx-note">{{ selectedWidget.note }}</p>
                 <label v-if="selectedWidget.kind === 'clock'" class="gx-layout__clock-format"><input type="checkbox" :checked="!!state.draft.clock24Hour" :disabled="!editAvailable || !!state.drag || !!state.layerDrag" @change="setClock24Hour"> Use 24-hour time</label>
                 <label v-if="!projection && selectedWidget.kind === 'cruise_limits'" class="gx-layout__clock-format"><input type="checkbox" :checked="state.draft.showMaxSpeed !== false" :disabled="!editAvailable || !!state.drag || !!state.layerDrag" @change="setShowMaxSpeed"> Show MAX speed</label>
+                <label v-if="projection && selectedWidget.kind === 'steering_wheel'" class="gx-layout__clock-format"><input type="checkbox" :checked="state.draft.wheelPedalFeedback === true"
+                  :disabled="!editAvailable || !!state.drag || !!state.layerDrag" @change="setProjectionDisplay('wheelPedalFeedback', $event.target.checked ? 'On' : 'Off')"> Brake and acceleration colors</label>
                 <label v-if="!projection && selectedWidget.kind === 'steering_wheel' && displayRow('ShowBrakeStatus')" class="gx-layout__clock-format"><input type="checkbox" :checked="displayValue('ShowBrakeStatus') === 'On'"
                   :disabled="!editAvailable || !!state.drag || !!state.layerDrag || !displayAvailable(displayRow('ShowBrakeStatus'))" @change="setDisplay('ShowBrakeStatus', $event.target.checked ? 'On' : 'Off')"> Brake and acceleration colors</label>
                 <div v-if="!projection && selectedWidget.kind === 'model_confidence' && displayRow('StockConfidenceBallWidget')" class="gx-layout__favorite-display">
@@ -1661,18 +1663,24 @@ export const OnroadLayoutPage = {
                 </div></div>
                 <GxNotice tone="danger" v-if="state.colorError">{{ state.colorError }}</GxNotice>
               </section>
-            <section v-if="projection" v-show="state.inspectorPanel === 'display'" class="gx-layout__colors gx-layout__display" aria-label="Android Auto display">
-              <GalaxySettingRow :row="switchRow('Large UI Gamma Effect Trial', state.draft.largeUiGammaTrial)" :index="0"
-                :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setLargeUiGammaTrial(value)" />
+            <section v-if="projection" v-show="state.inspectorPanel === 'display'" class="gx-layout__colors gx-layout__display" aria-label="Android Auto screen options">
+              <div class="gx-layout__subhead"><h4>Android Auto screen options</h4></div>
+              <p class="gx-note">Only the Android Auto screen uses these. The comma screen has its own options on the Comma tab. Save to apply.</p>
+              <h5 class="gx-layout__display-group">Alerts and borders</h5>
+              <GalaxySettingRow :row="switchRow('Hide Personality Alerts', state.draft.hidePersonalityAlerts === true)" :index="0"
+                :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionDisplay('hidePersonalityAlerts', value)" />
               <GalaxySettingRow :row="switchRow('Red blind-spot border', state.draft.blindSpotBorder === true)" :index="1"
                 :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionDisplay('blindSpotBorder', value)" />
               <GalaxySettingRow :row="switchRow('Amber signal border', state.draft.signalBorder === true)" :index="2"
                 :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionDisplay('signalBorder', value)" />
-              <p class="gx-note">Gamma trial: the large comma UI's road-camera color effect (not shown in the preview). Borders are separate from the comma screen's C4 settings. Save to apply.</p>
+              <h5 class="gx-layout__display-group">Camera</h5>
+              <GalaxySettingRow :row="switchRow('Large UI Gamma Effect Trial', state.draft.largeUiGammaTrial)" :index="0"
+                :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setLargeUiGammaTrial(value)" />
+              <p class="gx-note">Gamma trial: the large comma UI's road-camera color effect (not shown in the preview).</p>
             </section>
-              <section v-if="!projection && displayGroups.length" v-show="state.inspectorPanel === 'display'" class="gx-layout__colors gx-layout__display" aria-label="Display options">
-                <div class="gx-layout__subhead"><h4>Display options</h4></div>
-                <p class="gx-note">These apply to the whole driving screen on both layouts. Save changes to apply them.</p>
+              <section v-if="!projection && displayGroups.length" v-show="state.inspectorPanel === 'display'" class="gx-layout__colors gx-layout__display" aria-label="Comma screen options">
+                <div class="gx-layout__subhead"><h4>Comma screen options</h4></div>
+                <p class="gx-note">Only the comma screen uses these, in both the Big and Small layouts unless marked. Android Auto has its own options on the Android Auto tab. Save to apply.</p>
                 <template v-for="group in displayGroups" :key="group.name">
                   <h5 class="gx-layout__display-group">{{ group.name }}</h5>
                   <GalaxySettingRow v-for="(row, index) in group.rows" :key="row.key" :row="displaySettingRow(row)" :index="index"

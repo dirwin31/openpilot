@@ -103,7 +103,7 @@ class TestProjectionLayout(unittest.TestCase):
     document = default_layout(SCREEN)
     self.assertIs(document['blindSpotBorder'], False)
     self.assertIs(document['signalBorder'], False)
-    for key in ('blindSpotBorder', 'signalBorder'):
+    for key in ('blindSpotBorder', 'signalBorder', 'hidePersonalityAlerts', 'wheelPedalFeedback'):
       older = {k: v for k, v in document.items() if k != key}
       self.assertEqual(validate_layout(older, SCREEN)[key], document[key], 'older layouts get the defaults')
       flipped = validate_layout({**document, key: not document[key]}, SCREEN)

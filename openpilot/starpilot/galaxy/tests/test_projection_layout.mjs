@@ -18,7 +18,7 @@ metadata.widgets.car_exit = { label: "Exit to car", kind: "car_exit", width: 96,
 metadata.widgetOrder = [...(metadata.widgetOrder || Object.keys(native.metadata.profiles.large.widgets)), "car_exit"]
 const widgets = Object.fromEntries(Object.entries(metadata.widgets).map(([id, widget]) => [id,
   { ...widget.default, ...(widget.resizable ? { size: widget.resizable.default } : {}) }]))
-const doc = { version: 2, clock24Hour: false, largeUiGammaTrial: false, blindSpotBorder: false, signalBorder: false, blindSpotCamera: false, canvas: { width: 2880, height: 1080 }, widgets }
+const doc = { version: 2, clock24Hour: false, largeUiGammaTrial: false, blindSpotBorder: false, signalBorder: false, blindSpotCamera: false, hidePersonalityAlerts: false, wheelPedalFeedback: false, canvas: { width: 2880, height: 1080 }, widgets }
 const raw = { version: 1, document: doc, defaults: copy(doc), metadata,
   screen: { width: 1280, height: 720, margin_width: 0, margin_height: 240 },
   revision: "aa-screen-and-layout", editable: true, valid: true,
@@ -70,7 +70,7 @@ for (const blocked of [{ projection: false }, { editable: false }]) {
 assert.equal(data.document.blindSpotBorder, false)
 assert.equal(data.document.signalBorder, false)
 assert.equal(editorSnapshot({ ...raw, document: { ...raw.document, blindSpotBorder: undefined, signalBorder: undefined } }).document.blindSpotBorder, false)
-for (const key of ["blindSpotBorder", "signalBorder"]) assert.equal(validDocument({ ...data.document, [key]: 1 }, data.metadata), false)
+for (const key of ["blindSpotBorder", "signalBorder", "hidePersonalityAlerts", "wheelPedalFeedback"]) assert.equal(validDocument({ ...data.document, [key]: 1 }, data.metadata), false)
 assert.equal(validDocument({ ...native.document, signalBorder: true }, native.metadata), false, "the comma screen keeps its C4 settings")
 assert.match(OnroadLayoutPage.template, /Red blind-spot border/)
 assert.match(OnroadLayoutPage.template, /Amber signal border/)
@@ -85,7 +85,7 @@ assert.match(borderVm.state.notice, /Save to apply/)
 OnroadLayoutPage.methods.setProjectionDisplay.call(borderVm, "largeUiGammaTrial", "On")
 for (const blocked of [{ projection: false }, { editable: false }]) OnroadLayoutPage.methods.setProjectionDisplay.call({ ...borderVm, ...blocked }, "signalBorder", "Off")
 assert.deepEqual(borderVm.state.draft, { blindSpotBorder: true, signalBorder: true })
-assert.equal((OnroadLayoutPage.template.match(/aria-label="Android Auto display"/g) || []).length, 1, "one compact card for all Android Auto display switches")
+assert.equal((OnroadLayoutPage.template.match(/aria-label="Android Auto screen options"/g) || []).length, 1, "one compact card for all Android Auto screen options")
 assert.deepEqual(projectionPayload({ document: { ...data.document, ...borderVm.state.draft } }, data.metadata).document.signalBorder, true)
 // Camera popup is saved independently, and older layouts default it off.
 assert.equal(data.document.blindSpotCamera, false)
@@ -192,7 +192,7 @@ draft.layouts.large.current_speed.x += 20
 assert.equal(await feed.save(draft), true)
 assert.equal(requests[0].url, "./api/android-auto/layout")
 assert.equal(requests[1].body.document.version, 2)
-assert.deepEqual(Object.keys(requests[1].body.document).sort(), ["blindSpotBorder", "blindSpotCamera", "canvas", "clock24Hour", "largeUiGammaTrial", "signalBorder", "version", "widgets"])
+assert.deepEqual(Object.keys(requests[1].body.document).sort(), ["blindSpotBorder", "blindSpotCamera", "canvas", "clock24Hour", "hidePersonalityAlerts", "largeUiGammaTrial", "signalBorder", "version", "wheelPedalFeedback", "widgets"])
 assert.equal(requests[1].body.document.widgets.current_speed.x, 1170)
 assert.equal(updates.at(-1).notice, "Android Auto layout saved.")
 feed.stop()

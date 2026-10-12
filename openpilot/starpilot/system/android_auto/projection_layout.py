@@ -118,7 +118,21 @@ def layout_metadata_for_viewport(viewport):
 
 
 # Android Auto display switches, independent of the comma screen's preferences.
-DISPLAY_DEFAULTS = {'blindSpotBorder': False, 'signalBorder': False, 'blindSpotCamera': False}
+DISPLAY_DEFAULTS = {'blindSpotBorder': False, 'signalBorder': False, 'blindSpotCamera': False,
+                    'hidePersonalityAlerts': False, 'wheelPedalFeedback': False}
+
+
+def projection_appearance(appearance, document):
+  """The comma's onroad appearance with every car-screen choice taken from the AA layout instead."""
+  from dataclasses import replace
+  from openpilot.starpilot.ui.appearance_preferences import CameraViewChoice
+  # The car screen always shows the road camera; the comma's camera choices stay on the comma.
+  return replace(appearance,
+                 show_blindspot_border=document.get('blindSpotBorder', False) is True,
+                 show_signal_border=document.get('signalBorder', False) is True,
+                 hide_personality_alerts=document.get('hidePersonalityAlerts', False) is True,
+                 wheel_pedal_feedback=document.get('wheelPedalFeedback', False) is True,
+                 camera_view=CameraViewChoice.STANDARD, driver_camera_on_reverse=False)
 
 
 def default_layout(screen):

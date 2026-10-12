@@ -138,6 +138,8 @@ class ProjectionOnroad:
       self.map_feed = None
       self._ensure_map()
       self.adapter = native.adapter(native.ui_state)
+      # Personality notices and the reverse camera are decided inside the adapter, so it needs AA's choices too.
+      self.adapter.appearance_override = self._own_appearance
       self._state = None
       self.favorites = None
       if getattr(native, 'favorites', None) is not None:
@@ -221,7 +223,16 @@ class ProjectionOnroad:
     self._base_customization = self._projection_customization = None
     self._base_appearance = self._projection_appearance = None
     self.camera.large_ui_gamma_trial = bool((customization or {}).get('largeUiGammaTrial', False))
+    invalidate = getattr(self.adapter, 'invalidate_appearance', None)
+    if invalidate is not None:
+      invalidate()
     self._ensure_map()
+
+  def _own_appearance(self, appearance):
+    if self.customization is None:
+      return appearance
+    from openpilot.starpilot.system.android_auto.projection_layout import projection_appearance
+    return projection_appearance(appearance, self.customization)
 
   def _check_layout(self):
     # The watcher's own thread does all file work; this only takes a finished layout.
@@ -329,12 +340,11 @@ class ProjectionOnroad:
           self._projection_customization = projection_customization(self.customization, state.customization)
           self._base_customization = state.customization
         if state.appearance is not self._base_appearance:
-          # The car screen's border switches live in the AA layout, not the comma's C4 settings.
-          self._projection_appearance = replace(state.appearance,
-                                                show_blindspot_border=self.customization.get('blindSpotBorder', False) is True,
-                                                show_signal_border=self.customization.get('signalBorder', False) is True)
+          # The car screen's display options live in the AA layout, not the comma's settings.
+          self._projection_appearance = self._own_appearance(state.appearance)
           self._base_appearance = state.appearance
-        state = replace(state, customization=self._projection_customization, appearance=self._projection_appearance)
+        state = replace(state, customization=self._projection_customization, appearance=self._projection_appearance,
+                        reverse_driver_camera=False)
       self._state = self._with_certificate_notice(state, now_ns)
       self.onroad.render(self._state)
       self.fonts.draw('StarPilot', self.native.font_role.BRAND, 30, self.width - 210, self.height - 90)
