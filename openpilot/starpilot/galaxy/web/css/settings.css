@@ -572,7 +572,7 @@ input[type="range"].gx-slider:active::-moz-range-thumb {
 
 /* Landscape phones: preview and controls side by side, preview sized to the short screen. */
 @media (orientation: landscape) and (max-height: 560px) {
-  .gx-layout { max-width: none; --layout-pin-max: calc(100vh - var(--layout-sticky-top, 0px) - var(--layout-bar-h, 60px) - 76px); }
+  .gx-layout { max-width: none; --layout-pin-max: calc(100vh - var(--layout-sticky-top, 0px) - var(--layout-bar-h, 60px) - 76px); --layout-pin-max: calc(100svh - var(--layout-sticky-top, 0px) - var(--layout-bar-h, 60px) - 76px); }
   .gx-layout__workspace { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
   .gx-layout__preview-card .gx-layout__preview, .gx-layout__device-frame { max-width: calc(var(--layout-pin-max) * var(--layout-ratio, 2)); margin-inline: auto; }
   .gx-layout__sections { top: calc(var(--layout-sticky-top, 0px) + var(--layout-bar-h, 60px)); }
@@ -656,3 +656,33 @@ input[type="range"].gx-slider:active::-moz-range-thumb {
 /* Tap-area overlay label sits on the preview while the grid toggle is on. */
 .gx-layout__preview-card > .gx-layout__stage { position: relative; margin-inline: 0; min-width: 0; }
 .gx-layout__stage-chip { position: absolute; top: 6px; right: 6px; z-index: 1; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid #b799ff88; border-radius: var(--radius-full); background: rgba(22, 18, 31, .82); color: #d8c8ff; font-size: var(--fs-xs); font-weight: var(--fw-bold); white-space: nowrap; pointer-events: none; }
+
+/* A pinned save bar also covers the strip behind the app bar, so the editor never scrolls up behind the search. */
+.gx-layout__savebar { --pin-r: var(--radius-md); }
+.gx-layout__savebar.is-stuck::before {
+  content: ""; position: absolute; left: -24px; right: -24px; top: calc(-1px - var(--layout-sticky-top, 0px)); height: calc(var(--layout-sticky-top, 0px) + var(--pin-r)); pointer-events: none;
+  background:
+    radial-gradient(circle at 100% 100%, transparent calc(var(--pin-r) - .5px), var(--background) var(--pin-r)) 23px 100% / var(--pin-r) var(--pin-r) no-repeat,
+    radial-gradient(circle at 0 100%, transparent calc(var(--pin-r) - .5px), var(--background) var(--pin-r)) calc(100% - 23px) 100% / var(--pin-r) var(--pin-r) no-repeat,
+    linear-gradient(var(--background), var(--background)) 0 0 / 100% calc(100% - var(--pin-r)) no-repeat,
+    linear-gradient(var(--background), var(--background)) 0 100% / 23px var(--pin-r) no-repeat,
+    linear-gradient(var(--background), var(--background)) 100% 100% / 23px var(--pin-r) no-repeat; }
+
+/* Selected switches and tabs stay lit on touch screens, where :hover sticks to the last tapped button. */
+.gx-layout .gx-settings-tabs > .gx-btn[aria-pressed="true"], .gx-layout .gx-layout__segment > .gx-btn[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); }
+@media (hover: none) {
+  .gx-layout .gx-settings-tabs > .gx-btn--tonal:hover:not(:disabled):not([aria-pressed="true"]) { background: var(--primary-container); }
+  .gx-layout .gx-layout__segment > .gx-btn--tonal:hover:not(:disabled):not([aria-pressed="true"]) { background: transparent; }
+}
+/* Dragging rows, chips and preview widgets never starts a text selection or the long-press menu. */
+.gx-layout__widget-list, .gx-layout__chips, .gx-layout__preview, .gx-layout__drag-ghost { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.gx-layout__row-grip { touch-action: none; }
+
+/* iPhone zooms into any field under 16px and leaves the page zoomed; editor fields stay at 16px. */
+.gx-layout input:is([type="text"], [type="number"], [type="search"], :not([type])), .gx-layout select, .gx-layout textarea { font-size: max(16px, 1em); }
+
+/* No double-tap zoom while editing; touch screens size widgets from Edit, so the tiny corner handle is hidden there. */
+.gx-layout { touch-action: manipulation; }
+@media (pointer: coarse) { .gx-layout__resize { display: none; } }
+.gx-layout__color { scroll-margin-bottom: 16px; }
+html.gx-maker-open, html.gx-maker-open body { touch-action: manipulation; }

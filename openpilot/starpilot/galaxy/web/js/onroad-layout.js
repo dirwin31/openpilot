@@ -130,6 +130,12 @@ export function previewPoint(event, rect, profile) {
   }
 }
 
+// Open maker pages; a route switch briefly mounts the next editor before the last one leaves.
+let makerPagesOpen = 0
+
+// Screen pixels a pointer may wobble before a press on a preview widget becomes a drag.
+const DRAG_SLOP = 6
+
 // Android Auto's own border switches; the comma screen keeps its C4 settings.
 const PROJECTION_BORDERS = ["blindSpotBorder", "signalBorder"]
 
@@ -538,7 +544,7 @@ export const OnroadLayoutPage = {
       status: "idle", data: null, draft: null, needsReload: false, error: "", notice: "",
       profile: "large", scene: "engaged", selected: null, layerDrag: null, drag: null, discard: null, leavePresentation: null, removeConfirm: null, colorError: "", placementError: "",
       inspectorPanel: ["widgets", "edit", "road", "display"].includes(props.initialPanel) && !props.projection ? props.initialPanel : "widgets", previewMode: "layout", showFavoriteZones: false, devicePreviewOpen: false,
-      aboutOpen: false, tipsOpen: false, moreOpen: false, widgetsHelpOpen: false, openColor: null, preview: { status: "idle", error: "", url: null },
+      aboutOpen: false, tipsOpen: false, moreOpen: false, widgetsHelpOpen: false, barStuck: false, openColor: null, preview: { status: "idle", error: "", url: null },
       hiddenPreviewWidgets: loadPreviewVisibility(props.projection), history: { undo: [], redo: [], group: null }
     })
     let deferred = null
@@ -689,10 +695,15 @@ export const OnroadLayoutPage = {
   mounted() {
     if (this.mode === "local") this.feed.start()
     this._stopUnloadGuard = guardUnload(() => this.dirty || this.state.status === "saving")
+    // Double-tap zoom stays off across the whole page, app bar included, while a maker page is open.
+    if (makerPagesOpen++ === 0) document.documentElement.classList.add("gx-maker-open")
     this.observePinned()
   },
   updated() { this.observePinned() },
-  beforeUnmount() { this.cancelDrag(); this.feed.stop(); this.previewFeed.stop(); this._stopUnloadGuard(); this._pinObserver?.disconnect() },
+  beforeUnmount() { this.cancelDrag(); this.feed.stop(); this.previewFeed.stop(); this._stopUnloadGuard(); this._pinObserver?.disconnect(); this.unwatchRelease(); this._closeFloating?.()
+    if (--makerPagesOpen === 0) document.documentElement.classList.remove("gx-maker-open")
+    if (this._onPinScroll) window.removeEventListener("scroll", this._onPinScroll, { capture: true })
+  },
   methods: {
     switchRow,
     previewHidden(id) { return !(this.projection && id === "car_exit") && this.state.hiddenPreviewWidgets[this.state.profile]?.[id] === true },
@@ -709,6 +720,33 @@ export const OnroadLayoutPage = {
     toggleColor(key) {
       this.finishColorEdit()
       this.state.openColor = this.state.openColor === key ? null : key
+      // Bring an opened color's picker fully into view.
+      if (this.state.openColor) this.$nextTick?.(() => this.$el?.querySelector?.(".gx-layout__color.is-open")?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }))
+    },
+    // The more menu and the widget help close on any press outside them, including the app bar.
+    toggleFloating(key, ref) {
+      this.state[key] = !this.state[key]
+      this._closeFloating?.()
+      if (!this.state[key] || typeof document === "undefined") return
+      const outside = (event) => { if (!this.$refs[ref]?.contains(event.target)) { this.state[key] = false; this._closeFloating?.() } }
+      document.addEventListener("pointerdown", outside, true)
+      this._closeFloating = () => { document.removeEventListener("pointerdown", outside, true); this._closeFloating = null }
+    },
+    closeFloating(key) {
+      this.state[key] = false
+      this._closeFloating?.()
+    },
+    // Keeps a focused editor field clear of the pinned save bar, preview and tabs once the keyboard opens.
+    revealField(event) {
+      const field = event.target
+      if (!field?.matches?.("input:not([type=range]):not([type=checkbox]), .gx-field")) return
+      setTimeout(() => {
+        const tabs = this.$el?.querySelector?.(".gx-layout__sections")?.getBoundingClientRect()
+        const view = window.visualViewport, top = (tabs?.bottom || 0) + 12
+        const rect = field.getBoundingClientRect(), bottom = (view ? view.height + view.offsetTop : window.innerHeight) - 12
+        if (rect.top < top) window.scrollBy(0, rect.top - top)
+        else if (rect.bottom > bottom) window.scrollBy(0, rect.bottom - bottom)
+      }, 350)
     },
     // Narrow screens pin the save bar and preview; the editor tabs stick just below their measured height.
     observePinned() {
@@ -717,6 +755,16 @@ export const OnroadLayoutPage = {
         for (const [name, ref] of [["--layout-bar-h", "leaveBar"], ["--layout-pin-h", "pinned"]])
           if (this.$refs[ref]) this.$el.style.setProperty(name, this.$refs[ref].getBoundingClientRect().height + "px")
       })
+      // Once the save bar pins under the app bar, it also hides the editor scrolling up behind the app bar.
+      if (!this._onPinScroll) {
+        this._onPinScroll = () => {
+          const bar = this.$refs.leaveBar
+          const stuck = !!bar && bar.getBoundingClientRect().top <= (parseFloat(getComputedStyle(bar).top) || 0) + 1
+          if (this.state.barStuck !== stuck) this.state.barStuck = stuck
+        }
+        window.addEventListener("scroll", this._onPinScroll, { passive: true, capture: true })
+        this._onPinScroll()
+      }
       for (const ref of ["leaveBar", "pinned"]) {
         const element = this.$refs[ref]
         if (element && this._pinned?.[ref] !== element) {
@@ -748,6 +796,7 @@ export const OnroadLayoutPage = {
     startLayerDrag(event, id) {
       if (!this.editable || this.state.drag || this.state.layerDrag || event.button !== 0 || this.profile.widgets[id]?.frontmost) return
       this._suppressLayerClick = false
+      event.preventDefault()
       event.currentTarget.setPointerCapture(event.pointerId)
       const rect = event.currentTarget.closest("[data-layer-id]").getBoundingClientRect()
       this.state.selected = id
@@ -757,6 +806,25 @@ export const OnroadLayoutPage = {
         rows: this.layerWidgets.map(widget => widget.id), before: clone(this.state.draft), moved: false
       }
       this._layerTarget = event.currentTarget
+      this.watchRelease()
+    },
+    // A lost pointerup (capture dropped, native gesture, re-render) must never leave a drag active,
+    // since an active drag disables the tabs, preview switcher and navigation.
+    watchRelease() {
+      if (this._onRelease || typeof window === "undefined") return
+      this._onRelease = (event) => {
+        if (this.state.layerDrag?.pointerId === event.pointerId) this.endLayerDrag(event, event.type === "pointercancel")
+        if (this.state.drag?.pointerId === event.pointerId) event.type === "pointercancel" ? this.cancelDrag() : this.endDrag(event)
+        if (!this.state.drag && !this.state.layerDrag) this.unwatchRelease()
+      }
+      window.addEventListener("pointerup", this._onRelease)
+      window.addEventListener("pointercancel", this._onRelease)
+    },
+    unwatchRelease() {
+      if (!this._onRelease) return
+      window.removeEventListener("pointerup", this._onRelease)
+      window.removeEventListener("pointercancel", this._onRelease)
+      this._onRelease = null
     },
     moveLayerDrag(event) {
       const drag = this.state.layerDrag
@@ -765,7 +833,16 @@ export const OnroadLayoutPage = {
       drag.moved = true
       drag.x = event.clientX - drag.offsetX
       drag.y = event.clientY - drag.offsetY
-      const row = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-layer-id]')
+      this._layerPoint = [event.clientX, event.clientY]
+      this.retargetLayer(event.clientX, event.clientY)
+      this.autoScrollLayer()
+    },
+    retargetLayer(clientX, clientY) {
+      const drag = this.state.layerDrag
+      if (!drag) return
+      // A finger held over the pinned tabs or preview targets the first row visible under them.
+      const tabs = this.$el?.querySelector?.(".gx-layout__sections")?.getBoundingClientRect()
+      const row = document.elementFromPoint(clientX, tabs ? Math.max(clientY, tabs.bottom + 6) : clientY)?.closest('[data-layer-id]')
       const target = row?.dataset.layerId
       if (target && target !== drag.target && !this.profile.widgets[target]?.frontmost) {
         drag.target = target
@@ -777,8 +854,24 @@ export const OnroadLayoutPage = {
         this.state.draft.widgetOrder ||= {}
         this.state.draft.widgetOrder[this.state.profile] = order
       }
-      if (event.clientY < 60) window.scrollBy(0, -16)
-      else if (event.clientY > window.innerHeight - 60) window.scrollBy(0, 16)
+    },
+    // Scrolls while a dragged row is held near the visible edges; the top edge is the bottom of the pinned tabs.
+    autoScrollLayer() {
+      if (this._layerScroll || typeof requestAnimationFrame === "undefined") return
+      const step = () => {
+        this._layerScroll = null
+        const drag = this.state.layerDrag, point = this._layerPoint
+        if (!drag?.moved || !point) return
+        const tabs = this.$el?.querySelector?.(".gx-layout__sections")?.getBoundingClientRect()
+        const top = Math.max(60, tabs ? tabs.bottom : 0) + 40, bottom = window.innerHeight - 60
+        const speed = point[1] < top ? -Math.min(24, 6 + (top - point[1]) / 3) : point[1] > bottom ? Math.min(24, 6 + (point[1] - bottom) / 3) : 0
+        if (!speed) return
+        const before = window.scrollY
+        window.scrollBy(0, speed)
+        if (window.scrollY !== before) this.retargetLayer(point[0], point[1])
+        this._layerScroll = requestAnimationFrame(step)
+      }
+      this._layerScroll = requestAnimationFrame(step)
     },
     endLayerDrag(event, cancel = false) {
       const drag = this.state.layerDrag
@@ -786,6 +879,8 @@ export const OnroadLayoutPage = {
       if (cancel) this.state.draft = drag.before
       else if (drag.moved) this.recordChange(drag.before)
       this.state.layerDrag = null
+      this._layerPoint = null
+      if (this._layerScroll) { cancelAnimationFrame(this._layerScroll); this._layerScroll = null }
       if (this._layerTarget?.hasPointerCapture(event.pointerId)) this._layerTarget.releasePointerCapture(event.pointerId)
       this._layerTarget = null
       this._suppressLayerClick = cancel || drag.moved
@@ -1008,11 +1103,13 @@ export const OnroadLayoutPage = {
       this.finishColorEdit()
       this.state.drag = {
         id, pointerId: event.pointerId, fromTray, before: { ...position }, historyBefore: clone(this.state.draft), inside: !fromTray,
+        startX: event.clientX, startY: event.clientY, moved: false,
         offsetX: fromTray ? width / 2 : point.x - position.x,
         offsetY: fromTray ? height / 2 : point.y - position.y
       }
       this._dragTarget = this.$refs.preview
-      this._dragTarget.setPointerCapture?.(event.pointerId)
+      this.watchRelease()
+      try { this._dragTarget.setPointerCapture?.(event.pointerId) } catch { }
       event.preventDefault()
     },
     startResize(id, event) {
@@ -1028,19 +1125,42 @@ export const OnroadLayoutPage = {
         inside: true, offsetX: point.x - position.width, offsetY: point.y - position.height
       }
       this._dragTarget = this.$refs.preview
-      this._dragTarget.setPointerCapture?.(event.pointerId)
+      this.watchRelease()
+      try { this._dragTarget.setPointerCapture?.(event.pointerId) } catch { }
       event.stopPropagation()
       event.preventDefault()
     },
-    resizeBox(id, width, height) {
+    resizeBox(id, width, height, group = null) {
       if (!this.editable) return false
       const position = this.layout[id], next = clampBox(this.profile, id, position, width, height)
       if (!next) return false
       const before = this.state.drag ? null : clone(this.state.draft)
       Object.assign(position, next)
-      if (before) this.recordChange(before)
+      if (before) this.recordChange(before, group)
       this.state.placementError = this.state.notice = ""
       return true
+    },
+    boxSlider(axis, event) {
+      const number = Number(event.target.value)
+      if (!Number.isFinite(number) || this.state.drag || this.state.layerDrag) return
+      this.resizeBox(this.state.selected, axis === "width" ? number : this.selectedPosition.width,
+        axis === "height" ? number : this.selectedPosition.height, this.state.profile + ":" + this.state.selected + ":" + axis)
+    },
+    sizeSlider(event) {
+      const size = Number(event.target.value), range = this.selectedWidget?.resizable
+      if (!this.editable || this.state.drag || this.state.layerDrag || !range || !Number.isInteger(size) || size < range.min || size > range.max) return
+      const before = clone(this.state.draft), position = this.selectedPosition, previous = position.size
+      position.size = size
+      const next = clampPlacement(this.profile, this.state.selected, position.x, position.y, this.layout)
+      if (next) {
+        Object.assign(position, next)
+        this.recordChange(before, this.state.profile + ":" + this.state.selected + ":size")
+        this.state.placementError = ""
+      } else {
+        position.size = previous
+        event.target.value = previous
+        this.state.placementError = "That size would cover Speed limit actions. The last valid size is kept."
+      }
     },
     boxInput(axis, event) {
       const number = event.target.value.trim() === "" ? NaN : Number(event.target.value)
@@ -1069,6 +1189,9 @@ export const OnroadLayoutPage = {
       const point = previewPoint(event, this.$refs.preview.getBoundingClientRect(), this.profile)
       if (!point) return
       if (drag.resize) { this.resizeBox(drag.id, point.x - drag.offsetX, point.y - drag.offsetY); return }
+      // A finger wobbles a few pixels on every tap; only a deliberate move drags the widget.
+      if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < DRAG_SLOP) return
+      drag.moved = true
       drag.inside = point.x >= 0 && point.y >= 0 && point.x <= this.profile.width && point.y <= this.profile.height
       if (!drag.fromTray || drag.inside) {
         const x = point.x - drag.offsetX, y = point.y - drag.offsetY
@@ -1083,7 +1206,7 @@ export const OnroadLayoutPage = {
       this.moveDrag(event)
       if (drag.fromTray && !drag.inside) Object.assign(this.layout[drag.id], drag.before)
       const before = drag.historyBefore, position = this.layout[drag.id]
-      if (!drag.fromTray && !drag.resize && position.x === drag.before.x && position.y === drag.before.y) this.state.inspectorPanel = "edit"
+      if (!drag.fromTray && !drag.resize && !drag.moved) this.state.inspectorPanel = "edit"
       this.releaseDrag()
       this.recordChange(before)
     },
@@ -1250,7 +1373,7 @@ export const OnroadLayoutPage = {
       <p v-if="projection && state.data?.reason" class="gx-note">{{ state.data.reason }}</p>
       <GxState v-if="mode !== 'local'">Connect to local Galaxy to edit this device’s colors and layouts.</GxState>
       <template v-else>
-        <div ref="leaveBar" class="gx-layout__savebar" :class="{'gx-layout__savebar--leave': inlineLeavePrompt}" :inert="busy">
+        <div ref="leaveBar" class="gx-layout__savebar" :class="{'gx-layout__savebar--leave': inlineLeavePrompt, 'is-stuck': state.barStuck}" :inert="busy">
           <span role="status" :class="{'is-dirty': dirty && !inlineLeavePrompt && state.status !== 'saving'}">{{ inlineLeavePrompt ? (pendingLeave ? 'Leave without saving your changes?' : 'Discard your edits and reload the saved colors and layouts?') : state.status === 'saving' ? 'Saving…' : state.status === 'loading' ? 'Loading…' : !state.data ? 'No saved layout loaded' : dirty ? 'Unsaved' : state.notice || 'Saved' }}</span>
           <template v-if="inlineLeavePrompt">
             <button class="gx-btn gx-btn--tonal" type="button" aria-label="Keep editing" title="Keep editing" @click="cancelLeave"><svg class="gx-layout__action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 3-6M4 4v6h6"/></svg><span class="gx-layout__action-label">Keep editing</span></button>
@@ -1260,13 +1383,12 @@ export const OnroadLayoutPage = {
           <template v-else>
             <button class="gx-btn gx-btn--tonal" type="button" :disabled="!editAvailable || !canUndo || !!state.drag || !!state.layerDrag" aria-label="Undo" title="Undo" @click="undo"><svg class="gx-layout__action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12"/></svg><span class="gx-layout__action-label">Undo</span></button>
             <button class="gx-btn gx-btn--tonal" type="button" :disabled="!editAvailable || !canRedo || !!state.drag || !!state.layerDrag" aria-label="Redo" title="Redo" @click="redo"><svg class="gx-layout__action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5 5 5-5 5m5-5H10a6 6 0 0 0 0 12"/></svg><span class="gx-layout__action-label">Redo</span></button>
-            <div class="gx-layout__more" @keydown.esc="state.moreOpen = false">
-              <button class="gx-btn gx-btn--tonal" type="button" :aria-expanded="state.moreOpen" aria-haspopup="menu" aria-label="More actions" title="More actions" @click="state.moreOpen = !state.moreOpen"><svg class="gx-layout__action-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg><span class="gx-layout__action-label">More</span></button>
+            <div ref="moreMenu" class="gx-layout__more" @keydown.esc="closeFloating('moreOpen')">
+              <button class="gx-btn gx-btn--tonal" type="button" :aria-expanded="state.moreOpen" aria-haspopup="menu" aria-label="More actions" title="More actions" @click="toggleFloating('moreOpen', 'moreMenu')"><svg class="gx-layout__action-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg><span class="gx-layout__action-label">More</span></button>
               <template v-if="state.moreOpen">
-                <button class="gx-layout__menu-scrim" type="button" tabindex="-1" aria-hidden="true" @click="state.moreOpen = false"></button>
                 <div class="gx-layout__menu" role="menu" aria-label="More actions">
-                  <button class="gx-layout__menu-item" type="button" role="menuitem" :disabled="!!state.drag || !!state.layerDrag" @click="state.moreOpen = false; requestLeave('reload')"><svg class="gx-layout__action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2 5"/></svg>Reload saved</button>
-                  <button class="gx-layout__menu-item" type="button" role="menuitem" :disabled="!editAvailable || !stockChanged || !!state.drag || !!state.layerDrag" @click="state.moreOpen = false; resetToStock()"><svg class="gx-layout__action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 11 9-8 9 8M5 10v11h14V10M9 21v-7h6v7"/></svg>Reset to stock StarPilot</button>
+                  <button class="gx-layout__menu-item" type="button" role="menuitem" :disabled="!!state.drag || !!state.layerDrag" @click="closeFloating('moreOpen'); requestLeave('reload')"><svg class="gx-layout__action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2 5"/></svg>Reload saved</button>
+                  <button class="gx-layout__menu-item" type="button" role="menuitem" :disabled="!editAvailable || !stockChanged || !!state.drag || !!state.layerDrag" @click="closeFloating('moreOpen'); resetToStock()"><svg class="gx-layout__action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 11 9-8 9 8M5 10v11h14V10M9 21v-7h6v7"/></svg>Reset to stock StarPilot</button>
                 </div>
               </template>
             </div>
@@ -1368,7 +1490,7 @@ export const OnroadLayoutPage = {
               </div>
               <p v-if="state.placementError" class="gx-note" role="status">{{ state.placementError }}</p>
             </section>
-            <section class="gx-card gx-layout__inspector" aria-label="Widget placement">
+            <section class="gx-card gx-layout__inspector" aria-label="Widget placement" @focusin="revealField">
               <nav class="gx-layout__switcher gx-layout__sections gx-settings-tabs" aria-label="Editor sections">
                 <button class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'widgets'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'widgets'">Widgets</button>
                 <button class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'edit'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'edit'"><span>Edit<span class="gx-layout__long"> widget</span></span></button>
@@ -1376,9 +1498,9 @@ export const OnroadLayoutPage = {
                 <button v-if="projection || displayGroups.length" class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'display'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'display'">Display</button>
               </nav>
               <div v-show="state.inspectorPanel === 'widgets'" class="gx-layout__panel">
-              <div class="gx-layout__subhead gx-layout__help-anchor"><h3>Widgets</h3><span>{{ activeWidgets.length }} active</span>
-                <button class="gx-icon-btn gx-layout__info" type="button" :aria-expanded="state.widgetsHelpOpen" aria-controls="gx-layout-widgets-help" aria-label="How the widget list works" title="How the widget list works" @click="state.widgetsHelpOpen = !state.widgetsHelpOpen"><i class="bi bi-info-circle" aria-hidden="true"></i></button>
-                <div v-show="state.widgetsHelpOpen" id="gx-layout-widgets-help" class="gx-layout__popover" @click="state.widgetsHelpOpen = false" @keydown.esc="state.widgetsHelpOpen = false">
+              <div ref="widgetsHelp" class="gx-layout__subhead gx-layout__help-anchor"><h3>Widgets</h3><span>{{ activeWidgets.length }} active</span>
+                <button class="gx-icon-btn gx-layout__info" type="button" :aria-expanded="state.widgetsHelpOpen" aria-controls="gx-layout-widgets-help" aria-label="How the widget list works" title="How the widget list works" @click="toggleFloating('widgetsHelpOpen', 'widgetsHelp')"><i class="bi bi-info-circle" aria-hidden="true"></i></button>
+                <div v-show="state.widgetsHelpOpen" id="gx-layout-widgets-help" class="gx-layout__popover" @click="closeFloating('widgetsHelpOpen')" @keydown.esc="closeFloating('widgetsHelpOpen')">
                   <p>Tap a widget to edit it.</p><p>Drag ⠿ to reorder. The top row is in front, and alerts stay above all widgets.</p><p>The eye hides a widget in this preview only. The driving screen doesn't change.</p>
                 </div>
               </div>
@@ -1430,6 +1552,8 @@ export const OnroadLayoutPage = {
                 <label v-if="selectedWidget.resizable">Size
                   <input class="gx-field" type="number" step="1" :min="selectedWidget.resizable.min" :max="selectedWidget.resizable.max"
                     :value="selectedPosition.size" :disabled="!editAvailable || !!state.drag" @change="resizeSelected($event)"></label>
+                <input v-if="selectedWidget.resizable" class="gx-slider" type="range" step="1" aria-label="Size" :min="selectedWidget.resizable.min" :max="selectedWidget.resizable.max"
+                  :value="selectedPosition.size" :disabled="!editAvailable || !!state.drag || !!state.layerDrag" @input="sizeSlider($event)" @change="finishColorEdit" @blur="finishColorEdit">
                 <template v-if="selectedWidget.opacity">
                   <label for="layout-widget-opacity">{{ selectedWidget.box ? 'Map opacity' : 'Opacity' }} · {{ selectedPosition.opacity }}%</label>
                   <input id="layout-widget-opacity" class="gx-slider" type="range" step="1" :min="selectedWidget.opacity.min" :max="selectedWidget.opacity.max"
@@ -1467,7 +1591,15 @@ export const OnroadLayoutPage = {
                   <label>Y<input class="gx-field" type="number" step="1" :min="limits.minY" :max="limits.maxY" :value="selectedPosition.y" :disabled="!editAvailable || !!state.drag" @change="positionInput('y', $event)"></label><template v-if="selectedWidget.box">
                   <label>Width<input class="gx-field" type="number" step="10" :min="selectedWidget.box.minWidth" :max="selectedWidget.box.maxWidth" :value="selectedPosition.width" :disabled="!editAvailable || !!state.drag" @change="boxInput('width', $event)"></label>
                   <label>Height<input class="gx-field" type="number" step="10" :min="selectedWidget.box.minHeight" :max="selectedWidget.box.maxHeight" :value="selectedPosition.height" :disabled="!editAvailable || !!state.drag" @change="boxInput('height', $event)"></label></template></div>
-                <span v-if="selectedWidget.box" class="gx-note">Lower values let more of the road show through. Drag the corner handle on the preview to resize.</span>
+                <template v-if="selectedWidget.box">
+                  <label :for="'layout-box-width'">Width · {{ selectedPosition.width }}</label>
+                  <input id="layout-box-width" class="gx-slider" type="range" step="10" :min="selectedWidget.box.minWidth" :max="selectedWidget.box.maxWidth"
+                    :value="selectedPosition.width" :disabled="!editAvailable || !!state.drag || !!state.layerDrag" @input="boxSlider('width', $event)" @change="finishColorEdit" @blur="finishColorEdit">
+                  <label :for="'layout-box-height'">Height · {{ selectedPosition.height }}</label>
+                  <input id="layout-box-height" class="gx-slider" type="range" step="10" :min="selectedWidget.box.minHeight" :max="selectedWidget.box.maxHeight"
+                    :value="selectedPosition.height" :disabled="!editAvailable || !!state.drag || !!state.layerDrag" @input="boxSlider('height', $event)" @change="finishColorEdit" @blur="finishColorEdit">
+                  <span class="gx-note">Smaller sizes let more of the road show through.</span>
+                </template>
                 <span class="gx-note gx-layout__keys-note">Use arrow keys on a preview widget to move 1 pixel, or Shift + arrow for 10.</span>
                 <section v-if="!projection && colorFields.length" class="gx-layout__colors" :aria-label="selectedWidget.label + ' colors'">
                   <div class="gx-layout__subhead"><h4>{{ selectedWidget.label }} colors</h4><button class="gx-btn gx-btn--tonal" type="button" :disabled="!editAvailable" @click="resetColors" aria-label="Reset widget colors" title="Reset widget colors">Reset</button></div>
