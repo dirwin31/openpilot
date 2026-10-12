@@ -489,6 +489,12 @@ input[type="range"].gx-slider:active::-moz-range-thumb {
   .gx-layout__leave-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
 }
 
+/* Widget removal uses the same roomy copy, with Cancel and Remove as two even buttons. */
+.gx-card.gx-layout__remove-dialog { width: min(calc(100% - 48px), 480px); padding: 28px; gap: 24px; }
+.gx-layout__remove-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.gx-layout__remove-actions .gx-btn { min-height: 48px; padding: 12px 16px; }
+@media (max-width: 600px) { .gx-card.gx-layout__remove-dialog { width: calc(100% - 32px); padding: 24px; } }
+
 /* Compact editor chrome: one target row, one-line save bar, overflow menu, accordion colors. */
 .gx-layout { --layout-pin-max: 34vh; --layout-pin-max: 34svh; --layout-solid: linear-gradient(var(--surface-container), var(--surface-container)), var(--background); }
 .gx-layout__targets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
@@ -618,21 +624,22 @@ input[type="range"].gx-slider:active::-moz-range-thumb {
 }
 
 /* Pinned pieces keep the same 12px gap as the unpinned layout. A page-colored strip fills each gap
-   and the slivers beside the rounded corners, so the controls never show through while scrolling. */
+   and the slivers beside the rounded corners, so the controls never show through while scrolling.
+   The save bar only gets the fill once it is pinned, so its rounded corners show while it scrolls with the page. */
 .gx-layout__savebar { --pin-r: var(--radius-md); }
 .gx-layout__preview-card { --pin-r: var(--radius-lg); }
 @container (max-width: 1040px) {
   .gx-layout__preview-card { top: calc(var(--layout-sticky-top, 0px) + var(--layout-bar-h, 60px) + 12px); overflow: visible; }
   .gx-layout__sections { top: calc(var(--layout-sticky-top, 0px) + var(--layout-bar-h, 60px) + 24px + var(--layout-pin-h, 0px)); }
-  .gx-layout__savebar::before, .gx-layout__savebar::after, .gx-layout__preview-card::before, .gx-layout__preview-card::after {
+  .gx-layout__savebar.is-stuck::before, .gx-layout__savebar.is-stuck::after, .gx-layout__preview-card::before, .gx-layout__preview-card::after {
     content: ""; position: absolute; left: -1px; right: -1px; pointer-events: none; --pin-bg: var(--background); }
-  .gx-layout__savebar::after, .gx-layout__preview-card::after {
+  .gx-layout__savebar.is-stuck::after, .gx-layout__preview-card::after {
     top: calc(100% + 1px - var(--pin-r)); height: calc(var(--pin-r) + 12px);
     background:
       radial-gradient(circle at 100% 0, transparent calc(var(--pin-r) - .5px), var(--pin-bg) var(--pin-r)) 0 0 / var(--pin-r) var(--pin-r) no-repeat,
       radial-gradient(circle at 0 0, transparent calc(var(--pin-r) - .5px), var(--pin-bg) var(--pin-r)) 100% 0 / var(--pin-r) var(--pin-r) no-repeat,
       linear-gradient(var(--pin-bg), var(--pin-bg)) 0 100% / 100% 12px no-repeat; }
-  .gx-layout__savebar::before, .gx-layout__preview-card::before {
+  .gx-layout__savebar.is-stuck::before, .gx-layout__preview-card::before {
     top: -1px; height: var(--pin-r);
     background:
       radial-gradient(circle at 100% 100%, transparent calc(var(--pin-r) - .5px), var(--pin-bg) var(--pin-r)) 0 0 / var(--pin-r) var(--pin-r) no-repeat,
@@ -657,16 +664,26 @@ input[type="range"].gx-slider:active::-moz-range-thumb {
 .gx-layout__preview-card > .gx-layout__stage { position: relative; margin-inline: 0; min-width: 0; }
 .gx-layout__stage-chip { position: absolute; top: 6px; right: 6px; z-index: 1; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid #b799ff88; border-radius: var(--radius-full); background: rgba(22, 18, 31, .82); color: #d8c8ff; font-size: var(--fs-xs); font-weight: var(--fw-bold); white-space: nowrap; pointer-events: none; }
 
-/* A pinned save bar also covers the strip behind the app bar, so the editor never scrolls up behind the search. */
+/* A pinned save bar also covers the strip behind the app bar, so the editor never scrolls up behind the search.
+   Its outline is drawn above that strip, so the top edge and rounded corners stay visible. One layer fills
+   the strip, the corners and the 12px gap below; the other carries the border and shadow. */
 .gx-layout__savebar { --pin-r: var(--radius-md); }
+.gx-layout__savebar.is-stuck { --pin-line: var(--glass-border); --pin-shadow: var(--elev-1); border-color: transparent; box-shadow: none; }
+.gx-layout__savebar.gx-layout__savebar--leave.is-stuck { --pin-line: var(--primary); --pin-shadow: 0 0 0 1px var(--primary-glow), 0 0 24px var(--primary-glow); }
 .gx-layout__savebar.is-stuck::before {
-  content: ""; position: absolute; left: -24px; right: -24px; top: calc(-1px - var(--layout-sticky-top, 0px)); height: calc(var(--layout-sticky-top, 0px) + var(--pin-r)); pointer-events: none;
+  content: ""; position: absolute; top: calc(-1px - var(--layout-sticky-top, 0px)); bottom: -13px; height: auto; left: -24px; right: -24px; pointer-events: none;
   background:
-    radial-gradient(circle at 100% 100%, transparent calc(var(--pin-r) - .5px), var(--background) var(--pin-r)) 23px 100% / var(--pin-r) var(--pin-r) no-repeat,
-    radial-gradient(circle at 0 100%, transparent calc(var(--pin-r) - .5px), var(--background) var(--pin-r)) calc(100% - 23px) 100% / var(--pin-r) var(--pin-r) no-repeat,
-    linear-gradient(var(--background), var(--background)) 0 0 / 100% calc(100% - var(--pin-r)) no-repeat,
-    linear-gradient(var(--background), var(--background)) 0 100% / 23px var(--pin-r) no-repeat,
-    linear-gradient(var(--background), var(--background)) 100% 100% / 23px var(--pin-r) no-repeat; }
+    radial-gradient(circle at 100% 100%, transparent calc(var(--pin-r) - .5px), var(--background) var(--pin-r)) left 23px top var(--layout-sticky-top, 0px) / var(--pin-r) var(--pin-r) no-repeat,
+    radial-gradient(circle at 0 100%, transparent calc(var(--pin-r) - .5px), var(--background) var(--pin-r)) right 23px top var(--layout-sticky-top, 0px) / var(--pin-r) var(--pin-r) no-repeat,
+    radial-gradient(circle at 100% 0, transparent calc(var(--pin-r) - .5px), var(--background) var(--pin-r)) left 23px bottom 12px / var(--pin-r) var(--pin-r) no-repeat,
+    radial-gradient(circle at 0 0, transparent calc(var(--pin-r) - .5px), var(--background) var(--pin-r)) right 23px bottom 12px / var(--pin-r) var(--pin-r) no-repeat,
+    linear-gradient(var(--background), var(--background)) 0 0 / 100% var(--layout-sticky-top, 0px) no-repeat,
+    linear-gradient(var(--background), var(--background)) left 0 top var(--layout-sticky-top, 0px) / 23px var(--pin-r) no-repeat,
+    linear-gradient(var(--background), var(--background)) right 0 top var(--layout-sticky-top, 0px) / 23px var(--pin-r) no-repeat,
+    linear-gradient(var(--background), var(--background)) 0 100% / 100% 12px no-repeat; }
+.gx-layout__savebar.is-stuck::after {
+  content: ""; position: absolute; top: -1px; right: -1px; bottom: -1px; left: -1px; height: auto; pointer-events: none;
+  border: 1px solid var(--pin-line); border-radius: var(--pin-r); background: none; box-shadow: var(--pin-shadow); }
 
 /* Selected switches and tabs stay lit on touch screens, where :hover sticks to the last tapped button. */
 .gx-layout .gx-settings-tabs > .gx-btn[aria-pressed="true"], .gx-layout .gx-layout__segment > .gx-btn[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); }

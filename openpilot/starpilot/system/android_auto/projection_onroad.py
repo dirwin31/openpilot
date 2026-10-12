@@ -258,15 +258,17 @@ class ProjectionOnroad:
                     placed['opacity'] / 100.0)
 
   def _pip_layer(self, rect, state, *, submit=None):
-    """The comma's blinker/blind-spot side-camera bubbles, at the AA layout's placements."""
+    """Shared camera crops, with Android Auto's own blind-spot trigger and placements."""
     native = self.native
     now_ns = time.monotonic_ns()
     if self._pip_read_ns is None or not 0 <= now_ns - self._pip_read_ns < 1_000_000_000:
       self._pip_saved = native.read_pip(native.ui_state.params)
       self._pip_read_ns = now_ns
     saved = self._pip_saved
-    if (saved is None or saved.enabled is not True or saved.mask is None or
-        saved.invert is None or saved.on_blinker is None or saved.on_bsm is None):
+    # AA can show warnings with the comma preview off; only crops and mirroring are shared.
+    on_bsm = (self.customization or {}).get('blindSpotCamera', False) is True
+    on_blinker = saved is not None and saved.enabled is True and saved.on_blinker is True
+    if saved is None or saved.mask is None or saved.invert is None or not (on_bsm or on_blinker):
       self.pip.deactivate()
       self._set_pip_showing(False)
       return
@@ -284,8 +286,8 @@ class ProjectionOnroad:
       if position['enabled']:
         width, height = native.widget_size(state.customization, 'large', key)
         placements[side] = native.pip_rect(position['x'], position['y'], width, height)
-    result = self.pip.render(rect, saved.mask, signals, enabled=True, on_blinker=saved.on_blinker,
-                             on_bsm=saved.on_bsm, invert=saved.invert, placements=placements,
+    result = self.pip.render(rect, saved.mask, signals, enabled=True, on_blinker=on_blinker,
+                             on_bsm=on_bsm, invert=saved.invert, placements=placements,
                              **({"submit": submit} if submit is not None else {}))
     self._set_pip_showing(result == 'rendered')
 

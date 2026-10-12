@@ -112,6 +112,16 @@ class TestProjectionLayout(unittest.TestCase):
         with self.subTest(key=key, value=value), self.assertRaises(ValueError):
           validate_layout({**document, key: value}, SCREEN)
 
+  def test_blind_spot_camera_migrates_and_survives_serialization(self):
+    document = default_layout(SCREEN)
+    self.assertIs(document.pop('blindSpotCamera'), False)
+    self.assertIs(validate_layout(document, SCREEN)['blindSpotCamera'], False)
+    document['blindSpotCamera'] = True
+    self.assertEqual(decode_layout(json.dumps(document).encode(), SCREEN), document)
+    for value in (1, 0, 'true', None, [], {}):
+      with self.subTest(value=value), self.assertRaises(ValueError):
+        validate_layout({**document, 'blindSpotCamera': value}, SCREEN)
+
   def test_screen_roundtrip_omits_identity(self):
     with tempfile.TemporaryDirectory() as directory:
       path = Path(directory) / 'screen.json'

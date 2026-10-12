@@ -136,19 +136,19 @@ let makerPagesOpen = 0
 // Screen pixels a pointer may wobble before a press on a preview widget becomes a drag.
 const DRAG_SLOP = 6
 
-// Android Auto's own border switches; the comma screen keeps its C4 settings.
-const PROJECTION_BORDERS = ["blindSpotBorder", "signalBorder"]
+// Android Auto display switches, independent of the comma screen's preferences.
+const PROJECTION_DISPLAY_SWITCHES = ["blindSpotBorder", "signalBorder", "blindSpotCamera"]
 
 export function validDocument(document, metadata) {
   if (!object(document)) return false
   const profiles = metadata?.projection === true ? ["large"] : PROFILES
-  if (!keysEqual(document, ["version", "palette", "layouts", "widgetColors", "roadColors", ...(Object.hasOwn(document, "widgetOrder") ? ["widgetOrder"] : []), ...(Object.hasOwn(document, "speedSources") ? ["speedSources"] : []), ...(Object.hasOwn(document, "clock24Hour") ? ["clock24Hour"] : []), ...(Object.hasOwn(document, "showMaxSpeed") ? ["showMaxSpeed"] : []), ...(metadata?.projection !== true && Object.hasOwn(document, "display") ? ["display"] : []), ...(metadata?.projection === true && Object.hasOwn(document, "largeUiGammaTrial") ? ["largeUiGammaTrial"] : []), ...(metadata?.projection === true ? PROJECTION_BORDERS.filter(key => Object.hasOwn(document, key)) : [])]) || document.version !== 6 ||
+  if (!keysEqual(document, ["version", "palette", "layouts", "widgetColors", "roadColors", ...(Object.hasOwn(document, "widgetOrder") ? ["widgetOrder"] : []), ...(Object.hasOwn(document, "speedSources") ? ["speedSources"] : []), ...(Object.hasOwn(document, "clock24Hour") ? ["clock24Hour"] : []), ...(Object.hasOwn(document, "showMaxSpeed") ? ["showMaxSpeed"] : []), ...(metadata?.projection !== true && Object.hasOwn(document, "display") ? ["display"] : []), ...(metadata?.projection === true && Object.hasOwn(document, "largeUiGammaTrial") ? ["largeUiGammaTrial"] : []), ...(metadata?.projection === true ? PROJECTION_DISPLAY_SWITCHES.filter(key => Object.hasOwn(document, key)) : [])]) || document.version !== 6 ||
     (Object.hasOwn(document, "speedSources") && typeof document.speedSources !== "boolean") ||
     (Object.hasOwn(document, "clock24Hour") && typeof document.clock24Hour !== "boolean") ||
     (Object.hasOwn(document, "showMaxSpeed") && typeof document.showMaxSpeed !== "boolean") ||
     (Object.hasOwn(document, "display") && (!object(document.display) || !Object.values(document.display).every((value) => typeof value === "string"))) ||
     (Object.hasOwn(document, "largeUiGammaTrial") && typeof document.largeUiGammaTrial !== "boolean") ||
-    PROJECTION_BORDERS.some(key => Object.hasOwn(document, key) && typeof document[key] !== "boolean") ||
+    PROJECTION_DISPLAY_SWITCHES.some(key => Object.hasOwn(document, key) && typeof document[key] !== "boolean") ||
     !keysEqual(document.palette, COLORS) || !COLORS.every((key) => HEX.test(document.palette[key])) ||
     !keysEqual(document.layouts, profiles) || !keysEqual(document.widgetColors, profiles) || !keysEqual(document.roadColors, profiles)) return false
   if (Object.hasOwn(document, "widgetOrder") && (!object(document.widgetOrder) ||
@@ -624,6 +624,13 @@ export const OnroadLayoutPage = {
     canSavePending() { return this.saveAvailable && !this.busy },
     profile() { return this.state.data?.metadata.profiles[this.state.profile] },
     layout() { return this.state.draft?.layouts[this.state.profile] },
+    projectionHasPipWidget() {
+      return ["pip_left", "pip_right"].some(id => this.state.draft?.layouts?.large?.[id]?.enabled === true)
+    },
+    blindSpotCameraRow() {
+      return { ...switchRow("Show Camera on Blind Spot Warning", this.state.draft?.blindSpotCamera === true,
+        this.projectionHasPipWidget ? "" : "Add a PiP widget to enable."), available: this.projectionHasPipWidget }
+    },
     widgets() { return Object.entries(this.profile?.widgets || {}).map(([id, widget]) => ({ id, ...widget })) },
     layerWidgets() {
       return orderedWidgetIds(this.state.draft, this.state.data.metadata, this.state.profile)
@@ -1034,12 +1041,13 @@ export const OnroadLayoutPage = {
       this.recordChange(before)
       this.state.notice = "Save to apply the camera effect on Android Auto."
     },
-    setProjectionBorder(key, value) {
-      if (!this.projection || !this.editable || this.state.drag || this.state.layerDrag || !PROJECTION_BORDERS.includes(key)) return
+    setProjectionDisplay(key, value) {
+      if (!this.projection || !this.editable || this.state.drag || this.state.layerDrag || !PROJECTION_DISPLAY_SWITCHES.includes(key)) return
+      if (key === "blindSpotCamera" && !this.projectionHasPipWidget) return
       const before = clone(this.state.draft)
       this.state.draft[key] = value === "On"
       this.recordChange(before)
-      this.state.notice = "Save to apply the border on Android Auto."
+      this.state.notice = "Save to apply the display settings on Android Auto."
     },
     setFavoriteDisplay(display) {
       if (!this.editable || this.state.drag || this.state.layerDrag || !this.selectedWidget?.iconSize ||
@@ -1659,9 +1667,12 @@ export const OnroadLayoutPage = {
               <GalaxySettingRow :row="switchRow('Large UI Gamma Effect Trial', state.draft.largeUiGammaTrial)" :index="0"
                 :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setLargeUiGammaTrial(value)" />
               <GalaxySettingRow :row="switchRow('Red blind-spot border', state.draft.blindSpotBorder === true)" :index="1"
-                :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionBorder('blindSpotBorder', value)" />
+                :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionDisplay('blindSpotBorder', value)" />
               <GalaxySettingRow :row="switchRow('Amber signal border', state.draft.signalBorder === true)" :index="2"
-                :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionBorder('signalBorder', value)" />
+                :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionDisplay('signalBorder', value)" />
+              <GalaxySettingRow :row="blindSpotCameraRow" :index="3"
+                :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionDisplay('blindSpotCamera', value)" />
+              <p class="gx-note">The camera pops up on the warning side using your saved side-camera crops. Enable the left and right camera widgets to show them. This switch only affects Android Auto. Save to apply.</p>
               <p class="gx-note">Gamma trial: the large comma UI's road-camera color effect (not shown in the preview). Borders are separate from the comma screen's C4 settings. Save to apply.</p>
             </section>
               <section v-if="!projection && displayGroups.length" v-show="state.inspectorPanel === 'display'" class="gx-layout__colors gx-layout__display" aria-label="Display options">
@@ -1677,10 +1688,10 @@ export const OnroadLayoutPage = {
           </div>
         </template>
       </template>
-      <GxDialog v-if="state.removeConfirm && profile" labelledby="gx-layout-remove-title" describedby="gx-layout-remove-body" alert @close="cancelRemove">
-        <div><h3 id="gx-layout-remove-title">Remove {{ profile.widgets[state.removeConfirm]?.label }}?</h3>
+      <GxDialog v-if="state.removeConfirm && profile" class="gx-layout__remove-dialog" labelledby="gx-layout-remove-title" describedby="gx-layout-remove-body" alert @close="cancelRemove">
+        <div class="gx-layout__leave-copy"><h3 id="gx-layout-remove-title">Remove {{ profile.widgets[state.removeConfirm]?.label }}?</h3>
           <p id="gx-layout-remove-body">Remove this widget from the {{ projection ? 'Android Auto' : state.profile === 'large' ? 'Big' : 'Small' }} layout? You can add it again from Inactive Widgets.</p></div>
-        <div class="gx-settings__controls">
+        <div class="gx-layout__remove-actions">
           <button type="button" class="gx-btn gx-btn--tonal" @click="cancelRemove">Cancel</button>
           <button type="button" class="gx-btn gx-btn--danger" @click="confirmRemove">Remove widget</button>
         </div>
