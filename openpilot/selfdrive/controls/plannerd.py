@@ -7,6 +7,7 @@ from opendbc.car.structs import car
 from openpilot.common.params import Params
 from openpilot.common.realtime import Priority, config_realtime_process, set_core_affinity
 from openpilot.common.swaglog import cloudlog
+from openpilot.starpilot import intense_logging
 from openpilot.selfdrive.controls.lib.ldw import LaneDepartureWarning
 from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner, NATIVE_PLAN_INPUTS
 import openpilot.cereal.messaging as messaging
@@ -409,12 +410,17 @@ def starpilot_main():
   from openpilot.starpilot.planner_phase_timing import PlannerPhaseTiming
   phase_timing = (PlannerPhaseTiming() if COMMA_HARDWARE and conditional_host is not None and "REPLAY" not in os.environ else None)
 
+  # Model frames arrive every 50 ms; only gaps or work beyond a missed frame count as late.
+  timing = intense_logging.loop_timing(limit_ns=60_000_000)
+  intense_logger = intense_logging.start('plannerd', timing)
   try:
     while True:
       sm.update()
       if sm.updated['modelV2']:
         if phase_timing is not None:
           phase_timing.begin(tuple(sm.logMonoTime[name] for name in ('modelV2', 'carState', 'selfdriveState', 'carControl')))
+        if timing is not None:
+          timing.begin()
         # Only explicit replay uses the recorded model timeline. In a live host,
         # modelV2 may lag newer inputs in the same SubMaster update.
         now_ns = int(sm.logMonoTime['modelV2']) if 'REPLAY' in os.environ else time.monotonic_ns()
@@ -653,6 +659,8 @@ def starpilot_main():
           phase_timing.mark("slc_send_return")
         if current_start_ns > 0:
           drive_start_ns = current_start_ns
+        if timing is not None:
+          timing.mark('plan_end')
         longitudinal_planner.publish(sm, pm)
         if phase_timing is not None:
           phase_timing.mark("longplan_publish_return")
@@ -664,10 +672,14 @@ def starpilot_main():
         msg.driverAssistance.leftLaneDeparture = ldw.left
         msg.driverAssistance.rightLaneDeparture = ldw.right
         pm.send('driverAssistance', msg)
+        if timing is not None:
+          timing.finish({'model_frame': int(sm['modelV2'].frameId)}, enabled=True)
 
   finally:
     if phase_timing is not None:
       phase_timing.close()
+    if intense_logger is not None:
+      intense_logger.stop()
     if conditional_host is not None:
       conditional_host.close()
     if curve_preferences is not None:
