@@ -15,6 +15,7 @@ from openpilot.common.params import Params
 from openpilot.starpilot.card_loop_timing import CardLoopTiming
 from openpilot.common.realtime import config_realtime_process, drop_realtime, set_core_affinity, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
+from openpilot.starpilot import intense_logging
 
 from opendbc.car import DT_CTRL, structs
 from opendbc.car.can_definitions import CanData, CanRecvCallable, CanSendCallable
@@ -1434,8 +1435,13 @@ class Car:
       time.sleep(0.1)
 
   def card_thread(self):
-    self.loop_timing = (CardLoopTiming(detailed=os.getenv('CARD_PHASE_TIMING') == '1')
+    intense = intense_logging.enabled()
+    self.loop_timing = (CardLoopTiming(detailed=os.getenv('CARD_PHASE_TIMING') == '1' or intense)
                         if self.aol_replay and not REPLAY else None)
+    if intense and self.loop_timing is not None:
+      self.loop_timing.LIMIT_NS = intense_logging.LOOP_LIMIT_NS
+    # card's params_thread already drains loop_late reports; this worker only adds GC pauses.
+    intense_logger = intense_logging.start('card')
     self.timing_thread_id = threading.get_native_id()
     e = threading.Event()
     t = threading.Thread(target=self.params_thread, args=(e, ))
@@ -1458,6 +1464,8 @@ class Car:
     finally:
       e.set()
       t.join()
+      if intense_logger is not None:
+        intense_logger.stop()
       if self.ioniq6_keepalive is not None:
         self.ioniq6_long_lost = True
         self.ioniq6_keepalive.stop()
