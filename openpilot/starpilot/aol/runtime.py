@@ -9,12 +9,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from opendbc.car.structs import car
+from openpilot.cereal import log
 from openpilot.starpilot.aol.vehicle import native_admission_key, native_matches_cp, native_profile_supported
 from openpilot.starpilot.aol.wire import INTENT_SERVICE, SAFETY_SERVICE, IntentState, decode_intent, decode_safety
 
 INTENT_MAX_AGE_NS = 30_000_000
 SAFETY_MAX_AGE_NS = 200_000_000
 AXIS_MAX_AGE_NS = 30_000_000
+
+# Interrupt-rate faults latch until the Panda resets and report bus/IRQ load, not
+# a safety failure. Busy buses (Honda Bosch camera CAN) raise them every drive.
+NON_BLOCKING_PANDA_FAULTS = frozenset(name for name in log.PandaState.FaultType.schema.enumerants
+                                      if name.startswith('interruptRate'))
+_NON_BLOCKING_FAULT_MASK = sum(1 << value for name, value in log.PandaState.FaultType.schema.enumerants.items()
+                               if name in NON_BLOCKING_PANDA_FAULTS)
+
+
+def blocking_fault_bits(faults) -> int:
+  """Inventory fault bitmask without the latched interrupt-rate bits."""
+  return int(faults) & ~_NON_BLOCKING_FAULT_MASK
+
+
+def blocking_panda_faults(faults) -> bool:
+  """True when a pandaStates fault list holds anything beyond interrupt-rate faults."""
+  return any(str(fault) not in NON_BLOCKING_PANDA_FAULTS for fault in faults)
 
 
 @dataclass(frozen=True)
@@ -89,7 +107,7 @@ def native_inventory_matches_cp(state, CP) -> bool:
       return False
     owners = []
     for index, (slot, config) in enumerate(zip(slots, configs, strict=True)):
-      if slot.safetyRxChecksInvalid or slot.heartbeatLost or slot.faults:
+      if slot.safetyRxChecksInvalid or slot.heartbeatLost or blocking_fault_bits(slot.faults):
         return False
       if (slot.slotIndex != index or slot.safetyModel != int(config.safetyModel.raw) or
           slot.safetyParam != int(config.safetyParam) or slot.alternativeExperience != int(CP.alternativeExperience)):

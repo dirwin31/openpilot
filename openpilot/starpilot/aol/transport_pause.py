@@ -1,6 +1,7 @@
 """Reason-qualified intent retention; this module never grants an axis."""
 from openpilot.cereal import log
-from openpilot.starpilot.aol.runtime import AXIS_MAX_AGE_NS, SAFETY_MAX_AGE_NS, current_native, native_inventory_matches_cp
+from openpilot.starpilot.aol.runtime import (AXIS_MAX_AGE_NS, SAFETY_MAX_AGE_NS, blocking_fault_bits, blocking_panda_faults,
+                                             current_native, native_inventory_matches_cp)
 from openpilot.starpilot.aol.wire import SafetyState, decode_intent
 
 
@@ -29,7 +30,7 @@ def _configured_transport_native(sm, cp, session, now_ns, native=None, *, requir
     # current_native already checked this exact inventory in this call.
     # Supplied native values still need structural validation here.
     if coherent and (not validated_here and not native_inventory_matches_cp(native, cp) or
-                     any(p.safetyRxChecksInvalid or p.heartbeatLost or p.faults or
+                     any(p.safetyRxChecksInvalid or p.heartbeatLost or blocking_fault_bits(p.faults) or
                          (require_longitudinal and native.requestedLongitudinal and str(config.safetyModel) not in ('silent', 'noOutput') and
                           not p.controlsAllowed)
                          for p, config in zip(native.pandaInventory, cp.safetyConfigs, strict=True))):
@@ -45,7 +46,7 @@ def _configured_transport_native(sm, cp, session, now_ns, native=None, *, requir
       return None
     return native if all(int(p.safetyModel.raw) == int(c.safetyModel.raw) and p.safetyParam == c.safetyParam and
                p.alternativeExperience == cp.alternativeExperience and not p.safetyRxChecksInvalid and
-               not p.heartbeatLost and not p.faults and
+               not p.heartbeatLost and not blocking_panda_faults(p.faults) and
                (not require_longitudinal or not native.requestedLongitudinal or str(c.safetyModel) in ('silent', 'noOutput') or p.controlsAllowed)
                for p, c in zip(pandas, cp.safetyConfigs, strict=True)) else None
   except (AttributeError, KeyError, IndexError, TypeError, ValueError):
@@ -356,7 +357,7 @@ class TransportPauseFeedback:
     # every latest raw configuration/fault veto and exact producer-read inventory.
     current_pandas = all(int(p.safetyModel.raw) == int(c.safetyModel.raw) and p.safetyParam == c.safetyParam and
                          p.alternativeExperience == cp.alternativeExperience and not p.safetyRxChecksInvalid and
-                         not p.heartbeatLost and not p.faults and
+                         not p.heartbeatLost and not blocking_panda_faults(p.faults) and
                          (str(c.safetyModel) not in ('silent', 'noOutput') or not p.controlsAllowed)
                          for p, c in zip(pandas, cp.safetyConfigs, strict=True))
     return native if current_pandas else None
