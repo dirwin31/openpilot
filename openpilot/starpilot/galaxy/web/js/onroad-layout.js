@@ -627,10 +627,6 @@ export const OnroadLayoutPage = {
     projectionHasPipWidget() {
       return ["pip_left", "pip_right"].some(id => this.state.draft?.layouts?.large?.[id]?.enabled === true)
     },
-    blindSpotCameraRow() {
-      return { ...switchRow("Show Camera on Blind Spot Warning", this.state.draft?.blindSpotCamera === true,
-        this.projectionHasPipWidget ? "" : "Add a PiP widget to enable."), available: this.projectionHasPipWidget }
-    },
     widgets() { return Object.entries(this.profile?.widgets || {}).map(([id, widget]) => ({ id, ...widget })) },
     layerWidgets() {
       return orderedWidgetIds(this.state.draft, this.state.data.metadata, this.state.profile)
@@ -1672,9 +1668,6 @@ export const OnroadLayoutPage = {
                 :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionDisplay('blindSpotBorder', value)" />
               <GalaxySettingRow :row="switchRow('Amber signal border', state.draft.signalBorder === true)" :index="2"
                 :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionDisplay('signalBorder', value)" />
-              <GalaxySettingRow :row="blindSpotCameraRow" :index="3"
-                :disabled="!editable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionDisplay('blindSpotCamera', value)" />
-              <p class="gx-note">The camera pops up on the warning side using your saved side-camera crops. Enable the left and right camera widgets to show them. This switch only affects Android Auto. Save to apply.</p>
               <p class="gx-note">Gamma trial: the large comma UI's road-camera color effect (not shown in the preview). Borders are separate from the comma screen's C4 settings. Save to apply.</p>
             </section>
               <section v-if="!projection && displayGroups.length" v-show="state.inspectorPanel === 'display'" class="gx-layout__colors gx-layout__display" aria-label="Display options">

@@ -95,7 +95,7 @@ assert.equal(editorSnapshot(olderCameraLayout).document.blindSpotCamera, false)
 for (const value of [1, 0, "true", null, [], {}])
   assert.equal(validDocument({ ...data.document, blindSpotCamera: value }, data.metadata), false)
 assert.equal(validDocument({ ...native.document, blindSpotCamera: true }, native.metadata), false)
-assert.match(OnroadLayoutPage.template, /:row="blindSpotCameraRow"/)
+assert.doesNotMatch(OnroadLayoutPage.template, /blindSpotCameraRow|Show Camera on Blind Spot Warning/)
 const cameraChanges = []
 const cameraVm = { projection: true, editable: true,
   state: { draft: { blindSpotCamera: false }, drag: null, layerDrag: null, notice: '' },
@@ -121,24 +121,17 @@ const pipVm = { projection: true, editable: true,
   } } }, drag: null, layerDrag: null, notice: '' },
   recordChange: before => pipChanges.push(before) }
 Object.defineProperty(pipVm, "projectionHasPipWidget", { get: () => OnroadLayoutPage.computed.projectionHasPipWidget.call(pipVm) })
-const cameraRow = () => OnroadLayoutPage.computed.blindSpotCameraRow.call(pipVm)
-assert.equal(cameraRow().label, "Show Camera on Blind Spot Warning")
 assert.equal(pipVm.projectionHasPipWidget, false)
-assert.equal(cameraRow().available, false)
-assert.equal(cameraRow().reason, "Add a PiP widget to enable.")
 OnroadLayoutPage.methods.setProjectionDisplay.call(pipVm, "blindSpotCamera", "On")
 assert.equal(pipVm.state.draft.blindSpotCamera, false)
 assert.equal(pipChanges.length, 0)
 for (const side of ["pip_left", "pip_right"]) {
   pipVm.state.draft.layouts.large[side].enabled = true
-  assert.equal(pipVm.projectionHasPipWidget, true, "either camera widget unlocks the toggle")
-  assert.equal(cameraRow().available, true)
-  assert.equal(cameraRow().reason, "")
+  assert.equal(pipVm.projectionHasPipWidget, true, "either camera widget permits the saved camera preference")
   OnroadLayoutPage.methods.setProjectionDisplay.call(pipVm, "blindSpotCamera", "On")
   assert.equal(pipVm.state.draft.blindSpotCamera, true)
   pipVm.state.draft.layouts.large[side].enabled = false
-  assert.equal(cameraRow().available, false, "removing the last camera dims the toggle immediately")
-  assert.equal(cameraRow().value, "On", "removing a widget preserves the saved preference")
+  assert.equal(pipVm.projectionHasPipWidget, false)
   OnroadLayoutPage.methods.setProjectionDisplay.call(pipVm, "blindSpotCamera", "Off")
   assert.equal(pipVm.state.draft.blindSpotCamera, true)
   pipVm.state.draft.blindSpotCamera = false
