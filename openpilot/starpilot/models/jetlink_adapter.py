@@ -238,6 +238,10 @@ class JetlinkModel:
     self._output_ns = 0
     self._runtime_pending = None
     self._runtime_closed = False
+    self._runs = 0
+    self._run_ns = 0
+    self._max_run_ns = 0
+    self._slow_runs = 0
     self._runtime_condition = threading.Condition()
     self._runtime_thread = threading.Thread(target=self._write_runtime, name="jetlink-runtime", daemon=True)
     self._runtime_thread.start()
@@ -246,7 +250,13 @@ class JetlinkModel:
     return getattr(self.joined, name)
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):
+    started = time.monotonic_ns()
     outputs = self.joined.run(bufs, transforms, inputs, after_enqueue)
+    elapsed = time.monotonic_ns() - started
+    self._runs += 1
+    self._run_ns += elapsed
+    self._max_run_ns = max(self._max_run_ns, elapsed)
+    self._slow_runs += elapsed > 50_000_000
     client = self.joined.client
     if self.chestnut and outputs is not None and client is not None and client.last_output is not self._output:
       self._output = client.last_output
@@ -276,6 +286,9 @@ class JetlinkModel:
               "process_start_ticks": self._process_start_ticks,
               "mono_ns": now, "state": state, "handovers": self.handovers,
               "remote_output_mono_ns": self._output_ns if self.chestnut and not closed else 0}
+    record["processing"] = {"runs": self._runs, "total_ms": self._run_ns / 1e6,
+                            "max_ms": self._max_run_ns / 1e6, "over_50ms": self._slow_runs,
+                            "frame_drop_ratio": getattr(self.joined, "frame_drop_ratio", 0.0)}
     if self.chestnut and not closed:
       spec = self.joined.spec
       record["artifact_sha256"] = spec.sha256
@@ -287,6 +300,8 @@ class JetlinkModel:
       self._runtime_condition.notify()
 
   def _write_runtime(self):
+    from openpilot.starpilot.system.jetlink.diagnostics import RuntimeDiagnostics
+    diagnostics = RuntimeDiagnostics()
     while True:
       with self._runtime_condition:
         self._runtime_condition.wait_for(lambda: self._runtime_pending is not None or self._runtime_closed)
@@ -298,7 +313,9 @@ class JetlinkModel:
         adapter().put("JetlinkRuntime", record, block=True)
       except Exception:
         adapter().log.exception("Jetlink runtime status unavailable")
+      diagnostics.record(record, adapter().get("AndroidAutoEnabled"))
       if closed:
+        diagnostics.close()
         return
 
   def close(self):
