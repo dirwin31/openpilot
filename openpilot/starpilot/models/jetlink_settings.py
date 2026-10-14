@@ -35,7 +35,10 @@ class JetlinkSettings:
   def snapshot(self):
     try:
       return self._snapshot()
-    except (OSError, RuntimeError, ValueError, ImportError):
+    except Exception:
+      # Jetlink is optional: its failure must not take the Model Manager page down with it.
+      import logging
+      logging.getLogger(__name__).exception("Jetlink status unavailable")
       return {"mode": "off", "supported": False, "chestnut": False, "enabled": False,
               "present": False, "prepared": False, "active": False, "runtimeState": "unavailable", "state": "unavailable",
               "reason": "Jetlink status is unavailable; the local model remains in use.",
@@ -77,7 +80,7 @@ class JetlinkSettings:
       state = {"joining": "connecting", "retrying": "fallback / reconnecting", "ready": "waiting for disengagement"}[runtime_state]
     from openpilot.starpilot.models import jetlink_catalog
     refresher = self.refresher()
-    if mode != "off" and supported and not chestnut and not params.get_bool("IsOnroad"):
+    if mode != "off" and supported and not chestnut and params.get_bool("IsOffroad"):
       refresher.start(params)
     rows = jetlink_catalog.rows(params, model_root=self.model_root(), ready=bool(status and status.ready),
                                 model_state=getattr(link, "model_state", None))

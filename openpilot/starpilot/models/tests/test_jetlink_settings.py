@@ -1,4 +1,5 @@
 """Jetlink connection choices do not change the local model catalog."""
+import re
 from types import SimpleNamespace
 import tempfile
 from pathlib import Path
@@ -8,17 +9,24 @@ from openpilot.starpilot.models.jetlink_settings import JetlinkSettings
 from openpilot.starpilot.models.manager import ModelManager, preferences
 
 
+REGISTERED = frozenset(re.findall(r'^\s*\{"(\w+)",', (Path(__file__).resolve().parents[3] / "common/params_keys.h").read_text(), re.M))
+
+
 class MemoryParams:
+  # Like Params, an unregistered key raises: the device's UnknownKeyName broke the whole page.
   def __init__(self):
     self.values = {"JetlinkMode": 0, "JetlinkChargePhone": False}
 
   def get(self, key):
+    assert key in REGISTERED, key
     return self.values.get(key)
 
   def get_bool(self, key):
+    assert key in REGISTERED, key
     return self.values.get(key) is True
 
   def put(self, key, value, *, block):
+    assert key in REGISTERED, key
     assert block
     self.values[key] = value
 
@@ -114,10 +122,10 @@ class TestJetlinkSettings(unittest.TestCase):
     self.owner.snapshot()
     self.assertEqual(self.refresher.starts, [])
     self.params.values["JetlinkMode"] = 2
-    self.params.values["IsOnroad"] = True
+    self.params.values["IsOffroad"] = False
     self.owner.snapshot()
     self.assertEqual(self.refresher.starts, [])
-    self.params.values["IsOnroad"] = False
+    self.params.values["IsOffroad"] = True
     self.owner.snapshot()
     self.assertEqual(self.refresher.starts, [False])
     self.owner.configure({"refreshCatalog": True})
@@ -134,6 +142,18 @@ class TestJetlinkSettings(unittest.TestCase):
     self.assertEqual(view["model"], "remote")
     self.assertEqual(view["standinModel"], "previous-model")
     self.assertEqual(view["state"], "fallback model prepared")
+
+  def test_any_jetlink_failure_keeps_the_model_manager_page(self):
+    class Broken(Exception):
+      pass
+
+    def broken():
+      raise Broken("unknown key")
+    self.owner._link = broken
+    with self.assertLogs("openpilot.starpilot.models.jetlink_settings", "ERROR"):
+      view = self.owner.snapshot()
+    self.assertEqual(view["state"], "unavailable")
+    self.assertEqual(view["models"], [])
 
   def test_exact_choices_and_conflicts(self):
     for payload in ({"mode": 1}, {"mode": "other"}, {"chargePhone": 1}, {"unknown": True}):
