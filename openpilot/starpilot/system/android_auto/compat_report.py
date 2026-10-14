@@ -33,6 +33,9 @@ MAX_SESSION_LOGS = 20
 MAX_EVENTS = 200_000         # a day of 30 s stats is ~3000 lines; this only stops a runaway file
 EXTRA_LOGS = ("render_profile.txt", "render_profile.1.txt", "car_ui.log")
 EXTRA_LOG_BYTES = 1 << 20    # the tail of each extra log kept in a bundle
+JETLINK_LOG_DIR = Path('/data/log')
+JETLINK_LOGS = ('jetlink-owner.log', 'jetlink-owner.log.1', 'jetlink-runtime.jsonl',
+                'jetlink-runtime.jsonl.1', 'jetlink-runtime.jsonl.2')
 
 # Connection stages in the order a session passes them, for "how far did it get".
 STAGE_ORDER = ("connecting_bluetooth", "discovering", "rfcomm", "wifi_start", "wifi_info", "joining_wifi", "connecting_tcp",
@@ -314,6 +317,10 @@ def bundle(log_dir: Path | None = None, config_path: Path | None = None, *,
       data = _tail(directory / name, EXTRA_LOG_BYTES)
       if data is not None:
         add(f"logs/{name}", data)
+    for name in JETLINK_LOGS:
+      data = _tail(JETLINK_LOG_DIR / name, EXTRA_LOG_BYTES)
+      if data is not None:
+        add(f"jetlink/{name}", data)
     if snapshot is not None:
       # Optional context: whatever does not fit the size budget is left out rather than failing the download.
       for name, data in snapshot(system_snapshot.window_start(starts)).items():
