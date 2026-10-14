@@ -12,7 +12,8 @@ from pathlib import Path
 
 ADAPTER_MODULE = "openpilot.starpilot.models.jetlink_adapter"
 BASEDIR = Path(__file__).resolve().parents[3]
-API_VERSION = 1
+# 2: modeld writes in_control every frame (JetlinkModel.observe_frame); no engagement() poller.
+API_VERSION = 2
 
 
 def supported_device(device_type=None):
