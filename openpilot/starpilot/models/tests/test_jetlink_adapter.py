@@ -15,7 +15,25 @@ def test_public_interface_and_params_directory(monkeypatch, tmp_path):
   assert op.params_dir() == tmp_path / "jetlink-test"
   assert adapter.owner_config().params_dir == op.params_dir()
   assert op.keys.link == "JetlinkMode"
-  assert op.keys.big_model != "ModelSelected"
+  assert op.keys.big_model == "JetlinkBigModel"
+  assert op.keys.catalog == "JetlinkCatalog"
+
+
+def test_unfetched_catalog_still_resolves_the_default_or_pick(monkeypatch):
+  from jetlink.openpilot.models import Models
+  from jetlink.registry.catalog import DEFAULT_BIG_MODEL_REF, REQUIRED_SELECTOR_VERSION
+  op = adapter.StarPilotAdapter()
+  op.log = Mock()
+  stored = {}
+  monkeypatch.setattr(adapter.StarPilotAdapter, "params", property(lambda self: SimpleNamespace(get=stored.get)))
+  assert op.catalog_selector == REQUIRED_SELECTOR_VERSION
+  assert Models(op).selected_model()["ref"] == DEFAULT_BIG_MODEL_REF
+  newer = "1" * 40
+  stored["JetlinkCatalog"] = {"bundles": [{"ref": newer, "display_name": "Newer", "index": 9,
+                                            "minimum_selector_version": str(REQUIRED_SELECTOR_VERSION)}]}
+  assert Models(op).selected_model()["ref"] == newer
+  stored["JetlinkBigModel"] = {"ref": "2" * 40, "displayName": "Picked"}
+  assert Models(op).selected_model()["ref"] == "2" * 40
 
 
 def test_small_history_and_current_delay_forwarding():
