@@ -351,6 +351,14 @@ class TestRuntimeSnapshot(unittest.TestCase):
     home = RuntimeSnapshotAdapter(ui).build(ShellMode.HOME, now_ns=NOW).home
     self.assertEqual(home.branch, "Domathon")
     self.assertEqual(home.gpu_state, "loading")
+    self.assertEqual(home.jetlink, "off")   # JetlinkMode unset: no Jetlink import at all
+
+  def test_home_shows_jetlink_state(self):
+    from openpilot.starpilot.ui.jetlink_indicator import JetlinkIndicator
+    adapter = RuntimeSnapshotAdapter(ui_fake())
+    adapter._jetlink = JetlinkIndicator(read=lambda params: "connected")
+    self.assertEqual(adapter.build(ShellMode.HOME, now_ns=NOW).home.jetlink, "connected")
+    self.assertEqual(adapter.build(ShellMode.SETTINGS, now_ns=NOW + 1).home.jetlink, "off")
 
   def test_temporary_eps_alert_keeps_upstream_status_and_visual(self):
     ui = ui_fake()

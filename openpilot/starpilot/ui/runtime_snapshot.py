@@ -37,6 +37,7 @@ from openpilot.cereal.services import SERVICE_LIST
 from openpilot.tools.replay.display_clock import BOOT_TIME_SERVICES
 from opendbc.car.structs import car as car_schema
 from openpilot.starpilot.ui.device_state import DeviceRequest, DeviceState
+from openpilot.starpilot.ui.jetlink_indicator import JetlinkIndicator
 from openpilot.starpilot.ui.home_state import HomeMode, HomeState
 from openpilot.starpilot.ui.onroad_state import conditional_lead_from_message
 from openpilot.starpilot.ui.onroad_state import (AlertSize, BorderSignals, ObservationKind, OnroadAlert,
@@ -298,6 +299,7 @@ class RuntimeSnapshotAdapter:
     # A second screen (Android Auto) swaps in its own display choices before anything uses them.
     self.appearance_override: Callable[[OnroadAppearance], OnroadAppearance] | None = None
     self._last_mode: ShellMode | None = None
+    self._jetlink = JetlinkIndicator()
     self._onroad_ancillary: tuple[int, tuple[bool, int, bool], ShellSnapshot] | None = None
     self._onroad_view_ancillary: tuple[int, tuple[bool, int, bool], ShellSnapshot] | None = None
     self._conditional = ConditionalDisplayProjector()
@@ -691,7 +693,8 @@ class RuntimeSnapshotAdapter:
                      vehicle_online=panda_connected, connection=connection,
                      recording_audio=bool(ui.recording_audio), bluetooth=bluetooth,
                      gpu_present=gpu_present, gpu_active=gpu_active, branch=_text(params, "GitBranch"),
-                     gpu_state=getattr(getattr(ui, "chestnut_state", None), "value", "disconnected"))
+                     gpu_state=getattr(getattr(ui, "chestnut_state", None), "value", "disconnected"),
+                     jetlink=self._jetlink.state(params, now_ns) if mode == ShellMode.HOME else "off")
 
     settings_pages = (Destination.STAR, Destination.DEVICE, Destination.NETWORK, Destination.SOFTWARE, Destination.TOGGLES,
                       Destination.DRIVING_CONTROLS, Destination.SOUNDS, Destination.APPEARANCE,
