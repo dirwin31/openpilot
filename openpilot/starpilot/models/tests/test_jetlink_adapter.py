@@ -48,6 +48,9 @@ def test_small_history_and_current_delay_forwarding():
   model.observe_frame(.23, .004)
   assert joined.lat_delay == .23
   assert joined.frame_drop_ratio == .004
+  assert joined.in_control is True
+  model.observe_frame(.2, 0., in_control=False)
+  assert joined.in_control is False
 
 
 def test_chestnut_and_recovery_never_prepare_link():

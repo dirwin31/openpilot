@@ -28,6 +28,7 @@ from msgq.visionipc import VisionIpcClient, VisionBuf
 from opendbc.car.car_helpers import get_demo_car_params
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
+from openpilot.common.hardware import HARDWARE
 from openpilot.common.hardware.usb import cable_connected
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import config_realtime_process, DT_MDL
@@ -47,6 +48,9 @@ from openpilot.starpilot.navigation.intent import TurnIntent, matching_turn_sign
 from openpilot.starpilot.models.catalog import BUNDLED_CURRENT, BY_ID, DEFAULT_SMALL, DEFAULT_SMALL_SHA256
 from openpilot.starpilot.models.runner import CatalogModelState, action_from_outputs, load_verified_model
 from openpilot.starpilot.models.jetlink_adapter import JetlinkModel, attach as attach_jetlink
+from openpilot.starpilot.models.jetlink_runtime import (
+  chestnut_available as local_chestnut_available, configure_gpu as configure_jetlink_gpu, in_control as jetlink_in_control,
+)
 import uuid
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, should_stop, smooth_value, get_curvature_from_plan
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
@@ -271,8 +275,12 @@ def main(demo=False):
   receipt_owner.start()
 
   from openpilot.starpilot.models.manager import resolve_runtime, requested_runtime_id
-  chestnut_available = chestnut_present() or cable_connected()
+  params = Params()
+  chestnut_available = local_chestnut_available(params, present=chestnut_present(), cable=cable_connected)
   recovery_small_only = os.getenv("STARPILOT_MODELD_RECOVERY_SMALL_ONLY") == "1"
+  if configure_jetlink_gpu(params, device_type=HARDWARE.get_device_type(),
+                           chestnut=chestnut_available, recovery=recovery_small_only):
+    cloudlog.event("jetlinkGpuPriority", priority=11, android_auto_enabled=params.get_bool("AndroidAutoEnabled"))
   selection = resolve_runtime(chestnut_available=chestnut_available and not recovery_small_only, randomize=not recovery_small_only)
   requested_model_id = requested_runtime_id(chestnut_available)
   CHESTNUT = selection.allow_big and selection.big_path is not None
@@ -282,7 +290,6 @@ def main(demo=False):
     startup_trace.REPORT = lambda packet: cloudlog.event("chestnut.startup", **packet)
     from tinygrad.runtime.ops_amd import AMDDevice
     AMDDevice.wait_timeout_ms = 3000
-  params = Params()
   params.put_bool("ChestnutLoading", CHESTNUT)
   params.remove("ChestnutActive")
 
@@ -402,7 +409,7 @@ def main(demo=False):
   pub_socks = ["modelIdentity", "modelV2", "drivingModelData", "cameraOdometry", "laneChangeAssistWire"] + (["chestnutGpuState"] if CHESTNUT else [])
   pm = PubMaster(pub_socks)
   sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState",
-                  "carControl", "lateralDelay", "starpilotNavigation", "longitudinalPlan"])
+                  "carControl", "selfdriveState", "lateralDelay", "starpilotNavigation", "longitudinalPlan"])
 
   publish_state = PublishState()
   params = Params()
@@ -524,7 +531,7 @@ def main(demo=False):
 
     jetlink_handovers = model.handovers if isinstance(model, JetlinkModel) else None
     if isinstance(model, JetlinkModel):
-      model.observe_frame(lat_delay, frame_drop_ratio)
+      model.observe_frame(lat_delay, frame_drop_ratio, in_control=jetlink_in_control(sm))
     mt1 = time.perf_counter()
     try:
       send_chestnut = (chestnut_state is not None and

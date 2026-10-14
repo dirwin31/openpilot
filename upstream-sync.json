@@ -65,8 +65,8 @@
     {
       "path": "jetlink_repo",
       "url": "https://github.com/zoompilot/jetlink.git",
-      "commit": "c17cd5c52be0ee83b9a6265b7da69d24ad6c5d02",
-      "tree": "5199f58cb390fcaa4c798be82566cc87d9271da7",
+      "commit": "4b747aebad3d8d96ab26d76f1668f2b2ecb1b667",
+      "tree": "f20aca9790cf4b6ca5d1313166cb5b070ed02613",
       "exclude": [
         ".github",
         ".gitignore",

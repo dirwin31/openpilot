@@ -25,5 +25,28 @@ background runtime publisher rather than the model frame thread.
 The normal drive logs also contain upstream Jetlink telemetry, detailed slow-frame
 timing and handover events. Keep the drive route and note the approximate time of
 any freeze, disconnect or fallback, plus the cable arrangement and remote device.
-This change adds diagnostics only; it does not change USB ownership or inference
-fallback behavior.
+The diagnostics writer does not change USB ownership or inference fallback behavior.
+
+## Testing the 0.8.5 integration
+
+Use a current Jetlink companion app with the iPad's Jetlink app open and unlocked.
+Set Galaxy's connection mode to **iPhone / iPad** while parked, and let the model
+prepare online before testing. Galaxy reports a stand-in when the previously
+prepared model is available while a new selection builds. `Active` still requires
+fresh remote output; `prepared` alone does not establish remote execution.
+
+Test with Android Auto projecting as well as disconnected. Record a baseline,
+then check sustained frame rate, slow/held frames, camera drops and thermals.
+Include an unplug/reconnect while disengaged and check that a model switch waits
+for fresh disengagement state. Save the iPad's own Jetlink logs as well as the
+Galaxy bundle and the drive route.
+
+The drive log's `jetlinkGpuPriority` event reports priority 11. The owner log
+reports receive steering on core 3. Both scheduling changes need device measurements.
+The runtime may log that graph-only optimization is unavailable: this is expected
+for the shipped paired NV12 captures, which retain their complete replay.
+
+The upstream resource sampler is available at
+`jetlink_repo/scripts/comma/bench_resources.py --help`. The separate USB integrity
+bench is for an offroad computer-host transport test, requires exclusive access,
+and does not test iPad inference. Do not run that bench alongside modeld.
