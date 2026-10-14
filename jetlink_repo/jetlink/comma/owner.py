@@ -770,7 +770,10 @@ class Owner:
     going away takes the dial with it, so the next one is looked at afresh.
     """
     if self.attached and not self.configured:
-      gadget.log.warning("jetlink: a host configured us at %s", gadget.usb_speed() or 'an unknown speed')
+      speed = gadget.usb_speed()
+      gadget.log.warning("jetlink: a host configured us at %s", speed or 'an unknown speed')
+      if self.port.retrain(speed) is True:
+        self.attached = False   # StarPilot: the reconnect reports its own speed
     elif self.configured and not self.attached and self.cable.held:
       gadget.log.warning("jetlink: the host went away, the cable link with it")
       self.cable.release()
