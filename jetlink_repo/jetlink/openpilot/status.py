@@ -61,7 +61,7 @@ class Progress:
     """Never raises: called from except handlers. A fraction's ticks are held to
     4 Hz within a stage; a report with no fraction (a join's state) and the end
     of a stage always go through, so the panel's last word is never dropped. A
-    join says 'waiting for jetlink' and 'checking the link keeps up' 50 ms apart;
+    join says 'waiting for jetlink' and 're-engage to switch' moments apart;
     holding the second left the first on the panel for the rest of the drive.
     `msg` is the panel's one short line; `drops`, once the link has dropped often
     enough to blame the cable, is the panel's to word."""
@@ -187,13 +187,6 @@ def unavailable(parts, record: dict | None) -> str | None:
   return None if parts.warps.built() else NO_WARP
 
 
-def _built_for_the_pick(parts) -> bool:
-  spec = parts.spec.load()
-  selected = parts.models.selected_model()
-  return (spec is not None and selected is not None and spec.sha256 == selected['oid']
-          and parts.spec.engine_ready_for(spec.sha256))
-
-
 def reason(parts, mode: str) -> str | None:
   """Why the link cannot run, for someone who asked for it only: with it off,
   a device that cannot present the gadget simply does not offer the feature."""
@@ -214,11 +207,17 @@ class Status(NamedTuple):
   progress: dict | None         # {stage, frac, msg} while provisioning or joining
   model: str | None             # the big model it will run: the pick, else jetlink's default
   default_model: str | None     # jetlink's default, named like the chestnut's (no build date)
+  standin: str | None = None    # the last model built, which drives while the pick is not ready
+
+  @property
+  def runnable(self) -> bool:
+    """Is a big model built to run: the pick, or the stand-in for it?"""
+    return self.ready or self.standin is not None
 
   @property
   def active_model(self) -> str | None:
-    """model, once it can run."""
-    return self.model if self.ready else None
+    """The big model that runs: the pick once it is built, else the stand-in."""
+    return self.model if self.ready else self.standin
 
   def icon(self, started: bool, model_seen: bool, running_big: bool, state: str) -> str:
     """The chestnut icon's state for the link: a ChestnutState value.
@@ -234,7 +233,7 @@ class Status(NamedTuple):
         return 'disconnected'
       if stage and stage != 'ready':
         return 'failed' if stage == 'failed' else 'loading'
-      return 'ready' if self.ready else 'uncompiled'
+      return 'ready' if self.runnable else 'uncompiled'
 
     if model_seen and running_big:
       return 'active'
@@ -247,7 +246,7 @@ class Status(NamedTuple):
     # nothing is in control, so a driver who stays engaged keeps the small model
     if state == 'ready':
       return 'waiting'
-    if not self.ready:
+    if not self.runnable:
       return 'uncompiled'
     if state == 'running':
       return 'active'
@@ -259,18 +258,36 @@ def read(parts, mode: str) -> Status:
   record, live = owner_record()
   enabled = parts.enabled(mode)
   reason = unavailable(parts, record) if enabled else None
+  # the last model the server built; the pick's, or the stand-in that drives
+  # until the pick is built (link.open_link)
+  built = parts.spec.built_sha() if enabled and reason is None else None
+  selected = parts.models.selected_model() if built is not None else None
+  ready = built is not None and selected is not None and built == selected['oid']
   return Status(
     enabled=enabled,
     mode=mode,
     transport=link_transport(mode, live),
     present=bool(live.get('present')) if live is not None else parts.presence.present(),
     port=usb_port(),
-    ready=enabled and reason is None and _built_for_the_pick(parts),
+    ready=ready,
     reason=reason,
     progress=parts.progress.read(),
     model=parts.models.selected_model_name(),
     default_model=parts.models.default_model_name(),
+    standin=parts.models.name_for(built) if built is not None and not ready else None,
   )
+
+
+def model_state(parts, ref: str) -> str | None:
+  """One catalog model, for the picker's list: 'ready' when the Jetson has
+  built it (the spec record), 'downloaded' when the comma has its file, else
+  None. Records and one stat; a model never resolved has neither."""
+  model = next((m for m in parts.models.model_index() if m['ref'] == ref), None)
+  if model is None or not model.get('oid'):
+    return None
+  if parts.spec.engine_ready_for(model['oid']):
+    return 'ready'
+  return 'downloaded' if parts.models.has_file(model) else None
 
 
 def failed(error: str, mode: str) -> Status:

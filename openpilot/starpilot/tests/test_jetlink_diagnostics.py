@@ -76,3 +76,28 @@ def test_processing_metrics_are_published_off_frame_thread():
                                     'over_50ms': 1, 'frame_drop_ratio': .02}
     diagnostics.return_value.record.assert_called()
     diagnostics.return_value.close.assert_called_once()
+
+
+def test_usb_receive_steering_avoids_camera_and_driving_cores(tmp_path):
+  import os
+  from pathlib import Path
+  import subprocess
+  from jetlink.comma.root import SCRIPT
+
+  gadget = tmp_path / 'gadget'
+  function = gadget / 'functions' / 'ncm.usb0'
+  function.mkdir(parents=True)
+  (function / 'ifname').write_text('usb1')
+  net = tmp_path / 'net'
+  mask = net / 'usb1' / 'queues' / 'rx-0' / 'rps_cpus'
+  mask.parent.mkdir(parents=True)
+  mask.write_text('00')
+  env = {**os.environ, 'JETLINK_GADGET': str(gadget), 'JETLINK_SYS_NET': str(net)}
+  result = subprocess.run(['bash', str(SCRIPT), 'rps'], env=env, capture_output=True, text=True, timeout=2)
+  assert result.returncode == 0, result.stderr
+  assert mask.read_text().strip() == '08'
+  mask.unlink()
+  mask.symlink_to(Path(os.devnull))
+  result = subprocess.run(['bash', str(SCRIPT), 'rps'], env=env, capture_output=True, text=True, timeout=2)
+  assert result.returncode == 1
+  assert 'reads nothing, not 08' in result.stderr

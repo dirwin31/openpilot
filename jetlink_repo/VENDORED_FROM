@@ -1,0 +1,5 @@
+zoompilot/jetlink 4b747aebad3d8d96ab26d76f1668f2b2ecb1b667 (v0.8.5).
+Source and exclusions: ../upstream-sync.json.
+StarPilot changes: 40 held frames per 10 s; USB receive steering on core 3.
+Valid non-graph warp captures retain full replay when graph-only optimization is unavailable.
+The StarPilot adapter, process lifecycle and diagnostics live in ../openpilot/starpilot/.

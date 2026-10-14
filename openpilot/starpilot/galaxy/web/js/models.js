@@ -482,6 +482,7 @@ export const ModelsPage = {
             </div>
             <p class="gx-note" role="status"><span class="gx-chip">{{ status.jetlink.state }}</span><span v-if="status.jetlink.model && !status.jetlink.active"> · selected: {{ status.jetlink.model }}</span></p>
             <p v-if="status.jetlink.progress">{{ status.jetlink.progress }}</p>
+            <p v-if="status.jetlink.standinModel">Previously prepared model available while the selection builds: {{ status.jetlink.standinModel }}</p>
             <p v-if="status.jetlink.reason" class="gx-model-reason">{{ status.jetlink.reason }}</p>
             <p v-if="status.jetlink.chestnut" class="gx-model-reason">Chestnut is connected. Jetlink stays off while Chestnut is fitted.</p>
             <p class="gx-model-reason">Prepared means the remote model is built, not active. The local Small model remains available. Small and Chestnut catalog selections are unchanged.</p>

@@ -93,6 +93,11 @@ def test_remote_inference_failure_does_not_change_chestnut_status():
 def execute(statements, env):
   env.setdefault("os", SimpleNamespace(getenv=lambda key: None))
   env.setdefault("recovery_small_only", False)
+  # Jetlink's startup inputs: off, so Chestnut detection and GPU priority are unchanged.
+  from openpilot.starpilot.models.jetlink_runtime import chestnut_available
+  env.setdefault("local_chestnut_available", chestnut_available)
+  env.setdefault("configure_jetlink_gpu", Mock(return_value=False))
+  env.setdefault("HARDWARE", SimpleNamespace(get_device_type=lambda: "tizi"))
   exec(compile(ast.fix_missing_locations(ast.Module(body=statements, type_ignores=[])), str(MODEL_SOURCE), "exec"), env)
 
 
