@@ -115,6 +115,11 @@ RETRY_AFTER = 2.0
 # a device side turned on that went off again is turned on no sooner than
 # this: dwc3 gives floating lines 10 s
 RESTART_AFTER = 10.0
+# StarPilot: a host already powering the port when the device side is turned
+# on late (a comma booting with the iPad attached) settles for high-speed and
+# never retries super-speed. One off/on of the device side, this long apart,
+# makes it a fresh attach; once a plug, so a USB 2 cable cannot loop
+RETRAIN_GAP = 1.0
 # how long the port reads empty before a hold is let go. The hold itself is an
 # unplug and replug, so this has to outlast the replug
 RELEASE_AFTER = 5.0
@@ -229,6 +234,10 @@ class Port:
     self.charge_since = 0.0
     self.said_hot = False
     self.temp: float | None = None
+    # StarPilot: this plug's device side was turned on under a powering host,
+    # and whether its one super-speed retry has been spent
+    self.late_start = False
+    self.retrained = False
 
   def update(self, now: float | None = None, configured: bool = False, charge: bool = False) -> None:
     """configured: a host had the gadget configured at the last cycle, so the
@@ -304,6 +313,7 @@ class Port:
     self.asks = 0            # the next plug is asked afresh
     self.charge_asked = self.charging = self.said_hot = False
     self.temp = None
+    self.late_start = self.retrained = False
     # the policy engine turns off only a device side it turned on itself, so
     # one turned on here, by this owner or one before it, is turned off here
     if gadget.read(UDC_MODE) == 'peripheral':
@@ -320,7 +330,25 @@ class Port:
     gadget.log.warning("jetlink: a host powers the USB-C port but the USB device controller is %s "
                        "(charger detection %s); turning its device side on", mode, gadget.read(CHARGER) or 'unknown')
     self.next_start = now + RESTART_AFTER
+    self.late_start = True
     run_udc('start')
+
+  def retrain(self, speed: str | None) -> bool:
+    """StarPilot: after a late start, a host that configured us at high-speed
+    on a super-speed controller is detached and attached again, once a plug.
+    True when it was: the configuration just seen is going away."""
+    if not self.late_start or self.retrained or speed != 'high-speed':
+      return False
+    udc = gadget.bound_udc()
+    if udc is None or gadget.read(gadget.UDC_PATH / udc / 'maximum_speed') != 'super-speed':
+      return False
+    self.retrained = True
+    gadget.log.warning("jetlink: the host settled for high-speed after a late device start; "
+                       "reconnecting once for super-speed")
+    if not run_udc('stop'):
+      return False
+    time.sleep(RETRAIN_GAP)
+    return run_udc('start')
 
   def _charge_the_phone(self, now: float) -> None:
     """The phone powers the comma and hosts it over a USB PD contract: ask it

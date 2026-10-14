@@ -195,7 +195,7 @@ class Warp:
       call_warp(jit, tfm, big_tfm, blobs[0], blobs[1])
     self.wait = Device[self._device].synchronize
     self.wait()
-    self.output = out.as_memoryview(force_zero_copy=True, no_sync=True)
+    self.output = _zero_copy_view(out, sync=False)
     self._replay = jit.captured
     if self._device.startswith('QCOM'):
       inputs = (blobs[1].uop.base, self._big_tfm_buf, blobs[0].uop.base, self._tfm_buf)
@@ -226,6 +226,23 @@ class Warp:
     return tensor.uop.base
 
 
+def _zero_copy_view(buffer, *, sync: bool) -> memoryview:
+  """StarPilot: the buffer's own host mapping, never a copy. Upstream asks for
+  as_memoryview(force_zero_copy=True, no_sync=...), which this fork's tinygrad
+  does not have; there _host_mv() is that mapping. Raises without one, so the
+  join fails into the small model rather than sending a stale copy."""
+  import inspect
+  if 'force_zero_copy' in inspect.signature(buffer.as_memoryview).parameters:
+    # exactly upstream's calls: no_sync only where it skipped the sync
+    return buffer.as_memoryview(force_zero_copy=True) if sync else buffer.as_memoryview(force_zero_copy=True, no_sync=True)
+  view = buffer._host_mv()
+  if view is None:
+    raise RuntimeError(f"the {buffer.device} buffer has no host mapping to read without a copy")
+  if sync:
+    buffer.allocator.dev.synchronize()
+  return view
+
+
 def _paired_capture(captured) -> bool:
   """StarPilot's validated copy/kernel/copy/kernel topology, without graph fusion."""
   from tinygrad.uop.ops import Ops
@@ -252,7 +269,7 @@ def _graph_alone(captured, inputs):
   for step in copies:
     dest, src = resolve_params(step, inputs)
     name = WARP_INPUT_NAMES[next(i for i, u in enumerate(inputs) if u is src)]
-    views[name] = np.frombuffer(dest.buffer.as_memoryview(force_zero_copy=True), dtype=np.float32).reshape(3, 3)
+    views[name] = np.frombuffer(_zero_copy_view(dest.buffer, sync=True), dtype=np.float32).reshape(3, 3)
   return get_graph_runtime(graphs[0], inputs), views['tfm'], views['big_tfm']
 
 
