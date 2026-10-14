@@ -15,6 +15,10 @@ def test_public_interface_and_params_directory(monkeypatch, tmp_path):
   assert op.params_dir() == tmp_path / "jetlink-test"
   assert adapter.owner_config().params_dir == op.params_dir()
   assert op.keys.link == "JetlinkMode"
+  from jetlink.openpilot import API
+  # A mismatch makes get_jetlink() refuse the vendored package: "Jetlink could not be loaded".
+  assert adapter.API_VERSION == API
+  assert not hasattr(op, "engagement")
   assert op.keys.big_model == "JetlinkBigModel"
   assert op.keys.catalog == "JetlinkCatalog"
 
