@@ -25,7 +25,6 @@ parts a heavy process uses are imported when it first uses them.
 """
 from __future__ import annotations
 
-import threading
 import time
 
 from jetlink.comma import gadget
@@ -33,13 +32,16 @@ from jetlink.openpilot.interface import MODES, STATES, Keys, ModelFace, Openpilo
 from jetlink.openpilot.parts import Parts, for_this_process
 from jetlink.openpilot.status import Status
 
-API = 1
+# 2: modeld writes in_control onto the joining model before every frame, where
+# jetlink polled the adapter's engagement() (2026-10-05). An adapter of API 1
+# never writes it, and its large model would wait for a window forever
+API = 2
 
 __all__ = ['API', 'MODES', 'STATES', 'Jetlink', 'Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'Status', 'bind',
            'conformance']
 
-# how long a caller waits for the owner's run to shut the Jetson down. Wake
-# from suspend is ~8 s to a server
+# how long a power-off request waits for the owner's run to shut the Jetson
+# down before it is withdrawn. Wake from suspend is ~8 s to a server
 SHUTDOWN_TIMEOUT = 25.0
 
 
@@ -97,6 +99,12 @@ class Jetlink:
     mode = self._mode()
     return self._read('the status', lambda: status.read(self._parts, mode), lambda error: status.failed(error, mode))
 
+  def model_state(self, ref: str) -> str | None:
+    """One catalog model for the picker's list: 'ready' (built on the Jetson),
+    'downloaded' (on the comma) or None. Asked when a list opens."""
+    from jetlink.openpilot import status
+    return self._read('a model\'s state', lambda: status.model_state(self._parts, ref), lambda error: None)
+
   def reason(self) -> str | None:
     """Why the link the user asked for cannot run: hardwared's offroad alert.
     None with the link off. The files the gadget and the build leave, nothing
@@ -137,6 +145,9 @@ class Jetlink:
   def attach(self, small, cam_w: int, cam_h: int):
     """Join the link to modeld, once the camera is up and `small` is built:
     the joining model, which drives as `small` until the Jetson is there.
+    Before every run() modeld writes onto it `in_control` (is openpilot or
+    MADS in control? it swaps only while not) and `frame_drop_ratio` (its
+    share of dropped camera frames, which hands a lagging large model back).
 
     None unless prepare() said yes in this process: without it the GPU's
     thread would start on modeld's realtime core. If the joining model cannot
@@ -195,39 +206,12 @@ class Jetlink:
       self._shutdown_asked = None
     return pending
 
-  def shutdown(self, reason: str = '', timeout: float = SHUTDOWN_TIMEOUT) -> None:
-    """request_shutdown(), then wait up to `timeout` for the owner to take it,
-    on a thread abandoned at the deadline: for a caller with nothing to do
-    meanwhile. hardwared keeps publishing, and uses the two above."""
-    if not self.enabled():
-      return
-
-    def request():
-      try:
-        self._request_shutdown(reason, timeout)
-      except Exception:
-        self._log.exception("jetlink: shutdown request failed")
-
-    t = threading.Thread(target=request, name='accelerator-shutdown', daemon=True)
-    t.start()
-    t.join(timeout)
-    if t.is_alive():
-      self._log.warning("jetlink: shutdown request still pending after %.0f s, going on without it", timeout)
-
-  def _request_shutdown(self, reason: str, timeout: float) -> None:
-    if not self._ask_for_power_off(reason):
-      return
-    if gadget.await_shutdown(timeout):
-      self._log.warning("jetlink: shutdown request handed to the jetson")
-    else:
-      self._log.warning("jetlink: nobody took the shutdown request within %.0f s", timeout)
-
   def _ask_for_power_off(self, reason: str) -> bool:
     """Hand the request to the owner: nothing else can touch the link, and
     the request is a file (gadget.SHUTDOWN_REQUEST) the owner's step looks
     for before anything else. Skipped when no Jetson is known to be there
     (dormant counts as there). A run busy in a long provision is stopped for
-    it; the caller's timeout covers a Jetson that never answers."""
+    it; shutdown_pending()'s deadline covers a Jetson that never answers."""
     from jetlink.openpilot.status import Presence
     if not self.enabled():
       return False

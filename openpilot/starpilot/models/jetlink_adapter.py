@@ -155,16 +155,6 @@ class StarPilotAdapter:
     return ModelFace(remote_parser, lambda w, h: get_nv12_info(w, h)[3], ModelConstants.DESIRE_LEN, ModelConstants,
                      LAT_SMOOTH_SECONDS, LONG_SMOOTH_SECONDS, get_action_from_model)
 
-  def engagement(self):
-    from openpilot.cereal.messaging import SubMaster
-    sm = SubMaster(["selfdriveState", "carControl"])
-
-    def engaged(timeout_ms):
-      sm.update(timeout_ms)
-      return (not sm.all_checks() or sm["selfdriveState"].enabled or sm["selfdriveState"].active or
-              sm["carControl"].latActive or sm["carControl"].longActive)
-    return engaged
-
   def event(self, name, **fields):
     self.log.event(name, **fields)
 
@@ -283,9 +273,10 @@ class JetlinkModel:
     return action_from_outputs(outputs, self.small.behavior_version, previous, lat_action_t, long_action_t, v_ego,
                                LAT_SMOOTH_SECONDS, LONG_SMOOTH_SECONDS)
 
-  def observe_frame(self, lat_delay, drop_ratio):
+  def observe_frame(self, lat_delay, drop_ratio, *, in_control=True):
     self.joined.lat_delay = lat_delay
     self.joined.frame_drop_ratio = drop_ratio
+    self.joined.in_control = in_control
 
   def publish_runtime(self, *, closed=False):
     now = time.monotonic_ns()

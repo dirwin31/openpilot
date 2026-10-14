@@ -34,6 +34,8 @@ CONNECT_DELAY = 0.5
 # long plus the small model's, inside modelV2's 0.5 s alive limit; 0.5 s here
 # flashed commIssue on top of the fallback
 INFERENCE_TIMEOUT = 0.2
+# between joins while neither end has the picked model and nothing else is built
+MODEL_WAIT = 60.0
 # how long the load may wait for the early gadget bind; a provisioning run may
 # still be letting go of the endpoints
 PRESENT_TIMEOUT = 5.0
@@ -41,6 +43,15 @@ PRESENT_TIMEOUT = 5.0
 # hardware; the ceiling is only there so a server that has stopped answering
 # does not hold the caller for the rest of the day.
 BUILD_TIMEOUT = 1800.0
+
+
+class ModelMissing(RuntimeError):
+  """Neither end has the picked model and nothing else is built: only a
+  provisioning run's download changes that, so the join asks again after
+  `retry_after` rather than every few seconds, and the panel says `waiting`
+  (joining._join_loop)."""
+  retry_after = MODEL_WAIT
+  waiting = 'big model not downloaded yet'
 
 
 def _left(deadline: float | None, default: float) -> float:
@@ -229,6 +240,16 @@ def identity(parts, entry: dict) -> tuple[str, int]:
 _hashed: dict[tuple[str, int, int], str] = {}
 
 
+def _hash_key(path: Path, st) -> tuple[str, int, int]:
+  return str(path), st.st_size, st.st_mtime_ns
+
+
+def remember_hash(path: Path, sha256: str) -> None:
+  """A file whose hash is already proven, as a download's is on the way in:
+  its upload need not read the gigabyte again (verified_upload)."""
+  _hashed[_hash_key(path, path.stat())] = sha256
+
+
 def verified_upload(log, model_path: Path | None, sha256: str, nbytes: int) -> Path | None:
   """The file to upload, once its hash is proven to match the registry: under
   a sha the bytes do not have, the Jetson's plan would lie about its contents."""
@@ -240,7 +261,7 @@ def verified_upload(log, model_path: Path | None, sha256: str, nbytes: int) -> P
       log.error("jetlink: %s is %d bytes, the registry says %d; not uploading it",
                 model_path.name, st.st_size, nbytes)
       return None
-    key = (str(model_path), st.st_size, st.st_mtime_ns)
+    key = _hash_key(model_path, st)
     have = _hashed.get(key)
     if have is None:
       from jetlink.spec import sha256_file
@@ -275,6 +296,35 @@ def ensure(parts, client, sha256: str, nbytes: int, model_path: Path | None, *,
   return spec
 
 
+def stand_in(parts, hello: dict, pick: str, built) -> tuple[str, int] | None:
+  """The model to ask for in place of the pick, as (sha256, nbytes), or None
+  for the pick itself. `built` is the spec record's ready spec, or None.
+
+  The server's hello says what it has: the model it has loaded and the ones it
+  has built. The pick wins whenever the server has it. Otherwise the model it
+  has loaded drives, so the iPhone the user set to Cinque Terre V3 serves that
+  rather than whatever the comma last built on some other server (ResAction on
+  the Jetson, 2026-10-07); then the comma's own record of the last model built,
+  if this server has it too. A server that lists nothing has only the record
+  to go on."""
+  cached = hello.get('cached_models')
+  have = None
+  if isinstance(cached, list):
+    loaded = hello.get('loaded')
+    have = set(cached) | ({loaded} if loaded else set())
+    if pick in have:
+      return None
+    if loaded:
+      # its size names it to the server, and only a catalog model resolved
+      # here, or the record, has one
+      nbytes = built.nbytes if built is not None and built.sha256 == loaded else parts.models.size_for(loaded)
+      if nbytes:
+        return loaded, nbytes
+  if built is not None and built.sha256 != pick and (have is None or built.sha256 in have):
+    return built.sha256, built.nbytes
+  return None
+
+
 def open_link(parts, link: Link, should_stop=None):
   """Get a client and a spec. Link IO only, so it is safe off modeld's thread;
   everything that touches tinygrad stays in the joining state's build.
@@ -302,23 +352,35 @@ def open_link(parts, link: Link, should_stop=None):
                    hello.get('engine_state'), str(hello.get('loaded'))[:16])
     link.note_server(hello)
     sha256, nbytes = identity(parts, selected)
-    if not parts.spec.engine_ready_for(sha256):
+    path = parts.models.shipped_model_path()
+    built = parts.spec.ready_spec()
+    standin = stand_in(parts, hello, sha256, built)
+    if standin is not None:
+      # the user's choice (2026-10-06): a model already built drives until the
+      # pick is fetched and built, which a provisioning run does parked, rather
+      # than the small model. Building here would unload it, and uploading
+      # would share the link with its frames
+      parts.log.warning("jetlink: %s is not ready yet, %s drives until it is", selected.get('name', sha256[:16]),
+                        parts.models.name_for(standin[0]))
+      (sha256, nbytes), path = standin, None
+    elif built is None or built.sha256 != sha256:
       parts.log.warning("jetlink: %s is not built yet, building it with the small model driving",
-                     selected.get('name', sha256[:16]))
-    try:
-      # normally one round trip, since the provisioning run left the engine loaded. A
-      # server that restarted reloads from the plan cache, 13 to 25 s; one
-      # that has never seen this model builds it, 102 to 294 s
-      spec = ensure(parts, client, sha256, nbytes, parts.models.shipped_model_path(),
-                    progress=parts.progress.report_with_eta, should_stop=should_stop)
-    except EngineMissing:
-      # neither end has the bytes. Fetching them needs the internet and a
-      # gigabyte of it, which is a parked job; clear the record so the next
-      # parked period provisions again
-      parts.spec.clear_ready()
-      raise
+                        selected.get('name', sha256[:16]))
+    # normally one round trip, since the provisioning run left the engine loaded. A
+    # server that restarted reloads from the plan cache, 13 to 25 s; one
+    # that has never seen this model builds it, 102 to 294 s
+    spec = ensure(parts, client, sha256, nbytes, path, progress=parts.progress.report_with_eta,
+                  should_stop=should_stop)
     client.deadline = INFERENCE_TIMEOUT
     return client, spec
+  except EngineMissing as e:
+    # neither end has the bytes. Fetching them is a provisioning run's job;
+    # clear the record if it named this model, so the next one does. The link
+    # is fine and stays on `link`: closing it left a read queued that the next
+    # attempt's open had to bounce the gadget for, every 7 s for a whole drive
+    # (2026-10-06)
+    parts.spec.clear_ready(sha256)
+    raise ModelMissing(str(e)) from e
   except BaseException:
     link.close()
     raise

@@ -123,6 +123,18 @@ class TestJetlinkSettings(unittest.TestCase):
     self.owner.configure({"refreshCatalog": True})
     self.assertEqual(self.refresher.starts[-1], True)
 
+  def test_standin_is_prepared_while_selected_model_builds(self):
+    self.owner.configure({"mode": "ios"})
+    self.status.ready = False
+    self.status.standin = "previous-model"
+    self.status.progress = {"stage": "building", "msg": "Preparing selected model"}
+    view = self.owner.snapshot()
+    self.assertTrue(view["prepared"])
+    self.assertFalse(view["active"])
+    self.assertEqual(view["model"], "remote")
+    self.assertEqual(view["standinModel"], "previous-model")
+    self.assertEqual(view["state"], "fallback model prepared")
+
   def test_exact_choices_and_conflicts(self):
     for payload in ({"mode": 1}, {"mode": "other"}, {"chargePhone": 1}, {"unknown": True}):
       with self.assertRaises(ValueError):

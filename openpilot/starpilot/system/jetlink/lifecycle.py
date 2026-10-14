@@ -58,3 +58,13 @@ class ShutdownHandoff:
     # Poll at the deadline too: Jetlink withdraws an unanswered request there.
     return (self.link is None or not self.link.shutdown_pending() or
             time.monotonic() - self.started_at >= SHUTDOWN_TIMEOUT)
+
+
+def unavailable_reason(params) -> str | None:
+  if not selected(params):
+    return None
+  from openpilot.starpilot.models.jetlink_adapter import get_jetlink, supported_device
+  if not supported_device():
+    return 'Jetlink requires a comma 3X or comma 4.'
+  link = get_jetlink()
+  return link.reason() if link is not None else 'Jetlink could not be loaded. The local model remains available.'

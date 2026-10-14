@@ -10,7 +10,7 @@ import time
 from openpilot.starpilot.drive_state.owner import DriveStateOwner
 from openpilot.starpilot.drive_state.resolver import Mode, effective_onroad, should_start as resolve_start
 from openpilot.starpilot.storage import starpilot_storage_root
-from openpilot.starpilot.system.jetlink.lifecycle import power_action
+from openpilot.starpilot.system.jetlink.lifecycle import power_action, unavailable_reason as jetlink_unavailable_reason
 from collections import OrderedDict, namedtuple
 
 import openpilot.cereal.messaging as messaging
@@ -337,6 +337,8 @@ def hardware_thread(end_event, hw_queue) -> None:
     chestnut_status.update(started_ts is None, branch, last_hw_state.usb_state, chestnut.failed,
                            params.get_bool("ChestnutLoading"), params.get("ChestnutActive"),
                            chestnut_state if chestnut_valid else None, set_offroad_alert_if_changed)
+    jetlink_error = jetlink_unavailable_reason(params) if started_ts is None else None
+    set_offroad_alert_if_changed("Offroad_AcceleratorUnavailable", jetlink_error is not None, extra_text=jetlink_error)
     # this subset is only used for offroad
     temp_sources = [
       msg.deviceState.memoryTempC,

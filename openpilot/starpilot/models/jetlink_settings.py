@@ -67,7 +67,10 @@ class JetlinkSettings:
     active = mode != "off" and supported and not chestnut and runtime.get("active") is True
     runtime_state = runtime.get("state", "unavailable")
     stage = str(progress.get("stage", ""))
-    state = "off" if mode == "off" else "unavailable" if reason else "prepared" if status.ready else stage or "pending"
+    standin = getattr(status, "standin", None) if status is not None else None
+    runnable = bool(status and (status.ready or standin))
+    state = ("off" if mode == "off" else "unavailable" if reason else "prepared" if status.ready else
+             "fallback model prepared" if standin else stage or "pending")
     if active:
       state = "active"
     elif mode != "off" and not reason and runtime_state in ("joining", "retrying", "ready"):
@@ -79,12 +82,13 @@ class JetlinkSettings:
     rows = jetlink_catalog.rows(params, model_root=self.model_root(), ready=bool(status and status.ready),
                                 model_state=getattr(link, "model_state", None))
     return {"mode": mode, "supported": supported, "chestnut": chestnut, "enabled": bool(status and status.enabled and supported),
-            "present": bool(status and status.present), "prepared": bool(mode != "off" and status and status.ready and supported),
+            "present": bool(status and status.present), "prepared": bool(mode != "off" and runnable and supported and not chestnut),
             "active": active, "runtimeState": runtime_state,
             "activeArtifactSha256": runtime.get("artifact_sha256") if active else None,
             "activeCheckpoint": runtime.get("model_checkpoint") if active else None,
             "state": state, "reason": reason, "progress": str(progress.get("msg", "")),
             "model": status.model if status is not None else None,
+            "standinModel": standin,
             "transport": status.transport if status is not None else "USB",
             "chargePhone": params.get_bool("JetlinkChargePhone"),
             "models": rows, "selectedRef": jetlink_catalog.picked_ref(params),

@@ -102,6 +102,14 @@ class TestJetlinkLifecycle(unittest.TestCase):
         self.assertFalse(should_start(mode, {'ignition': True, 'not_powering_off': False},
                                       {'not_powering_off': False}, already_started=started))
 
+  def test_offroad_reason_is_opt_in_and_uses_adapter_failure(self):
+    with patch.dict(sys.modules, {'openpilot.starpilot.models.jetlink_adapter': None}):
+      self.assertIsNone(lifecycle.unavailable_reason(SimpleNamespace(get=lambda key: 0)))
+    link = SimpleNamespace(reason=lambda: 'check cable')
+    adapter = SimpleNamespace(get_jetlink=lambda: link, supported_device=lambda: True)
+    with patch.dict(sys.modules, {'openpilot.starpilot.models.jetlink_adapter': adapter}):
+      self.assertEqual(lifecycle.unavailable_reason(SimpleNamespace(get=lambda key: 2)), 'check cable')
+
   def test_registered_native_int_and_owner_file_reader_agree(self):
     from pathlib import Path
     from jetlink.openpilot.settings import FileParams, Settings
