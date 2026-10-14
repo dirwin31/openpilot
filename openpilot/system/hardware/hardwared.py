@@ -10,6 +10,7 @@ import time
 from openpilot.starpilot.drive_state.owner import DriveStateOwner
 from openpilot.starpilot.drive_state.resolver import Mode, effective_onroad, should_start as resolve_start
 from openpilot.starpilot.storage import starpilot_storage_root
+from openpilot.starpilot.system.jetlink.lifecycle import power_action
 from collections import OrderedDict, namedtuple
 
 import openpilot.cereal.messaging as messaging
@@ -369,6 +370,9 @@ def hardware_thread(end_event, hw_queue) -> None:
     startup_conditions["up_to_date"] = params.get("Offroad_ConnectivityNeeded") is None or params.get_bool("DisableUpdates") or params.get_bool("SnoozeUpdate")
     startup_conditions["no_excessive_actuation"] = params.get("Offroad_ExcessiveActuation") is None
     startup_conditions["not_uninstalling"] = not params.get_bool("DoUninstall")
+    startup_conditions["not_powering_off"] = power_action(params) is None
+    # Also end a running/forced-onroad session while manager waits for Jetlink.
+    onroad_conditions["not_powering_off"] = startup_conditions["not_powering_off"]
     startup_conditions["accepted_terms"] = params.get("HasAcceptedTerms") == terms_version
 
     # with 2% left, we killall, otherwise the phone will take a long time to boot

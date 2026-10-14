@@ -134,6 +134,7 @@ def manager_cleanup() -> None:
 
 
 def manager_thread() -> None:
+  from openpilot.starpilot.system.jetlink.lifecycle import ShutdownHandoff, power_action
   cloudlog.bind(daemon="manager")
   cloudlog.info("manager start")
   cloudlog.info({"environ": os.environ})
@@ -158,6 +159,7 @@ def manager_thread() -> None:
 
   started_prev = False
   ignition_prev = False
+  shutdown_handoff = ShutdownHandoff()
 
   while True:
     sm.update(1000)
@@ -202,15 +204,13 @@ def manager_thread() -> None:
       pass
 
     # Exit main loop when uninstall/shutdown/reboot is needed
-    shutdown = False
-    for param in ("DoUninstall", "DoShutdown", "DoReboot"):
-      if params.get_bool(param):
-        shutdown = True
-        params.put("LastManagerExitReason", f"{param} {datetime.datetime.now()}", block=True)
-        cloudlog.warning(f"Shutting down manager - {param} set")
-
-    if shutdown:
-      break
+    reason = power_action(params)
+    if reason is not None:
+      if shutdown_handoff.started_at is None:
+        params.put("LastManagerExitReason", f"{reason} {datetime.datetime.now()}", block=True)
+        cloudlog.warning(f"Shutting down manager - {reason} set")
+      if shutdown_handoff.ready(params, reason):
+        break
 
 
 def main() -> None:
@@ -249,11 +249,6 @@ def main() -> None:
         analytics.close()
       except Exception:
         cloudlog.warning("Usage statistics shutdown failed")
-    try:
-      from openpilot.starpilot.system.jetlink.lifecycle import shutdown as shutdown_jetlink
-      shutdown_jetlink(Params())
-    except Exception:
-      cloudlog.exception("Jetlink shutdown handoff failed")
     manager_cleanup()
 
   params = Params()
