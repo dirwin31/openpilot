@@ -401,13 +401,24 @@ export const ModelsPage = {
       this.dialog = null
     },
     async configureJetlink(mode, chargePhone = this.status.jetlink?.chargePhone === true) {
+      await this.jetlinkRequest({ mode, chargePhone }, { action: "jetlink", value: mode })
+    },
+    async selectJetlinkModel(model) {
+      await this.jetlinkRequest({ model: model.default ? "" : model.ref },
+        { action: "jetlink-model", value: model.ref })
+    },
+    async jetlinkRequest(payload, pending = null) {
       if (!this.canAction("jetlink")) return
-      this.pendingChoice = { action: "jetlink", value: mode }
-      this.busy = "jetlink:"
+      this.pendingChoice = pending
+      this.busy = `jetlink:${pending?.value || Object.keys(payload).join(",")}`
+      this.message = ""
       try {
-        const result = await this.manager.action("jetlink", null, { mode, chargePhone })
+        const result = await this.manager.action("jetlink", null, payload)
         if (result) this.message = result.message
       } finally { this.pendingChoice = null; this.busy = "" }
+    },
+    jetlinkModelState(model) {
+      return model.state === "ready" ? "Built on the remote device" : model.state === "downloaded" ? "Downloaded to the comma" : ""
     },
     async runAction(action, model = null) {
       if (this.disposed || !this.canAction(action, model)) return
@@ -477,6 +488,26 @@ export const ModelsPage = {
             <div v-if="status.jetlink.mode === 'ios'" class="gx-row">
               <span class="gx-row__label">Charge phone over USB</span>
               <button class="gx-btn gx-btn--tonal" type="button" :aria-pressed="status.jetlink.chargePhone" :disabled="!actionAvailable('jetlink')" @click="configureJetlink(status.jetlink.mode, !status.jetlink.chargePhone)">{{ status.jetlink.chargePhone ? 'On' : 'Off' }}</button>
+            </div>
+            <div v-if="status.jetlink.mode !== 'off' && !status.jetlink.chestnut" class="gx-jetlink-models">
+              <div class="gx-row">
+                <span class="gx-row__label">Remote big model</span>
+                <button class="gx-btn gx-btn--tonal" type="button" :disabled="!actionAvailable('jetlink') || status.jetlink.catalogRefreshing" @click="jetlinkRequest({ refreshCatalog: true })"><i aria-hidden="true" class="bi" :class="status.jetlink.catalogRefreshing ? 'bi-arrow-repeat gx-spin' : 'bi-arrow-clockwise'"></i> Check for models</button>
+              </div>
+              <p v-if="!status.jetlink.catalogFetched" class="gx-model-reason">{{ status.jetlink.catalogRefreshing ? 'Fetching the Jetlink model list…' : 'Only the default model is listed until the model list has been fetched.' }}</p>
+              <p v-if="status.jetlink.catalogError" class="gx-model-reason">{{ status.jetlink.catalogError }}</p>
+              <div v-for="m in status.jetlink.models || []" :key="m.ref" class="gx-panel gx-cluster">
+                <div class="gx-grow">
+                  <strong>{{ m.name }}</strong>
+                  <div class="gx-actions gx-tags">
+                    <span v-if="m.default" class="gx-chip">Jetlink default</span>
+                    <span v-if="jetlinkModelState(m)" class="gx-chip">{{ jetlinkModelState(m) }}</span>
+                  </div>
+                </div>
+                <span v-if="pendingChoice?.action === 'jetlink-model' ? pendingChoice.value === m.ref : m.running" class="gx-chip gx-chip--selected">Selected</span>
+                <button v-else class="gx-btn gx-btn--tonal" type="button" :disabled="!actionAvailable('jetlink')" :aria-label="'Use ' + m.name + ' for Jetlink'" @click="selectJetlinkModel(m)"><i aria-hidden="true" class="bi bi-play-fill"></i> Use</button>
+              </div>
+              <p class="gx-model-reason">A new choice is downloaded and built on the remote device while parked, which can take several minutes. The local model drives until it is ready.</p>
             </div>
             <p class="gx-model-reason">Set up parked with a USB 3 data cable and separate power. Keep the computer awake; keep the iPhone app open and unlocked.</p>
             <a href="https://github.com/firestar5683/StarPilot/blob/StarPilot/openpilot/starpilot/models/JETLINK.md" target="_blank" rel="noopener noreferrer">Jetlink setup guides</a>

@@ -1677,6 +1677,7 @@ input[type="checkbox"]:disabled { opacity: .4; cursor: not-allowed; }
 .gx-grow { flex: 1; min-width: 0; }
 .gx-wrap { overflow-wrap: anywhere; }
 .gx-tags { margin-top: var(--sp-2); }
+.gx-jetlink-models { display: grid; gap: var(--sp-2); margin: var(--sp-3) 0; }
 .gx-inset { margin: var(--sp-4); max-width: calc(100% - 2 * var(--sp-4)); }
 .gx-text-danger { color: var(--error); }
 .gx-row.gx-row--borderless { border-top: 0; }

@@ -270,6 +270,25 @@ await linkManagement.reply(2, { ...managerPayload, ...jetlinkView, jetlink: { mo
 await linkSelection
 assert.equal(linkManagement.manager.data.jetlink.mode, "ios")
 linkManagement.manager.stop()
+// The Jetlink picker posts a catalog ref, or "" to follow Jetlink's default.
+assert.match(ModelsPage.template, /Remote big model/)
+const jetlinkPicks = []
+const pickerPage = { status: { jetlink: { selectedRef: "a".repeat(40) } }, jetlinkRequest: (payload, pending) => jetlinkPicks.push([payload, pending]) }
+await ModelsPage.methods.selectJetlinkModel.call(pickerPage, { ref: "b".repeat(40), default: false })
+await ModelsPage.methods.selectJetlinkModel.call(pickerPage, { ref: "c".repeat(40), default: true })
+assert.deepEqual(jetlinkPicks, [[{ model: "b".repeat(40) }, { action: "jetlink-model", value: "b".repeat(40) }],
+  [{ model: "" }, { action: "jetlink-model", value: "c".repeat(40) }]])
+assert.equal(ModelsPage.methods.jetlinkModelState({ state: "ready" }), "Built on the remote device")
+assert.equal(ModelsPage.methods.jetlinkModelState({ state: null }), "")
+const modelPick = managerFixture()
+modelPick.manager.start()
+await modelPick.reply(0, { ...managerPayload, ...jetlinkView, jetlink: { mode: "ios" } })
+const picked = modelPick.manager.action("jetlink", null, { model: "b".repeat(40) })
+assert.deepEqual(JSON.parse(modelPick.requests[1].options.body), { model: "b".repeat(40) })
+await modelPick.reply(1, { message: "Saved" })
+await modelPick.reply(2, { ...managerPayload, ...jetlinkView, jetlink: { mode: "ios" } })
+await picked
+modelPick.manager.stop()
 const liveLink = managerFixture()
 liveLink.manager.start()
 await liveLink.reply(0, { ...managerPayload, ...jetlinkView, jetlink: { mode: "usb", active: true, state: "active" } })
