@@ -31,6 +31,7 @@ def params_directory() -> Path:
 
 def keys():
   from jetlink.openpilot import Keys
+  # Galaxy's Jetlink picker writes big_model; jetlink_catalog keeps catalog.
   return Keys(link="JetlinkMode", offroad="IsOffroad", progress="JetlinkProgress", spec="JetlinkSpec",
               pointers="JetlinkPointers", big_model="JetlinkBigModel", catalog="JetlinkCatalog",
               charge_phone="JetlinkChargePhone")
@@ -84,7 +85,12 @@ def runtime_status():
 
 class StarPilotAdapter:
   basedir = BASEDIR
-  catalog_selector = 0
+
+  @property
+  def catalog_selector(self):
+    # sunnypilot's big-model bundles, as jetlink.registry fetches and merges them
+    from jetlink.registry.catalog import REQUIRED_SELECTOR_VERSION
+    return REQUIRED_SELECTOR_VERSION
 
   @property
   def keys(self):
@@ -109,9 +115,14 @@ class StarPilotAdapter:
 
   def get(self, key):
     try:
-      return self.params.get(key)
+      value = self.params.get(key)
     except Exception:
-      return None
+      value = None
+    if key == "JetlinkCatalog":
+      # Until a catalog has been fetched, Jetlink's default model must still resolve.
+      from openpilot.starpilot.models.jetlink_catalog import effective_catalog
+      return effective_catalog(value)
+    return value
 
   def put(self, key, value, *, block=False):
     self.params.put(key, value, block=block)
