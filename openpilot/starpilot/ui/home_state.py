@@ -76,6 +76,7 @@ class HomeState:
   recording_audio: bool = False
   branch: str = ""
   gpu_state: str = "disconnected"
+  jetlink: str = "off"
 
 
 @dataclass(frozen=True)
