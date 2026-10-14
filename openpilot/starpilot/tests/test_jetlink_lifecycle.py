@@ -47,23 +47,60 @@ class TestJetlinkLifecycle(unittest.TestCase):
       adapter.get_jetlink.return_value = None
       self.assertFalse(lifecycle.enabled(params))
 
-  def test_only_power_actions_request_bounded_remote_shutdown(self):
+  def test_power_actions_request_once_without_blocking_manager(self):
     link = Mock()
     link.enabled.return_value = True
+    link.request_shutdown.return_value = True
+    link.shutdown_pending.return_value = True
     adapter = SimpleNamespace(get_jetlink=lambda: link, supported_device=lambda: True)
     with patch.dict(sys.modules, {'openpilot.starpilot.models.jetlink_adapter': adapter}):
-      for reason in (None, 'DoShutdown', 'DoReboot', 'DoUninstall'):
-        link.shutdown.reset_mock()
+      for reason in lifecycle.POWER_ACTIONS:
+        link.reset_mock()
         params = SimpleNamespace(get=lambda key: 2, get_bool=lambda key, reason=reason: key == reason)
-        lifecycle.shutdown(params)
-        if reason is None:
-          link.shutdown.assert_not_called()
-        else:
-          link.shutdown.assert_called_once_with(reason, timeout=25.0)
+        handoff = lifecycle.ShutdownHandoff()
+        self.assertEqual(lifecycle.power_action(params), reason)
+        with patch.object(lifecycle.time, 'monotonic', return_value=100.):
+          self.assertFalse(handoff.ready(params, reason))
+          self.assertFalse(handoff.ready(params, reason))
+        with patch.object(lifecycle.time, 'monotonic', return_value=125.):
+          self.assertTrue(handoff.ready(params, reason))
+        link.request_shutdown.assert_called_once_with(reason)
       link.enabled.return_value = False
-      link.shutdown.reset_mock()
-      lifecycle.shutdown(params)
-      link.shutdown.assert_not_called()
+      link.reset_mock()
+      self.assertTrue(lifecycle.ShutdownHandoff().ready(params, 'DoShutdown'))
+      link.request_shutdown.assert_not_called()
+
+  def test_shutdown_completes_when_owner_takes_request_or_no_remote_host(self):
+    params = SimpleNamespace(get=lambda key: 1)
+    link = Mock()
+    link.enabled.return_value = True
+    link.request_shutdown.return_value = True
+    link.shutdown_pending.side_effect = [True, False]
+    adapter = SimpleNamespace(get_jetlink=lambda: link, supported_device=lambda: True)
+    with patch.dict(sys.modules, {'openpilot.starpilot.models.jetlink_adapter': adapter}):
+      handoff = lifecycle.ShutdownHandoff()
+      self.assertFalse(handoff.ready(params, 'DoShutdown'))
+      self.assertTrue(handoff.ready(params, 'DoShutdown'))
+      link.request_shutdown.assert_called_once_with('DoShutdown')
+      link.request_shutdown.return_value = False
+      link.shutdown_pending.reset_mock()
+      self.assertTrue(lifecycle.ShutdownHandoff().ready(params, 'DoReboot'))
+      link.shutdown_pending.assert_not_called()
+
+  def test_shutdown_transport_exception_does_not_strand_power_off(self):
+    params = SimpleNamespace(get=lambda key: 1)
+    link = Mock()
+    link.request_shutdown.side_effect = OSError('link unavailable')
+    adapter = SimpleNamespace(get_jetlink=lambda: link, supported_device=lambda: True)
+    with patch.dict(sys.modules, {'openpilot.starpilot.models.jetlink_adapter': adapter}):
+      self.assertTrue(lifecycle.ShutdownHandoff().ready(params, 'DoShutdown'))
+
+  def test_power_actions_prevent_start_and_end_forced_onroad(self):
+    from openpilot.starpilot.drive_state.resolver import Mode, should_start
+    for mode in Mode:
+      for started in (False, True):
+        self.assertFalse(should_start(mode, {'ignition': True, 'not_powering_off': False},
+                                      {'not_powering_off': False}, already_started=started))
 
   def test_registered_native_int_and_owner_file_reader_agree(self):
     from pathlib import Path

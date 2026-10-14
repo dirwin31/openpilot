@@ -1,8 +1,8 @@
 """Driving health requirements for manager-owned services."""
 
-# Projection and local phone access are optional even when requested.
+# Projection, local phone access and external inference are optional even when requested.
 # Their lifecycles remain visible in managerState and their own status.
-ANCILLARY_PROCESSES = frozenset({'android_autod', 'galaxy_hotspot'})
+ANCILLARY_PROCESSES = frozenset({'android_autod', 'galaxy_hotspot', 'jetlinkd'})
 
 
 def driving_process_failures(processes) -> set[str]:
