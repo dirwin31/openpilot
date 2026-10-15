@@ -72,3 +72,68 @@ def test_zero_copy_view_refuses_a_copy():
   import pytest
   with pytest.raises(RuntimeError, match='no host mapping'):
     warp._zero_copy_view(unmapped, sync=False)
+
+
+def paired_warp(fast_writes):
+  """A Warp over a paired capture whose full replay writes 0x5a into the output,
+  and a _PairedReplay stand-in that writes `fast_writes`."""
+  class Tensor:
+    def __init__(self, array, **kwargs):
+      self.array = array
+      self.uop = NS(base=self)
+
+    def realize(self):
+      return self
+
+    @staticmethod
+    def from_blob(address, shape, **kwargs):
+      return Tensor(np.zeros(shape, dtype=np.uint8))
+
+  mapped = memoryview(bytearray(64))
+  output = NS(device='QCOM', as_memoryview=lambda allow_zero_copy=False: None, _host_mv=lambda: mapped)
+  capture = Mock(ret=NS(uop=NS(base=NS(buffer=output))), _linear=NS(src=paired_steps()))
+  capture.side_effect = lambda inputs, var_vals: mapped.__setitem__(slice(None), bytes([0x5a]) * 64)
+  fast = Mock(side_effect=lambda inputs, var_vals: mapped.__setitem__(slice(None), bytes([fast_writes]) * 64))
+  log = Mock()
+  with patch('tinygrad.tensor.Tensor', Tensor), patch('tinygrad.device.Device', {'QCOM': NS(synchronize=Mock())}), \
+       patch.object(warp, '_make_coherent'), patch.object(warp, '_PairedReplay', return_value=fast), \
+       patch.object(warp, '_graph_alone', side_effect=warp.UnsupportedWarpCapture('interleaved capture')):
+    model = warp.Warp(Mock(captured=capture), 64, log)
+  return model, capture, fast, log
+
+
+def test_paired_capture_replays_directly_when_it_warps_identically():
+  model, capture, fast, log = paired_warp(0x5a)
+  assert model._replay is fast
+  assert fast.call_count == 3 and capture.call_count == 3   # the self-check, frame for frame
+  log.warning.assert_called_once_with('jetlink: warp replays its paired capture directly')
+
+
+def test_paired_capture_keeps_full_replay_when_the_direct_one_differs():
+  model, capture, fast, log = paired_warp(0x00)
+  assert model._replay is capture
+  assert 'warped a frame differently' in str(log.warning.call_args)
+
+
+def test_paired_replay_copies_before_its_kernels(monkeypatch):
+  import tinygrad.engine.realize as realize
+  order = []
+  def buffer(name, host_value):
+    storage = NS(host=bytearray(4))
+    buf = NS(device='QCOM' if name.startswith('dest') else 'NPY', allocator=NS(dev=NS(synchronize=lambda: order.append(f'sync {name}'))),
+             get_storage=lambda: storage, ensure_allocated=lambda: buf, host=storage.host)
+    buf.host[:] = host_value
+    return buf
+  pairs = [(buffer('dest_tfm', b'\0' * 4), buffer('tfm', b'tfm!')), (buffer('dest_big', b'\0' * 4), buffer('big', b'big!'))]
+  steps = paired_steps()
+  monkeypatch.setattr(realize, 'resolve_params', lambda step, inputs: step)
+  copies = iter(pairs)
+  monkeypatch.setattr(realize, 'unwrap_multi', lambda step, params: [(next(copies), {})])
+  monkeypatch.setattr(realize, 'link_linear', lambda linear, allow_cache: ('kernels', linear.src))
+  monkeypatch.setattr(realize, 'run_linear', lambda linear, var_vals, input_uops, jit: order.append(('run', linear, jit)))
+  captured = NS(_linear=NS(src=steps, replace=lambda src: NS(src=src)))
+  replay = warp._PairedReplay(captured, ('inputs',))
+  replay(('frame inputs',), {})
+  assert [bytes(d.host) for d, _ in pairs] == [b'tfm!', b'big!']
+  assert order[-1] == ('run', ('kernels', steps[1::2]), True)
+  assert all(isinstance(o, str) for o in order[:-1])   # every copy, then the kernels
