@@ -227,7 +227,7 @@ class Owner:
     self.port = port.Port(chestnut_ids)
     self.cable = lending.CableListener()
     self.lender = lending.Lender(self.lendable, self.bounce_gadget, cable=self.cable_mode, vacate=self.cable.vacate,
-                                 server=self.note_server)
+                                 server=self.note_server, take_cable=self.take_cable)
 
   # -- the gadget -----------------------------------------------------------
 
@@ -430,6 +430,25 @@ class Owner:
     gadget.set_dormant(False)
     self.dormant = False
     self.idle_since = time.monotonic()
+
+  def take_cable(self):
+    """The phone's dial for a borrower, on the lender's thread. A borrower asks
+    only while it has no session, so an empty answer means no phone is talking
+    to anybody: the step does not watch the port while the link is lent."""
+    sock = self.cable.take()
+    if sock is None:
+      if self._peer is not None:
+        self.publish()
+      return None
+    try:
+      peer = sock.getpeername()[0]
+    except OSError:
+      sock.close()   # reset since the accept: the phone dials again
+      if self._peer is not None:
+        self.publish()
+      return None
+    self.publish(peer)
+    return sock
 
   def note_server(self, borrower: str, fields: dict) -> None:
     """What a borrower passed on of the server's hello (lending.Loan.note_server),

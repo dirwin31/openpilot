@@ -58,12 +58,18 @@ class ProvisioningRun:
     """Always go through this: a FunctionFS owner that exits without closing
     can wedge the driver until a reboot."""
     client, self.client = self.client, None
-    if client is not None:
-      try:
-        client.leave(P.LEAVE_PROVISIONED)
-        client.close()
-      except Exception:
-        self.log.exception("jetlink: error closing the link")
+    loan, self.loan = self.loan, None
+    try:
+      if client is not None:
+        try:
+          client.leave(P.LEAVE_PROVISIONED)
+        finally:
+          client.close()
+    except Exception:
+      self.log.exception("jetlink: error closing the link")
+    finally:
+      if loan is not None:
+        loan.close()
 
   def open_link(self) -> bool:
     """Borrow the link from the owner that started this run. Without a loan

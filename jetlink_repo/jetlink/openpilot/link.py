@@ -74,8 +74,10 @@ def connect(log, loan, deadline: float | None = None, name: str | None = None, w
   if loan.cable:
     sock = loan.accept(lending.BORROW_TIMEOUT if wait is None else wait)
     peer = sock.getpeername()[0]
-    # the panels name the phone; the owner records it only while it holds the dial itself
-    gadget.note_link('cable', peer)
+    # the panels name the phone; an owner that brokered the dial has recorded it
+    # already, and one that let us listen records it only while it holds the dial
+    if not loan.brokered:
+      gadget.note_link('cable', peer)
     log.warning("jetlink: the phone dialed in from %s", peer)
     return JetlinkClient.open_socket(sock, deadline=deadline, name=name)
   return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce, deadline=deadline, name=name)
@@ -200,7 +202,7 @@ def connect_patiently(link: Link):
   last = None
   while True:
     try:
-      client = link.open()
+      client = link.open(deadline)
     except Exception as e:
       client, last = None, e
     if client is not None:
@@ -211,12 +213,12 @@ def connect_patiently(link: Link):
         return client
       # the link stays on `link`, still bound, for the next attempt
       raise TimeoutError(f"no jetson attached within {CONNECT_TIMEOUT:.0f}s")
-    if time.monotonic() > deadline:
+    if time.monotonic() >= deadline:
       # nothing is held here: this is a gadget we could not open at all,
       # usually a provisioning run still finishing an exchange on the endpoints
       raise last if last is not None else TimeoutError("could not open the link")
     link.log.warning("jetlink: link not ready (%s), retrying", last)
-    time.sleep(CONNECT_DELAY)
+    time.sleep(min(CONNECT_DELAY, _left(deadline, CONNECT_DELAY)))
 
 
 # -- making the Jetson ready ------------------------------------------------------

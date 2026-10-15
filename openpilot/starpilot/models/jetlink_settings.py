@@ -87,6 +87,9 @@ class JetlinkSettings:
     return {"mode": mode, "supported": supported, "chestnut": chestnut, "enabled": bool(status and status.enabled and supported),
             "present": bool(status and status.present), "prepared": bool(mode != "off" and runnable and supported and not chestnut),
             "active": active, "runtimeState": runtime_state,
+            "connectionDetail": ("Remote model connected and producing fresh output." if active else
+                                 "Remote model ready; waiting for disengagement." if state == "waiting for disengagement" else
+                                 getattr(status, "connection", "")),
             "activeArtifactSha256": runtime.get("artifact_sha256") if active else None,
             "activeCheckpoint": runtime.get("model_checkpoint") if active else None,
             "state": state, "reason": reason, "progress": str(progress.get("msg", "")),

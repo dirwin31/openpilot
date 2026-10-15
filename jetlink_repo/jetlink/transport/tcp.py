@@ -72,11 +72,14 @@ class TcpTransport(StreamTransport):
     self.stop_datagrams()
     if not self.on_the_cable():
       return False
+    udp = None
     try:
       udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
       udp.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 << 20)
       udp.connect((self.sock.getpeername()[0], port))
     except OSError as e:
+      if udp is not None:
+        udp.close()
       log.warning("jetlink: no frame datagrams to port %d (%s); frames stay on TCP", port, e)
       return False
     self._udp = (udp, token)
@@ -109,9 +112,13 @@ class TcpTransport(StreamTransport):
   @classmethod
   def listen(cls, host: str = '0.0.0.0', port: int = DEFAULT_PORT, backlog: int = 1) -> socket.socket:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind((host, port))
-    srv.listen(backlog)
+    try:
+      srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+      srv.bind((host, port))
+      srv.listen(backlog)
+    except OSError:
+      srv.close()
+      raise
     return srv
 
   @classmethod

@@ -23,9 +23,10 @@ interface and dials the comma at CABLE_ADDR. Whoever holds the loan listens
 for that dial: the owner while nobody does (CableListener), so a parked phone
 shows connected and a dial is news that starts a provisioning run, and the
 borrower while it holds the loan (Loan.accept), for the drive or the run. The
-handshake is the handover: the owner closes its listener and the dial it
-holds before it says yes, and listens again once the loan ends. No socket
-changes hands, and nothing shares one.
+owner keeps the listening port open. New borrowers request an accepted socket
+over the lease using SCM_RIGHTS; the owner closes its copy immediately, without
+shutdown. Only the borrower reads protocol bytes. Older borrowers retain the
+legacy close-and-redial handoff.
 """
 from __future__ import annotations
 
@@ -90,7 +91,7 @@ def _recv_line(conn: socket.socket, buf: bytearray, deadline: float) -> dict | N
 
 class Loan:
   """The right to do endpoint IO on a gadget the owner holds, or on the
-  cable the right to listen for the phone's dial (accept).
+  cable the right to take the phone's dial (accept).
 
   Held for the length of a drive: modeld is stopped at every ignition-off and
   SIGKILLed if it lingers, so the socket closing is how the link is handed
@@ -105,6 +106,7 @@ class Loan:
     # a phone is the host: the link is its dial, taken by accept, and the
     # endpoint files are left alone. The owner's answer says (_take)
     self.cable = False
+    self._brokered = False
     # the cable listener, bound on the first accept and kept for the loan
     self._srv: socket.socket | None = None
     self.bound: tuple | None = None
@@ -115,6 +117,12 @@ class Loan:
   @property
   def closed(self) -> bool:
     return self._closed
+
+  @property
+  def brokered(self) -> bool:
+    """Does the owner hand us the phone's dial (and record it), rather than
+    us listening for it?"""
+    return self._brokered
 
   def bounce(self) -> bool:
     """Ask the owner to take the gadget down and put it back up.
@@ -167,7 +175,8 @@ class Loan:
   def accept(self, timeout: float) -> socket.socket:
     """The phone's next dial, within `timeout` s: the link on the cable.
 
-    The listener is bound on the first call and kept for the loan's life, so a
+    New owners broker an already accepted socket without closing the port.
+    With older owners, the listener is bound on the first call and kept, so a
     phone that dials again after a lost link is taken here, with nobody else
     involved. The newest dial wins, as on the owner's listener: the app may
     have restarted behind an older one. Raises TimeoutError with no dial in
@@ -178,6 +187,8 @@ class Loan:
     if not self.cable:
       raise RuntimeError('this loan is the endpoint files, not the cable')
     deadline = time.monotonic() + timeout
+    if self._brokered:
+      return self._accept_brokered(deadline)
     while self._srv is None:
       try:
         srv = _listen()
@@ -195,6 +206,45 @@ class Loan:
       if time.monotonic() >= deadline:
         raise TimeoutError(f'no phone dialed in {timeout:.0f} s')
 
+  def _accept_brokered(self, deadline: float) -> socket.socket:
+    # A separate request/response keeps ancillary data out of the JSON parser.
+    while not self._closed:
+      with self._lock:
+        if self._closed:
+          break
+        fds = []
+        try:
+          _send(self.conn, {'op': 'accept'})
+          # the conn's own timeout is a poll: an owner a moment late is not gone
+          if not select.select([self.conn], [], [], NOTE_TIMEOUT)[0]:
+            raise TimeoutError('the owner did not answer an accept')
+          data, fds, flags, _ = socket.recv_fds(self.conn, 1, 1)
+          if flags & socket.MSG_CTRUNC or data not in (b'0', b'1') or len(fds) != (data == b'1'):
+            raise ValueError('invalid cable socket handoff')
+          if fds:
+            fd = fds.pop()
+            try:
+              os.set_inheritable(fd, False)
+              accepted = socket.socket(fileno=fd)
+            except BaseException:
+              os.close(fd)
+              raise
+            accepted.setblocking(True)
+            return accepted
+        except (OSError, ValueError):
+          # No request ids: a late response cannot be reused for another ask.
+          self._closed = True
+          _shut(self.conn)
+          raise
+        finally:
+          for fd in fds:
+            os.close(fd)
+      left = deadline - time.monotonic()
+      if left <= 0:
+        raise TimeoutError('waiting for the Jetlink app to connect')
+      time.sleep(min(RETRY, left))
+    raise ConnectionResetError('the owner lease closed')
+
   def _take(self, timeout: float) -> dict | None:
     """Ask the owner for the link until it lends one or `timeout` passes; the
     reply that lent it. The loan is closed when the owner is gone."""
@@ -210,6 +260,7 @@ class Loan:
       return None
     self.mount, self.udc = str(reply['mount']), str(reply['udc'])
     self.cable = bool(reply.get('cable'))
+    self._brokered = self.cable and reply.get('socket_handoff') is True
     return reply
 
   def close(self) -> None:
@@ -229,11 +280,13 @@ def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path | N
   holds ep0. `path` defaults to SOCKET as it is when called, so a test that
   points SOCKET elsewhere is never lent the real owner's link.
   """
+  conn = None
   try:
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.settimeout(POLL)
     conn.connect(str(SOCKET if path is None else path))
   except OSError:
+    _close(conn)
     return None   # no owner listening
   loan = Loan(conn, bytearray(), '', '', name=name)
   reply = loan._take(timeout)
@@ -248,7 +301,7 @@ def _ask(conn: socket.socket, buf: bytearray, name: str, deadline: float) -> dic
   """Ask for the link until the owner lends it or `deadline` passes: the reply
   that lent it. None when out of time or refused."""
   while time.monotonic() < deadline:
-    _send(conn, {'op': 'borrow', 'name': name})
+    _send(conn, {'op': 'borrow', 'name': name, 'socket_handoff': True})
     reply = _recv_line(conn, buf, deadline)
     if reply is None:
       return None   # out of time
@@ -324,7 +377,7 @@ class CableListener:
     self.redial_expected = False
     self.news = False
     self._last_error = ''
-    self._lock = threading.Lock()
+    self._lock = threading.RLock()
 
   @property
   def listening(self) -> bool:
@@ -359,6 +412,10 @@ class CableListener:
     return True
 
   def poll(self) -> str | None:
+    with self._lock:
+      return self._poll()
+
+  def _poll(self) -> str | None:
     """Take a dial if one is waiting. The peer's address when one arrived,
     else None. A held dial the phone has since dropped is let go here too,
     so a borrower is never handed a dead socket."""
@@ -372,9 +429,14 @@ class CableListener:
       return None
     if conn is None:
       return None
+    try:
+      peer = str(conn.getpeername()[0])
+    except OSError:
+      _close(conn)   # reset between the accept and here: the phone dials again
+      return None
     with self._lock:
       old, self._sock = self._sock, conn
-      self.peer = str(conn.getpeername()[0])
+      self.peer = peer
       self.news, self.redial_expected = not self.redial_expected, False
     _close(old)
     return self.peer
@@ -388,6 +450,18 @@ class CableListener:
       self._sock, self.peer = None, None
     gadget.log.warning("jetlink: the phone hung up")
     _close(sock)
+
+  def take(self) -> socket.socket | None:
+    """Transfer an idle dial without dropping the listener or protocol bytes."""
+    with self._lock:
+      if not self.open():
+        return None
+      self._poll()
+      sock, self._sock = self._sock, None
+      self.peer = None
+      if sock is not None:
+        self.redial_expected = True
+      return sock
 
   def vacate(self) -> None:
     """Stop listening and let the held dial go, for a borrower that listens
@@ -459,19 +533,23 @@ class Lender:
   answered "retry" and the daemon's own loop puts it there. `cable` says the
   host is a phone (Jetlink iOS): the loan is then the right to
   listen for its dial, never the endpoint files, which a phone does not read,
-  and `vacate` frees the port first (CableListener.vacate). `server` takes
+  and `take_cable` transfers idle connections without closing the port.
+  Legacy borrowers use `vacate` to free the port first. `server` takes
   what a borrower passes on of the server's hello (Loan.note_server), with
   the borrower's name, on this thread.
   """
 
   def __init__(self, lendable: Callable[[], bool], bounce: Callable[[], bool],
                path: Path | None = None, cable: Callable[[], bool] | None = None,
-               vacate: Callable[[], None] | None = None, server: Callable[[str, dict], None] | None = None):
+               vacate: Callable[[], None] | None = None, server: Callable[[str, dict], None] | None = None,
+               take_cable: Callable[[], socket.socket | None] | None = None):
     self._lendable = lendable
     self._bounce = bounce
     self._cable = cable or (lambda: False)
     self._vacate = vacate or (lambda: None)
     self._server = server
+    self._take_cable = take_cable
+    self._brokered = False
     # what this borrower was last told it has, so each change is logged once
     self._told = ''
     # as it is when made, for the same reason as borrow's
@@ -565,6 +643,7 @@ class Lender:
                              'cable link' if self._told == 'cable' else 'gadget')
         # the owner's step listens for the phone again, now that the port is free
         self._told = ''
+        self._brokered = False
         self._lent.clear()
         self.borrower = ''
 
@@ -594,12 +673,13 @@ class Lender:
       self.borrower = str(msg.get('name') or 'a borrower')
       self._lent.set()
       if self._cable():
-        # a phone: the link is its dial, which the borrower listens for
-        # itself; the owner's listener and the dial it holds go first, so the
-        # port is free when this answer lands. The endpoint files stay put
-        self._vacate()
+        # Negotiate only the local lease protocol: host wire protocol is unchanged.
+        # A legacy borrower still owns its listener; new ones request dials.
+        self._brokered = msg.get('socket_handoff') is True and self._take_cable is not None
+        if not self._brokered:
+          self._vacate()
         self._tell('cable', "jetlink: lending the cable link to %s", self.borrower)
-        _send(conn, {'ok': True, 'cable': True, 'udc': gadget.bound_udc() or '', 'mount': str(gadget.FFS_MOUNT)})
+        _send(conn, {'ok': True, 'cable': True, 'socket_handoff': self._brokered, 'udc': gadget.bound_udc() or '', 'mount': str(gadget.FFS_MOUNT)})
         return
       udc = gadget.bound_udc()
       if not (udc and self._lendable()):
@@ -609,6 +689,21 @@ class Lender:
         return
       self._tell('gadget', "jetlink: lending the gadget to %s, udc %s", self.borrower, udc)
       _send(conn, {'ok': True, 'udc': udc, 'mount': str(gadget.FFS_MOUNT)})
+    elif op == 'accept' and self._brokered:
+      try:
+        sock = self._take_cable()
+      except Exception:
+        # a phone's trouble is never worth the lease: the borrower asks again
+        gadget.log.exception("jetlink: could not take the phone's dial")
+        sock = None
+      try:
+        if sock is None:
+          conn.sendall(b'0')
+        else:
+          socket.send_fds(conn, [b'1'], [sock.fileno()])
+      finally:
+        # close, never shutdown: the receiver now owns the same TCP session.
+        _close(sock)
     elif op == 'bounce':
       gadget.log.warning("jetlink: %s asked for a gadget bounce", self.borrower)
       _send(conn, {'ok': bool(self._bounce())})

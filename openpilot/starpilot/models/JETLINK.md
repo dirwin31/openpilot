@@ -23,7 +23,7 @@ that StarPilot has switched to it. Set up parked, with both devices online.
 The host program is the upstream **Jetlink** application, developed by Zeph
 Leggett / ZoomPilot. Its download identifiers and commands keep their upstream
 names; installing the host does not require installing ZoomPilot on the comma.
-The bundled client uses Jetlink protocol 3 (package 0.8.3). A different host
+The bundled client uses Jetlink protocol 3 (StarPilot runtime 0.8.6+starpilot.1). A different host
 release still needs a successful compatible handshake and device validation.
 
 ### Jetson and Linux PC
@@ -65,6 +65,16 @@ Use a recent USB 3-capable Android 12+ phone, a powered USB 3 hub, and separate
 comma power. Choose **USB computer** in StarPilot. Follow the host's USB permission
 prompt and benchmark sustained performance before use.
 [Credited Android host reference](https://github.com/zoompilot/jetlink/blob/c17cd5c/docs/android-app.md).
+
+## Connection recovery in the StarPilot 0.8.6 runtime
+
+The chosen device mode is saved. The app can connect before or after the comma
+starts waiting. For iPhone/iPad, the comma keeps its listening port available
+and transfers an idle app connection directly to the preparing or driving
+process. Opening a waiting connection no longer forces the app to redial.
+An ended or interrupted protocol session still reconnects with a fresh handshake.
+Galaxy displays connection guidance separately from model preparation and active
+execution. This runtime keeps protocol 3 and does not require a new host app.
 
 ## Use and recovery
 
