@@ -476,6 +476,7 @@ export const ModelsPage = {
               <label for="gx-jetlink-mode" class="gx-row__label">Remote model connection</label>
               <GalaxySelect id="gx-jetlink-mode" class="gx-field" :value="pendingChoice?.action === 'jetlink' ? pendingChoice.value : status.jetlink.mode" :disabled="!actionAvailable('jetlink')" @change="configureJetlink($event.target.value)">
                 <option value="off">Off</option>
+                <option value="auto" :disabled="!status.jetlink.supported || status.jetlink.chestnut">Automatic</option>
                 <option value="usb" :disabled="!status.jetlink.supported || status.jetlink.chestnut">USB computer</option>
                 <option value="ios" :disabled="!status.jetlink.supported || status.jetlink.chestnut">iPhone / iPad</option>
               </GalaxySelect>
@@ -487,7 +488,7 @@ export const ModelsPage = {
             <p v-if="status.jetlink.reason" class="gx-model-reason">{{ status.jetlink.reason }}</p>
             <p v-if="status.jetlink.chestnut" class="gx-model-reason">Chestnut is connected. Jetlink stays off while Chestnut is fitted.</p>
             <p class="gx-model-reason">Prepared means the remote model is built, not active. The local Small model remains available. Small and Chestnut catalog selections are unchanged.</p>
-            <div v-if="status.jetlink.mode === 'ios'" class="gx-row">
+            <div v-if="status.jetlink.mode === 'ios' || status.jetlink.mode === 'auto'" class="gx-row">
               <span class="gx-row__label">Charge phone over USB</span>
               <button class="gx-btn gx-btn--tonal" type="button" :aria-pressed="status.jetlink.chargePhone" :disabled="!actionAvailable('jetlink')" @click="configureJetlink(status.jetlink.mode, !status.jetlink.chargePhone)">{{ status.jetlink.chargePhone ? 'On' : 'Off' }}</button>
             </div>

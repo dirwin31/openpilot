@@ -7,6 +7,7 @@ a paired capture replays its two transform copies on buffers resolved once and i
 The StarPilot adapter, process lifecycle and diagnostics live in ../openpilot/starpilot/.
 A host configured at high-speed after a late device-side start is reconnected once for super-speed.
 The warp reads its buffers through tinygrad's own host mapping where this tinygrad lacks as_memoryview(force_zero_copy).
+An 'auto' link setting (MODES index 3, Owner.auto_mode) picks the USB or iOS gadget by which kind of host speaks.
 
 StarPilot runtime 0.8.7+starpilot.1 (not an upstream release): persistent cable
 listener with negotiated SCM_RIGHTS handoff of idle app connections, legacy

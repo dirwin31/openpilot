@@ -1,4 +1,4 @@
-"""Published large-model loss uses the same soft-disable event for either owner."""
+"""A chestnut's published large-model loss soft-disables; a Jetlink hand-back to the small model is quiet."""
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -31,7 +31,8 @@ def fixture(chestnut=None):
 
 class TestBigModelStatus(unittest.TestCase):
   def test_failure_edge_restarts_settling_once_until_recovery(self):
-    drive = fixture()
+    drive = fixture(True)
+    drive.sm['deviceState'].chestnutPresent = True
     drive.big_model_ready_t = -1.0
     drive.sm['modelV2'].big = True
     with patch('openpilot.selfdrive.selfdrived.helpers.time.monotonic', side_effect=[50.0, 70.0]) as clock:
@@ -52,17 +53,27 @@ class TestBigModelStatus(unittest.TestCase):
       self.assertEqual(drive.big_model_ready_t, 70.0)
       self.assertEqual(clock.call_count, 2)
 
-  def test_actual_remote_big_then_small_is_soft_disable_without_chestnut_claim(self):
-    drive = fixture()
-    drive.sm['modelV2'].big = True
-    self.assertFalse(drive.update_big_model_status())
-    self.assertTrue(drive.big_model_active)
-    self.assertFalse(drive.big_model_chestnut)
-    drive.sm['modelV2'].big = False
-    self.assertTrue(drive.update_big_model_status())
-    self.assertIn(EventName.bigModelFailed, drive.events.names)
-    self.assertTrue(drive.events.contains(ET.SOFT_DISABLE))
-    self.assertTrue(drive.events.contains(ET.PERMANENT))
+  def test_jetlink_hand_back_to_small_is_quiet(self):
+    for field in ('big', 'alive', 'valid'):
+      with self.subTest(field=field):
+        drive = fixture()
+        drive.sm['modelV2'].big = True
+        self.assertFalse(drive.update_big_model_status())
+        self.assertTrue(drive.big_model_active)
+        self.assertFalse(drive.big_model_chestnut)
+        if field == 'big':
+          drive.sm['modelV2'].big = False
+        else:
+          getattr(drive.sm, field)['modelV2'] = False
+        self.assertFalse(drive.update_big_model_status())
+        self.assertFalse(drive.big_model_active)
+        self.assertNotIn(EventName.bigModelFailed, drive.events.names)
+        self.assertTrue(drive.jetlink_handed_back)
+        # and it can rejoin and hand back again
+        getattr(drive.sm, field if field != 'big' else 'valid')['modelV2'] = True
+        drive.sm['modelV2'].big = True
+        self.assertFalse(drive.update_big_model_status())
+        self.assertTrue(drive.big_model_active)
 
   def test_remote_execution_does_not_inherit_failed_chestnut_startup_marker(self):
     drive = fixture(False)
@@ -73,10 +84,11 @@ class TestBigModelStatus(unittest.TestCase):
     self.assertTrue(drive.update_big_model_status())
     self.assertTrue(drive.events.contains(ET.SOFT_DISABLE))
 
-  def test_stale_or_invalid_remote_output_cannot_clear_failure(self):
+  def test_stale_or_invalid_chestnut_output_cannot_clear_failure(self):
     for field in ('alive', 'valid'):
       with self.subTest(field=field):
-        drive = fixture()
+        drive = fixture(True)
+        drive.sm['deviceState'].chestnutPresent = True
         drive.sm['modelV2'].big = True
         self.assertFalse(drive.update_big_model_status())
         getattr(drive.sm, field)['modelV2'] = False
@@ -102,9 +114,10 @@ class TestBigModelStatus(unittest.TestCase):
         drive.sm['modelV2'].big = True
         self.assertFalse(drive.update_big_model_status())
         self.assertTrue(drive.big_model_active)
-        drive.sm['modelV2'].big = False
-        self.assertTrue(drive.update_big_model_status())
-        self.assertTrue(drive.events.contains(ET.SOFT_DISABLE))
+        drive.sm.valid['modelV2'] = False
+        self.assertFalse(drive.update_big_model_status())
+        self.assertFalse(drive.events.contains(ET.SOFT_DISABLE))
+        drive.sm.valid['modelV2'] = True
         setattr(drive.sm['carControl'], axis, False)
         drive.update_big_model_status()
         self.assertFalse(drive.big_model_active)

@@ -174,6 +174,8 @@ OWNER_LOCK = Path("/dev/shm/jetlink/owner.lock")
 # what the server's last hello said (lending.SERVER_FIELDS), kept apart from
 # the status record so a clean stop leaves it for the next owner
 SERVER = Path("/dev/shm/jetlink/server.json")
+# the 'auto' setting's last host kind that spoke, 'usb' or 'ios', for the next owner this boot
+AUTO = Path("/dev/shm/jetlink/auto.json")
 # how long a host that stopped reading configured still counts as there. The
 # owner holds the gadget for as long as the link is enabled, so presence no
 # longer blinks at every handover; what is left to bridge is a USB3 link
@@ -195,6 +197,15 @@ def write_record(path: Path, record) -> None:
   except BaseException:
     tmp.unlink(missing_ok=True)
     raise
+
+
+def auto_kind() -> str:
+  """The 'auto' setting's last host kind that spoke this boot; 'usb' before any did."""
+  try:
+    record = json.loads(read(AUTO))
+  except (OSError, ValueError):
+    return 'usb'
+  return 'ios' if isinstance(record, dict) and record.get('kind') == 'ios' else 'usb'
 
 
 def clear_leftovers(directory: Path) -> None:

@@ -1,7 +1,7 @@
 """Parked Jetlink selection, its big-model pick and its read-only provisioning status."""
 from __future__ import annotations
 
-MODES = ("off", "usb", "ios")
+MODES = ("off", "usb", "ios", "auto")
 
 
 class JetlinkSettings:
@@ -121,7 +121,7 @@ class JetlinkSettings:
     if "refreshCatalog" in payload and payload["refreshCatalog"] is not True:
       raise ValueError("Invalid Jetlink catalog request")
     if "mode" in payload and payload["mode"] not in MODES:
-      raise ValueError("Choose Off, USB, or iPhone")
+      raise ValueError("Choose Off, Automatic, USB, or iPhone")
     if "chargePhone" in payload and type(payload["chargePhone"]) is not bool:
       raise ValueError("Invalid phone charging setting")
     view = self.snapshot()
