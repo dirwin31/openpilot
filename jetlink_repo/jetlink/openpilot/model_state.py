@@ -74,6 +74,9 @@ TELEMETRY_EVERY = 2
 TELEMETRY_PERIOD = 1.0
 # frames Trips keeps the timings of: a minute at 20 Hz
 TRIPS_KEPT = 1200
+# StarPilot: how often a summary of every frame, by stage, goes to the log
+# (Window), so a drive says which end spends the 50 ms without a slow frame
+WINDOW_PERIOD = 10.0
 
 
 class Trips:
@@ -107,6 +110,43 @@ class Trips:
       whole = sorted(self._whole_ms)
       out.update(p50_ms=round(whole[len(whole) // 2], 1), p99_ms=round(whole[int(0.99 * (len(whole) - 1))], 1),
                  max_ms=round(whole[-1], 1), server_ms=round(sum(self._server_ms) / len(self._server_ms), 1))
+    return out
+
+
+class Window:
+  """Every frame of the last WINDOW_PERIOD by stage, in ms: the warp, packing
+  the inputs, the send, the wait for the reply, the server's own total (frames
+  it answered in time only) and the whole frame. The per-frame log line has
+  only the slow and held ones; this says where a typical frame and its tail go."""
+
+  STAGES = ('warp', 'data', 'send', 'wait', 'server', 'whole')
+
+  def __init__(self, now: float):
+    self.reset(now)
+
+  def reset(self, now: float) -> None:
+    self.started = now
+    self.ms: dict[str, list[float]] = {s: [] for s in self.STAGES}
+    self.frames = 0
+    self.held = 0
+    self.unsent = 0
+
+  def add(self, stages: dict[str, float], held: bool, sent: bool) -> None:
+    self.frames += 1
+    self.held += held
+    self.unsent += not sent
+    for k, v in stages.items():
+      self.ms[k].append(v)
+
+  def summary(self) -> dict:
+    """frames, held, unsent, held_pct, and <stage>_p50/_p99/_max per stage."""
+    out = {'frames': self.frames, 'held': self.held, 'unsent': self.unsent,
+           'held_pct': round(100.0 * self.held / self.frames, 1) if self.frames else 0.0}
+    for k, values in self.ms.items():
+      if values:
+        values = sorted(values)
+        out.update({f'{k}_p50': round(values[len(values) // 2], 2), f'{k}_p99': round(values[int(0.99 * (len(values) - 1))], 2),
+                    f'{k}_max': round(values[-1], 2)})
     return out
 
 
@@ -184,6 +224,7 @@ class JetlinkModelState:
     self._last_logged = 0.0
     self._last_hold_logged = 0.0
     self.trips = Trips()
+    self.window = Window(time.monotonic())
     # the frame prepared and not yet ended, if any
     self._frame: Frame | None = None
     # the newest output parsed, with what it parsed to: a held frame
@@ -282,6 +323,7 @@ class JetlinkModelState:
     self.behind = self._note_hold(held)
     outputs = self._outputs(self.client.last_output if held else model_output)
     self.trips.record(t4 - frame.t0, self.client.last_timings[2])
+    self._note_window(frame, waiting_from, t4, held)
     # a frame past the budget is a dropped camera frame; send against reply
     # says which end it was. Held frames are a steady few on a marginal host,
     # so after the first they go to the log at TELEMETRY_PERIOD
@@ -314,6 +356,34 @@ class JetlinkModelState:
     self.prepare(bufs, transforms, inputs)
     self.send(after_enqueue is not None)
     return self.end(after_enqueue)
+
+  def _note_window(self, frame: Frame, waiting_from: float, t4: float, held: bool) -> None:
+    """This frame into the window, and the window to the log once it spans
+    WINDOW_PERIOD: one line and one jetlinkWindow event, never raising."""
+    stages = {'warp': (frame.t1 - frame.t0) * 1e3, 'data': (frame.t2 - frame.t1) * 1e3,
+              'wait': (t4 - waiting_from) * 1e3, 'whole': (t4 - frame.t0) * 1e3}
+    if frame.seq is not None:
+      stages['send'] = (frame.sent - frame.t2) * 1e3
+    if not held:
+      stages['server'] = self.client.last_timings[2] / 1e3
+    self.window.add(stages, held, frame.seq is not None)
+    now = time.monotonic()
+    if now - self.window.started < WINDOW_PERIOD:
+      return
+    try:
+      s = self.window.summary()
+      t = self.client.t
+      link = 'datagrams' if getattr(t, 'datagrams', False) else type(t).__name__.removesuffix('Transport').lower()
+      replay = getattr(self.warp, 'replay_kind', 'unknown')
+      span = now - self.window.started
+      self._event("jetlinkWindow", span_s=round(span, 1), link=link, warp_replay=replay,
+                  frames_lost=getattr(self.client, 'frames_lost', 0), **s)
+      timings = ' '.join(f"{k} {s[f'{k}_p50']:.1f}/{s[f'{k}_p99']:.1f}" for k in Window.STAGES if f'{k}_p50' in s)
+      self._log.warning("jetlink: last %.0f s, %d frames, %d held (%.1f%%), %d not sent; p50/p99 ms %s; link %s, warp %s",
+                        span, s['frames'], s['held'], s['held_pct'], s['unsent'], timings, link, replay)
+    except Exception:
+      self._log.exception("jetlink: could not summarise the frame window")
+    self.window.reset(now)
 
   @property
   def _can_hold(self) -> bool:

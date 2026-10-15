@@ -54,6 +54,10 @@ OPENPILOT_USER=comma
 # tmpfs on purpose: per-boot state, and the comma's flash is precious
 STATUS_FILE=/dev/shm/jetlink-gadget
 NET_STATUS_FILE=/dev/shm/jetlink-net
+# the device number of a FunctionFS instance detached by teardown while its
+# endpoint files may still be open, and how long teardown waits for them (s)
+FFS_STALE=/dev/shm/jetlink-ffs-stale
+FFS_STALE_WAIT=20
 # pid.codes test allocation; get a real PID before distributing this
 VID=0x1209
 PID=0x0001
@@ -166,6 +170,28 @@ fail() {
   echo "jetlink: $1" >&2
   status "error: $1"
   exit 1
+}
+
+# The pids with a file open on the FunctionFS with device number $1: one find
+# over every process's fds, 0.25 s on a comma four with about 1800 open. A
+# detached instance is in no mount table, so find names its type unknown; a
+# mounted filesystem that reused the number names its own and is not counted.
+ffs_holders() {
+  find -L /proc/[0-9]*/fd -mindepth 1 -maxdepth 1 -printf '%D %F %p\n' 2>/dev/null |
+    awk -v dev="$1" '$1 == dev && ($2 == "functionfs" || $2 == "unknown") { split($3, p, "/"); print p[3] }' |
+    sort -un
+}
+
+# Is a FunctionFS instance teardown detached still held open? The record goes
+# once nothing holds it, so only the first build after a teardown pays the scan.
+ffs_stale_held() {
+  local dev
+  dev=$(cat "$FFS_STALE" 2>/dev/null) || return 1
+  if [[ -n "$dev" && -n "$(ffs_holders "$dev")" ]]; then
+    return 0
+  fi
+  rm -f "$FFS_STALE"
+  return 1
 }
 
 # -- the gadget's network, iOS only -------------------------------------------
@@ -381,6 +407,12 @@ cmd_gadget() {
   echo 0xC0 > configs/c.1/bmAttributes
   echo 8    > configs/c.1/MaxPower
 
+  # A teardown that ran out of time left the old FunctionFS instance pending
+  # behind open endpoint files; a new ffs function beside it oopses the 4.9
+  # kernel, so refuse until its holders are gone (ffs_stale_held)
+  if [[ ! -d "functions/ffs.$FFS_NAME" ]] && ffs_stale_held; then
+    fail "the last FunctionFS instance is still held open (pids $(ffs_holders "$(cat "$FFS_STALE")" | tr '\n' ' ')); not rebuilding until they close"
+  fi
   # the mkdir instantiates the function and registers functionfs, so a kernel
   # genuinely without it fails here
   mkdir -p "functions/ffs.$FFS_NAME" ||
@@ -473,8 +505,25 @@ cmd_teardown() {
   fi
   # A plain umount can block or segfault on a FunctionFS instance whose owner died
   # with endpoints open; lazy-detach unhooks it now and lets the kernel finish.
+  # The instance stays alive while anything holds an endpoint file, so its
+  # device number is kept to find those holders after the detach.
+  if mountpoint -q "$FFS_MOUNT" 2>/dev/null; then
+    { stat -c %d "$FFS_MOUNT" > "$FFS_STALE"; } 2>/dev/null || true
+  fi
   umount -l "$FFS_MOUNT" 2>/dev/null || umount "$FFS_MOUNT" 2>/dev/null || true
   rmdir "$FFS_MOUNT" 2>/dev/null || true
+  # Creating the next ffs function while the old instance is pending oopses the
+  # 4.9 kernel (usb_put_function_instance in function_make; mzdnick/jetlink
+  # 2a9922a), so wait for the holders, bounded inside root.TIMEOUT. One still
+  # held is a failure, and the gadget build refuses until it lets go.
+  local i
+  for ((i = 0; i < FFS_STALE_WAIT; i++)); do
+    ffs_stale_held || break
+    sleep 1
+  done
+  if ffs_stale_held; then
+    fail "gadget torn down, but FunctionFS is still held open (pids $(ffs_holders "$(cat "$FFS_STALE")" | tr '\n' ' ')); the gadget will not be rebuilt until they close"
+  fi
   status "error: gadget torn down"
   net_status "error: gadget torn down"
   echo "jetlink gadget torn down"
@@ -583,7 +632,12 @@ udc_set() {
   for knob in "$PE_PARAMS/usb_compliance_mode" "$UDC_GLUE/usb_compliance_mode"; do
     put "$1" "$knob" "could not set $knob" || failed=1
   done
-  put "$2" "$FFS_LOG_OFF" "could not set $FFS_LOG_OFF" || failed=1
+  # The ring is a kernel build option: a kernel with ipc_logging but no f_fs
+  # ring has no file to switch, which is the ring already off, not a failed
+  # apply (from FOREVERZAX1988/jetlink 86971d7)
+  if [[ -e $FFS_LOG_OFF ]]; then
+    put "$2" "$FFS_LOG_OFF" "could not set $FFS_LOG_OFF" || failed=1
+  fi
   return $failed
 }
 

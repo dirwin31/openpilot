@@ -197,10 +197,13 @@ class Warp:
     self.wait()
     self.output = _zero_copy_view(out, sync=False)
     self._replay = jit.captured
+    # which replay the frames take, for the link's summary: 'full', 'graph' or 'paired'
+    self.replay_kind = 'full'
     if self._device.startswith('QCOM'):
       inputs = (blobs[1].uop.base, self._big_tfm_buf, blobs[0].uop.base, self._tfm_buf)
       try:
         self._replay, self._tfm, self._big_tfm = _graph_alone(jit.captured, inputs)
+        self.replay_kind = 'graph'
       except UnsupportedWarpCapture:
         if not _paired_capture(jit.captured):
           raise
@@ -236,6 +239,7 @@ class Warp:
       self._log.warning('jetlink: warp keeps full captured replay; graph-only optimization unavailable (%s)', e)
       return captured
     self._log.warning('jetlink: warp replays its paired capture directly')
+    self.replay_kind = 'paired'
     return fast
 
   def start(self, frame: int, big_frame: int, tfm, big_tfm) -> None:

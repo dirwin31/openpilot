@@ -226,6 +226,7 @@ class Owner:
     self.auto_wait_scale = 1.0
     self.auto_heard: str | None = None
     self.auto_plugged = False
+    self.port_plugged = False           # a host on the port at the last unpresented step
     self.auto_run_failed = False        # a provisioning run failed during this silence
     self.auto_settled = False           # a host spoke since the cable was last plugged in
     self.last_configured = 0.0
@@ -441,6 +442,9 @@ class Owner:
     self.close_link()
     self.dormant = True
     self.had_host = False
+    # the host on the port now is the one going to sleep: only a plug after
+    # this presents the gadget again (step)
+    self.port_plugged = gadget.port_has_host()
 
   def wake(self) -> None:
     """Present the gadget again. If the Jetson is asleep, the bind wakes it."""
@@ -863,10 +867,23 @@ class Owner:
     # dials over: for iOS the gadget stays up whatever the record says
     sleeps = self.far_end_sleeps() and not self.built_ios
     if self.transport is None:
-      # nothing to do and nothing presented: only worth a bind if the far end
-      # stays awake for it
-      if not sleeps and self.ensure_gadget(ios):
+      # nothing to do and nothing presented: worth a bind if the far end stays
+      # awake for it, or when a host was just plugged in. The record may be
+      # another host's, and one never met says no hello without a gadget to
+      # enumerate, so holding the bind back deadlocks it (FOREVERZAX1988/jetlink
+      # 86971d7). On the plug only: a sleeping Jetson left on the cable still
+      # reads as a host, and binding for that would wake it all night.
+      plugged = gadget.port_has_host()
+      arrived = plugged and not self.port_plugged
+      if (not sleeps or arrived) and self.ensure_gadget(ios):
+        if arrived:
+          gadget.log.warning("jetlink: a host was plugged in, presenting the gadget for it")
+        self.wake()
         self.open_link()
+      elif arrived:
+        # the build failed: the plug is still unanswered, try it next step
+        return
+      self.port_plugged = plugged
       return
     if sleeps and time.monotonic() - self.idle_since >= DORMANT_HOLD:
       self.go_dormant()

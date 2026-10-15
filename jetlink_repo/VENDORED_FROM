@@ -8,6 +8,9 @@ The StarPilot adapter, process lifecycle and diagnostics live in ../openpilot/st
 A host configured at high-speed after a late device-side start is reconnected once for super-speed.
 The warp reads its buffers through tinygrad's own host mapping where this tinygrad lacks as_memoryview(force_zero_copy).
 An 'auto' link setting (MODES index 3, Owner.auto_mode) picks the USB or iOS gadget by which kind of host speaks.
+Teardown waits (bounded) for FunctionFS holders and the gadget build refuses while a detached instance is held (after mzdnick/jetlink 2a9922a).
+A host plugged in while nothing is presented gets the gadget even when the saved record says it sleeps; only the plug edge, so a sleeping Jetson stays asleep (after FOREVERZAX1988/jetlink 86971d7, which also skips a missing f_fs log ring).
+model_state logs a per-10 s frame summary by stage (jetlinkWindow) with the link and the warp's replay path.
 
 StarPilot runtime 0.8.7+starpilot.1 (not an upstream release): persistent cable
 listener with negotiated SCM_RIGHTS handoff of idle app connections, legacy
