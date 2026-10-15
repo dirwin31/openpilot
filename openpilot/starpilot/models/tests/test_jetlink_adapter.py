@@ -49,12 +49,17 @@ def test_small_history_and_current_delay_forwarding():
   assert face.input_queues is small.input_queues
   joined = SimpleNamespace(chestnut=False, lat_delay=0., frame_drop_ratio=0.)
   model = adapter.JetlinkModel(joined, small)
+  assert adapter.adapter().in_control() is True
   model.observe_frame(.23, .004)
   assert joined.lat_delay == .23
   assert joined.frame_drop_ratio == .004
   assert joined.in_control is True
+  assert adapter.adapter().in_control() is True
   model.observe_frame(.2, 0., in_control=False)
   assert joined.in_control is False
+  assert adapter.adapter().in_control() is False
+  model.observe_frame(.2, 0., in_control=None)
+  assert adapter.adapter().in_control() is True
 
 
 def test_chestnut_and_recovery_never_prepare_link():

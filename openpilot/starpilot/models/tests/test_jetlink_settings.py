@@ -221,3 +221,21 @@ class TestCatalogRefresher(unittest.TestCase):
     self.assertNotIn("JetlinkCatalog", params.values)
     now[0] = RETRY_INTERVAL
     self.assertTrue(refresher.due(params))
+
+  def test_new_pin_replaces_old_identity_even_when_catalog_is_unchanged(self):
+    from openpilot.starpilot.models.jetlink_catalog import CatalogRefresher
+    params = MemoryParams()
+    ref, other = "a" * 40, "b" * 40
+    catalog = {"bundles": [bundle(ref, "Mountain Dew Model", 1)]}
+    old = {"oid": "1" * 64, "size": 10}
+    new = {"oid": "2" * 64, "size": 20}
+    params.values["JetlinkPointers"] = {ref: old, other: old}
+    refresher = CatalogRefresher(fetch=lambda: catalog)
+    self.run_refresh(refresher, params)
+    unchanged = params.get("JetlinkCatalog")
+    refresher._fetch = lambda: {**catalog, "pointers": {ref: new, "c" * 40: {"oid": "invalid", "size": 1}}}
+    self.run_refresh(refresher, params)
+    self.assertEqual(refresher.error, "")
+    self.assertEqual(params.get("JetlinkPointers"), {ref: new, other: old})
+    self.assertEqual(params.get("JetlinkCatalog"), unchanged)
+    self.assertNotIn("pointers", params.get("JetlinkCatalog"))

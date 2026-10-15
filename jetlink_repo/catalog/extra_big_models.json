@@ -19,5 +19,11 @@
       },
       "models": []
     }
-  ]
+  ],
+  "pointers": {
+    "6f4c0faf1f85132734e94aa39c67143f823b9324": {
+      "oid": "87fe86ca0813c099efddf9173ba503be2e40ea4c5362c36812a44141f4cb07d4",
+      "size": 792430559
+    }
+  }
 }
