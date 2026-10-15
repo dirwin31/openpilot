@@ -195,6 +195,26 @@ def reason(parts, mode: str) -> str | None:
 
 # -- the snapshot ----------------------------------------------------------------
 
+def connection_detail(mode: str, live: dict | None) -> str:
+  """Connection guidance from the owner's heartbeat, never stale model records."""
+  if mode == 'off':
+    return 'Choose your device type to enable Jetlink.'
+  if live is None:
+    return 'Waiting for the Jetlink connection service.'
+  if live.get('error'):
+    return str(live['error'])
+  if not live.get('present'):
+    return 'Connect your device with a USB 3 data cable and open Jetlink.'
+  if live.get('dormant'):
+    # no enumeration while it sleeps: the udc state below would never settle
+    return 'The connected device is asleep; Jetlink wakes it when it is needed.'
+  if live.get('udc') != 'configured':
+    return 'USB detected; waiting for the device to finish connecting.'
+  if mode == 'ios' and not live.get('peer'):
+    return 'USB connected. Open Jetlink on your unlocked iPhone or iPad and allow Local Network access.'
+  return 'USB connected; checking the app and model readiness.'
+
+
 class Status(NamedTuple):
   """Everything a reader shows, taken at once. Fields are only ever added."""
   enabled: bool                 # the setting is on and no chestnut is fitted
@@ -208,6 +228,7 @@ class Status(NamedTuple):
   model: str | None             # the big model it will run: the pick, else jetlink's default
   default_model: str | None     # jetlink's default, named like the chestnut's (no build date)
   standin: str | None = None    # the last model built, which drives while the pick is not ready
+  connection: str = ''         # actionable connection guidance, independent of model readiness
 
   @property
   def runnable(self) -> bool:
@@ -275,6 +296,7 @@ def read(parts, mode: str) -> Status:
     model=parts.models.selected_model_name(),
     default_model=parts.models.default_model_name(),
     standin=parts.models.name_for(built) if built is not None and not ready else None,
+    connection=connection_detail(mode, live),
   )
 
 
