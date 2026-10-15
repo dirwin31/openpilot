@@ -206,6 +206,10 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
     resources.callback(bookmark_sender.close)
 
     layout.bookmark = lambda: request_bookmark(bookmark_sender, ui_state, layout.native.display_message, time.monotonic_ns())
+    from openpilot.starpilot.system.android_auto.projection_slc_action import SlcActionSender
+    slc_sender = SlcActionSender()
+    resources.callback(slc_sender.close)
+    layout.slc_action = slc_sender.send
     # Confirm only what was really saved: the bookmark the native UI publishes, whichever button asked for it.
     from openpilot.cereal import messaging
     saved_bookmarks = messaging.sub_sock('userBookmark', conflate=True)
