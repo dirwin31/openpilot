@@ -38,9 +38,12 @@ class SpecRecord:
       self.op.log.exception("jetlink: cached spec is unreadable")
       return None
 
-  def store(self, spec) -> None:
+  def store(self, spec, *, source: str | None = None) -> None:
     """The server has built the engine for this spec and answered with it."""
-    self.op.put(self.op.keys.spec, {**spec.to_dict(), 'ready': True})
+    record = {**spec.to_dict(), 'ready': True}
+    if source is not None:
+      record['source'] = source
+    self.op.put(self.op.keys.spec, record)
 
   def engine_ready_for(self, sha256: str | None) -> bool:
     """Has the server built the engine for this model? Params only."""

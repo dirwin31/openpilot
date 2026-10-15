@@ -43,7 +43,7 @@ class JetlinkSettings:
               "present": False, "prepared": False, "active": False, "runtimeState": "unavailable", "state": "unavailable",
               "reason": "Jetlink status is unavailable; the local model remains in use.",
               "progress": "", "model": None, "transport": "USB", "chargePhone": False,
-              "models": [], "selectedRef": "", "runningRef": "", "catalogFetched": False,
+              "models": [], "selectedRef": "", "runningRef": "", "followingApp": True, "catalogFetched": False,
               "catalogRefreshing": False, "catalogError": ""}
 
   def _snapshot(self):
@@ -98,6 +98,7 @@ class JetlinkSettings:
             "transport": status.transport if status is not None else "USB",
             "chargePhone": params.get_bool("JetlinkChargePhone"),
             "models": rows, "selectedRef": jetlink_catalog.picked_ref(params),
+            "followingApp": not bool(jetlink_catalog.picked_ref(params)),
             "runningRef": next((row["ref"] for row in rows if row["running"]), ""),
             "catalogFetched": jetlink_catalog.usable(params.get(jetlink_catalog.CATALOG_KEY)),
             "catalogRefreshing": refresher.running, "catalogError": refresher.error}
@@ -138,6 +139,8 @@ class JetlinkSettings:
     if "model" in payload:
       from openpilot.starpilot.models.jetlink_catalog import select
       name = select(params, payload["model"])
+      if payload["model"] == "":
+        return {"message": "Following the Jetlink app. Select and load a model in the app; StarPilot will use it when ready."}
       return {"message": f"Jetlink will prepare {name} on the remote device while parked. "
                          "The local model drives until it is ready."}
     if payload.get("refreshCatalog"):

@@ -1,11 +1,26 @@
 """Resident FunctionFS owner; release shared resources before waiting on its worker."""
 import signal
+import time
+
+APP_MODEL_POLL = 15.0
 
 
 def owner_class():
   from jetlink.comma import owner as comma_owner, root
 
   class ManagedOwner(comma_owner.Owner):
+    def wanted(self):
+      why = super().wanted()
+      if why is None and self.settings.follow_app() and (self.attached or self._peer is not None):
+        if time.monotonic() >= self.next_worker:
+          return 'checking the app model'
+      return why
+
+    def spawn_worker(self, why):
+      super().spawn_worker(why)
+      if self.settings.follow_app():
+        self.next_worker = time.monotonic() + APP_MODEL_POLL
+
     def stop_worker(self):
       if self.stop or self.settings.mode() == 'off':
         # Mode-off can stop the process before the upstream next poll restores

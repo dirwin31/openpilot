@@ -17,3 +17,7 @@ The standalone StarPilot warp format, build entry point and validated paired
 replay are retained instead of upstream's driving_warp dictionary format.
 Fallback reset supports both native packed state and StarPilot catalog queues.
 The adapter implements API 3 using control state supplied by modeld each frame.
+StarPilot opts into following the host's loaded model when there is no manual
+big-model pick. Protocol 3's existing ENGINE_REQ returns the loaded engine's
+spec with nbytes=0; no host changes, catalog lookup, or upload are needed.
+App observations are tagged in the spec record, separate from manual picks.

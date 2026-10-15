@@ -327,6 +327,31 @@ def stand_in(parts, hello: dict, pick: str, built) -> tuple[str, int] | None:
   return None
 
 
+def follow_app(parts, client, hello: dict, *, should_stop=None):
+  """Ask only for the engine the app reports loaded, with no catalog lookup or upload.
+
+  Protocol 3 accepts a zero byte count when the engine is already loaded and
+  answers with its real spec. An absent/invalid loaded identity means wait for
+  the app, never select a model from its cache or the comma's previous record.
+  """
+  from jetlink.registry.catalog import is_sha256
+  from jetlink.transport.base import LinkError
+  sha256 = hello.get('loaded')
+  if not is_sha256(sha256):
+    parts.spec.clear_ready()
+    parts.progress.report('waiting', 0.0, 'Select and load a model in the Jetlink app')
+    raise LinkError('waiting for a loaded model in the Jetlink app')
+  try:
+    spec = client.ensure_engine(sha256, 0, onnx_path=None, progress=parts.progress.report_with_eta,
+                                should_stop=should_stop)
+  except Exception:
+    parts.spec.clear_ready()
+    parts.progress.report('waiting', 0.0, 'App model unavailable; waiting for the Jetlink app')
+    raise
+  parts.spec.store(spec, source='app')
+  return spec
+
+
 def open_link(parts, link: Link, should_stop=None):
   """Get a client and a spec. Link IO only, so it is safe off modeld's thread;
   everything that touches tinygrad stays in the joining state's build.
@@ -341,7 +366,8 @@ def open_link(parts, link: Link, should_stop=None):
   from jetlink.client import EngineMissing
 
   selected = parts.models.selected_model()
-  if selected is None:
+  following_app = parts.models.follow_app()
+  if selected is None and not following_app:
     raise RuntimeError('no large model has been picked yet')
 
   # the endpoints may still be held by a provisioning run, and the Jetson may still be
@@ -353,6 +379,14 @@ def open_link(parts, link: Link, should_stop=None):
                    hello.get('device'), hello.get('trt_version'),
                    hello.get('engine_state'), str(hello.get('loaded'))[:16])
     link.note_server(hello)
+    following_app = parts.models.follow_app()
+    if following_app:
+      spec = follow_app(parts, client, hello, should_stop=should_stop)
+      client.deadline = INFERENCE_TIMEOUT
+      return client, spec
+    selected = parts.models.selected_model()
+    if selected is None:
+      raise RuntimeError('no large model has been picked yet')
     sha256, nbytes = identity(parts, selected)
     path = parts.models.shipped_model_path()
     built = parts.spec.ready_spec()
@@ -381,6 +415,9 @@ def open_link(parts, link: Link, should_stop=None):
     # is fine and stays on `link`: closing it left a read queued that the next
     # attempt's open had to bounce the gadget for, every 7 s for a whole drive
     # (2026-10-06)
+    if following_app:
+      link.close()
+      raise ModelMissing(str(e)) from e
     parts.spec.clear_ready(sha256)
     raise ModelMissing(str(e)) from e
   except BaseException:

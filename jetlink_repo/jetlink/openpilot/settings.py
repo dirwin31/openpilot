@@ -24,6 +24,7 @@ The standard library only: the owner imports this module.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -93,6 +94,16 @@ class Settings:
     the param is unset or the fork declares none."""
     key = self.keys.charge_phone
     return bool(key) and self.params.get_bool(key) is True
+
+  def follow_app(self) -> bool:
+    if not self.keys.follow_app:
+      return False
+    try:
+      slot = json.loads(self.params.raw(self.keys.big_model) or b'null') if self.keys.big_model else None
+    except (ValueError, TypeError):
+      slot = None
+    ref = slot.get('ref') if isinstance(slot, dict) else None
+    return not (isinstance(ref, str) and ref)
 
   def marks(self) -> dict[str, int]:
     """When each watched param last changed, by key; 0 for one that is unset."""
