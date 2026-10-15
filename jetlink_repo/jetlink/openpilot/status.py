@@ -210,7 +210,7 @@ def connection_detail(mode: str, live: dict | None) -> str:
     return 'The connected device is asleep; Jetlink wakes it when it is needed.'
   if live.get('udc') != 'configured':
     return 'USB detected; waiting for the device to finish connecting.'
-  if mode == 'ios' and not live.get('peer'):
+  if (mode == 'ios' or (mode == 'auto' and live.get('link') == 'cable')) and not live.get('peer'):
     return 'USB connected. Open Jetlink on your unlocked iPhone or iPad and allow Local Network access.'
   return 'USB connected; checking the app and model readiness.'
 

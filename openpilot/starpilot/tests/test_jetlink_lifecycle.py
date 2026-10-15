@@ -31,7 +31,7 @@ class TestJetlinkLifecycle(unittest.TestCase):
     self.addCleanup(hardware.stop)
 
   def test_disabled_or_malformed_mode_never_imports_adapter(self):
-    for mode in (None, 0, -1, 3, True, False, b'1', b'2', b'corrupt'):
+    for mode in (None, 0, -1, 4, True, False, b'1', b'2', b'corrupt'):
       params = SimpleNamespace(get=lambda key, mode=mode: mode)
       with self.subTest(mode=mode), patch.dict(sys.modules, {'openpilot.starpilot.models.jetlink_adapter': None}):
         self.assertFalse(lifecycle.enabled(params))
@@ -124,14 +124,14 @@ class TestJetlinkLifecycle(unittest.TestCase):
       link = Mock()
       link.enabled.return_value = True
       with patch('openpilot.starpilot.models.jetlink_adapter.get_jetlink', return_value=link):
-        for value, mode in ((0, 'off'), (1, 'usb'), (2, 'ios'), (3, 'off'), (-1, 'off')):
+        for value, mode in ((0, 'off'), (1, 'usb'), (2, 'ios'), (3, 'auto'), (4, 'off'), (-1, 'off')):
           with self.subTest(value=value):
             params.put('JetlinkMode', value, block=True)
             self.assertIs(type(params.get('JetlinkMode')), int)
             self.assertEqual(params.get('JetlinkMode'), value)
             self.assertEqual(FileParams(config.params_dir).get_int('JetlinkMode'), value)
             self.assertEqual(settings.mode(), mode)
-            self.assertEqual(lifecycle.enabled(params), value in (1, 2))
+            self.assertEqual(lifecycle.enabled(params), value in (1, 2, 3))
         params.put('JetlinkMode', 1, block=True)
         for device, supported in (('tizi', True), ('mici', True), ('tici', False), ('pc', False)):
           with self.subTest(device=device), patch('openpilot.common.hardware.HARDWARE.get_device_type', return_value=device):

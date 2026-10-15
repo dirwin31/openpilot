@@ -80,6 +80,14 @@ LENDER_BACKOFF = 30.0
 WORKER_BACKOFF = 300.0
 SHUTDOWN_RETRY = 2.0      # a shutdown run that exited with the request still there
 WORKER_GRACE = 10.0
+# 'auto': how long a host that configured us may stay silent before the other
+# gadget is tried, parked only. A phone gets longer, to open the app. Each try
+# that hears nothing doubles the wait, up to AUTO_WAIT_MAX, so a phone with the
+# app closed is not re-plugged every few seconds; a host speaking or the cable
+# coming out starts it over
+AUTO_WAIT_USB = 20.0
+AUTO_WAIT_IOS = 30.0
+AUTO_WAIT_MAX = 300.0
 # between opens of an ep0 that answered EBUSY: a borrower from before this
 # owner started still has the endpoint files, and the open succeeds the moment
 # it lets go. A refused open changes nothing in the kernel, so it is safe to
@@ -208,6 +216,18 @@ class Owner:
     # the last step acted on, when a host last had us configured (presence's
     # hold), when the record was last written, and a failure writing it, said once
     self.mode: str | None = None
+    # 'auto': the gadget for whichever kind of host spoke last (gadget.AUTO
+    # keeps it for the next owner this boot), when the host now configured on
+    # it started its silence, the wait before trying the other, what spoke
+    # since the last step ('usb' a server's hello, 'ios' a phone's dial), and
+    # whether a host was on the cable at the last step
+    self.auto_ios = gadget.auto_kind() == 'ios'
+    self.auto_silent_since: float | None = None
+    self.auto_wait_scale = 1.0
+    self.auto_heard: str | None = None
+    self.auto_plugged = False
+    self.auto_run_failed = False        # a provisioning run failed during this silence
+    self.auto_settled = False           # a host spoke since the cable was last plugged in
     self.last_configured = 0.0
     self.published = 0.0
     self.status_error: str | None = None
@@ -457,6 +477,7 @@ class Owner:
     which outlives this owner: a run with nothing to do never says hello, so
     the next owner would otherwise take an always-on Jetson for one that
     sleeps and let the gadget go until the next drive."""
+    self.auto_heard = 'usb'
     known, self.server = self.server or {}, dict(fields)
     if any(known.get(k) != fields.get(k) for k in ('device', 'sleep_after')) or not known:
       gadget.log.warning("jetlink: %s says the server on %s %s when the gadget goes (sleep_after %s)", borrower,
@@ -483,6 +504,7 @@ class Owner:
     # 0 is a run with nothing left to do; anything else, a crash included, is
     # tried again once WORKER_BACKOFF has passed
     self.unfinished = self.worker.returncode != 0
+    self.auto_run_failed = self.auto_run_failed or self.unfinished
     self.worker = None
     self.shutting_down = False
     # the far end may still be waking; give it the hold before letting go
@@ -640,6 +662,8 @@ class Owner:
   def step(self) -> None:
     # each read is a file; take them once and pass them down
     mode = self.mode = self.settings.mode()
+    if mode == 'auto':
+      mode = self.auto_mode()
     if mode == 'off':
       if self.transport is not None:
         gadget.log.warning("jetlink: disabled, releasing the link")
@@ -674,6 +698,75 @@ class Owner:
       elif self.tuned == 'ios':
         root.run('draw', 'on', timeout=root.PORT_TIMEOUT)
       self.tuned = mode
+
+  def auto_mode(self) -> str:
+    """'usb' or 'ios' for the 'auto' setting: the gadget for whichever kind
+    of host spoke last, and the other one once a host has had us configured
+    and said nothing for its wait. Only parked, where a rebuild is allowed
+    anyway (switch_mode), and never while a phone is dialed in.
+
+    A Jetson, a Mac and an Android phone speak over the vendor interface,
+    which a server's hello proves; an iPhone or iPad dials over the network
+    function, which only the iOS gadget has. Nothing on the cable or in USB
+    PD tells them apart before that: they all host, and Apple's devices all
+    source power."""
+    now = time.monotonic()
+    heard, self.auto_heard = self.auto_heard, None
+    if heard is not None:
+      self.auto_silent_since = None
+      self.auto_wait_scale = 1.0
+      self.auto_settled = True
+      if self.auto_ios != (heard == 'ios'):
+        self.auto_ios = heard == 'ios'
+        gadget.log.warning("jetlink: auto, an %s host spoke; keeping that gadget", 'iOS' if self.auto_ios else 'USB')
+      try:
+        gadget.write_record(gadget.AUTO, {'kind': 'ios' if self.auto_ios else 'usb'})
+      except OSError as e:
+        gadget.log.warning("jetlink: could not keep the auto choice (%s)", e)
+    current = 'ios' if self.auto_ios else 'usb'
+    if not self.settings.offroad():
+      # onroad the gadget stays as it is, and the step reads nothing more
+      self.auto_silent_since = None
+      return current
+    plugged = gadget.port_has_host()
+    if plugged and not self.auto_plugged and self.dormant:
+      # released for a sleeping Jetson: something plugged in since sees no
+      # device until the gadget is presented again
+      self.wake()
+    if not plugged and self.auto_plugged:
+      # unplugged: whatever comes next may be the other kind
+      self.auto_silent_since = None
+      self.auto_wait_scale = 1.0
+      self.auto_run_failed = False
+      self.auto_settled = False
+    self.auto_plugged = plugged
+    talking = heard is not None or self._peer is not None or self.cable.held
+    attached = gadget.host_attached()
+    # once a host spoke on this plug, it is that kind until the cable comes out:
+    # a phone whose app is closed is still a phone
+    if self.auto_settled or not attached or talking or self.built_ios != self.auto_ios or self.shutting_down:
+      if not attached or talking:
+        self.auto_silent_since = None
+        self.auto_run_failed = False
+      return current
+    if self.auto_silent_since is None:
+      self.auto_silent_since = now
+      return current
+    wait = min((AUTO_WAIT_IOS if self.auto_ios else AUTO_WAIT_USB) * self.auto_wait_scale, AUTO_WAIT_MAX)
+    if now - self.auto_silent_since < wait:
+      return current
+    if not self.auto_ios and not self.auto_run_failed:
+      # a run with nothing to do never says hello, so an idle Jetson is silent
+      # too: leave USB only once a run against this host has failed to reach it
+      return current
+    self.auto_ios = not self.auto_ios
+    self.auto_silent_since = None
+    self.auto_run_failed = False
+    self.had_host = False   # the host on the new gadget is a new one: a run goes to meet it
+    self.auto_wait_scale = min(self.auto_wait_scale * 2, AUTO_WAIT_MAX)
+    gadget.log.warning("jetlink: auto, the host on the cable said nothing for %.0f s; trying the %s gadget",
+                       wait, 'iOS' if self.auto_ios else 'USB')
+    return 'ios' if self.auto_ios else 'usb'
 
   def ensure_lender(self) -> None:
     """Listen for borrowers, or say why not and try again later.
@@ -810,6 +903,7 @@ class Owner:
     if peer is not None:
       self.publish(peer)
       gadget.log.warning("jetlink: cable link from %s", peer)
+      self.auto_heard = 'ios'
       self.had_host = True
       self.idle_since = time.monotonic()
       # a reason for a run, unless it is the phone coming back after we hung

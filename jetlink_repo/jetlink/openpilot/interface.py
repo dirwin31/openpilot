@@ -30,9 +30,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-# the Jetlink setting: off; a Jetson, a Linux PC or a Mac on USB; an
-# iPhone on the cable. The INT param holds the index
-MODES = ('off', 'usb', 'ios')
+# the Jetlink setting: off; a Jetson, a Linux PC, a Mac or an Android phone on
+# USB; an iPhone or iPad on the cable; or auto, whichever of the two speaks
+# (comma.owner.Owner.auto_mode). The INT param holds the index
+MODES = ('off', 'usb', 'ios', 'auto')
 # what a joining model reports as big_model_state, by the names of the fork's
 # modelDataV2SP.acceleratorState enum
 STATES = ('none', 'joining', 'retrying', 'ready', 'running', 'unavailable')

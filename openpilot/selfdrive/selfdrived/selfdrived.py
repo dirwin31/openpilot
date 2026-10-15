@@ -149,6 +149,7 @@ class SelfdriveD:
     self.big_model_active = False
     self.big_model_chestnut = False
     self.big_model_failed = False
+    self.jetlink_handed_back = False
     self.big_model_ready_t = 0.
 
     # Setup sockets
@@ -1088,6 +1089,13 @@ class SelfdriveD:
       alerts.append(notification)
     if not recovery.monitor.visible(now_ns):
       clear_event_types.add(RADAR_RECOVERY_EVENT)
+    if getattr(self, 'jetlink_handed_back', False):
+      self.jetlink_handed_back = False
+      notice = Alert("Big Model Lagging", "Small model driving, big model rejoins once disengaged",
+        log.SelfdriveState.AlertStatus.normal, log.SelfdriveState.AlertSize.mid, AlertPriority.LOW,
+        car.CarControl.HUDControl.VisualAlert.none, log.SelfdriveState.AudibleAlert.prompt, 5.)
+      notice.alert_type, notice.event_type = 'jetlinkHandBack/notification', 'jetlinkHandBack'
+      alerts.append(notice)
     if getattr(self, 'aol_fault_reason', 'none') == 'availabilityPause':
       warning = Alert("Steering Paused", "Communication Issue", log.SelfdriveState.AlertStatus.normal,
         log.SelfdriveState.AlertSize.small, AlertPriority.LOW, car.CarControl.HUDControl.VisualAlert.none,

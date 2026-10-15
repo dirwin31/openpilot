@@ -83,6 +83,13 @@ def update_big_model_status(owner) -> bool:
   demoted = owner.big_model_active and fresh and not published_big
   chestnut_lost = owner.big_model_active and owner.big_model_chestnut and not owner.sm['deviceState'].chestnutPresent
   load_mismatch = big_active is True and fresh and not published_big
+  # Jetlink (a big model with no chestnut behind it) hands back to the small model on its own and
+  # rejoins later; the small model keeps driving, so that is not a failure to alert or disengage on.
+  # A one-off chime and banner (selfdrived's update_alerts) says so.
+  if big_active is None and not owner.big_model_chestnut and (demoted or model_unavailable):
+    owner.big_model_active = False
+    owner.jetlink_handed_back = True
+    model_unavailable = demoted = False
   big_failed = (big_active is False and not published_big) or load_mismatch or model_unavailable or demoted or chestnut_lost
   if big_failed and not owner.big_model_failed:
     owner.events.add(log.OnroadEvent.EventName.bigModelFailed)

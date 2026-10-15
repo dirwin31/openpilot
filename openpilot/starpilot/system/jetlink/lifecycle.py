@@ -10,7 +10,7 @@ POWER_ACTIONS = ('DoUninstall', 'DoReboot', 'DoShutdown')
 
 def selected(params) -> bool:
   raw = params.get('JetlinkMode')
-  return type(raw) is int and raw in (1, 2)
+  return type(raw) is int and raw in (1, 2, 3)
 
 
 def enabled(params) -> bool:
