@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from functools import cached_property, lru_cache
 import logging
+import math
 import os
 import time
 import threading
@@ -69,6 +70,9 @@ def runtime_snapshot(record, now_ns, boot_id, start_ticks):
     checkpoint = record.get("model_checkpoint")
     if isinstance(checkpoint, str) and len(checkpoint) <= 256:
       snapshot["model_checkpoint"] = checkpoint
+    latency = record.get("app_latency_ms")
+    if type(latency) in (int, float) and math.isfinite(latency) and latency > 0:
+      snapshot["app_latency_ms"] = latency
   return snapshot
 
 
@@ -245,6 +249,7 @@ class JetlinkModel:
     self._published_state = None
     self._output = None
     self._output_ns = 0
+    self._app_latency_ms = None
     self._runtime_pending = None
     self._runtime_closed = False
     self._runs = 0
@@ -270,6 +275,11 @@ class JetlinkModel:
     if self.chestnut and outputs is not None and client is not None and client.last_output is not self._output:
       self._output = client.last_output
       self._output_ns = time.monotonic_ns()
+      # INFER_RESP reports server processing in microseconds, excluding USB.
+      # Capture only with a new output, never from a held frame or local fallback.
+      timings = getattr(client, "last_timings", ())
+      total_us = timings[2] if isinstance(timings, (tuple, list)) and len(timings) == 3 else None
+      self._app_latency_ms = total_us / 1000 if type(total_us) in (int, float) and math.isfinite(total_us) and total_us > 0 else None
     self.publish_runtime()
     return outputs
 
@@ -301,6 +311,8 @@ class JetlinkModel:
                             "max_ms": self._max_run_ns / 1e6, "over_50ms": self._slow_runs,
                             "frame_drop_ratio": getattr(self.joined, "frame_drop_ratio", 0.0)}
     if self.chestnut and not closed:
+      if self._app_latency_ms is not None and 0 < self._output_ns <= now and now - self._output_ns <= 250_000_000:
+        record["app_latency_ms"] = self._app_latency_ms
       spec = self.joined.spec
       record["artifact_sha256"] = spec.sha256
       record["artifact_nbytes"] = spec.nbytes

@@ -28,7 +28,9 @@ FAVORITE_SIZE = (320, 110)
 FAVORITE_ICON_SIZE = 110
 CAR_EXIT_SIZE = (96, 96)
 CAR_EXIT_MIN_OPACITY = 25
-PROJECTION_WIDGETS = (NAV_CARD, NAV_MAP, *DISPLAY_WIDGETS, STOPPED_TIMER_WIDGET, CAR_EXIT)
+JETLINK_WIDGET = 'jetlink_status'
+JETLINK_SIZE = (440, 160)
+PROJECTION_WIDGETS = (NAV_CARD, NAV_MAP, *DISPLAY_WIDGETS, STOPPED_TIMER_WIDGET, JETLINK_WIDGET, CAR_EXIT)
 NAV_CARD_SIZE = (560, 195)
 MAP_MIN_SIZE = (280, 200)
 MAP_OPACITY = (15, 100, 50)  # percent: min, max, default
@@ -105,6 +107,10 @@ def layout_metadata_for_viewport(viewport):
                               'iconSize': FAVORITE_ICON_SIZE,
                               'note': 'Save a bookmark in the current drive recording.',
                               'default': {'x': width - 30 - FAVORITE_SIZE[0], 'y': 155, 'enabled': False, 'display': 'words'}}
+  widgets[JETLINK_WIDGET] = {'label': 'Jet Link status', 'kind': JETLINK_WIDGET,
+                             'width': JETLINK_SIZE[0], 'height': JETLINK_SIZE[1], 'colors': {},
+                             'note': 'Shown while Jet Link is enabled. Shows device mode, connection and app processing latency (excludes USB transfer).',
+                             'default': {'x': 30, 'y': 650, 'enabled': False}}
   exit_w, exit_h = CAR_EXIT_SIZE
   widgets[CAR_EXIT] = {'label': 'Exit to car', 'kind': CAR_EXIT, 'width': exit_w, 'height': exit_h, 'colors': {},
                        'required': True, 'frontmost': True,
@@ -117,7 +123,7 @@ def layout_metadata_for_viewport(viewport):
   # Background opacity for the cruise and speed-limit card; its text stays solid.
   widgets['cruise_limits'].update(opacity={'min': 0, 'max': 100, 'default': 100})
   widgets['cruise_limits']['default'].update(opacity=100)
-  profile["widgetOrder"] = [NAV_MAP, *profile["widgetOrder"], STOPPED_TIMER_WIDGET, NAV_CARD, *DISPLAY_WIDGETS, CAR_EXIT]
+  profile["widgetOrder"] = [NAV_MAP, *profile["widgetOrder"], STOPPED_TIMER_WIDGET, NAV_CARD, *DISPLAY_WIDGETS, JETLINK_WIDGET, CAR_EXIT]
   return profile
 
 

@@ -189,6 +189,12 @@ export const LayoutWidgetPreview = {
           :font-size="profile === 'large' ? 48 : 21" font-weight="600"
           style="filter: drop-shadow(2px 2px 1px #000000aa)">{{ clock24Hour ? '18:00' : '12:00 PM' }}</text>
       </template>
+      <g v-else-if="widget.kind === 'jetlink_status'">
+        <rect x="1" y="1" :width="widget.width - 2" :height="widget.height - 2" rx="16" fill="#0f0d17f5" stroke="#46c86e" stroke-width="3" />
+        <text x="16" y="42" font-size="33.5" font-weight="600" fill="#46c86e">Jet Link: iPhone</text>
+        <text x="16" y="92" font-size="39.7" font-weight="600" fill="#46c86e">Link up</text>
+        <text x="16" y="139" font-size="31" fill="#46c86e">App latency: 24.6 ms</text>
+      </g>
       <template v-else-if="widget.kind === 'speed_limit'">
         <rect x="10" y="8" width="100" height="116" rx="14" fill="none" stroke="white" stroke-width="2" />
         <text x="60" y="18" dominant-baseline="text-before-edge" text-anchor="middle" font-size="20" font-weight="600" fill="white">SPEED</text>
@@ -400,10 +406,12 @@ export const OnroadLayoutPage = {
     projectionHasPipWidget() {
       return ["pip_left", "pip_right"].some(id => this.state.draft?.layouts?.large?.[id]?.enabled === true)
     },
-    widgets() { return Object.entries(this.profile?.widgets || {}).map(([id, widget]) => ({ id, ...widget })) },
+    widgets() { return Object.entries(this.profile?.widgets || {})
+      .filter(([id, widget]) => widget.available !== false || this.layout?.[id]?.enabled)
+      .map(([id, widget]) => ({ id, ...widget })) },
     layerWidgets() {
       return orderedWidgetIds(this.state.draft, this.state.data.metadata, this.state.profile)
-        .slice().reverse().map(id => this.widgets.find(widget => widget.id === id)).filter(widget => this.layout[widget.id].enabled)
+        .slice().reverse().map(id => this.widgets.find(widget => widget.id === id)).filter(widget => widget && this.layout[widget.id].enabled)
     },
     listWidgets() { return this.state.layerDrag ? this.state.layerDrag.rows.map(id => this.widgets.find(widget => widget.id === id)) : this.layerWidgets },
     selectionBox() {
@@ -431,7 +439,8 @@ export const OnroadLayoutPage = {
         }
       })
     },
-    inactiveWidgets() { return this.widgets.filter(({ id }) => !this.layout[id].enabled || (this.state.drag?.fromTray && this.state.drag.id === id)) },
+    inactiveWidgets() { return this.widgets.filter(({ id, available }) => available !== false &&
+      (!this.layout[id].enabled || (this.state.drag?.fromTray && this.state.drag.id === id))) },
     availableProfiles() { return this.state.data?.supportedProfiles || (this.state.data?.activeProfile ? [this.state.data.activeProfile] : []) },
     selectedWidget() { return this.profile?.widgets[this.state.selected] },
     selectedPosition() { return this.layout?.[this.state.selected] },
@@ -780,7 +789,7 @@ export const OnroadLayoutPage = {
       this.state.notice = ""
     },
     add(id) {
-      if (!this.editable || this.state.drag || !Object.hasOwn(this.profile.widgets, id)) return
+      if (!this.editable || this.state.drag || !Object.hasOwn(this.profile.widgets, id) || this.profile.widgets[id].available === false) return
       const before = clone(this.state.draft)
       this.layout[id].enabled = true
       if (this.sceneHidden(id)) this.state.scene = "general"
@@ -944,6 +953,7 @@ export const OnroadLayoutPage = {
     },
     startDrag(id, event, fromTray = false) {
       if (!this.editable || event.button > 0 || this.state.drag || !Object.hasOwn(this.profile.widgets, id)) return
+      if (fromTray && this.profile.widgets[id].available === false) return
       if (fromTray && this.sceneHidden(id)) this.state.scene = "general"
       const point = previewPoint(event, this.$refs.preview.getBoundingClientRect(), this.profile)
       if (!point) return

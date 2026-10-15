@@ -197,6 +197,7 @@ export function validSnapshot(data) {
         zone.x + zone.width > bounds.x + bounds.width || zone.y + zone.height > bounds.y + bounds.height) return false
     }
     for (const widget of Object.values(profile.widgets)) {
+      if (widget.available != null && (!projection || widget.kind !== "jetlink_status" || typeof widget.available !== "boolean")) return false
       const area = widget.bounds || bounds
       if (widget.visualInsetTop != null && (!Number.isFinite(widget.visualInsetTop) || widget.visualInsetTop < 0 || widget.visualInsetTop > area.height)) return false
       if (!object(widget.colors) || !Object.entries(widget.colors).every(([key, value]) =>
