@@ -18,9 +18,14 @@ def configure_gpu(params, *, device_type: str, chestnut=False, recovery=False) -
   return True
 
 
+CONTROLS = ['selfdriveState', 'carControl']
+
+
 def in_control(sm) -> bool:
   # Unknown or stale controls must never permit a model swap. Read modeld's
   # existing frame snapshot rather than starting another subscription thread.
-  return (not sm.all_checks(['selfdriveState', 'carControl']) or
+  # Not all_checks: modeld's conflated sockets see these 100 Hz services at
+  # its own 20 Hz, so their frequency check never passes and the swap never came
+  return (not (sm.all_alive(CONTROLS) and sm.all_valid(CONTROLS)) or
           sm['selfdriveState'].enabled or sm['selfdriveState'].active or
           sm['carControl'].latActive or sm['carControl'].longActive)

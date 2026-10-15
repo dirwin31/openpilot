@@ -34,9 +34,13 @@ class Controls:
     self.messages = {'selfdriveState': SimpleNamespace(enabled=False, active=False),
                      'carControl': SimpleNamespace(latActive=False, longActive=False)}
 
-  def all_checks(self, services):
+  def all_alive(self, services):
     assert services == ['selfdriveState', 'carControl']
     return self.fresh
+
+  def all_valid(self, services):
+    assert services == ['selfdriveState', 'carControl']
+    return True
 
   def __getitem__(self, key):
     return self.messages[key]
@@ -52,6 +56,31 @@ def test_swap_is_blocked_for_any_control_axis_and_unknown_engagement():
     setattr(controls[service], field, False)
   controls.fresh = False
   assert in_control(controls)
+
+
+def modeld_controls(*, valid=True):
+  # modeld's own SubMaster, read once a frame at 20 Hz while the controls publish at 100 Hz
+  import openpilot.cereal.messaging as messaging
+  sm = messaging.SubMaster(['carState', 'selfdriveState', 'carControl'])
+  for frame in range(200):
+    msgs = []
+    for service in ('carState', 'selfdriveState', 'carControl'):
+      msg = messaging.new_message(service)
+      msg.valid = valid
+      msgs.append(msg.as_reader())
+    sm.update_msgs(frame * 0.05, msgs)
+  return sm
+
+
+def test_disengaged_controls_read_at_modelds_rate_allow_the_swap():
+  assert not in_control(modeld_controls())
+
+
+def test_invalid_or_silent_controls_block_the_swap():
+  assert in_control(modeld_controls(valid=False))
+  sm = modeld_controls()
+  sm.update_msgs(10.0 + 1.0, [])
+  assert in_control(sm)
 
 
 def model_holds():
