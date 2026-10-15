@@ -1,4 +1,5 @@
 import os
+import pytest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -91,6 +92,50 @@ def test_runtime_requires_fresh_same_boot_and_process():
                   {"mono_ns": 3_000_000_001}, {"remote_output_mono_ns": 0}, {"state": "ready"}):
     assert not adapter.runtime_snapshot(record | changes, 3_000_000_000, "boot", 12)["active"]
   assert not adapter.runtime_snapshot(record, 3_500_000_001, "boot", 12)["active"]
+
+
+@pytest.mark.parametrize('latency,expected', [(24.6, 24.6), (1, 1), (0, None), (-1, None), (True, None),
+                                             ('24.6', None), (float('nan'), None), (float('inf'), None), (None, None)])
+def test_runtime_latency_requires_valid_fresh_remote_output(latency, expected):
+  record = {"version": 1, "boot_id": "boot", "session": "a" * 32, "pid": os.getpid(), "process_start_ticks": 12,
+            "artifact_sha256": "b" * 64, "mono_ns": 2_000_000_000, "remote_output_mono_ns": 1_999_000_000,
+            "state": "running", "app_latency_ms": latency}
+  assert adapter.runtime_snapshot(record, 3_000_000_000, 'boot', 12).get('app_latency_ms') == expected
+  for changes in ({'state': 'ready'}, {'remote_output_mono_ns': 0}, {'remote_output_mono_ns': 1_000_000_000},
+                  {'boot_id': 'old'}, {'process_start_ticks': 11}):
+    assert 'app_latency_ms' not in adapter.runtime_snapshot(record | changes, 3_000_000_000, 'boot', 12)
+  assert 'app_latency_ms' not in adapter.runtime_snapshot(record, 3_500_000_001, 'boot', 12)
+
+
+def test_runtime_publishes_reply_processing_time_and_clears_on_fallback():
+  client = SimpleNamespace(last_output=object(), last_timings=(20_000, 600, 24_600))
+  joined = SimpleNamespace(chestnut=True, client=client, big_model_state='running', handovers=0, close=Mock(),
+                           spec=SimpleNamespace(sha256='b' * 64, nbytes=123, checkpoint='remote'),
+                           run=lambda *args: {'remote': True})
+  op = Mock()
+  with patch.object(adapter, 'adapter', return_value=op), patch.object(adapter.JetlinkModel, '_write_runtime'):
+    model = adapter.JetlinkModel(joined, object())
+    try:
+      assert model.run({}, {}, {}) == {'remote': True}
+      assert model._runtime_pending['app_latency_ms'] == 24.6
+      # Holding the same reply must not refresh its timestamp or latency.
+      output_ns = model._output_ns
+      client.last_timings = (1, 1, 99_000)
+      model.run({}, {}, {})
+      assert model._output_ns == output_ns
+      assert model._app_latency_ms == 24.6
+      # A fresh reply updates the timing, while a local fallback removes it.
+      client.last_output = object()
+      model.run({}, {}, {})
+      assert model._app_latency_ms == 99.0
+      joined.chestnut = False
+      joined.big_model_state = 'retrying'
+      model.run({}, {}, {})
+      assert 'app_latency_ms' not in model._runtime_pending
+      model.close()
+      assert 'app_latency_ms' not in model._runtime_pending
+    finally:
+      model._runtime_thread.join(1)
 
 
 def test_handover_action_contract_tracks_actual_driver():

@@ -46,6 +46,7 @@ def native_dependencies():
   from openpilot.starpilot.ui.runtime_snapshot import RuntimeSnapshotAdapter, current_message, display_message
   from openpilot.starpilot.ui.shell import ShellMode
   from openpilot.starpilot.system.android_auto.projection_favorites import ProjectionFavorites
+  from openpilot.starpilot.system.android_auto.projection_jetlink import ProjectionJetlinkFeed
 
   class ProjectionRoadCamera(AugmentedRoadView):
     """Current native calibrated camera/model without stock action widgets."""
@@ -106,7 +107,7 @@ def native_dependencies():
                          shell_mode=ShellMode, pip_renderer=PiPRenderer, read_pip=read_pip, pip_signals=Signals,
                          pip_rect=Rect, pip_widgets=CAMERA_WIDGETS, placement=placement, widget_size=widget_size,
                          alert=OnroadAlert, alert_size=AlertSize, map_overlay=MapOverlay, map_feed=MapFeed,
-                         favorites=ProjectionFavorites, standby_logo=standby_logo)
+                         favorites=ProjectionFavorites, standby_logo=standby_logo, jetlink_feed=ProjectionJetlinkFeed)
 
 
 class ProjectionOnroad:
@@ -146,6 +147,10 @@ class ProjectionOnroad:
       self._resources.callback(self._close_camera)
       self.onroad = self.create_view(native.onroad, self.fonts, camera_layer=self._camera_layer, viewport=viewport)
       self._resources.callback(self._close_onroad)
+      self.jetlink_feed = None
+      if getattr(native, 'jetlink_feed', None) is not None:
+        self.jetlink_feed = native.jetlink_feed(native.ui_state.params)
+        self._resources.callback(self.jetlink_feed.close)
       self.exit = ProjectionExit(native.rl, lambda: self.native_focus())
       self.onroad.projection_exit_layer = self.exit.render
       self.monitor = native.monitor(native.profile.LARGE)
@@ -286,6 +291,10 @@ class ProjectionOnroad:
   def prepare(self):
     """Before the frame's render target is bound: offscreen map work happens here."""
     self._check_layout()
+    if self.jetlink_feed is not None:
+      placed = (self.customization or {}).get('widgets', {}).get('jetlink_status', {})
+      self.jetlink_feed.set_enabled(bool(placed.get('enabled') and self.native.ui_state.started))
+      self.onroad.jetlink_status.status = self.jetlink_feed.snapshot()
     if self.favorites is not None:
       self.favorites.refresh()
       self.onroad.navigation_favorites.document = self.favorites.document
