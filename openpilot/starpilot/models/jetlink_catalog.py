@@ -158,6 +158,7 @@ class CatalogRefresher:
       stored = stored if usable(stored) else {}
       fetched = (self._fetch or fetch_catalogs)()
       merged = merge_catalogs([stored, fetched] if stored else [fetched], selector=_selector())
+      merged.pop("pointers", None)  # pins are kept under POINTERS_KEY, never in the catalog
       if not usable(merged):
         raise ValueError("the fetched catalog lists no Jetlink models")
       pins = pinned_pointers(fetched)
