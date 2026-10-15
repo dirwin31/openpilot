@@ -60,13 +60,17 @@ def picked_ref(params) -> str:
   return ref if isinstance(ref, str) else ""
 
 
-def running_ref(rows: list[dict], pick: str) -> str:
-  """The ref Jetlink prepares: the pick, else its default when listed, else the newest."""
-  from jetlink.registry.catalog import DEFAULT_BIG_MODEL_REF
-  if pick:
-    return pick
-  refs = [row["ref"] for row in rows]
-  return DEFAULT_BIG_MODEL_REF if DEFAULT_BIG_MODEL_REF in refs or not refs else refs[0]
+def app_model_ref(params) -> str:
+  """Name the last observed app model only when a known pointer matches its hash."""
+  record, pointers = params.get("JetlinkSpec"), params.get(POINTERS_KEY)
+  if (not isinstance(record, dict) or record.get("source") != "app" or record.get("ready") is not True or
+      not isinstance(pointers, dict)):
+    return ""
+  oid = record.get("sha256")
+  from jetlink.registry.catalog import is_sha256
+  if not is_sha256(oid):
+    return ""
+  return next((ref for ref, pointer in pointers.items() if isinstance(pointer, dict) and pointer.get("oid") == oid), "")
 
 
 def downloaded(params, model_root: Path, ref: str) -> bool:
@@ -91,7 +95,7 @@ def rows(params, *, model_root: Path, ready: bool, model_state=None) -> list[dic
     if bundle["ref"] not in seen:
       seen.add(bundle["ref"])
       listed.append({"ref": bundle["ref"], "name": str(bundle.get("display_name") or bundle["ref"][:10])})
-  running = running_ref(listed, pick)
+  running = pick or app_model_ref(params)
   for row in listed:
     state = None
     if model_state is not None:
@@ -109,10 +113,10 @@ def rows(params, *, model_root: Path, ready: bool, model_state=None) -> list[dic
 
 
 def select(params, ref: str) -> str:
-  """Save the pick by catalog ref; '' returns to Jetlink's default. Returns its name."""
+  """Save a manual override; '' resumes following the app without saving a pick."""
   if ref == "":
     params.remove(PICK_KEY)
-    return "the default model"
+    return "the app model"
   row = next((b for b in _bundles(effective_catalog(params.get(CATALOG_KEY))) if b["ref"] == ref), None)
   if row is None:
     raise ValueError("Unknown Jetlink model")

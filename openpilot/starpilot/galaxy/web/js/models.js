@@ -404,7 +404,7 @@ export const ModelsPage = {
       await this.jetlinkRequest({ mode, chargePhone }, { action: "jetlink", value: mode })
     },
     async selectJetlinkModel(model) {
-      await this.jetlinkRequest({ model: model.default ? "" : model.ref },
+      await this.jetlinkRequest({ model: model.ref },
         { action: "jetlink-model", value: model.ref })
     },
     async jetlinkRequest(payload, pending = null) {
@@ -496,7 +496,15 @@ export const ModelsPage = {
                 <span class="gx-row__label">Remote big model</span>
                 <button class="gx-btn gx-btn--tonal" type="button" :disabled="!actionAvailable('jetlink') || status.jetlink.catalogRefreshing" @click="jetlinkRequest({ refreshCatalog: true })"><i aria-hidden="true" class="bi" :class="status.jetlink.catalogRefreshing ? 'bi-arrow-repeat gx-spin' : 'bi-arrow-clockwise'"></i> Check for models</button>
               </div>
-              <p v-if="!status.jetlink.catalogFetched" class="gx-model-reason">{{ status.jetlink.catalogRefreshing ? 'Fetching the Jetlink model list…' : 'Only the default model is listed until the model list has been fetched.' }}</p>
+              <div class="gx-panel gx-cluster">
+                <div class="gx-grow">
+                  <strong>Follow Jetlink app</strong>
+                  <p class="gx-note">Use the model loaded in the connected app. Changes are detected while parked or reconnecting.</p>
+                </div>
+                <span v-if="pendingChoice?.action === 'jetlink-model' ? pendingChoice.value === '' : status.jetlink.followingApp" class="gx-chip gx-chip--selected">Selected</span>
+                <button v-else class="gx-btn gx-btn--tonal" type="button" :disabled="!actionAvailable('jetlink')" @click="selectJetlinkModel({ ref: '' })">Use</button>
+              </div>
+              <p v-if="!status.jetlink.catalogFetched" class="gx-model-reason">{{ status.jetlink.catalogRefreshing ? 'Fetching the Jetlink model list…' : 'Fetch the model list to see more StarPilot overrides. Following the app works without it.' }}</p>
               <p v-if="status.jetlink.catalogError" class="gx-model-reason">{{ status.jetlink.catalogError }}</p>
               <div v-for="m in status.jetlink.models || []" :key="m.ref" class="gx-panel gx-cluster">
                 <div class="gx-grow">
@@ -506,10 +514,11 @@ export const ModelsPage = {
                     <span v-if="jetlinkModelState(m)" class="gx-chip">{{ jetlinkModelState(m) }}</span>
                   </div>
                 </div>
-                <span v-if="pendingChoice?.action === 'jetlink-model' ? pendingChoice.value === m.ref : m.running" class="gx-chip gx-chip--selected">Selected</span>
+                <span v-if="status.jetlink.followingApp && m.running" class="gx-chip">From app</span>
+                <span v-if="pendingChoice?.action === 'jetlink-model' ? pendingChoice.value === m.ref : m.selected" class="gx-chip gx-chip--selected">Selected</span>
                 <button v-else class="gx-btn gx-btn--tonal" type="button" :disabled="!actionAvailable('jetlink')" :aria-label="'Use ' + m.name + ' for Jetlink'" @click="selectJetlinkModel(m)"><i aria-hidden="true" class="bi bi-play-fill"></i> Use</button>
               </div>
-              <p class="gx-model-reason">A new choice is downloaded and built on the remote device while parked, which can take several minutes. The local model drives until it is ready.</p>
+              <p class="gx-model-reason">A StarPilot override is downloaded and built on the remote device while parked, which can take several minutes. The local model drives until it is ready.</p>
             </div>
             <p class="gx-model-reason">Set up parked with a USB 3 data cable and separate power. Keep the computer awake; keep the iPhone app open and unlocked.</p>
             <a href="https://github.com/firestar5683/StarPilot/blob/StarPilot/openpilot/starpilot/models/JETLINK.md" target="_blank" rel="noopener noreferrer">Jetlink setup guides</a>

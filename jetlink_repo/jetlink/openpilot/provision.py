@@ -150,6 +150,10 @@ class ProvisioningRun:
     fetched then."""
     from jetlink.client import EngineMissing
     parts = self.parts
+    if parts.models.follow_app():
+      link.follow_app(parts, self.client, self.hello(), should_stop=lambda: self.stop)
+      parts.progress.report('ready', 1.0, 'App model ready')
+      return True
     entry = parts.models.selected_model()
     if entry is None:
       # no catalog yet; not an error
@@ -202,6 +206,8 @@ class ProvisioningRun:
 
   def has_work(self) -> bool:
     """Is there a reason to wake the Jetson? Only things the link can fix count."""
+    if self.parts.models.follow_app():
+      return True  # a new connection may have a different model, even with a ready spec
     spec = self.parts.spec.load()
     if spec is None or not self.parts.spec.engine_ready_for(spec.sha256):
       return True
@@ -271,7 +277,7 @@ class ProvisioningRun:
     try:
       # the bytes first, and with no Jetson: a parked car whose Jetson is
       # switched with the ignition never has one to wait for (2026-10-06)
-      if self.needs_download() and self.fetch_model() is None:
+      if not self.parts.models.follow_app() and self.needs_download() and self.fetch_model() is None:
         return False
       if not self.open_link():
         return False
@@ -283,7 +289,8 @@ class ProvisioningRun:
       finished = self.provision()
     except Exception:
       self.log.exception("jetlink: provisioning failed")
-      self.parts.progress.report('failed', 1.0, 'see the log')
+      if not self.parts.models.follow_app():
+        self.parts.progress.report('failed', 1.0, 'see the log')
     finally:
       self.close_link()
     return finished

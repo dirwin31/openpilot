@@ -35,7 +35,7 @@ def keys():
   # Galaxy's Jetlink picker writes big_model; jetlink_catalog keeps catalog.
   return Keys(link="JetlinkMode", offroad="IsOffroad", progress="JetlinkProgress", spec="JetlinkSpec",
               pointers="JetlinkPointers", big_model="JetlinkBigModel", catalog="JetlinkCatalog",
-              charge_phone="JetlinkChargePhone")
+              charge_phone="JetlinkChargePhone", follow_app=True)
 
 
 def process_start_ticks(pid):

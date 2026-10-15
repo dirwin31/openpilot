@@ -270,14 +270,17 @@ await linkManagement.reply(2, { ...managerPayload, ...jetlinkView, jetlink: { mo
 await linkSelection
 assert.equal(linkManagement.manager.data.jetlink.mode, "ios")
 linkManagement.manager.stop()
-// The Jetlink picker posts a catalog ref, or "" to follow Jetlink's default.
+// Every catalog row is an override, including the upstream default. Empty follows the app.
 assert.match(ModelsPage.template, /Remote big model/)
+assert.match(ModelsPage.template, /Follow Jetlink app/)
 const jetlinkPicks = []
 const pickerPage = { status: { jetlink: { selectedRef: "a".repeat(40) } }, jetlinkRequest: (payload, pending) => jetlinkPicks.push([payload, pending]) }
 await ModelsPage.methods.selectJetlinkModel.call(pickerPage, { ref: "b".repeat(40), default: false })
 await ModelsPage.methods.selectJetlinkModel.call(pickerPage, { ref: "c".repeat(40), default: true })
+await ModelsPage.methods.selectJetlinkModel.call(pickerPage, { ref: "" })
 assert.deepEqual(jetlinkPicks, [[{ model: "b".repeat(40) }, { action: "jetlink-model", value: "b".repeat(40) }],
-  [{ model: "" }, { action: "jetlink-model", value: "c".repeat(40) }]])
+  [{ model: "c".repeat(40) }, { action: "jetlink-model", value: "c".repeat(40) }],
+  [{ model: "" }, { action: "jetlink-model", value: "" }]])
 assert.equal(ModelsPage.methods.jetlinkModelState({ state: "ready" }), "Built on the remote device")
 assert.equal(ModelsPage.methods.jetlinkModelState({ state: null }), "")
 const modelPick = managerFixture()

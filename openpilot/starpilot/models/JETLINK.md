@@ -11,6 +11,15 @@ that StarPilot has switched to it. Set up parked, with both devices online.
 2. Open **Galaxy → Model Manager → Jetlink**. Choose **USB computer** for a
    Jetson, Mac, Linux PC, or Android host; choose **iPhone / iPad** for an Apple phone or tablet.
    **Off** is the default. These selections are separate from Small and Chestnut models.
+   **Follow Jetlink app** is the default model choice: select and load the model in
+   the host app. StarPilot uses the loaded model reported by the existing protocol;
+   a model still preparing in the app is not visible until it loads. StarPilot
+   checks while parked (about every 15 seconds) and when modeld connects or reconnects.
+   Choosing a catalog model in Galaxy creates a saved StarPilot override. App
+   changes do not replace that override; choose **Follow Jetlink app** to clear it.
+   With no loaded app model, StarPilot waits and keeps using the local model.
+   Following works by model hash without downloading a second copy to the comma;
+   a model absent from the catalog is shown by its checkpoint or hash.
 3. Use a USB 3 data cable. Power the comma and host separately. Every cable,
    hub, and port in the connection must support USB 3. Chestnut takes precedence
    when connected; wireless Android Auto can stay enabled.

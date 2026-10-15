@@ -48,12 +48,15 @@ class Keys:
   pointers: str                  # JSON: catalog ref -> {oid, size}
   # sunnypilot's model manager: the big-model pick, JSON {ref, displayName},
   # and the big-model catalog, JSON {bundles}. Without one both are None, and
-  # jetlink runs its own default big model
+  # jetlink runs its own default big model unless follow_app is enabled
   big_model: str | None = None
   catalog: str | None = None
   # BOOL: an iPhone on a direct cable is asked to charge from the comma
   # (comma.port). Off when unset, and without the key
   charge_phone: str | None = None
+  # With no big_model pick, use the host's loaded model instead of our default.
+  # Opt-in for forks; no change to the host wire protocol.
+  follow_app: bool = False
 
 
 @dataclass(frozen=True)

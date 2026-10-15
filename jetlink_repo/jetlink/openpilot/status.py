@@ -295,7 +295,7 @@ def read(parts, mode: str) -> Status:
     progress=parts.progress.read(),
     model=parts.models.selected_model_name(),
     default_model=parts.models.default_model_name(),
-    standin=parts.models.name_for(built) if built is not None and not ready else None,
+    standin=parts.models.name_for(built) if built is not None and not ready and not parts.models.follow_app() else None,
     connection=connection_detail(mode, live),
   )
 

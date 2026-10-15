@@ -84,9 +84,10 @@ class TestJetlinkSettings(unittest.TestCase):
     view = self.owner.snapshot()
     self.assertFalse(view["catalogFetched"])
     self.assertEqual([row["ref"] for row in view["models"]], [DEFAULT_BIG_MODEL_REF])
-    self.assertEqual(view["runningRef"], DEFAULT_BIG_MODEL_REF)
+    self.assertEqual(view["runningRef"], "")
+    self.assertTrue(view["followingApp"])
     self.assertEqual(view["selectedRef"], "")
-    self.assertEqual(view["models"][0]["state"], "ready")
+    self.assertIsNone(view["models"][0]["state"])
 
   def test_pick_from_catalog_and_back_to_default(self):
     from jetlink.registry.catalog import DEFAULT_BIG_MODEL_REF
@@ -95,19 +96,35 @@ class TestJetlinkSettings(unittest.TestCase):
                                                         {**bundle("b" * 40, "Wrong runtime", 3), "minimum_selector_version": "20"}]}
     view = self.owner.snapshot()
     self.assertEqual([row["ref"] for row in view["models"]], [newer, older])
-    self.assertEqual(view["runningRef"], older)
+    self.assertEqual(view["runningRef"], "")
     self.status.ready = False
     self.owner.configure({"model": newer})
     self.assertEqual(self.params.values["JetlinkBigModel"], {"ref": newer, "displayName": "Newer (Oct 1, 2026)"})
     view = self.owner.snapshot()
     self.assertEqual(view["selectedRef"], newer)
+    self.assertFalse(view["followingApp"])
     self.assertEqual([row["selected"] for row in view["models"]], [True, False])
     self.assertEqual(view["runningRef"], newer)
     for payload in ({"model": "b" * 40}, {"model": "c" * 40}, {"model": 1}, {"refreshCatalog": False}):
       with self.assertRaises(ValueError):
         self.owner.configure(payload)
-    self.owner.configure({"model": ""})
+    result = self.owner.configure({"model": ""})
     self.assertNotIn("JetlinkBigModel", self.params.values)
+    self.assertTrue(self.owner.snapshot()["followingApp"])
+    self.assertIn("Following the Jetlink app", result["message"])
+
+  def test_app_observation_does_not_become_manual_override(self):
+    ref, oid = "a" * 40, "b" * 64
+    self.params.values["JetlinkCatalog"] = {"bundles": [bundle(ref, "App model", 1)]}
+    self.params.values["JetlinkPointers"] = {ref: {"oid": oid, "size": 5}}
+    self.params.values["JetlinkSpec"] = {"sha256": oid, "ready": True, "source": "app"}
+    view = self.owner.snapshot()
+    self.assertTrue(view["followingApp"])
+    self.assertEqual(view["selectedRef"], "")
+    self.assertEqual(view["runningRef"], ref)
+    self.assertFalse(view["models"][0]["selected"])
+    self.params.values["JetlinkSpec"]["sha256"] = "c" * 64
+    self.assertEqual(self.owner.snapshot()["runningRef"], "")
 
   def test_downloaded_model_is_marked_from_its_pointer(self):
     from jetlink.registry.catalog import DEFAULT_BIG_MODEL_REF

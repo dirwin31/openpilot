@@ -18,6 +18,10 @@ jetlink.registry.lfs.
 Without a model manager (Keys.big_model and Keys.catalog None) there is no
 pick and no catalog, and the large model is jetlink's own default, named by its
 ref: its pointer resolves from the ref as any pick's does.
+
+A fork may opt into Keys.follow_app. Without a manual pick it then runs only
+the host's loaded engine, observed from a fresh hello. The spec record names
+the last observed app model for status; it never becomes a manual pick.
 """
 from __future__ import annotations
 
@@ -129,6 +133,8 @@ class Models:
     catalog lists. Not the chestnut's default, which is the model in the tree.
     A fork with no catalog at all (Keys.catalog None) gets jetlink's default by
     its ref; one whose catalog has not been fetched yet waits for it, as ever."""
+    if self.op.keys.follow_app:
+      return None
     if self.op.keys.catalog is None:
       return self._row(DEFAULT_BIG_MODEL_NAME, DEFAULT_BIG_MODEL_REF, self._index()[1])
     models = self.model_index()
@@ -143,10 +149,24 @@ class Models:
 
   def selected_model(self) -> dict | None:
     """The slot's pick, listed in the catalog or not: a ref is enough to find its
-    pointer. With no pick, default_model()."""
+    pointer. With no pick, the observed app model when opted in, else default_model()."""
     if (pick := self.selected_slot()) is not None:
       return self._row(pick['name'], pick['ref'], self._index()[1])
+    if self.follow_app():
+      record = self.op.get(self.op.keys.spec)
+      if isinstance(record, dict) and record.get('source') == 'app' and record.get('ready') is True:
+        from jetlink.registry.catalog import is_sha256
+        oid = record.get('sha256')
+        if is_sha256(oid):
+          row = self._row_for(oid)
+          return {'name': row['name'] if row else str(record.get('checkpoint') or oid[:16]),
+                  'ref': row['ref'] if row else None, 'oid': oid, 'size': record.get('nbytes')}
+      return None
     return self.default_model()
+
+  def follow_app(self) -> bool:
+    """A host observation never occupies the manual big-model slot."""
+    return self.op.keys.follow_app and self.selected_slot() is None
 
   def selected_model_name(self) -> str | None:
     selected = self.selected_model()
