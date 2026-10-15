@@ -239,3 +239,19 @@ class TestCatalogRefresher(unittest.TestCase):
     self.assertEqual(params.get("JetlinkPointers"), {ref: new, other: old})
     self.assertEqual(params.get("JetlinkCatalog"), unchanged)
     self.assertNotIn("pointers", params.get("JetlinkCatalog"))
+
+  def test_pins_stay_out_of_a_first_or_previously_polluted_catalog(self):
+    from openpilot.starpilot.models.jetlink_catalog import CatalogRefresher
+    params = MemoryParams()
+    ref = "a" * 40
+    pin = {"oid": "2" * 64, "size": 20}
+    fetched = {"bundles": [bundle(ref, "Mountain Dew Model", 1)], "pointers": {ref: pin}}
+    refresher = CatalogRefresher(fetch=lambda: fetched)
+    self.run_refresh(refresher, params)
+    self.assertEqual(refresher.error, "")
+    self.assertEqual(params.get("JetlinkPointers"), {ref: pin})
+    self.assertNotIn("pointers", params.get("JetlinkCatalog"))
+
+    params.values["JetlinkCatalog"] = {**params.get("JetlinkCatalog"), "pointers": {ref: pin}}
+    self.run_refresh(refresher, params)
+    self.assertNotIn("pointers", params.get("JetlinkCatalog"))
