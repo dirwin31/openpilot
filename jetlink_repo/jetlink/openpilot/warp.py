@@ -205,8 +205,38 @@ class Warp:
         if not _paired_capture(jit.captured):
           raise
         # StarPilot's paired NV12 capture interleaves each transform copy with
-        # its warp kernel. Replaying the complete capture preserves that order.
-        self._log.warning('jetlink: warp keeps full captured replay; graph-only optimization unavailable')
+        # its warp kernel. The copies run first on buffers resolved once, then
+        # the two kernels, in the capture's order (_PairedReplay); the complete
+        # capture is the fallback.
+        self._replay = self._paired_replay(jit.captured, inputs, frame_size)
+
+  def _paired_replay(self, captured, inputs, frame_size):
+    """_PairedReplay if it warps random frames byte-for-byte as the complete
+    capture does, else the capture itself. Never raises: the join must not fail
+    over a faster path."""
+    import numpy as np
+    from tinygrad.tensor import Tensor
+    try:
+      fast = _PairedReplay(captured, inputs)
+      rng = np.random.default_rng(0)
+      frames = [rng.integers(0, 256, frame_size, dtype=np.uint8) for _ in range(2)]
+      blobs = [Tensor.from_blob(f.ctypes.data, (frame_size,), dtype='uint8', device=self._device) for f in frames]
+      check = (blobs[1].uop.base, self._big_tfm_buf, blobs[0].uop.base, self._tfm_buf)
+      for _ in range(3):
+        self._tfm[:, :] = np.eye(3, dtype=np.float32) + rng.normal(0, 0.05, (3, 3)).astype(np.float32)
+        self._big_tfm[:, :] = np.eye(3, dtype=np.float32) + rng.normal(0, 0.05, (3, 3)).astype(np.float32)
+        captured(check, {})
+        self.wait()
+        expected = bytes(self.output)
+        fast(check, {})
+        self.wait()
+        if bytes(self.output) != expected:
+          raise UnsupportedWarpCapture("the direct replay warped a frame differently")
+    except Exception as e:
+      self._log.warning('jetlink: warp keeps full captured replay; graph-only optimization unavailable (%s)', e)
+      return captured
+    self._log.warning('jetlink: warp replays its paired capture directly')
+    return fast
 
   def start(self, frame: int, big_frame: int, tfm, big_tfm) -> None:
     """Warp the camera buffers at these addresses under their transforms.
@@ -241,6 +271,41 @@ def _zero_copy_view(buffer, *, sync: bool) -> memoryview:
   if sync:
     buffer.allocator.dev.synchronize()
   return view
+
+
+class _PairedReplay:
+  """StarPilot: a paired capture (transform copy, kernel, copy, kernel) replayed
+  without tinygrad's per-frame dispatch of its two copies. On the comma 4's GPU
+  (2026-10-14) those 36-byte copies were 81 % of a 5.9 ms launch, a graph
+  rewrite each inside exec_copy; done as exec_copy does them, on buffers
+  resolved once, with the two kernels linked once: 1.6 ms, byte-identical over
+  200 frames. The copies don't depend on the camera buffers, so resolving them
+  once is the same copy every frame."""
+
+  def __init__(self, captured, inputs):
+    from tinygrad.engine.realize import link_linear, resolve_params, unwrap_multi
+    steps = captured._linear.src
+    self._copies = []
+    for step in steps[::2]:
+      for bufs, _ in unwrap_multi(step, resolve_params(step, inputs)):
+        dest, src = bufs[0].ensure_allocated(), bufs[1].ensure_allocated()
+        # only exec_copy's host branch, the one the comma's NPY -> QCOM copies take
+        if ((hasattr(dest.allocator, '_transfer') and dest.allocator.supports_transfer and
+             dest.device.split(":")[0] == src.device.split(":")[0]) or src.device.startswith("DISK") or
+            dest.get_storage().host is None or src.get_storage().host is None):
+          raise UnsupportedWarpCapture(f"a {src.device} -> {dest.device} copy that is not a host copy")
+        self._copies.append((dest, src))
+    if len(self._copies) != 2:
+      raise UnsupportedWarpCapture(f"{len(self._copies)} transform copies, not 2")
+    self._kernels = link_linear(captured._linear.replace(src=steps[1::2]), allow_cache=False)
+
+  def __call__(self, inputs, var_vals):
+    from tinygrad.engine.realize import run_linear
+    for dest, src in self._copies:
+      for b in (dest, src):
+        b.allocator.dev.synchronize()
+      dest.host[:] = src.host[:]
+    run_linear(self._kernels, var_vals, input_uops=inputs, jit=True)
 
 
 def _paired_capture(captured) -> bool:
