@@ -12,8 +12,8 @@ from pathlib import Path
 
 ADAPTER_MODULE = "openpilot.starpilot.models.jetlink_adapter"
 BASEDIR = Path(__file__).resolve().parents[3]
-# 2: modeld writes in_control every frame (JetlinkModel.observe_frame); no engagement() poller.
-API_VERSION = 2
+# 3: Jetlink asks in_control(); observe_frame supplies modeld's current messages.
+API_VERSION = 3
 
 
 def supported_device(device_type=None):
@@ -86,6 +86,7 @@ def runtime_status():
 
 class StarPilotAdapter:
   basedir = BASEDIR
+  _in_control = True
 
   @property
   def catalog_selector(self):
@@ -159,6 +160,10 @@ class StarPilotAdapter:
   def event(self, name, **fields):
     self.log.event(name, **fields)
 
+  def in_control(self):
+    # Fail closed until modeld supplies a frame; no subscriber or polling thread.
+    return self._in_control
+
   def make_warp(self, cam_w, cam_h, model_w, model_h):
     from openpilot.starpilot.models.jetlink_warp import make_warp
     return make_warp(cam_w, cam_h, model_w, model_h)
@@ -228,6 +233,8 @@ class JetlinkModel:
   def __init__(self, joined, small):
     self.joined = joined
     self.small = small
+    self._adapter = adapter()
+    self._adapter._in_control = True
     self._session = uuid.uuid4().hex
     self._process_start_ticks = process_start_ticks(os.getpid())
     try:
@@ -277,7 +284,8 @@ class JetlinkModel:
   def observe_frame(self, lat_delay, drop_ratio, *, in_control=True):
     self.joined.lat_delay = lat_delay
     self.joined.frame_drop_ratio = drop_ratio
-    self.joined.in_control = in_control
+    self._adapter._in_control = in_control is not False
+    self.joined.in_control = self._adapter._in_control
 
   def publish_runtime(self, *, closed=False):
     now = time.monotonic_ns()

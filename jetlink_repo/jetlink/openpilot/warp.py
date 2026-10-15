@@ -355,32 +355,43 @@ def _make_coherent(out) -> None:
 def prepare_reset(model):
   """Capture the small model's reset before driving, keeping its JIT's buffer identities.
 
-  Its history is stale after the Jetson ran, so a fallback starts from the same
-  zero history as modeld startup. Nothing is allocated or compiled on the
-  failure frame.
+  Its history is stale after the Jetson ran, so a fallback starts from the
+  zero history modeld's warmup leaves it at. Nothing is allocated or compiled
+  on the failure frame.
 
-  The small model is whatever bundle the user picked, stock modeld's or a
-  modeld_v2 one, so the history is whatever GPU queues it has; the NPY tensors
-  are zeroed through their numpy views. Duck-typed on openpilot's ModelState:
-  input_queues, numpy_inputs (modeld_v2) or npy (modeld), prev_desire. The
-  fork's tests pin those names.
+  The small model is whatever bundle the user picked, on stock modeld or
+  modeld_v2, and each keeps its history its own way. Stock modeld's
+  ModelState, and a modeld_v2 native bundle's adapter: the recurrent state on
+  the GPU (state_pairs) and one packed host buffer (packed_input), as their
+  warmup zeroes them. A modeld_v2 legacy bundle's adapter: history queues on
+  the GPU, and numpy inputs. The fork's tests pin those names.
   """
   from tinygrad import Tensor, TinyJit
 
-  queues = tuple(q for q in model.input_queues.values() if q.device != 'NPY')
-  npy = model.numpy_inputs if hasattr(model, 'numpy_inputs') else model.npy
+  adapter = getattr(model, 'adapter', None)
+  keeper = model if adapter is None else adapter
+  if hasattr(keeper, 'state_pairs') and hasattr(keeper, 'packed_input'):
+    queues = tuple(keeper.input_queues[name] for name in keeper.state_pairs)
+    arrays = (keeper.packed_input,)
+  else:
+    # StarPilot's catalog runner also keeps GPU queues and numpy views.
+    queues = tuple(q for q in keeper.input_queues.values() if q.device != 'NPY')
+    npy = keeper.numpy_inputs if hasattr(keeper, 'numpy_inputs') else keeper.npy
+    arrays = tuple(npy.values())
 
   @TinyJit
   def clear():
     Tensor.realize(*(q.assign(0) for q in queues))
 
-  for _ in range(3):
-    clear()
+  if queues:
+    for _ in range(3):
+      clear()
 
   def reset():
-    clear()
+    if queues:
+      clear()
     model.prev_desire.fill(0)
-    for array in npy.values():
+    for array in arrays:
       array.fill(0)
 
   return reset

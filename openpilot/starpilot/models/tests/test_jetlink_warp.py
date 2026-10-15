@@ -3,8 +3,37 @@ from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 import numpy as np
+import pytest
 from tinygrad.uop.ops import Ops
 from jetlink.openpilot import warp
+
+
+@pytest.mark.parametrize('layout', ['catalog', 'native', 'adapted_catalog', 'adapted_native', 'empty'])
+def test_fallback_reset_clears_history_without_replacing_buffers(layout):
+  from tinygrad import Tensor
+
+  queue = Tensor([7., 8.], device='CPU').realize()
+  host = np.ones(12, dtype=np.uint8)
+  desire = np.ones(8, dtype=np.float32)
+  keeper = NS(input_queues={} if layout == 'empty' else {'history': queue})
+  if layout.endswith('native'):
+    keeper.state_pairs = {'history': 'next_history'}
+    keeper.packed_input = host
+  else:
+    keeper.numpy_inputs = {'host': host}
+  model = NS(prev_desire=desire, adapter=keeper) if layout.startswith('adapted') else keeper
+  model.prev_desire = desire
+  reset = warp.prepare_reset(model)
+  buffer = queue.uop.base.buffer
+  for _ in range(2):
+    queue.assign(9).realize()
+    host[:] = 5
+    desire[:] = 3
+    reset()
+    assert queue.uop.base.buffer is buffer
+    if layout != 'empty':
+      np.testing.assert_array_equal(queue.numpy(), [0., 0.])
+    assert not host.any() and not desire.any()
 
 
 def paired_steps():

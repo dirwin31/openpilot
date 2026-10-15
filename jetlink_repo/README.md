@@ -6,7 +6,7 @@ For installing, connecting, selecting, and running it with StarPilot, follow
 
 The comma runs StarPilot; the connected host runs the upstream Jetlink application.
 Host apps, installers, development references, and original history are maintained
-in [ZoomPilot / Jetlink](https://github.com/zoompilot/jetlink/tree/4b747ae).
+in [ZoomPilot / Jetlink v0.8.7](https://github.com/zoompilot/jetlink/tree/d26001b4161f33bab28d806de6a99b96325a429b).
 This runtime subtree does not contain the upstream host applications or docs;
 their source attribution does not require installing ZoomPilot on the comma.
 

@@ -153,13 +153,20 @@ class CatalogRefresher:
 
   def _run(self, params) -> None:
     try:
-      from jetlink.registry.catalog import fetch_catalogs, merge_catalogs
+      from jetlink.registry.catalog import fetch_catalogs, merge_catalogs, pinned_pointers
       stored = params.get(CATALOG_KEY)
       stored = stored if usable(stored) else {}
       fetched = (self._fetch or fetch_catalogs)()
       merged = merge_catalogs([stored, fetched] if stored else [fetched], selector=_selector())
       if not usable(merged):
         raise ValueError("the fetched catalog lists no Jetlink models")
+      pins = pinned_pointers(fetched)
+      if pins:
+        known = params.get(POINTERS_KEY)
+        known = known if isinstance(known, dict) else {}
+        updated = {**known, **pins}
+        if updated != known:
+          params.put(POINTERS_KEY, updated, block=True)
       if merged != stored:
         params.put(CATALOG_KEY, merged, block=True)
       self.error = ""
