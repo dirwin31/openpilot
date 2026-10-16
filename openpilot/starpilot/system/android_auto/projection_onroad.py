@@ -158,7 +158,9 @@ class ProjectionOnroad:
       self._monitor_pair_ns = None
       self.onroad.driver_monitor_layer = self._driver_monitor_layer
       from openpilot.starpilot.ui.onroad_state import OnroadInput
-      self._slc_input = OnroadInput(lambda request: self.slc_action(request), native.profile.LARGE)
+      # Car touchscreens drift a few pixels during a tap, and the canvas is scaled up from them
+      # (1.5x on a 1280x720 head unit): a 5 px slop (the comma default) cancels those taps.
+      self._slc_input = OnroadInput(lambda request: self.slc_action(request), native.profile.LARGE, slop=30)
       self.onroad.pressed_action = lambda: self._slc_input.pressed_action
       self.pip = None
       self._pip_saved = None
