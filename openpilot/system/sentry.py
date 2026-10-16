@@ -150,10 +150,29 @@ def report_tombstone(fn: str, message: str, contents: str) -> None:
       cloudlog.warning("Native crash report could not be queued")
 
 
-def flush() -> None:
-  """Only call on fatal process exit; ordinary captures never wait for HTTP."""
+def capture_report(message: str, *, level: str = "info", fingerprint: list[str] | None = None,
+                   tags: dict[str, str] | None = None, contexts: dict[str, dict] | None = None) -> bool:
+  """Queue a non-crash report (a drive or pairing summary). True when the SDK accepted it."""
+  if sdk is None:
+    return False
+  try:
+    with sdk.new_scope() as scope:
+      if fingerprint:
+        scope.fingerprint = fingerprint
+      for key, value in (tags or {}).items():
+        scope.set_tag(key, value)
+      for key, value in (contexts or {}).items():
+        scope.set_context(key, value)
+      return sdk.capture_message(message, level=level) is not None
+  except Exception:
+    cloudlog.warning("Report could not be queued")
+    return False
+
+
+def flush(timeout: float = EXIT_FLUSH_TIMEOUT) -> None:
+  """Call on fatal process exit, or from a background reporter; ordinary captures never wait for HTTP."""
   if sdk is not None:
     try:
-      sdk.flush(timeout=EXIT_FLUSH_TIMEOUT)
+      sdk.flush(timeout=timeout)
     except Exception:
       cloudlog.warning("Crash report flush interrupted")

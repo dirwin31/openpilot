@@ -34,6 +34,7 @@ from openpilot.common.hardware import COMMA_HARDWARE
 from openpilot.starpilot.system.android_auto import identity as identity_store
 from openpilot.starpilot.system.android_auto.auto_connect import AutoConnectPolicy
 from openpilot.starpilot.system.android_auto.bootstrap import NAMES, BootstrapError, WirelessBootstrap
+from openpilot.starpilot.system.android_auto.bugsink_report import PairingAttempt
 from openpilot.starpilot.system.android_auto.frame_source import (DEFAULT_PATH as DEFAULT_FRAME_PATH, FLAG_ASYNC_READBACK, FLAG_NV12,
                                                                   FORMAT_NV12, FrameRequest)
 from openpilot.starpilot.system.android_auto.projection_control import DEFAULT_CONTROL_SOCKET, NATIVE_FOCUS
@@ -302,6 +303,8 @@ class Supervisor:
     self._bluez: Any = None
     self._pairing_until = 0.0
     self._pairing_known: set[str] | None = None  # Android Auto cars already paired when the pairing window opened
+    self._pairing_attempt: PairingAttempt | None = None  # steps of the open pairing window, for the Bugsink pairing report
+    self._pairing_seen: tuple = ()
     self._car_seen_at = -CAR_LINK_HOLD
     self._hfp_link = threading.Event()  # set when the chosen car opens the hands-free link
     self.auto = AutoConnectPolicy()
@@ -481,20 +484,39 @@ class Supervisor:
       bluez.acquire_pairing()
     elif self.config.get('phone_class', True):
       bluez.acquire()
+    self._end_pairing("reopened")
     with self._lock:
       self._pairing_known = known
       self._pairing_until = time.monotonic() + seconds
+      self._pairing_attempt, self._pairing_seen = PairingAttempt(seconds), ()
     self.log("pairing_window", seconds=seconds)
 
   def pair_device(self, address: str) -> None:
     if self._source_session is None or self._shared_bluetooth_owner is None or not self._pairing_active():
       raise RuntimeError('Current Galaxy pairing authorization required')
+    self._pairing_step("pair_requested")
     self._shared_bluetooth_owner.pair_device(self._source_session, address)
 
   def pairing_status(self) -> dict:
     if self._source_session is None or self._shared_bluetooth_owner is None:
       return {'active': False, 'receiver': None, 'prompt': None, 'approved': False}
-    return self._shared_bluetooth_owner.incoming_status(self._source_session)
+    status = self._shared_bluetooth_owner.incoming_status(self._source_session)
+    seen = (status.get('state'), bool(status.get('prompt')), bool(status.get('approved')), status.get('error') or '')
+    if seen != getattr(self, '_pairing_seen', ()):
+      self._pairing_seen = seen
+      self._pairing_step("status", state=seen[0], prompt=seen[1], approved=seen[2], **({'error': seen[3]} if seen[3] else {}))
+    return status
+
+  def _pairing_step(self, name: str, **values) -> None:
+    attempt = getattr(self, '_pairing_attempt', None)
+    if attempt is not None:
+      attempt.step(name, **values)
+
+  def _end_pairing(self, result: str, **values) -> None:
+    with self._lock:
+      attempt, self._pairing_attempt = getattr(self, '_pairing_attempt', None), None
+    if attempt is not None:
+      attempt.finish(result, **values)
 
   def pairing_response(self, prompt_id: str, accepted: bool, value: str = '') -> None:
     if not isinstance(prompt_id, str) or len(prompt_id) != 32 or type(accepted) is not bool or not isinstance(value, str):
@@ -502,8 +524,10 @@ class Supervisor:
     if self._source_session is None or self._shared_bluetooth_owner is None or not self._pairing_active() or \
        not self._shared_bluetooth_owner.incoming_response(self._source_session, prompt_id, accepted, value):
       raise RuntimeError('Pairing prompt expired or changed')
+    self._pairing_step("prompt_answered", accepted=accepted)
 
   def cancel_pairing(self) -> None:
+    self._end_pairing("cancelled")
     with self._lock:
       self._pairing_until, self._pairing_known = 0.0, None
       phone = self._bluez if not self._session_alive() else None
@@ -566,6 +590,7 @@ class Supervisor:
           self.stop(timeout=0.0, graceful=0.0)
         else:
           self._pairing_until, self._pairing_known = 0.0, None
+          self._end_pairing("interrupted", reason="Bluetooth lease released")
         self._bluez.close()
         self._bluez = None
         return
@@ -577,6 +602,7 @@ class Supervisor:
             self._bluez = None
           self._source_session = None
           self._pairing_until, self._pairing_known = 0.0, None
+        self._end_pairing("interrupted", reason="Galaxy session ended")
         if old_phone is not None:
           old_phone.close()
     if self._pairing_until:
@@ -585,6 +611,7 @@ class Supervisor:
       else:
         with self._lock:
           self._pairing_until, self._pairing_known = 0.0, None
+        self._end_pairing("expired")
         if not self._session_alive():
           self._release_phone()
     self._auto_connect(now)
@@ -671,12 +698,18 @@ class Supervisor:
               self._shared_bluetooth_owner.phone_lease.receiver == device["address"])]
       if not new:
         return
+    with self._lock:
+      attempt, self._pairing_attempt = getattr(self, '_pairing_attempt', None), None
     try:
       self.cancel_pairing()
       self.select_receiver(new[0]["address"], new[0]["name"])
       self.log("car_selected_after_pairing", car=new[0]["name"])
+      if attempt is not None:
+        attempt.finish("paired")
     except (RuntimeError, ValueError) as error:
       self.log("car_select_failed", error=str(error))
+      if attempt is not None:
+        attempt.finish("select_failed", error=str(error))
 
   def close(self) -> None:
     self.stop()
@@ -1170,7 +1203,8 @@ class Supervisor:
     flags = (FLAG_NV12 if config["gpu_nv12"] and getattr(encoder, "supports_nv12", False) else 0) | \
             (FLAG_ASYNC_READBACK if config["async_readback"] else 0)
     request = FrameRequest(mode.width, mode.height, mode.margin_width, mode.margin_height, int(interval * 1e6), flags)
-    self.log("frame_pipeline", nv12=bool(flags & FLAG_NV12), async_readback=bool(flags & FLAG_ASYNC_READBACK))
+    self.log("frame_pipeline", nv12=bool(flags & FLAG_NV12), async_readback=bool(flags & FLAG_ASYNC_READBACK),
+             target_fps=fps, encoder=getattr(encoder, "backend", "libx264"))
     view = config["view"]
     if view == "car" and not self._synthetic and self._renderer_command is None and not renderer_available():
       view = "unavailable"

@@ -85,6 +85,18 @@ def test_manager_init_failure_before_logmessaged_has_structured_stack(reporting,
   sentry.flush.assert_called_once_with()
 
 
+def test_report_carries_fingerprint_tags_and_contexts_without_leaking_scope(reporting):
+  assert sentry.capture_report('Android Auto drive: streamed', level='info', fingerprint=['android-auto-drive', 'wireless', 'Alpine'],
+                               tags={'aa.report': 'drive'}, contexts={'android_auto_drive': {'fps_avg': 29.5}})
+  sentry.capture_report('second')
+  first, second = event_list(reporting)
+  assert first['message'] == 'Android Auto drive: streamed' and first['level'] == 'info'
+  assert first['fingerprint'] == ['android-auto-drive', 'wireless', 'Alpine']
+  assert first['tags']['aa.report'] == 'drive' and first['tags']['device'] == 'test-hardware'
+  assert first['contexts']['android_auto_drive'] == {'fps_avg': 29.5}
+  assert 'aa.report' not in second['tags'] and 'android_auto_drive' not in second.get('contexts', {})
+
+
 @pytest.mark.parametrize('during_import', [True, False])
 def test_child_import_and_main_failure_after_real_fork(reporting, monkeypatch, during_import):
   from openpilot.system.manager import process
