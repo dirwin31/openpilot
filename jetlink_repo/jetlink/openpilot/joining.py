@@ -57,8 +57,9 @@ from jetlink.transport.priority import background_thread
 REJOIN_DELAY = 5.0
 # doubled per consecutive failure, reset by a join that lasted STABLE_SECONDS.
 # A link that dies on its first frame every time must not cost a swap, a
-# demote and an alert every few seconds
-REJOIN_DELAY_MAX = 60.0
+# demote and an alert every few seconds. 20 s, not 60: an iPad that recovered
+# spent 10 minutes of a drive mostly on the small model at 60 (2026-10-15)
+REJOIN_DELAY_MAX = 20.0
 STABLE_SECONDS = 60.0
 # after a join that held: a link that ran for minutes and then went is a USB
 # drop, and the host re-enumerates a rebound gadget in under a second. The

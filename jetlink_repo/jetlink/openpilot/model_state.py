@@ -62,6 +62,12 @@ HOLD_WINDOW = 10.0
 # wheel, where an iPhone's every return was a soft disable within a second
 # (2026-10-04)
 PROVING_FRAMES = 20
+# held frames forgiven among them: one or two are the link's tail, not a host
+# behind (an iPad at 29 ms a frame on its server, 2026-10-15, demoted 7 times
+# in a drive for one or two holds each, every demote a swap, alerts and a
+# backoff). A host that is behind holds most of them, and steady-state
+# HOLDS_IN_A_ROW and HOLDS_ALLOWED still apply
+PROVING_HOLDS_ALLOWED = 2
 # the first of them never hand back, held or not: the first after a join
 # carries the history reset, and a Mac's is ~100 ms of CoreML warm-up. A
 # single slow frame later is the comma's own stall, a warp or a send, which
@@ -235,6 +241,8 @@ class JetlinkModelState:
     # a row; `behind` says why it should hand back after the last frame
     self._holds: deque[float] = deque()
     self._holds_in_a_row = 0
+    # held frames past SETTLING_FRAMES within PROVING_FRAMES
+    self._proving_holds = 0
     self.behind: str | None = None
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
@@ -397,7 +405,8 @@ class JetlinkModelState:
 
   def _note_hold(self, held: bool) -> str | None:
     """Why the large model should hand back after this frame, if it should:
-    any held frame among its first PROVING_FRAMES past SETTLING_FRAMES,
+    more than PROVING_HOLDS_ALLOWED held frames among its first
+    PROVING_FRAMES past SETTLING_FRAMES,
     HOLDS_IN_A_ROW held frames running, or more than HOLDS_ALLOWED in
     HOLD_WINDOW. None while it is keeping up."""
     if not held:
@@ -412,7 +421,9 @@ class JetlinkModelState:
     if self._frame_id <= SETTLING_FRAMES:
       return None
     if self._frame_id <= PROVING_FRAMES:
-      return f'held frame {self._frame_id} of the first {PROVING_FRAMES}'
+      self._proving_holds += 1
+      if self._proving_holds > PROVING_HOLDS_ALLOWED:
+        return f'held frame {self._frame_id} of the first {PROVING_FRAMES}, {self._proving_holds} held'
     if self._holds_in_a_row >= HOLDS_IN_A_ROW:
       return f'held {self._holds_in_a_row} frames in a row'
     if len(self._holds) > HOLDS_ALLOWED:
