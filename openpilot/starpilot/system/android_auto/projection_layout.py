@@ -30,7 +30,10 @@ CAR_EXIT_SIZE = (96, 96)
 CAR_EXIT_MIN_OPACITY = 25
 JETLINK_WIDGET = 'jetlink_status'
 JETLINK_SIZE = (440, 160)
-PROJECTION_WIDGETS = (NAV_CARD, NAV_MAP, *DISPLAY_WIDGETS, STOPPED_TIMER_WIDGET, JETLINK_WIDGET, CAR_EXIT)
+NOW_PLAYING_WIDGET = 'now_playing'
+NOW_PLAYING_SIZE = (520, 132)
+NOW_PLAYING_OPACITY = (0, 100, 85)  # percent: min, max, default
+PROJECTION_WIDGETS = (NAV_CARD, NAV_MAP, *DISPLAY_WIDGETS, STOPPED_TIMER_WIDGET, JETLINK_WIDGET, NOW_PLAYING_WIDGET, CAR_EXIT)
 NAV_CARD_SIZE = (560, 195)
 MAP_MIN_SIZE = (280, 200)
 MAP_OPACITY = (15, 100, 50)  # percent: min, max, default
@@ -111,6 +114,12 @@ def layout_metadata_for_viewport(viewport):
                              'width': JETLINK_SIZE[0], 'height': JETLINK_SIZE[1], 'colors': {},
                              'note': 'Shown while Jet Link is enabled. Shows device mode, connection and app processing latency (excludes USB transfer).',
                              'default': {'x': 30, 'y': 650, 'enabled': False}}
+  widgets[NOW_PLAYING_WIDGET] = {'label': 'Now playing', 'kind': NOW_PLAYING_WIDGET,
+                                 'width': NOW_PLAYING_SIZE[0], 'height': NOW_PLAYING_SIZE[1], 'colors': {},
+                                 'note': 'The song playing from Spotify or your phone over Bluetooth. Opacity sets the card background.',
+                                 'opacity': {'min': NOW_PLAYING_OPACITY[0], 'max': NOW_PLAYING_OPACITY[1], 'default': NOW_PLAYING_OPACITY[2]},
+                                 'default': {'x': width - 30 - NOW_PLAYING_SIZE[0], 'y': height - 30 - NOW_PLAYING_SIZE[1],
+                             'enabled': True, 'opacity': NOW_PLAYING_OPACITY[2]}}
   exit_w, exit_h = CAR_EXIT_SIZE
   widgets[CAR_EXIT] = {'label': 'Exit to car', 'kind': CAR_EXIT, 'width': exit_w, 'height': exit_h, 'colors': {},
                        'required': True, 'frontmost': True,
@@ -123,7 +132,7 @@ def layout_metadata_for_viewport(viewport):
   # Background opacity for the cruise and speed-limit card; its text stays solid.
   widgets['cruise_limits'].update(opacity={'min': 0, 'max': 100, 'default': 100})
   widgets['cruise_limits']['default'].update(opacity=100)
-  profile["widgetOrder"] = [NAV_MAP, *profile["widgetOrder"], STOPPED_TIMER_WIDGET, NAV_CARD, *DISPLAY_WIDGETS, JETLINK_WIDGET, CAR_EXIT]
+  profile["widgetOrder"] = [NAV_MAP, *profile["widgetOrder"], STOPPED_TIMER_WIDGET, NAV_CARD, *DISPLAY_WIDGETS, JETLINK_WIDGET, NOW_PLAYING_WIDGET, CAR_EXIT]
   return profile
 
 
@@ -248,6 +257,8 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
       placement.setdefault('background', True)
     if key == 'cruise_limits' and type(placement) is dict:
       placement.setdefault('opacity', 100)
+    if key == NOW_PLAYING_WIDGET and type(placement) is dict:
+      placement.setdefault('opacity', NOW_PLAYING_OPACITY[2])
     if key == 'driver_monitor' and type(placement) is dict and 'size' not in placement:
       for axis in ('x', 'y'):
         if type(placement.get(axis)) in (int, float):
@@ -256,7 +267,7 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
     fields = ({'x', 'y', 'enabled'} | ({'size'} if widget.get('resizable') else set()) |
               ({'display'} if key in DISPLAY_WIDGETS else set()) |
               ({'opacity', 'background'} if key in ACTION_WIDGETS else set()) |
-              ({'opacity'} if key == 'cruise_limits' else set()) |
+              ({'opacity'} if key in ('cruise_limits', NOW_PLAYING_WIDGET) else set()) |
               ({'width', 'height', 'opacity'} if key == NAV_MAP else set()))
     if type(placement) is not dict or set(placement) != fields or type(placement['enabled']) is not bool:
       raise ValueError('Invalid projection widget')
@@ -269,6 +280,8 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
       raise ValueError('Invalid action widget appearance')
     if key == 'cruise_limits' and (type(placement['opacity']) is not int or not 0 <= placement['opacity'] <= 100):
       raise ValueError('Invalid cruise card opacity')
+    if key == NOW_PLAYING_WIDGET and (type(placement['opacity']) is not int or not 0 <= placement['opacity'] <= 100):
+      raise ValueError('Invalid now playing opacity')
     if key == CAR_EXIT and placement['opacity'] < CAR_EXIT_MIN_OPACITY:
       raise ValueError('Exit to car opacity must be at least 25%')
     if widget.get('resizable'):
