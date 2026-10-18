@@ -26,6 +26,7 @@
 		D15C00000000000000000001 /* LANDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15C00000000000000000002 /* LANDiscovery.swift */; };
 		D15C00000000000000000011 /* AudioPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15C00000000000000000012 /* AudioPairing.swift */; };
 		D15C00000000000000000013 /* AudioPairingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15C00000000000000000014 /* AudioPairingSheet.swift */; };
+		D15C00000000000000000015 /* PhoneLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15C00000000000000000016 /* PhoneLocation.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -50,6 +51,7 @@
 		D15C00000000000000000002 /* LANDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LANDiscovery.swift; sourceTree = "<group>"; };
 		D15C00000000000000000012 /* AudioPairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPairing.swift; sourceTree = "<group>"; };
 		D15C00000000000000000014 /* AudioPairingSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPairingSheet.swift; sourceTree = "<group>"; };
+		D15C00000000000000000016 /* PhoneLocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLocation.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,6 +79,7 @@
 				D15C00000000000000000002 /* LANDiscovery.swift */,
 				D15C00000000000000000014 /* AudioPairingSheet.swift */,
 				D15C00000000000000000012 /* AudioPairing.swift */,
+				D15C00000000000000000016 /* PhoneLocation.swift */,
 				114E3D37646B3A8626A8A232 /* NetworkTransport.swift */,
 				D3BBE1488FD8A83E3983FEDE /* GalaxyAssetStore.swift */,
 				5492C1BC71EB8D0DBF12896E /* PrivateLANHTTP.swift */,
@@ -172,6 +175,7 @@
 				D15C00000000000000000001 /* LANDiscovery.swift in Sources */,
 				D15C00000000000000000013 /* AudioPairingSheet.swift in Sources */,
 				D15C00000000000000000011 /* AudioPairing.swift in Sources */,
+				D15C00000000000000000015 /* PhoneLocation.swift in Sources */,
 				754B6F8C853BDD47D7593948 /* NetworkTransport.swift in Sources */,
 				B2DE76B1CE686BDFB635FAAE /* GalaxyAssetStore.swift in Sources */,
 				887D84D1E3F00F0A5A8AD090 /* PrivateLANHTTP.swift in Sources */,

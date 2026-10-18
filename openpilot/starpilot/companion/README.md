@@ -33,6 +33,20 @@ takes one phone and needs the code approved; adapter visibility returns to what 
 Older comma builds are skipped quietly. Installing Spotify (`/api/spotify/upload`) is
 blocked over Bluetooth like the other large uploads.
 
+## Phone GPS
+
+The iPhone app can send the phone's GPS to comma about once a second, over
+Bluetooth or Wi-Fi (needs a comma build with phone GPS). Turn on **Share phone GPS
+with comma** under Bluetooth pairing; it keeps sending in the background while on.
+Comma publishes it as `phoneGps` and navigation uses it only when comma's own GPS
+and the car's GPS have no fix. Older comma builds answer 405 and the app says so.
+
+`POST /api/companion/location` with JSON: `latitude`, `longitude`,
+`horizontalAccuracy` (m) and `ageMs` (phone-measured age, at most 2000) are
+required; `altitude`, `verticalAccuracy`, `speed`, `speedAccuracy`, `bearing`,
+`bearingAccuracy` and `timestamp` (Unix ms) are optional. Leave out unknown
+values. Comma dates the fix by its own clock minus `ageMs`, never by `timestamp`.
+
 ## Android
 
 Install: join the Galaxy hotspot, open Galaxy → **Galaxy Access & Install** →

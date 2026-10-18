@@ -47,6 +47,11 @@ final class AppModel: ObservableObject {
     @Published var showAudioPairing = false
     private var offerAudioPairing = false
     lazy var audioPairing = AudioPairing(transport: { [weak self] in self?.transport })
+    lazy var phoneLocation: PhoneLocation = {
+        let value = PhoneLocation(transport: { [weak self] in self?.transport })
+        value.onSharingChanged = { [weak self] _ in self?.updateMonitoring() }
+        return value
+    }()
     @Published var tab: CompanionTab = .galaxy
     @Published var developerMode = UserDefaults.standard.bool(forKey: "galaxy.app.developerMode") {
         didSet {
@@ -90,7 +95,8 @@ final class AppModel: ObservableObject {
     func setPhoneActive(_ active: Bool) { phoneActive = active; diagnostics.phoneActive = active; if !active { discovery.stop() }; updateMonitoring() }
     func setCarPlayActive(_ active: Bool) { carPlayActive = active; diagnostics.carPlayActive = active; updateMonitoring() }
     private func updateMonitoring() {
-        if phoneActive || carPlayActive {
+        // Sharing phone GPS keeps the app running in the background, so keep reconnecting too.
+        if phoneActive || carPlayActive || phoneLocation.sharing {
             if monitorTask == nil { monitorTask = Task { await monitor() } }
         } else { monitorTask?.cancel(); monitorTask = nil }
     }
@@ -181,6 +187,7 @@ final class AppModel: ObservableObject {
             }
         }
         pathMonitor.start(queue: .main)
+        updateMonitoring()
     }
     deinit { pathMonitor.cancel() }
     private func logConnection(_ reason: String) {
@@ -346,6 +353,15 @@ final class AppModel: ObservableObject {
             }
             do { try await Task.sleep(nanoseconds: 3_000_000_000) } catch { return }
         }
+    }
+}
+
+private struct PhoneLocationRow: View {
+    @ObservedObject var location: PhoneLocation
+    var body: some View {
+        Toggle("Share phone GPS with comma", isOn: Binding(get: { location.sharing }, set: { location.setSharing($0) }))
+        Text(location.status.isEmpty ? "Comma uses this iPhone's GPS for navigation when its own GPS has no fix. Keeps sending in the background while on." : location.status)
+            .font(.caption).foregroundStyle(.secondary)
     }
 }
 
@@ -527,6 +543,7 @@ struct GalaxyRootView: View {
                         .buttonStyle(.bordered).disabled(!model.transport.connected)
                     Text("Lets this iPhone play music through comma. Comma opens pairing for two minutes, then you tap comma in Settings → Bluetooth.")
                         .font(.caption).foregroundStyle(.secondary)
+                    PhoneLocationRow(location: model.phoneLocation)
                     Button("Scan pairing code") { model.showPairingScanner = true }
                         .buttonStyle(.borderedProminent).tint(brandPurple)
                         .sheet(isPresented: $model.showPairingScanner) {
