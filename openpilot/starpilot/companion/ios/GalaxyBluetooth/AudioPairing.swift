@@ -51,11 +51,12 @@ final class AudioPairing: ObservableObject {
                         code: (prompt?["value"] as? String) ?? "", displayOnly: (prompt?["displayOnly"] as? Bool) ?? false)
     }
 
-    func start() {
+    /// `windowOpen`: comma's pairing window is already open because the person just paired the app from comma's Pair phone.
+    func start(windowOpen: Bool = false) {
         guard task == nil else { return }
         phase = .opening
         task = Task { [weak self] in
-            await self?.run()
+            await self?.run(windowOpen: windowOpen)
             self?.task = nil
         }
     }
@@ -93,18 +94,20 @@ final class AudioPairing: ObservableObject {
         return Self.parse(response.bodyData)
     }
 
-    private func run() async {
+    private func run(windowOpen: Bool) async {
         guard let first = await status() else { phase = .message("Phone music wasn't set up. Connect to your comma and try again."); return }
         // An older comma reports no adapter address and has no pairing window.
         guard Self.validAddress(first.adapterAddress) else { phase = .idle; return }
         let name = first.adapterName.isEmpty ? "comma" : first.adapterName
-        let opened: BridgeResponse?
-        do { opened = try await post(["operation": "accept_pair"]) } catch { opened = nil }
-        switch opened?.status {
-        case 200?: break
-        case 400?: phase = .idle; return
-        case 409?: phase = .message("Phone music wasn't set up because comma's Bluetooth is busy. Park, stop Android Auto pairing, then try Set up phone music again."); return
-        default: phase = .message("Phone music wasn't set up. Try Set up phone music again."); return
+        if !windowOpen {
+            let opened: BridgeResponse?
+            do { opened = try await post(["operation": "accept_pair"]) } catch { opened = nil }
+            switch opened?.status {
+            case 200?: break
+            case 400?: phase = .idle; return
+            case 409?: phase = .message("Phone music wasn't set up because comma's Bluetooth is busy. Park, stop Android Auto pairing, then try Set up phone music again."); return
+            default: phase = .message("Phone music wasn't set up. Try Set up phone music again."); return
+            }
         }
         phase = .waiting(commaName: name)
         var answered: String?

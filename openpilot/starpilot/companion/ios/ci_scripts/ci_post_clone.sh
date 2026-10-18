@@ -3,7 +3,10 @@ set -eu
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
-swiftc -module-cache-path "$test_dir/module-cache" -swift-version 5 -parse-as-library GalaxyBluetooth/Wire.swift GalaxyBluetooth/PairingScanner.swift GalaxyBluetooth/PairingKeyStore.swift tests/PairingPhoneRegression.swift -o "$test_dir/pairing-phone-tests"
+swiftc -module-cache-path "$test_dir/module-cache" -swift-version 5 -parse-as-library GalaxyBluetooth/Wire.swift GalaxyBluetooth/PairingCode.swift GalaxyBluetooth/PairingKeyStore.swift tests/PairingPhoneRegression.swift -o "$test_dir/pairing-phone-tests"
+
+swiftc -module-cache-path "$test_dir/module-cache" -swift-version 5 -parse-as-library GalaxyBluetooth/Wire.swift GalaxyBluetooth/PairingCode.swift GalaxyBluetooth/ClaimPairing.swift tests/ClaimPairingRegression.swift -o "$test_dir/claim-pairing-tests"
+"$test_dir/claim-pairing-tests"
 "$test_dir/pairing-phone-tests"
 
 python3 tests/extract_carplay_navigation.py "$test_dir/NavigationProbe.swift"

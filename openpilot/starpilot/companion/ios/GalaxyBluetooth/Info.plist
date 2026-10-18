@@ -35,8 +35,6 @@
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Connect directly to your comma's Galaxy Bluetooth bridge.</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Scan the pairing code displayed on your comma to connect the Galaxy app over Bluetooth.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_sp-galaxy._tcp</string>
