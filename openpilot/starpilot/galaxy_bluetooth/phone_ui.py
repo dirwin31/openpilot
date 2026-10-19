@@ -169,6 +169,8 @@ def message_lines(view, bridge=READY):
 
 def PairPhone(allowed):
   import pyray as rl
+  from openpilot.common.hardware import HARDWARE
+  from openpilot.system.ui.lib.text_measure import measure_text_cached
   from openpilot.system.ui.lib.application import gui_app, FontWeight
   from openpilot.system.ui.widgets import Widget
   from openpilot.system.ui.widgets.button import Button
@@ -180,7 +182,8 @@ def PairPhone(allowed):
       self.lock = threading.Lock()
       self.view = self.window.view()
       self.stop = threading.Event()
-      self.close_button = self._child(Button('Close', self._close, font_size=42))
+      self.c4 = HARDWARE.get_device_type() == 'mici'
+      self.close_button = self._child(Button('Close', self._close, font_size=24 if self.c4 else 42))
       threading.Thread(target=self._run, daemon=True).start()
 
     def _close(self):
@@ -210,6 +213,36 @@ def PairPhone(allowed):
       compact = rect.height < 600
       with self.lock:
         view = dict(self.view)
+      if self.c4:
+        margin = 20
+        width = rect.width - margin * 2
+        button_height = 52
+        button_y = rect.y + rect.height - margin - button_height
+        lines = message_lines(view, cached_setup_status())
+        # Leave the bottom row for Close, including the longest pairing/status messages.
+        available = button_y - (rect.y + 58) - 12
+        for size in range(22, 11, -1):
+          wrapped = []
+          for line in lines:
+            row = ''
+            for word in line.split():
+              candidate = f'{row} {word}'.strip()
+              if row and measure_text_cached(font, candidate, size).x > width:
+                wrapped.append(row)
+                row = word
+              else:
+                row = candidate
+            wrapped.append(row)
+          step = size * 1.4
+          if len(wrapped) * step <= available:
+            break
+        rl.draw_text_ex(font, 'Pair your phone', rl.Vector2(rect.x + margin, rect.y + 16), 26, 0, rl.WHITE)
+        y = rect.y + 58
+        for line in wrapped:
+          rl.draw_text_ex(font, line, rl.Vector2(rect.x + margin, y), size, 0, rl.LIGHTGRAY)
+          y += step
+        self.close_button.render(rl.Rectangle(rect.x + rect.width - margin - 180, button_y, 180, button_height))
+        return
       rl.draw_text_ex(font, 'Pair your phone', rl.Vector2(rect.x + 28, rect.y + 16), 26 if compact else 48, 0, rl.WHITE)
       size, step = (22, 30) if compact else (34, 48)
       y = rect.y + (60 if compact else 100)
