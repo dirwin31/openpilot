@@ -7,6 +7,10 @@ import { connectionError } from "./polling.js"
 import { BluetoothDeviceList } from "./bluetooth-devices.js"
 import { GalaxySettingRow, switchRow } from "./galaxy-setting-row.js"
 
+export function uploadTimeout(size) {
+  return Math.max(180000, Math.ceil(size / 65536) * 1000)
+}
+
 export function uploadPackage(path, options, progress, makeRequest = () => new XMLHttpRequest()) {
   return new Promise((resolve, reject) => {
     const xhr = makeRequest()
@@ -20,7 +24,7 @@ export function uploadPackage(path, options, progress, makeRequest = () => new X
     }
     xhr.open("POST", path)
     xhr.withCredentials = true
-    xhr.timeout = 180000
+    xhr.timeout = options.timeout ?? 180000
     xhr.setRequestHeader("Content-Type", "application/octet-stream")
     xhr.upload.onprogress = (event) => {
       if (!settled && event.lengthComputable) progress({ loaded: event.loaded, total: event.total })
@@ -288,13 +292,15 @@ export class AndroidAutoFeed {
     }
     this.uploadProgress = { loaded: 0, total: file.size }
     const generation = this.generation + 1
-    const transport = (path, options) => this.uploader(path, options, (progress) => {
+    // Slow tunnel links need longer than three minutes for large packages.
+    const timeout = uploadTimeout(file.size)
+    const transport = (path, options) => this.uploader(path, { ...options, timeout }, (progress) => {
       if (this.active && generation === this.generation) { this.uploadProgress = progress; this.emit() }
     })
     const result = await this.request("./api/android-auto/upload", {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" }, body: file
-    }, 180000, transport)
+    }, timeout, transport)
     this.uploadProgress = null
     this.emit()
     if (result === null) return false
