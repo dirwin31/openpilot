@@ -229,7 +229,7 @@ def open_pairing(allowed):
   from openpilot.system.ui.lib.application import gui_app
   if cached_setup_status() not in (READY, 'Bridge startup pending'):
     try:
-      retry_setup()
+      retry_setup(restart=False)
     except OSError:
       pass
   gui_app.push_widget(PairPhone(allowed))
