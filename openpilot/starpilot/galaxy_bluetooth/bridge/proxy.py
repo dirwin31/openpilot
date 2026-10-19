@@ -7,7 +7,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from protocol import MAX_BODY
+if __package__:
+  from .protocol import MAX_BODY
+else:
+  from protocol import MAX_BODY
 
 METHODS = {'GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'}
 REQUEST_HEADERS = {'content-type', 'accept'}
