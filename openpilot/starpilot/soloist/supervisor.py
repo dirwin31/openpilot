@@ -242,7 +242,8 @@ class Supervisor:
         time.sleep(0.1)
       if not socket_path.exists():
         raise RuntimeError('Audio output could not open')
-      env = {**os.environ, 'PULSE_SERVER': f'unix:{socket_path}', 'STARPILOT_AUDIO_PARENT_PID': str(os.getpid())}
+      env = {**os.environ, 'PULSE_SERVER': f'unix:{socket_path}', 'STARPILOT_AUDIO_PARENT_PID': str(os.getpid()),
+             'STARPILOT_SOLOIST_CONFIG': str(self.layout.config)}
       argv = [sys.executable, '-m', 'openpilot.starpilot.soloist.phone_audio', prefs.phone_address,
               env['PULSE_SERVER'], str(self.layout.runtime / 'phone-alsa.conf')]
       # Resolve this checkout explicitly; the worker runs in the private runtime directory.
@@ -352,6 +353,14 @@ class Supervisor:
     self.retry_at = now + min(60.0, 2.0 ** self.fast_failures) * random.uniform(0.8, 1.2)
     self._set('retrying', message)
 
+  def _flush_phone_audio(self, sent: str | None) -> None:
+    """Drop the audio already queued for the car so pause and skip take effect now, not a buffer later."""
+    if sent in phone_audio.FLUSH_ACTIONS and self.player is not None and self.player.poll() is None:
+      try:
+        os.kill(self.player.pid, phone_audio.FLUSH_ACTIONS[sent][0])
+      except (ProcessLookupError, PermissionError):
+        pass
+
   # ---- control --------------------------------------------------------------------------------------
   def handle(self, request: dict) -> dict:
     command = request.get('command')
@@ -364,7 +373,8 @@ class Supervisor:
         if action not in (*phone_audio.PLAYER_METHODS, 'play_pause') or request.get('args', {}) != {}:
           return {'ok': False, 'error': 'Use your phone for playback and volume controls'}
         try:
-          self.phone.control(phone_prefs.phone_address, action)
+          sent = self.phone.control(phone_prefs.phone_address, action)
+          self._flush_phone_audio(sent)
           return {'ok': True}
         except (OSError, RuntimeError):
           return {'ok': False, 'error': 'Phone playback control is unavailable'}

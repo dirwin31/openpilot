@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { SpotifyFeed, SpotifyPage, archivePreflight, importProblem, installChecks, releaseInfo, serviceLabel,
-  positionNow, formatTime, DOWNLOAD_PAGE } from "../web/js/spotify.js"
+  positionNow, formatTime, muteLabel, DOWNLOAD_PAGE } from "../web/js/spotify.js"
 
 const setup = {
   enabled: true, parked: true, keyPresent: true, audioReady: true,
@@ -112,3 +112,23 @@ for (const [overBluetooth, expected] of [[false, 4000], [true, 15000]]) {
   slow.stop()
 }
 assert.match(SpotifyPage.template, /Pair phone/)
+
+// Pause/skip smoothing sliders: live-tunable, never gated on Park.
+assert.equal(muteLabel(0), "Off")
+assert.equal(muteLabel(0.25), "250 ms")
+assert.equal(muteLabel(undefined), "Off")
+assert.match(SpotifyPage.template, /aria-label="Pause smoothing"[^>]*:disabled="busy"/)
+assert.match(SpotifyPage.template, /aria-label="Skip smoothing"[^>]*:disabled="busy"/)
+assert.doesNotMatch(SpotifyPage.template, /Pause smoothing[^>]*parked/)
+{
+  const posts = []
+  const page = { pauseDraft: 0.9, skipDraft: 0.9, feed: { post: (path, body) => { posts.push([path, body]); return Promise.resolve() } } }
+  SpotifyPage.methods.commitPauseMute.call(page, { target: { value: "0.3" } })
+  SpotifyPage.methods.commitSkipMute.call(page, { target: { value: "0" } })
+  SpotifyPage.methods.commitSkipMute.call(page, { target: { value: "not a number" } })
+  assert.deepEqual(posts, [["./api/spotify/preferences", { pauseMute: 0.3 }], ["./api/spotify/preferences", { skipMute: 0 }]])
+  assert.equal(page.pauseDraft, null)
+  assert.equal(page.skipDraft, null)
+  assert.equal(SpotifyPage.computed.pauseMuteLabel.call({ pauseDraft: 0.6, setup: { preferences: { pauseMute: 0.5 } } }), "600 ms")
+  assert.equal(SpotifyPage.computed.skipMuteLabel.call({ skipDraft: null, setup: { preferences: { skipMute: 0.25 } } }), "250 ms")
+}

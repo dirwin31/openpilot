@@ -249,3 +249,29 @@ def test_unpaired_connected_device_is_not_offered_or_accepted_as_a_phone(owner):
   assert '66:55:44:33:22:11' not in {device['address'] for device in setup.status(SESSION)['devices']}
   with pytest.raises(SetupRejected, match='Pair your phone'):
     setup.save_preferences(SESSION, {'source': 'phone', 'phoneAddress': '66:55:44:33:22:11'})
+
+
+def test_mute_windows_save_while_driving_and_never_restart_the_player(owner):
+  setup, state, layout, _ = owner
+  before = preferences.load(layout)
+  assert (before.pause_mute, before.skip_mute) == (0.5, 0.25)
+  state['parked'] = False
+  status = setup.save_preferences(SESSION, {'pauseMute': 0.3, 'skipMute': 0})
+  assert (status['preferences']['pauseMute'], status['preferences']['skipMute']) == (0.3, 0.0)
+  assert status['preferences']['muteMax'] == preferences.MUTE_MAX
+  assert preferences.load(layout) == before  # equality ignores the mute windows, so the supervisor keeps playing
+  assert json.loads(layout.config.read_text())['pause_mute'] == 0.3
+  for bad in (-0.1, preferences.MUTE_MAX + 0.01, True, 'x', None, float('nan')):
+    with pytest.raises(SetupRejected):
+      setup.save_preferences(SESSION, {'pauseMute': bad})
+  assert preferences.load(layout).pause_mute == 0.3
+
+
+def test_old_config_without_mute_windows_loads_with_defaults(owner):
+  _, _, layout, _ = owner
+  preferences.save(preferences.Preferences(), layout)
+  raw = json.loads(layout.config.read_text())
+  del raw['pause_mute'], raw['skip_mute']
+  layout.config.write_text(json.dumps(raw))
+  loaded = preferences.load(layout)
+  assert (loaded.pause_mute, loaded.skip_mute) == (0.5, 0.25)

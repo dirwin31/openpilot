@@ -119,6 +119,11 @@ export function formatTime(ms) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
 }
 
+export function muteLabel(seconds) {
+  const ms = Math.round((Number(seconds) || 0) * 1000)
+  return ms === 0 ? "Off" : `${ms} ms`
+}
+
 export class SpotifyFeed {
   constructor({ publish, unauthorized = () => { }, fetcher = (...args) => fetch(...args), uploader = uploadPackage,
     later = (fn, ms) => setTimeout(fn, ms), cancelTimer = (id) => clearTimeout(id),
@@ -248,7 +253,7 @@ export const SpotifyPage = {
     setup: null, busy: false, error: "", uploadProgress: null, now: Date.now(),
     installOpen: false, removeOpen: false, resetOpen: false, showSetup: false, downloadStarted: false,
     archiveFile: null, archiveMagicError: "", archiveChecking: false, archiveSelection: 0, installAttempted: false, installBaseline: null,
-    keyValue: "", keyEditing: false, nameValue: "", volumeDraft: null,
+    keyValue: "", keyEditing: false, nameValue: "", volumeDraft: null, pauseDraft: null, skipDraft: null,
   }),
   mounted() {
     this.feed = new SpotifyFeed({ publish: (value) => Object.assign(this, value, { now: Date.now() }), unauthorized: this.unauthorized })
@@ -275,6 +280,8 @@ export const SpotifyPage = {
       return !!prefs && (["test", "android_auto"].includes(prefs.output) || ADDRESS.test(prefs.outputAddress))
     },
     phoneSource() { return this.setup?.preferences.source === "phone" },
+    pauseMuteLabel() { return muteLabel(this.pauseDraft ?? this.setup?.preferences.pauseMute) },
+    skipMuteLabel() { return muteLabel(this.skipDraft ?? this.setup?.preferences.skipMute) },
     setupDone() { return this.phoneSource ? !!(ADDRESS.test(this.setup?.preferences.phoneAddress || "") && this.outputChosen) :
       !!(this.installed && this.setup?.keyPresent && this.outputChosen) },
     player() { return this.setup?.service?.player || null },
@@ -366,6 +373,16 @@ export const SpotifyPage = {
     async removeAll() { this.removeOpen = false; return this.feed.removeAll() },
     control(action, args) { return this.feed.control(action, args) },
     togglePlay() { return this.control(this.playing ? "pause" : "play") },
+    commitPauseMute(event) {
+      const value = Number(event.target.value)
+      this.pauseDraft = null
+      if (Number.isFinite(value)) return this.feed.post("./api/spotify/preferences", { pauseMute: value })
+    },
+    commitSkipMute(event) {
+      const value = Number(event.target.value)
+      this.skipDraft = null
+      if (Number.isFinite(value)) return this.feed.post("./api/spotify/preferences", { skipMute: value })
+    },
     commitVolume(event) {
       const volume = Math.round(Number(event.target.value))
       this.volumeDraft = null
@@ -429,6 +446,13 @@ export const SpotifyPage = {
           <GalaxySettingRow :row="switchRow('Phone Audio', setup.enabled, 'Forward music from the selected phone. Playback and volume stay on your phone.')"
             :index="0" :busy="busy" :save-value="(index, value) => setEnabled(value === 'On')" />
           <p class="gx-note" role="status">{{ statusText }}</p>
+          <label class="gx-stack"><span>Pause smoothing · {{ pauseMuteLabel }}</span>
+            <input type="range" class="gx-slider" min="0" :max="setup.preferences.muteMax || 1.5" step="0.05" :value="pauseDraft ?? setup.preferences.pauseMute"
+              aria-label="Pause smoothing" :disabled="busy" @input="pauseDraft = Number($event.target.value)" @change="commitPauseMute" /></label>
+          <label class="gx-stack"><span>Skip smoothing · {{ skipMuteLabel }}</span>
+            <input type="range" class="gx-slider" min="0" :max="setup.preferences.muteMax || 1.5" step="0.05" :value="skipDraft ?? setup.preferences.skipMute"
+              aria-label="Skip smoothing" :disabled="busy" @input="skipDraft = Number($event.target.value)" @change="commitSkipMute" /></label>
+          <p class="gx-note">After you pause or skip from the car screen, phone audio is muted this long so the song’s last moments don’t play. Raise a slider if you hear the old song’s tail; lower it if the next song starts clipped. Changes apply immediately, even while driving.</p>
           <p class="gx-note">Music only. Calls and microphone audio are not forwarded.</p>
         </template>
         <template v-if="setupDone && !phoneSource && !showSetup">
