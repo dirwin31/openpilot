@@ -468,7 +468,7 @@ export const SpotifyPage = {
           </div>
         </div>
         <div v-if="track && track.durationMs" class="gx-spotify-now__progress">
-          <input type="range" class="gx-slider" min="0" :max="track.durationMs" step="1000" :value="elapsed" :disabled="!can.has('seek')" aria-label="Position"
+          <input type="range" class="gx-slider gx-slider--galaxy" min="0" :max="track.durationMs" step="1000" :value="elapsed" :style="{ '--fill': Math.min(100, elapsed / track.durationMs * 100) + '%' }" :disabled="!can.has('seek')" aria-label="Position"
             @change="control('seek', { positionMs: Math.round(Number($event.target.value)) })" />
           <small class="gx-note">{{ formatTime(elapsed) }} / {{ formatTime(track.durationMs) }}</small>
         </div>
@@ -478,7 +478,7 @@ export const SpotifyPage = {
             <i :class="playing ? 'bi bi-pause-fill' : 'bi bi-play-fill'" aria-hidden="true"></i></button>
           <button type="button" class="gx-icon-btn" aria-label="Next" :disabled="!can.has('skip_next')" @click="control('next')"><i class="bi bi-skip-end-fill"></i></button>
           <label v-if="player.volume !== null" class="gx-spotify-now__volume"><i class="bi bi-volume-up" aria-hidden="true"></i>
-            <input type="range" class="gx-slider" min="0" max="100" step="1" :value="volumeDraft ?? player.volume" aria-label="Volume"
+            <input type="range" class="gx-slider gx-slider--galaxy" min="0" max="100" step="1" :value="volumeDraft ?? player.volume" :style="{ '--fill': (volumeDraft ?? player.volume) + '%' }" aria-label="Volume"
               @input="volumeDraft = Number($event.target.value)" @change="commitVolume" /></label>
         </div>
         <div v-if="setup.enabled && player?.loggedIn && !player.active" class="gx-stack">
