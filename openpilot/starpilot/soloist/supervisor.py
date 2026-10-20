@@ -32,8 +32,21 @@ OUTPUT_RETRY_SECONDS = 20.0
 PAIRING_PROFILE_SECONDS = 180.0  # the pairing window plus time for the phone to save the comma's services
 MAX_FAST_FAILURES = 5
 UNRESPONSIVE_SECONDS = 120.0
+LOGIN_SECONDS = 20.0
+LOGIN_RETRY_MAX_SECONDS = 300.0
+LOGIN_REJECTED_AFTER = 3
 PLAYING_GRACE_SECONDS = 600.0
 LOG_LINES = 200
+def network_ready() -> bool:
+  """A default route is up, so a login can reach Spotify. The clock is not checked; it waits on GPS."""
+  try:
+    with open('/proc/net/route') as route:
+      next(route)
+      return any(f[1] == '00000000' and int(f[3], 16) & 1 and f[0] != 'lo' for f in (line.split() for line in route) if len(f) > 3)
+  except (OSError, StopIteration, ValueError):
+    return False
+
+
 EXPIRES_IN = re.compile(r'client expires in (\d+) days?')
 
 
@@ -106,10 +119,11 @@ class BluetoothOutput:
 class Supervisor:
   def __init__(self, layout: Layout | None = None, *, output: BluetoothOutput | None = None,
                spawn: Callable[..., subprocess.Popen] = subprocess.Popen, clock: Callable[[], float] = time.monotonic,
-               make_client: Callable[[Path], PlayerClient] | None = None):
+               make_client: Callable[[Path], PlayerClient] | None = None,
+               network: Callable[[], bool] = network_ready):
     self.layout = layout or Layout.default()
     self.output = output or BluetoothOutput()
-    self.spawn, self.clock = spawn, clock
+    self.spawn, self.clock, self.network = spawn, clock, network
     self.make_client = make_client or (lambda data: PlayerClient(data))
     self.server: subprocess.Popen | None = None
     self.player: subprocess.Popen | None = None
@@ -142,6 +156,8 @@ class Supervisor:
       target=fn, name='spotify_output_check', daemon=True).start()
     self.unresponsive_since: float | None = None
     self.authenticated_once = False
+    self.login_since: float | None = None
+    self.login_failures = 0
     self.answered = False
     self.last_playing = False
 
@@ -193,7 +209,7 @@ class Supervisor:
     return process
 
   def stop_children(self, *, release_phone: bool = True) -> None:
-    self.unresponsive_since = None
+    self.unresponsive_since = self.login_since = None
     self.output_generation += 1
     self.output_seen, self.output_flips, self.waiting_for = None, 0, ''
     if self.client is not None:
@@ -362,6 +378,9 @@ class Supervisor:
       return
     if now < self.retry_at:
       return
+    if not self.network():
+      self._set('waiting_network', 'Waiting for the comma’s network…')
+      return
     self.output_available = prefs.output != 'bluetooth' or self._output_ready(prefs.output_address)
     self.output_check_at = now + OUTPUT_RETRY_SECONDS
     self.waiting_for = '' if self.output_available else prefs.output_name or 'your Bluetooth speaker'
@@ -396,7 +415,13 @@ class Supervisor:
       self.answered = self.answered or connected
       if snapshot.get('loggedIn'):
         self.authenticated_once = True
+        self.login_since, self.login_failures = None, 0
         self.last_playing = bool(snapshot.get('active') and snapshot.get('status') in ('playing', 'buffering'))
+      if connected and not self.authenticated_once and not snapshot.get('loggedIn'):
+        self.login_since = self.login_since if self.login_since is not None else now
+        if now - self.login_since >= LOGIN_SECONDS:
+          self._retry_login(now)
+          return
       lost_login = connected and self.authenticated_once and not snapshot.get('loggedIn')
       # Logout clears the playback state, so cached music from before a coverage gap gets longer.
       limit = PLAYING_GRACE_SECONDS if lost_login and self.last_playing else UNRESPONSIVE_SECONDS
@@ -423,6 +448,15 @@ class Supervisor:
       return
     detail = 'audio output closed' if server_dead and code is None else f'player exited ({code})'
     self._fail(now, f'Spotify stopped: {detail}. Retrying…')
+
+  def _retry_login(self, now: float) -> None:
+    self.stop_children()
+    self.login_failures += 1
+    delay = min(LOGIN_RETRY_MAX_SECONDS, 5.0 * 2 ** (self.login_failures - 1)) * random.uniform(0.8, 1.2)
+    self.retry_at = now + delay
+    rejected = self.login_failures >= LOGIN_REJECTED_AFTER
+    self._set('retrying', 'Spotify keeps refusing the sign-in. Check your API key or network connection. Trying again…' if rejected
+              else 'Couldn’t sign in to Spotify yet. Trying again…')
 
   def _fail(self, now: float, message: str) -> None:
     self.fast_failures += 1

@@ -37,9 +37,13 @@ assert.match(releaseInfo({ installed: true }).label, /expiry date unavailable/)
 assert.equal(serviceLabel({ enabled: false }), "Off")
 assert.equal(serviceLabel({ enabled: true, service: { state: "waiting_output", message: "Waiting for Car to connect over Bluetooth." } }),
   "Waiting for Car to connect over Bluetooth.")
-assert.match(serviceLabel({ enabled: true, service: { state: "waiting", message: "" } }), /pick this device/)
-assert.match(serviceLabel({ enabled: true, service: { state: "waiting", message: "", outputWaiting: "Car" } }),
-  /pick this device.*Audio waits for Car\./)
+assert.equal(serviceLabel({ enabled: true, service: { state: "waiting", message: "" } }), "Signing in to Spotify…")
+assert.match(serviceLabel({ enabled: true, service: { state: "ready", message: "", outputWaiting: "Car" } }),
+  /Pick this device.*Audio waits for Car\./)
+assert.equal(serviceLabel({ enabled: true, service: { state: "waiting_network", message: "Waiting for the comma’s network…" } }),
+  "Waiting for the comma’s network…")
+assert.equal(serviceLabel({ enabled: true, service: { state: "retrying", message: "Couldn’t sign in to Spotify yet. Trying again…" } }),
+  "Couldn’t sign in to Spotify yet. Trying again…")
 assert.equal(serviceLabel({ enabled: true, service: { state: "ready", player: { status: "paused" } } }), "Paused")
 
 assert.equal(positionNow({ ms: 1000, at: 10_000, speed: 1 }, 5000, 12_000), 3000)

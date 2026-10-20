@@ -156,13 +156,14 @@ class FakeProcess:
 
 
 class FakeClient:
+  logged_in = True
   def __init__(self, _data):
     self.on_change = lambda: None
     self.started = self.stopped = False
     self.sent = []
   def start(self): self.started = True
   def stop(self): self.stopped = True
-  def snapshot(self): return {'connected': True, 'loggedIn': False, 'status': 'idle', 'active': False}
+  def snapshot(self): return {'connected': True, 'loggedIn': self.logged_in, 'status': 'idle', 'active': False}
   def send(self, action, args): self.sent.append((action, args))
 
 
@@ -174,7 +175,7 @@ def ready_layout(layout, monkeypatch, *, expired=False):
   preferences.save(preferences.Preferences(output='test'), layout)
 
 
-def make_supervisor(layout, spawned):
+def make_supervisor(layout, spawned, logged_in=True):
   def spawn(argv, **kwargs):
     process = FakeProcess(argv, **kwargs)
     spawned.append(process)
@@ -182,7 +183,7 @@ def make_supervisor(layout, spawned):
       backend.runtime_paths(layout)['socket'].touch()
     return process
   now = [100.0]
-  sup = supervisor.Supervisor(layout, spawn=spawn, clock=lambda: now[0], make_client=FakeClient)  # ty: ignore[invalid-argument-type]  # test double
+  sup = supervisor.Supervisor(layout, spawn=spawn, clock=lambda: now[0], make_client=type('Client', (FakeClient,), {'logged_in': logged_in}), network=lambda: True)  # ty: ignore[invalid-argument-type]  # test double
   sup.run_async = lambda fn: fn()
   return sup, now
 
@@ -202,7 +203,7 @@ def test_supervisor_reports_missing_setup_steps(layout, monkeypatch):
 def test_supervisor_starts_server_then_player_and_redacts_key(layout, monkeypatch):
   ready_layout(layout, monkeypatch)
   spawned = []
-  sup, _ = make_supervisor(layout, spawned)
+  sup, _ = make_supervisor(layout, spawned, logged_in=False)
   sup.tick()
   assert [Path(p.argv[0]).name for p in spawned] == ['pulseaudio', 'soloist']
   assert all(p.kwargs['start_new_session'] for p in spawned)
@@ -267,7 +268,7 @@ def _speaker_supervisor(layout, monkeypatch, *, can_switch):
   sup, now = make_supervisor(layout, spawned)
   sup.output = Output()
   sup.tick()
-  assert sup.status()['state'] == 'waiting' and sup.status()['outputWaiting'] == 'Car'
+  assert sup.status()['state'] == 'ready' and sup.status()['outputWaiting'] == 'Car'
   assert len(spawned) == 2 and sup.client.started
   assert 'module-null-sink sink_name=spotify_silent' in spawned[0].argv
   sup.output.connected = True
@@ -377,3 +378,43 @@ def test_status_publishes_the_phone_track_only_while_phone_audio_runs(layout):
   sup.player = object()
   found = sup.status()['nowPlaying']
   assert found['source'] == 'phone' and found['title'] == 'Phone Song'
+
+
+def test_supervisor_waits_for_network_before_starting(layout, monkeypatch):
+  ready_layout(layout, monkeypatch)
+  spawned = []
+  sup, _ = make_supervisor(layout, spawned)
+  up = [False]
+  sup.network = lambda: up[0]
+  sup.tick()
+  assert spawned == []
+  assert sup.status()['state'] == 'waiting_network'
+  assert sup.fast_failures == 0
+  up[0] = True
+  sup.tick()
+  assert [Path(p.argv[0]).name for p in spawned] == ['pulseaudio', 'soloist']
+
+
+def test_supervisor_retries_sign_in_with_backoff_and_resets_on_login(layout, monkeypatch):
+  ready_layout(layout, monkeypatch)
+  spawned = []
+  sup, now = make_supervisor(layout, spawned, logged_in=False)
+  sup.tick()
+  assert len(spawned) == 2
+  delays = []
+  for attempt in range(1, 4):
+    sup.tick()
+    now[0] += supervisor.LOGIN_SECONDS + 1
+    sup.tick()
+    assert sup.status()['state'] == 'retrying'
+    assert sup.login_failures == attempt
+    delays.append(sup.retry_at - now[0])
+    assert ('API key' in sup.status()['message']) == (attempt >= supervisor.LOGIN_REJECTED_AFTER)
+    now[0] = sup.retry_at + 0.1
+    sup.tick()
+    assert len(spawned) == 2 * (attempt + 1)
+  assert delays[0] < delays[1] < delays[2]
+  sup.client.snapshot = lambda: {'connected': True, 'loggedIn': True, 'status': 'idle', 'active': False}
+  sup.tick()
+  assert sup.login_failures == 0
+  assert sup.status()['state'] == 'ready'
