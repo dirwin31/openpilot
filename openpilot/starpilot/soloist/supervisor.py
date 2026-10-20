@@ -31,6 +31,8 @@ STOP_SECONDS = 5.0
 OUTPUT_RETRY_SECONDS = 20.0
 PAIRING_PROFILE_SECONDS = 180.0  # the pairing window plus time for the phone to save the comma's services
 MAX_FAST_FAILURES = 5
+UNRESPONSIVE_SECONDS = 120.0
+PLAYING_GRACE_SECONDS = 600.0
 LOG_LINES = 200
 EXPIRES_IN = re.compile(r'client expires in (\d+) days?')
 
@@ -128,6 +130,20 @@ class Supervisor:
     self.phone_track = None
     self.phone_profile = False
     self.pairing_profile_until = 0.0
+    self.output_available = True
+    self.output_check_at = 0.0
+    self.output_lock = threading.Lock()
+    self.output_seen: tuple[int, bool] | None = None
+    self.output_generation = 0
+    self.output_checking = False
+    self.output_flips = 0
+    self.waiting_for = ''
+    self.run_async: Callable[[Callable[[], None]], None] = lambda fn: threading.Thread(
+      target=fn, name='spotify_output_check', daemon=True).start()
+    self.unresponsive_since: float | None = None
+    self.authenticated_once = False
+    self.answered = False
+    self.last_playing = False
 
   # ---- status ---------------------------------------------------------------------------------------
   def _set(self, state: str, message: str = '') -> None:
@@ -146,7 +162,7 @@ class Supervisor:
     with self.log_lock:
       log = list(self.log)[-20:]
     return {'state': state, 'message': self.message, 'daysLeft': self.days_left, 'player': player,
-            'nowPlaying': now_playing, 'log': log}
+            'nowPlaying': now_playing, 'outputWaiting': self.waiting_for if self.player is not None else '', 'log': log}
 
   def publish(self) -> None:
     try:
@@ -177,6 +193,9 @@ class Supervisor:
     return process
 
   def stop_children(self, *, release_phone: bool = True) -> None:
+    self.unresponsive_since = None
+    self.output_generation += 1
+    self.output_seen, self.output_flips, self.waiting_for = None, 0, ''
     if self.client is not None:
       self.client.stop()
       self.client = None
@@ -189,6 +208,45 @@ class Supervisor:
       self.phone_prefs = None
       if self.clock() >= self.pairing_profile_until:
         self._release_profile()
+
+  def _output_ready(self, address: str) -> bool:
+    with self.output_lock:
+      return self.output.ready(address)
+
+  def _output_changed(self, now: float, address: str) -> bool:
+    seen, self.output_seen = self.output_seen, None
+    if seen is not None and seen[0] == self.output_generation:
+      self.output_flips = self.output_flips + 1 if seen[1] != self.output_available else 0
+      if self.output_flips >= 2:
+        return True
+    if now >= self.output_check_at and not self.output_checking:
+      self.output_check_at = now + OUTPUT_RETRY_SECONDS
+      self.output_checking = True
+      generation = self.output_generation
+
+      def check() -> None:
+        try:
+          self.output_seen = (generation, self._output_ready(address))
+        finally:
+          self.output_checking = False
+      self.run_async(check)
+    return False
+
+  def _switch_output(self, prefs: preferences.Preferences) -> bool:
+    """Move audio to or from the speaker inside the running server, so Soloist keeps its session."""
+    speaker = not self.output_available
+    if not backend.can_switch():
+      return False
+    try:
+      backend.switch_output(self.layout, speaker)
+    except (OSError, subprocess.SubprocessError) as error:
+      with self.log_lock:
+        self.log.append(f'audio: could not switch output: {error}')
+      return False
+    self.output_available, self.output_flips = speaker, 0
+    self.waiting_for = '' if speaker else prefs.output_name or 'your Bluetooth speaker'
+    self.publish()
+    return True
 
   def _release_profile(self) -> None:
     if self.phone_profile:
@@ -225,7 +283,7 @@ class Supervisor:
         self._set('waiting_phone', f'Waiting for {prefs.phone_name or "your phone"}. Select the comma as its Bluetooth audio output.')
         self.retry_at = now + 5
         return
-      if prefs.output == 'bluetooth' and not self.output.ready(prefs.output_address):
+      if prefs.output == 'bluetooth' and not self._output_ready(prefs.output_address):
         self.stop_children(release_phone=False)
         self._set('waiting_output', f'Waiting for {prefs.output_name or "your speaker"} to connect.')
         self.retry_at = now + OUTPUT_RETRY_SECONDS
@@ -295,19 +353,23 @@ class Supervisor:
     if self.release_target != target:
       self.release_target, self.fast_failures, self.retry_at = target, 0, 0.0
     if self.player is not None:
+      if prefs.output == 'bluetooth' and self._output_changed(now, prefs.output_address):
+        if not self._switch_output(prefs):
+          self.stop_children()
+          self.retry_at = 0.0
+          return
       self._watch(now, target)
       return
     if now < self.retry_at:
       return
-    if prefs.output == 'bluetooth' and not self.output.ready(prefs.output_address):
-      name = prefs.output_name or 'your Bluetooth speaker'
-      self._set('waiting_output', f'Waiting for {name} to connect over Bluetooth.')
-      self.retry_at = now + OUTPUT_RETRY_SECONDS
-      return
+    self.output_available = prefs.output != 'bluetooth' or self._output_ready(prefs.output_address)
+    self.output_check_at = now + OUTPUT_RETRY_SECONDS
+    self.waiting_for = '' if self.output_available else prefs.output_name or 'your Bluetooth speaker'
+    # A private null sink keeps Connect available until the speaker returns; never the warning speaker.
     self.secret = key
     self._set('starting', 'Starting Spotify…')
     try:
-      self.server = self._start(backend.server_launch(self.layout, prefs), 'audio')
+      self.server = self._start(backend.server_launch(self.layout, prefs, silent=not self.output_available), 'audio')
       deadline = now + 5.0
       socket_path = backend.runtime_paths(self.layout)['socket']
       while not socket_path.exists() and self.server.poll() is None and self.clock() < deadline:
@@ -319,7 +381,7 @@ class Supervisor:
       self.stop_children()
       self._fail(now, f'Could not start Spotify: {error}')
       return
-    self.launched, self.started_at = launch_key, now
+    self.launched, self.started_at, self.answered, self.last_playing = launch_key, now, False, False
     self.client = self.make_client(self.layout.state)
     self.client.on_change = self.publish
     self.client.start()
@@ -329,7 +391,29 @@ class Supervisor:
     code = self.player.poll() if self.player is not None else None
     server_dead = self.server is not None and self.server.poll() is not None
     if code is None and not server_dead:
-      if now - self.started_at > 60:
+      snapshot = self.client.snapshot() if self.client is not None else {}
+      connected = bool(snapshot.get('connected'))
+      self.answered = self.answered or connected
+      if snapshot.get('loggedIn'):
+        self.authenticated_once = True
+        self.last_playing = bool(snapshot.get('active') and snapshot.get('status') in ('playing', 'buffering'))
+      lost_login = connected and self.authenticated_once and not snapshot.get('loggedIn')
+      # Logout clears the playback state, so cached music from before a coverage gap gets longer.
+      limit = PLAYING_GRACE_SECONDS if lost_login and self.last_playing else UNRESPONSIVE_SECONDS
+      if self.client is not None and (not connected or lost_login):
+        if self.unresponsive_since is None:
+          self.unresponsive_since = now
+        elif now - self.unresponsive_since >= limit:
+          self.stop_children()
+          if not self.answered:
+            self._fail(now, 'Spotify didn’t respond. Retrying…')
+            return
+          self.retry_at = now + 10
+          self._set('retrying', 'Reconnecting Spotify with your saved account…')
+          return
+      else:
+        self.unresponsive_since = None
+      if self.answered and now - self.started_at > 60:
         self.fast_failures = 0
       return
     self.stop_children()
@@ -393,6 +477,7 @@ class Supervisor:
     if command == 'reset_session':
       with self.lock:
         self.stop_children()
+        self.authenticated_once = False
         shutil.rmtree(self.layout.state, ignore_errors=True)
         shutil.rmtree(self.layout.cache, ignore_errors=True)
       return {'ok': True}

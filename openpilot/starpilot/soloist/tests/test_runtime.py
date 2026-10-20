@@ -1,4 +1,5 @@
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -65,7 +66,10 @@ def test_launch_commands_isolate_the_server_and_player(layout):
   assert (layout.runtime / 'alsa.conf').stat().st_mode & 0o777 == 0o600
   test = backend.server_launch(layout, preferences.Preferences(output='test'))
   assert any(arg.startswith('module-null-sink') for arg in test.argv) and 'ALSA_CONFIG_PATH' not in test.env
+  silent = backend.server_launch(layout, prefs, silent=True, alsa_base=Path('/usr/share/alsa/alsa.conf'))
+  assert 'module-null-sink sink_name=spotify_silent' in silent.argv and 'ALSA_CONFIG_PATH' in silent.env
   player = backend.player_launch(layout, prefs, 'sk_live_0123456789abcdef')
+  assert 'PULSE_SINK' not in player.env  # follows the server's default sink, so outputs can switch live
   assert player.argv[player.argv.index('--ws') + 1] == '127.0.0.1:0'
   assert player.argv[player.argv.index('--cache-size') + 1] == '256'
   assert player.env['PULSE_SERVER'] == f'unix:{layout.runtime}/pulse/native'
@@ -179,6 +183,7 @@ def make_supervisor(layout, spawned):
     return process
   now = [100.0]
   sup = supervisor.Supervisor(layout, spawn=spawn, clock=lambda: now[0], make_client=FakeClient)  # ty: ignore[invalid-argument-type]  # test double
+  sup.run_async = lambda fn: fn()
   return sup, now
 
 
@@ -247,24 +252,73 @@ def test_supervisor_backs_off_and_rolls_back_a_failing_build(layout, monkeypatch
   assert rolled == [True]
 
 
-def test_supervisor_waits_for_the_selected_bluetooth_output(layout, monkeypatch):
+def _speaker_supervisor(layout, monkeypatch, *, can_switch):
   ready_layout(layout, monkeypatch)
   preferences.save(preferences.Preferences(output_address='AA:BB:CC:DD:EE:FF', output_name='Car'), layout)
   class Output:
     connected = False
     def ready(self, address):
       return self.connected
-  output = Output()
+  switched = []
+  monkeypatch.setattr(supervisor.backend, 'can_switch', lambda: can_switch)
+  monkeypatch.setattr(supervisor.backend, 'switch_output', lambda _layout, speaker: switched.append(speaker))
+  monkeypatch.setattr(supervisor, '_kill_group', lambda _p: None)
   spawned = []
   sup, now = make_supervisor(layout, spawned)
-  sup.output = output
+  sup.output = Output()
   sup.tick()
-  assert sup.status()['state'] == 'waiting_output' and 'Car' in sup.status()['message'] and spawned == []
-  output.connected = True
-  now[0] += supervisor.OUTPUT_RETRY_SECONDS + 1
+  assert sup.status()['state'] == 'waiting' and sup.status()['outputWaiting'] == 'Car'
+  assert len(spawned) == 2 and sup.client.started
+  assert 'module-null-sink sink_name=spotify_silent' in spawned[0].argv
+  sup.output.connected = True
+  for _ in range(2):  # one check is not enough; the speaker has to stay connected
+    now[0] += supervisor.OUTPUT_RETRY_SECONDS + 1
+    sup.tick()
+    assert len(spawned) == 2 and switched == []
   sup.tick()
-  assert len(spawned) == 2
+  return sup, now, spawned, switched
 
+
+def test_speaker_returning_switches_audio_without_restarting_soloist(layout, monkeypatch):
+  sup, now, spawned, switched = _speaker_supervisor(layout, monkeypatch, can_switch=True)
+  client = sup.client
+  assert switched == [True] and len(spawned) == 2 and sup.client is client and not client.stopped
+  assert sup.status()['outputWaiting'] == ''
+  sup.output.connected = False
+  for _ in range(3):
+    now[0] += supervisor.OUTPUT_RETRY_SECONDS + 1
+    sup.tick()
+  assert switched == [True, False] and len(spawned) == 2
+  assert sup.status()['outputWaiting'] == 'Car'
+
+
+def test_speaker_switch_falls_back_to_a_restart(layout, monkeypatch):
+  sup, _now, spawned, switched = _speaker_supervisor(layout, monkeypatch, can_switch=False)
+  (layout.state / 'saved-session').write_text('retained')
+  sup.tick()
+  assert switched == [] and len(spawned) == 4
+  assert any(arg.startswith('module-alsa-sink') for arg in spawned[2].argv)
+  assert (layout.state / 'saved-session').read_text() == 'retained'
+  assert sup.status()['outputWaiting'] == ''
+
+
+def test_switch_output_moves_streams_and_drops_the_old_sink(layout):
+  calls = []
+  outputs = {('list', 'short', 'sink-inputs'): '7\t1\t3\tprotocol-native.c\ts16le 2ch 44100Hz\n',
+             ('list', 'short', 'modules'): ('0\tmodule-native-protocol-unix\tsocket=/x\n' +
+                                            '1\tmodule-null-sink\tsink_name=spotify_silent\n' +
+                                            '2\tmodule-alsa-sink\tdevice=starpilot_spotify sink_name=spotify channels=2 tsched=0\n')}
+  def run(argv, **kwargs):
+    calls.append(tuple(argv[1:]))
+    assert kwargs['env']['PULSE_SERVER'].startswith('unix:') and kwargs['timeout'] and kwargs['check']
+    return subprocess.CompletedProcess(argv, 0, outputs.get(tuple(argv[1:]), ''))
+  backend.switch_output(layout, True, run=run)
+  assert calls == [('load-module', 'module-alsa-sink', 'device=starpilot_spotify', 'sink_name=spotify', 'channels=2', 'tsched=0'),
+                   ('set-default-sink', 'spotify'), ('list', 'short', 'sink-inputs'), ('move-sink-input', '7', 'spotify'),
+                   ('list', 'short', 'modules'), ('unload-module', '1')]
+  calls.clear()
+  backend.switch_output(layout, False, run=run)
+  assert calls[0] == ('load-module', 'module-null-sink', 'sink_name=spotify_silent') and calls[-1] == ('unload-module', '2')
 
 def test_control_socket_round_trip(layout, tmp_path):
   import threading
