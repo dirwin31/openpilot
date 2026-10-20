@@ -418,3 +418,41 @@ def test_supervisor_retries_sign_in_with_backoff_and_resets_on_login(layout, mon
   sup.tick()
   assert sup.login_failures == 0
   assert sup.status()['state'] == 'ready'
+
+
+def test_changing_mute_values_never_restarts_the_player(layout, monkeypatch):
+  from dataclasses import replace
+  ready_layout(layout, monkeypatch)
+  spawned = []
+  sup, now = make_supervisor(layout, spawned)
+  sup.tick()
+  assert len(spawned) == 2
+  preferences.save(replace(preferences.load(layout), pause_mute=1.2, skip_mute=0.0), layout)
+  assert preferences.load(layout).pause_mute == 1.2
+  now[0] += 1
+  sup.tick()
+  assert len(spawned) == 2 and not sup.client.stopped and all(p.poll() is None for p in spawned)
+  preferences.save(replace(preferences.load(layout), cache_mb=512), layout)  # a real change still restarts
+  sup.tick()
+  assert len(spawned) == 4
+
+
+def test_changing_mute_values_keeps_phone_audio_running(layout, monkeypatch):
+  from dataclasses import replace
+  ready_layout(layout, monkeypatch)
+  preferences.save(preferences.Preferences(output='test', source='phone', phone_address='AA:BB:CC:DD:EE:FF'), layout)
+  spawned = []
+  sup, now = make_supervisor(layout, spawned)
+  sup.phone.powered = lambda: True
+  sup.phone.ready = lambda *_a: True
+  sup.phone.track = lambda _a: None
+  monkeypatch.setattr(supervisor.phone_audio, 'profile', lambda *_a: None)
+  sup.tick()
+  assert [Path(p.argv[0]).name for p in spawned][0] == 'pulseaudio' and len(spawned) == 2
+  preferences.save(replace(preferences.load(layout), pause_mute=1.5, skip_mute=0.05), layout)
+  now[0] += 1
+  sup.tick()
+  assert len(spawned) == 2 and all(p.poll() is None for p in spawned)
+  preferences.save(replace(preferences.load(layout), cache_mb=512), layout)
+  sup.tick()
+  assert len(spawned) == 4
