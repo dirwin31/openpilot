@@ -182,6 +182,18 @@ def test_phone_connects_only_paired_selected_audio_source_and_pauses_its_player(
   assert phone.client.calls == [(path, DEVICE, 'ConnectProfile', 's', (phone_audio.A2DP_SOURCE,))]
   phone.ready(PHONE, 101)
   assert len(phone.client.calls) == 1
+  transport_path = path + '/fd0'
+  for state in ('pending', 'active'):
+    objects[transport_path] = {phone_audio.MEDIA_TRANSPORT: {'Device': path, 'State': state}}
+    assert phone.ready(PHONE, 200)
+    assert len(phone.client.calls) == 1
+  # Another device's stream must not suppress recovery of this phone's A2DP.
+  objects[transport_path][phone_audio.MEDIA_TRANSPORT]['Device'] = '/other'
+  assert phone.ready(PHONE, 200)
+  assert len(phone.client.calls) == 2
+  del objects[transport_path]
+  assert phone.ready(PHONE, 221)  # transport disappeared: normal retry resumes
+  assert len(phone.client.calls) == 3
   phone.pause(PHONE)
   assert phone.client.calls[-1] == (path + '/player0', phone_audio.MEDIA_PLAYER, 'Pause')
   phone.control(PHONE, 'next')

@@ -23,6 +23,7 @@ from openpilot.starpilot.soloist.preferences import ADDRESS
 
 A2DP_SOURCE = '0000110a-0000-1000-8000-00805f9b34fb'
 MEDIA_PLAYER = 'org.bluez.MediaPlayer1'
+MEDIA_TRANSPORT = 'org.bluez.MediaTransport1'
 PLAYER_METHODS = {'play': 'Play', 'pause': 'Pause', 'next': 'Next', 'previous': 'Previous'}
 # The deep buffer rides out Bluetooth stalls, so queued audio must be thrown away when the car sends pause or
 # skip, and the phone's still-arriving audio muted until it has acted on the command.
@@ -80,7 +81,8 @@ class PhoneInput:
 
   def ready(self, address: str, now: float) -> bool:
     from openpilot.starpilot.bluetooth.owner import DEVICE
-    for path, interfaces in self._objects().items():
+    objects = self._objects()
+    for path, interfaces in objects.items():
       props = interfaces.get(DEVICE, {})
       if str(props.get('Address', '')).upper() != address:
         continue
@@ -88,6 +90,13 @@ class PhoneInput:
         return False
       if A2DP_SOURCE not in props.get('UUIDs', []):
         raise RuntimeError('The selected device does not offer Bluetooth music. Choose your phone.')
+      # A streaming transport already proves the profile is connected. Do not
+      # send periodic ConnectProfile requests into an established audio stream.
+      if props.get('Connected') and any(
+        transport.get('Device') == path and transport.get('State') in ('pending', 'active')
+        for item in objects.values() if (transport := item.get(MEDIA_TRANSPORT)) is not None
+      ):
+        return True
       # Connected alone does not mean A2DP is connected (e.g. an existing HFP link).
       if now >= self.next_connect:
         self.next_connect = now + 20
