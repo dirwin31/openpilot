@@ -168,6 +168,7 @@ class FakeClient:
 
 
 def ready_layout(layout, monkeypatch, *, expired=False):
+  monkeypatch.setattr(supervisor.phone_audio, 'profile', lambda action: None)
   monkeypatch.setattr(supervisor.package, 'release_status', lambda _l: {'installed': True, 'expired': expired})
   monkeypatch.setattr(supervisor.backend, 'bundle_ready', lambda: True)
   layout.root.mkdir(parents=True, exist_ok=True)

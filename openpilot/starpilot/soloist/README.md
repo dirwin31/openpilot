@@ -43,17 +43,13 @@ page only after they are updated.
 
 ## Runtime behavior
 
-The cached AGNOS image's BlueALSA service starts `/usr/bin/bluealsa -p a2dp-source`.
-`phone_profile.py`, invoked through noninteractive sudo on the device, temporarily
-adds `a2dp-sink` using its own drop-in under `/run/systemd/system/bluealsa.service.d`.
-Only BlueALSA is restarted, once on entry and once on exit; Bluetooth bonds,
-bluetoothd, adapter power/identity and HFP registration are not changed. Unknown
-service commands and externally modified drop-ins are rejected. The override is
-removed on orderly shutdown/source change, recovered at the next supervisor start
-after an abrupt shutdown, and disappears at reboot. If the supervisor is killed
-without restarting, the receiving profile can remain advertised until reboot;
-its capture worker exits on parent death. Bluetooth music may briefly disconnect
-while BlueALSA restarts. Radio-off is respected; this feature never powers it on.
+The checkout bundles BlueALSA 5.0.0's daemon and matching PCM/CTL plugins for
+phone reception and Bluetooth output. `phone_profile.py` uses temporary `/run`
+overrides; the system's BlueALSA 4.1.1 installation stays intact. Phone capture
+uses `hwcompat "silence"` for continuity across input interruptions. Private ALSA
+configs select the matching plugins and explicitly preserve software volume.
+See [the bundle documentation](bluealsa/README.md) for build inputs, tests, and
+the old-commit rollback contract (restart music/openpilot or reboot after checkout).
 
 Only the selected paired phone is captured. The existing trusted pairing policy
 still determines which phones may establish Bluetooth connections; this feature
@@ -61,7 +57,7 @@ does not alter trust or erase bonds. `arecord` opens an ALSA plug PCM for that
 phone, converting to signed 16-bit 48 kHz stereo. A separate Python worker writes
 to the private server using AGNOS's `libpulse-simple.so.0`, with bounded buffers.
 The supervisor retries disconnects without repeatedly restarting Bluetooth.
-No extra native binaries are bundled or built for this feature.
+The versioned BlueALSA bundle and private PulseAudio server are included with the checkout.
 
 ## Validation
 

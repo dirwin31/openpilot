@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-from openpilot.starpilot.soloist import backend
+from openpilot.starpilot.soloist import backend, bluealsa_runtime
 from openpilot.starpilot.soloist import preferences
 from openpilot.starpilot.soloist.paths import Layout
 from openpilot.starpilot.soloist.preferences import ADDRESS
@@ -155,8 +155,8 @@ class PhoneInput:
 def capture_config(address: str) -> str:
   if not ADDRESS.fullmatch(address):
     raise ValueError('Invalid phone Bluetooth address')
-  return ('</usr/share/alsa/alsa.conf>\npcm.starpilot_phone {\n type plug\n slave.pcm {\n' +
-          f'  type bluealsa\n  device "{address}"\n  profile "a2dp"\n' + ' }\n}\n')
+  return ('</usr/share/alsa/alsa.conf>\n' + bluealsa_runtime.alsa_plugins() + 'pcm.starpilot_phone {\n type plug\n slave.pcm {\n' +
+          f'  type bluealsa\n  device "{address}"\n  profile "a2dp"\n  hwcompat "silence"\n  softvol "true"\n' + ' }\n}\n')
 
 
 class SampleSpec(C.Structure):
@@ -246,7 +246,8 @@ def relay(address: str, server: str, config: Path):
             continue
           writer.write(data)
           if log is not None and now - last_log >= 0.5:
-            log.write(f'{time.time():.3f} latency_ms={writer.latency_ms():.1f} max_read_ms={max_read * 1000:.0f}\n')
+            epoch = time.time()  # noqa: TID251 - correlate diagnostic logs with btmon/journal timestamps
+            log.write(f'{epoch:.3f} latency_ms={writer.latency_ms():.1f} max_read_ms={max_read * 1000:.0f}\n')
             log.flush()
             last_log, max_read = now, 0.0
       finally:

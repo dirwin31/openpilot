@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from openpilot.starpilot.soloist import backend, bugsink_report, credentials, package, preferences, phone_audio
+from openpilot.starpilot.soloist import backend, bluealsa_runtime, bugsink_report, credentials, package, preferences, phone_audio
 from openpilot.starpilot.soloist import now_playing as now_playing_module
 from openpilot.starpilot.soloist.client import PlayerClient
 from openpilot.starpilot.soloist.paths import CONTROL_SOCKET, Layout, private_dir
@@ -357,7 +357,7 @@ class Supervisor:
     if self.phone_prefs is not None:
       self.stop_children()
       self.retry_at = 0
-    elif self.phone_profile and self.clock() >= self.pairing_profile_until:
+    elif self.phone_profile and (prefs.output != 'bluetooth' or self.launched is None) and self.clock() >= self.pairing_profile_until:
       self._release_profile()
     state, message, launch_key = self.desired()
     now = self.clock()
@@ -382,6 +382,14 @@ class Supervisor:
     if not self.network():
       self._set('waiting_network', 'Waiting for the comma’s network…')
       return
+    if prefs.output == 'bluetooth' and not self.phone_profile:
+      try:
+        phone_audio.profile('acquire')
+        self.phone_profile = True
+      except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        self.retry_at = now + OUTPUT_RETRY_SECONDS
+        self._set('audio_unavailable', str(error))
+        return
     self.output_available = prefs.output != 'bluetooth' or self._output_ready(prefs.output_address)
     self.output_check_at = now + OUTPUT_RETRY_SECONDS
     self.waiting_for = '' if self.output_available else prefs.output_name or 'your Bluetooth speaker'
@@ -579,7 +587,8 @@ def main() -> None:
   os.nice(10)  # music yields to everything driving-related; children inherit this
   supervisor = Supervisor()
   reap_orphans(supervisor.layout)
-  if Path('/run/systemd/system/bluealsa.service.d/90-starpilot-phone.conf').exists():
+  legacy_profile = Path('/run/systemd/system/bluealsa.service.d/90-starpilot-phone.conf')
+  if legacy_profile.exists() or bluealsa_runtime.paths(legacy_profile)[0].exists():
     phone_audio.profile('release')
   stop = threading.Event()
 

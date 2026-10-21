@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from openpilot.starpilot.soloist import bluealsa_runtime
 from openpilot.starpilot.soloist.paths import Layout, private_dir
 from openpilot.starpilot.soloist.preferences import ADDRESS, Preferences
 
@@ -53,7 +54,8 @@ def alsa_config(address: str, base: Path = SYSTEM_ALSA_CONFIG) -> str:
     raise BackendUnavailable('Choose a Bluetooth speaker or car first')
   if any(character in str(base) for character in '\n\r<>"'):
     raise BackendUnavailable('Invalid system ALSA configuration path')
-  return (f'<{base}>\n\npcm.{PCM_NAME} {{\n  type bluealsa\n  device "{address}"\n  profile "a2dp"\n' +
+  return (f'<{base}>\n' + bluealsa_runtime.alsa_plugins() +
+          f'\npcm.{PCM_NAME} {{\n  type bluealsa\n  device "{address}"\n  profile "a2dp"\n  softvol "true"\n' +
           '  hint { show on description "StarPilot Spotify output" }\n}\n')
 
 
