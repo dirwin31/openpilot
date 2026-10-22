@@ -17,6 +17,7 @@ struct ConnectionSettingsView: View {
     @State private var checked = false
     @State private var openAfterReconnect = false
     @State private var connectingCommaID: String?
+    @State private var showHotspotJoin = false
 
     private let accent = Color(red: 0.68, green: 0.48, blue: 0.96)
     private let background = Color(red: 0.035, green: 0.035, blue: 0.078)
@@ -95,6 +96,11 @@ struct ConnectionSettingsView: View {
             .onChange(of: model.opened) { _, _ in openReconnectedGalaxy() }
             .onChange(of: model.wantsConnection) { _, value in if !value { openAfterReconnect = false } }
             .tint(accent).preferredColorScheme(.dark)
+            .alert("Join comma’s hotspot", isPresented: $showHotspotJoin) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("This hotspot address is available in the device list, but your iPhone couldn’t reach and verify comma there. In iPhone Settings → Wi-Fi, join comma’s TheGalaxy-… network using the hotspot password shown on comma. Then return here and tap the comma row again.")
+            }
             .confirmationDialog("Forget Bluetooth pairing?", isPresented: $confirmForget, titleVisibility: .visible) {
                 Button("Forget pairing", role: .destructive) {
                     model.disconnect(); bluetooth.forgetSavedDevice(); PairingKeyStore.remove(); model.pairingKey = ""
@@ -172,8 +178,11 @@ struct ConnectionSettingsView: View {
                     openAfterReconnect = true
                     Task { @MainActor in
                         defer { connectingCommaID = nil }
-                        await model.selectDiscoveredComma(device)
-                        openReconnectedGalaxy()
+                        let selected = await model.selectDiscoveredComma(device)
+                        if !selected && device.address == "172.31.254.1" {
+                            openAfterReconnect = false
+                            showHotspotJoin = true
+                        } else if selected { openReconnectedGalaxy() }
                     }
                 } label: {
                     HStack(spacing: 12) {

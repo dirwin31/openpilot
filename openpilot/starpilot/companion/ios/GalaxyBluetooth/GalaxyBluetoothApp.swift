@@ -344,8 +344,8 @@ final class AppModel: ObservableObject {
         bluetooth.disconnect(reason: "User selected Disconnect"); lan.invalidate(reason: "User selected Disconnect")
         connectionMessage = "Disconnected."
     }
-    func selectDiscoveredComma(_ device: DiscoveredComma) async {
-        guard !selectingDiscoveredComma, mode != .bluetooth else { return }
+    func selectDiscoveredComma(_ device: DiscoveredComma) async -> Bool {
+        guard !selectingDiscoveredComma, mode != .bluetooth else { return false }
         discovery.stop()
         selectingDiscoveredComma = true
         defer { selectingDiscoveredComma = false }
@@ -359,19 +359,21 @@ final class AppModel: ObservableObject {
             guard await candidate.probe() else {
                 connectionMessage = "Found a device, but Galaxy is unavailable or it doesn’t match your paired comma."
                 connectionLog.record("Discovered comma rejected by LAN verification")
-                return
+                return false
             }
             guard lan.generation == originalGeneration, mode == originalMode, phoneActive else {
                 connectionMessage = "Connection changed. Select the comma again."
-                return
+                return false
             }
             lan.bind(to: candidate.verifiedDeviceID)
             UserDefaults.standard.set(candidate.verifiedDeviceID, forKey: "galaxy.comma.identity")
             address = device.address
             connect()
             connectionLog.record("User selected a discovered comma; LAN verification passed")
+            return true
         } catch {
             connectionMessage = "Couldn’t connect to the discovered comma. Try again or enter its IP."
+            return false
         }
     }
     func fetchLegacyURL() async -> URL? {
