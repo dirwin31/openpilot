@@ -38,10 +38,14 @@ final class CBUUID: NSObject {
     static var instances: [CBCentralManager] = []
     var state = CBManagerState.poweredOn
     var cancellations = 0
+    var connected: [CBPeripheral] = []
+    var connections: [CBPeripheral] = []
+    var scans = 0
+    func retrieveConnectedPeripherals(withServices services: [CBUUID]) -> [CBPeripheral] { connected }
     init(delegate: CBCentralManagerDelegate, queue: DispatchQueue) { Self.instances.append(self) }
-    func scanForPeripherals(withServices services: [CBUUID], options: [String: Any]?) {}
+    func scanForPeripherals(withServices services: [CBUUID], options: [String: Any]?) { scans += 1 }
     func stopScan() {}
-    func connect(_ peripheral: CBPeripheral, options: [String: Any]?) {}
+    func connect(_ peripheral: CBPeripheral, options: [String: Any]?) { connections.append(peripheral) }
     func cancelPeripheralConnection(_ peripheral: CBPeripheral) { cancellations += 1 }
 }
 '''
@@ -63,8 +67,16 @@ tests = r'''
                 transport.centralManagerDidUpdateState(previous)
             }
             let peripheral = CBPeripheral()
+            if attempt == 1 { central.connected = [peripheral] }
             transport.centralManagerDidUpdateState(central)
-            transport.centralManager(central, didDiscover: peripheral, advertisementData: [:], rssi: 0)
+            transport.centralManagerDidUpdateState(central)
+            if attempt == 0 {
+                precondition(central.scans == 1 && central.connections.isEmpty)
+                transport.centralManager(central, didDiscover: peripheral, advertisementData: [:], rssi: 0)
+            } else {
+                precondition(central.scans == 0, "Already-connected comma must not depend on advertisements")
+            }
+            precondition(central.connections == [peripheral], "Attach exactly once, including repeated powered-on callbacks")
             transport.centralManager(central, didConnect: peripheral)
             let rx = CBCharacteristic(Wire.rx), tx = CBCharacteristic(Wire.tx), info = CBCharacteristic(Wire.info)
             let service = CBService()
@@ -113,6 +125,16 @@ tests = r'''
                 catch is CancellationError { }
             }
         }
+        let ambiguous = Task { try await transport.claim(name: "iPhone") }
+        let oldCount = CBCentralManager.instances.count
+        for _ in 0..<100 where CBCentralManager.instances.count == oldCount { await Task.yield() }
+        let central = CBCentralManager.instances.last!
+        central.connected = [CBPeripheral(), CBPeripheral()]
+        transport.centralManagerDidUpdateState(central)
+        do { _ = try await ambiguous.value; preconditionFailure("Do not silently select among connected commas") }
+        catch { precondition(error.localizedDescription.contains("More than one comma")) }
+        precondition(central.connections.isEmpty && central.scans == 0)
+        precondition(events.contains { $0.contains("waiting for comma’s pairing reply") })
         precondition(events.filter { $0.contains("pairing complete") }.count == 2)
         print("Repeated pairing, stale callbacks and setup handoff passed")
     }
