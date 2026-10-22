@@ -65,6 +65,9 @@ func prompt(kind: String = "confirmation", displayOnly: Bool = false) -> [String
         precondition(comma.posts.first?["operation"] as? String == "accept_pair")
         precondition(comma.posts.contains { $0["operation"] as? String == "pairing_response" && $0["accepted"] as? Bool == true })
 
+        model.dismiss()
+        precondition(model.phase == .done && model.summary.contains("Paired"), "Closing successful setup must retain pairing status")
+
         // Older comma: no adapter address means no window and no message.
         let old = ScriptedComma([["pairing": NSNull()]])
         let oldModel = AudioPairing(transport: { old }, pause: { await Task.yield() })
@@ -97,12 +100,19 @@ func prompt(kind: String = "confirmation", displayOnly: Bool = false) -> [String
         hangingModel.dismiss()
         await settle(hangingModel) { $0 == .idle && hanging.posts.contains { $0["operation"] as? String == "cancel_pair" } }
         let connectedComma = ScriptedComma([snapshot()])
-        let connectedModel = AudioPairing(transport: { connectedComma }, audioOutput: { $0 == "comma" }, pause: { await Task.yield() })
+        var routeSelected = true
+        let connectedModel = AudioPairing(transport: { connectedComma }, audioOutput: { routeSelected && $0 == "comma" }, pause: { await Task.yield() })
         connectedModel.start()
         await settle(connectedModel) { $0 == .connected }
         precondition(connectedComma.posts.isEmpty, "An existing audio route must not reopen pairing")
         connectedModel.dismiss()
-        precondition(connectedModel.phase == .idle)
+        precondition(connectedModel.phase == .connected)
+        routeSelected = false
+        connectedModel.refreshAudioRoute()
+        precondition(connectedModel.phase == .done, "Pairing and active audio output are different states")
+        routeSelected = true
+        connectedModel.refreshAudioRoute()
+        precondition(connectedModel.phase == .connected)
         print("audio pairing ok")
     }
 }

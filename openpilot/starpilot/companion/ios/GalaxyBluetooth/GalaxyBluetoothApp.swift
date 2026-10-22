@@ -45,7 +45,6 @@ final class AppModel: ObservableObject {
     private var lastRoute = "Reconnecting…"
     @Published var showDiagnostics = false
     @Published var showAudioPairing = false
-    private var offerAudioPairing = false
     private var audioWindowOpen = false
     private let claimer = ClaimTransport()
     lazy var audioPairing = AudioPairing(transport: { [weak self] in self?.transport })
@@ -149,7 +148,6 @@ final class AppModel: ObservableObject {
         guard !pairingInProgress else { return }
         pairingInProgress = true
         pairingFailure = ""
-        offerAudioPairing = false
         showAudioPairing = false
         bluetooth.disconnect(reason: "Starting new phone pairing")
         connectionMessage = "Open Settings → Bluetooth → Pair phone on comma (or Pair phone in Galaxy). Looking for comma…"
@@ -201,7 +199,6 @@ final class AppModel: ObservableObject {
         pairingKey = outcome.result.key
         if mode == .lan { mode = .automatic }
         connectionMessage = "Paired. Connecting to comma…"
-        offerAudioPairing = true
         audioWindowOpen = true
         lastReconnect = Date()
         bluetooth.reconnectSaved(pairingKey: pairingKey)
@@ -508,6 +505,7 @@ final class AppModel: ObservableObject {
 
     func monitor() async {
         while !Task.isCancelled {
+            audioPairing.refreshAudioRoute()
             if wantsConnection && !pairingInProgress {
                 if mode != .lan, !bluetooth.connected, !bluetooth.connecting, !bluetooth.isScanning,
                    !pairingKey.isEmpty, Date().timeIntervalSince(lastReconnect) >= 25 {
@@ -526,7 +524,6 @@ final class AppModel: ObservableObject {
                         Task { await self.checkGalaxyUpdates() }
                     }
                     connectionMessage = "Connected over \(transport.label)." + (opened || assets.readyRoot != nil ? "" : " " + assets.status)
-                    if offerAudioPairing { offerAudioPairing = false; startAudioPairing() }
                 } else if mode == .bluetooth {
                     connectionMessage = "Reconnecting over Bluetooth. If you forgot this phone on comma, open Pair phone on comma and Pair with comma here."
                 } else {

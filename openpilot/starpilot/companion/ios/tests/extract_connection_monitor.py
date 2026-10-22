@@ -38,10 +38,12 @@ enum ConnectionMode { case automatic, bluetooth, lan }
     let connected = false
 }
 @MainActor final class Discovery { var searching = false; var status = "Find comma on Wi-Fi"; func start() { searching = true }; func stop() {} }
+@MainActor final class Audio { func refreshAudioRoute() {} }
 @MainActor final class Assets { var readyRoot: URL?; var status = "" }
 @MainActor final class MonitorProbe {
     let bluetooth = Bluetooth(), lan = LAN(), transport = Transport(), discovery = Discovery()
     let assets = Assets()
+    let audioPairing = Audio()
     var legacyURL: URL?
     var lastAddressCheck = Date.distantPast
     var localAddressNetwork = ""

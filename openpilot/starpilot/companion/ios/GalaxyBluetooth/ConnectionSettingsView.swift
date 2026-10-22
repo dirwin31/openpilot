@@ -207,7 +207,7 @@ struct ConnectionSettingsView: View {
 
     private var preferences: some View {
         VStack(spacing: 0) {
-            row("music.note", title: "Phone music", subtitle: audio.phase == .connected ? "Comma is the audio output" : pairing ? "Waiting for app pairing" : "Audio not verified") {
+            row("music.note", title: "Phone music", subtitle: pairing ? "Waiting for app pairing" : audio.summary) {
                 Button("Set up") { model.startAudioPairing() }.disabled(!connected || pairing).font(.system(size: 12)).frame(minHeight: 44)
             }
             separator

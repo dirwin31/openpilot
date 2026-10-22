@@ -34,6 +34,7 @@ final class AudioPairing: ObservableObject {
     private let audioOutput: (String) -> Bool
     private let attempts: Int
     private var task: Task<Void, Never>?
+    private var commaName: String?
 
     init(transport: @escaping () -> (any GalaxyRequestTransport)?, attempts: Int = 125,
          audioOutput: ((String) -> Bool)? = nil,
@@ -52,6 +53,21 @@ final class AudioPairing: ObservableObject {
     }
 
     var active: Bool { phase != .idle }
+
+    var summary: String {
+        switch phase {
+        case .connected: return "Comma is the audio output"
+        case .done: return "Paired · choose comma as audio output"
+        case .opening, .waiting, .confirm: return "Music pairing in progress"
+        case .message: return "Music setup needs attention"
+        case .idle: return "Music output not checked"
+        }
+    }
+
+    func refreshAudioRoute() {
+        guard let commaName, phase == .done || phase == .connected else { return }
+        phase = audioOutput(commaName) ? .connected : .done
+    }
 
     nonisolated static func validAddress(_ value: String) -> Bool {
         value.range(of: "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", options: .regularExpression) != nil
@@ -94,7 +110,7 @@ final class AudioPairing: ObservableObject {
         if wasOpen { Task { [weak self] in _ = try? await self?.post(["operation": "cancel_pair"]) } }
     }
 
-    func dismiss() { if case .message = phase { phase = .idle } else if phase == .done || phase == .connected { phase = .idle } else { cancel() } }
+    func dismiss() { if phase == .done || phase == .connected { refreshAudioRoute() } else if case .message = phase { phase = .idle } else { cancel() } }
 
     private func post(_ payload: [String: Any]) async throws -> BridgeResponse? {
         guard let transport = transport(), transport.connected else { return nil }
@@ -115,8 +131,10 @@ final class AudioPairing: ObservableObject {
         // An older comma reports no adapter address and has no pairing window.
         guard Self.validAddress(first.adapterAddress) else { phase = .idle; return }
         let name = first.adapterName.isEmpty ? "comma" : first.adapterName
+        commaName = name
         if audioOutput(name) { phase = .connected; return }
-        if !windowOpen {
+        if windowOpen && first.state == "paired" { phase = .done; return }
+        if !windowOpen || first.state != "pairing" {
             let opened: BridgeResponse?
             do { opened = try await post(["operation": "accept_pair"]) } catch { opened = nil }
             switch opened?.status {
