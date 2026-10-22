@@ -29,7 +29,7 @@ struct ConnectionSettingsView: View {
         if pairing { return "Pairing…" }
         if connected { return model.opened ? "Open Galaxy" : "Preparing Galaxy…" }
         if connecting { return "Connecting…" }
-        return needsPairing ? "Pair with comma" : (model.address.isEmpty && model.pairingKey.isEmpty ? "Connect" : "Reconnect")
+        return needsPairing ? "Pair with comma" : "Connect"
     }
     private var checking: Bool { model.matchingGalaxy || assets.checking }
     private var status: String { pairing ? "Pairing with comma…" : connected ? "Connected via \(model.transport.label)" : connecting ? "Connecting to comma…" : "Not connected" }
