@@ -162,7 +162,7 @@ final class AppModel: ObservableObject {
         offerAudioPairing = false
         showAudioPairing = false
         bluetooth.disconnect(reason: "Starting new phone pairing")
-        connectionMessage = "Open Settings → Bluetooth → Pair phone on comma (or Pair phone in Galaxy). Looking for comma…"
+        connectionMessage = "Preparing Bluetooth setup over Wi-Fi…"
         pairingTask = Task { @MainActor in
             defer { pairingInProgress = false; pairingTask = nil }
             do {
@@ -567,7 +567,7 @@ final class AppModel: ObservableObject {
                     }
                     connectionMessage = "Connected over \(transport.label)." + (opened || assets.readyRoot != nil ? "" : " " + assets.status)
                 } else if mode == .bluetooth {
-                    connectionMessage = "Reconnecting over Bluetooth. If you forgot this phone on comma, open Pair phone on comma and Pair with comma here."
+                    connectionMessage = "Reconnecting over Bluetooth. If you removed this phone’s pairing, connect over Wi-Fi.\nThen set up Bluetooth again in this app."
                 } else {
                     connectionMessage = discovery.searching || lan.endpoint == nil
                         ? discovery.status

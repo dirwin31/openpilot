@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 import CoreBluetooth
 
-/// What comma hands a phone when its pairing window is open (Settings → Bluetooth → Pair phone on comma).
+/// The app opens comma’s pairing window over verified LAN before claiming a key.
 struct ClaimResult: Equatable {
     let key: String
     let id: String?
@@ -95,7 +95,7 @@ final class ClaimTransport: NSObject, @preconcurrency CBCentralManagerDelegate, 
             timeout = Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 guard !Task.isCancelled else { return }
-                self?.fail("comma didn’t answer. On comma open Settings → Bluetooth → Pair phone, then try again.")
+                self?.fail("Comma didn’t respond. Keep your iPhone nearby and reconnect to comma over Wi-Fi.\nThen try Bluetooth setup again in this app.")
             }
         }
     }

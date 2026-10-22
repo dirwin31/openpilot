@@ -106,7 +106,7 @@ struct ConnectionSettingsView: View {
             .alert("Reset Bluetooth pairing", isPresented: $showPairingHelp) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("If Bluetooth still won’t connect, try a fresh pairing:\n\n1. In this app, open Advanced → Forget Bluetooth pairing.\n2. On comma, open Bluetooth settings and forget this iPhone. Remove its app pairing too if it is listed separately.\n3. On iPhone, open Settings → Bluetooth → ⓘ beside comma → Forget This Device, if listed.\n4. On comma, open Pair phone, then pair again in this app.\n\nThis resets device pairing, not the app’s Bluetooth permission.")
+                Text("If Bluetooth still won’t connect, try a fresh pairing:\n\n1. In this app, open Advanced → Forget Bluetooth pairing.\n2. On comma, open Bluetooth settings and forget this iPhone. Remove its app pairing too if it is listed separately.\n3. On iPhone, open Settings → Bluetooth → ⓘ beside comma → Forget This Device, if listed.\n4. Connect to comma over Wi-Fi, then start Bluetooth setup in this app. The app opens pairing on comma automatically.\n\nThis resets device pairing, not the app’s Bluetooth permission.")
             }
             .confirmationDialog("Forget Bluetooth pairing?", isPresented: $confirmForget, titleVisibility: .visible) {
                 Button("Forget pairing", role: .destructive) {
@@ -143,8 +143,10 @@ struct ConnectionSettingsView: View {
                 Text("Wi-Fi").tag(ConnectionMode.lan)
             }.pickerStyle(.segmented).disabled(pairing)
             if !pairing {
-                Text(model.mode == .automatic ? "Wi-Fi first, Bluetooth as backup." : model.mode == .bluetooth ? "Local controls over Bluetooth." : "Uses your local Wi-Fi network.")
-                    .font(.system(size: 11)).foregroundStyle(muted)
+                Text(model.mode == .automatic ? "Connect over Wi-Fi\nBluetooth takes over when needed" : model.mode == .bluetooth ? "Connect directly to comma\nControl Galaxy without Wi-Fi" : "Connect over your local network\nJoin the same Wi-Fi or comma’s hotspot")
+                    .font(.system(size: 11)).foregroundStyle(muted).lineSpacing(3)
+                    .multilineTextAlignment(.center).frame(maxWidth: .infinity)
+                    .fixedSize(horizontal: false, vertical: true).padding(.vertical, 3)
             }
             if model.mode != .bluetooth && !connected && !pairing && (discovery.searching || !connectionCandidates.isEmpty) {
                 discoveredCommas
@@ -175,9 +177,9 @@ struct ConnectionSettingsView: View {
             if pairing {
                 Button("Cancel pairing") { model.cancelPairing() }.font(.system(size: 12)).frame(maxWidth: .infinity, minHeight: 30)
             } else if !model.pairingFailure.isEmpty {
-                message(model.pairingFailure)
+                connectionMessage(model.pairingFailure)
             } else if model.connectionMessage != "Connected over \(model.transport.label)." && !connected {
-                message(model.connectionMessage)
+                connectionMessage(model.connectionMessage)
             }
             if !pairing && (!model.pairingFailure.isEmpty || (bluetooth.connectionFailed && model.mode != .lan)) {
                 Button("Bluetooth trouble? Try resetting pairing") { showPairingHelp = true }
@@ -185,6 +187,21 @@ struct ConnectionSettingsView: View {
             }
         }.padding(14).background(LinearGradient(colors: [panel, background], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(accent.opacity(0.25)))
+    }
+
+    private func connectionMessage(_ text: String) -> some View {
+        let copy = text
+        let split = copy.range(of: ". ")
+        let title = split.map { String(copy[..<$0.lowerBound]) } ?? copy
+        let detail = split.map { String(copy[$0.upperBound...]) }
+        return VStack(spacing: 4) {
+            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(Color.white.opacity(0.9))
+            if let detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.system(size: 11)).foregroundStyle(muted).lineSpacing(3)
+            }
+        }.multilineTextAlignment(.center).frame(maxWidth: .infinity)
+            .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 8).padding(.top, 3)
     }
 
     private var discoveredCommas: some View {

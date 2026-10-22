@@ -21,7 +21,7 @@ extension GalaxyRequestTransport {
 enum LANPairing {
     static let windowPath = "/api/bluetooth/action"
     static let windowBody = Data("{\"operation\":\"accept_pair\"}".utf8)
-    /// False means there is no LAN session and the user must open the window on comma.
+    /// False means there is no verified LAN session for opening the window.
     /// A refused or uncertain LAN request must not silently start a Bluetooth claim.
     @MainActor static func openWindow(over lan: any GalaxyRequestTransport,
         pause: (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
@@ -56,7 +56,7 @@ enum LANPairing {
                 try await pause(2_500_000_000)
                 continue
             }
-            throw BridgeError.message("Couldn’t open comma’s pairing window (HTTP \(response.status)\(code.isEmpty ? "" : " · " + code)). Open Pair phone on comma or try again.")
+            throw BridgeError.message("Couldn’t open comma’s pairing window (HTTP \(response.status)\(code.isEmpty ? "" : " · " + code)). Check your Wi-Fi connection to comma, then retry Bluetooth setup in this app.")
         }
         return false
     }

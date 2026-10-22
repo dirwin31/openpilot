@@ -78,7 +78,7 @@ final class AudioPairing: ObservableObject {
                         code: (prompt?["value"] as? String) ?? "", displayOnly: (prompt?["displayOnly"] as? Bool) ?? false)
     }
 
-    /// `windowOpen`: comma's pairing window is already open because the person just paired the app from comma's Pair phone.
+    /// `windowOpen`: the app already opened comma’s pairing window over LAN.
     func start(windowOpen: Bool = false) {
         guard task == nil else { return }
         onEvent?("Music setup started; reuse pairing window=\(windowOpen)")
