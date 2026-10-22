@@ -16,6 +16,7 @@ struct ConnectionSettingsView: View {
     @State private var confirmForget = false
     @State private var checked = false
     @State private var openAfterReconnect = false
+    @State private var connectingCommaID: String?
 
     private let accent = Color(red: 0.68, green: 0.48, blue: 0.96)
     private let background = Color(red: 0.035, green: 0.035, blue: 0.078)
@@ -121,12 +122,14 @@ struct ConnectionSettingsView: View {
             }.pickerStyle(.segmented).disabled(pairing)
             Text(pairing ? "Keep Pair phone open on comma." : model.mode == .automatic ? "Wi-Fi first, Bluetooth as backup." : model.mode == .bluetooth ? "Local controls over Bluetooth." : "Uses your local Wi-Fi network.")
                 .font(.system(size: 11)).foregroundStyle(muted)
+            if model.mode != .bluetooth && !connected && !pairing && (discovery.searching || !discovery.devices.isEmpty) {
+                discoveredCommas
+            } else {
             Button {
                 if connected && model.opened { select(.galaxy) }
                 else if needsPairing { model.pairWithComma() }
                 else {
                     openAfterReconnect = true
-                    if model.mode != .bluetooth && model.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { advanced = true }
                     model.connect()
                     openReconnectedGalaxy()
                 }
@@ -139,6 +142,7 @@ struct ConnectionSettingsView: View {
                     .background(LinearGradient(colors: [Color(red: 0.73, green: 0.55, blue: 1), accent], startPoint: .leading, endPoint: .trailing), in: Capsule())
                     .foregroundStyle(Color(red: 0.12, green: 0.06, blue: 0.19))
             }.buttonStyle(.plain).disabled(pairing || connecting || (connected && !model.opened))
+            }
             if pairing {
                 message(model.connectionMessage)
                 Button("Cancel pairing") { model.cancelPairing() }.font(.system(size: 12)).frame(maxWidth: .infinity, minHeight: 30)
@@ -149,6 +153,56 @@ struct ConnectionSettingsView: View {
             }
         }.padding(14).background(LinearGradient(colors: [panel, background], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(accent.opacity(0.25)))
+    }
+
+    private var discoveredCommas: some View {
+        VStack(spacing: 8) {
+            ForEach(discovery.devices) { device in
+                Button {
+                    connectingCommaID = device.id
+                    openAfterReconnect = true
+                    Task { @MainActor in
+                        defer { connectingCommaID = nil }
+                        await model.selectDiscoveredComma(device)
+                        openReconnectedGalaxy()
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        HStack(alignment: .bottom, spacing: 3) {
+                            ForEach(0..<4) { bar in
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(accent.opacity(0.45 + Double(bar) * 0.18))
+                                    .frame(width: 4, height: CGFloat(7 + bar * 5))
+                            }
+                        }.frame(width: 28, height: 26).accessibilityHidden(true)
+                        Text(device.name).font(.system(size: 14, weight: .semibold))
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Text(device.address).font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(muted).lineLimit(1)
+                        if connectingCommaID == device.id {
+                            ProgressView().controlSize(.small).tint(accent)
+                        } else {
+                            Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(accent)
+                        }
+                    }.padding(.horizontal, 14).frame(minHeight: 58)
+                        .background(LinearGradient(colors: [accent.opacity(0.18), panel], startPoint: .leading, endPoint: .trailing), in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(accent.opacity(0.35)))
+                        .contentShape(RoundedRectangle(cornerRadius: 16))
+                }.buttonStyle(.plain).disabled(model.selectingDiscoveredComma)
+                    .accessibilityLabel("Connect to \(device.name), \(device.address)")
+            }
+            HStack(spacing: 8) {
+                if discovery.searching { ProgressView().controlSize(.mini).tint(accent) }
+                Text(discovery.searching ? "Finding comma on Wi-Fi…" : "Select your comma")
+                    .font(.system(size: 11)).foregroundStyle(muted)
+                Spacer()
+                Button(discovery.searching ? "Stop" : "Search again") {
+                    if discovery.searching { discovery.stop() } else { discovery.start() }
+                }.font(.system(size: 11, weight: .medium)).foregroundStyle(accent)
+                    .frame(minHeight: 44).disabled(model.selectingDiscoveredComma)
+            }
+        }
     }
 
     private var preferences: some View {
@@ -193,11 +247,6 @@ struct ConnectionSettingsView: View {
                     }.disabled(model.selectingDiscoveredComma || pairing)
                 }
                 message(discovery.status)
-                ForEach(discovery.devices) { device in
-                    Button { Task { await model.selectDiscoveredComma(device) } } label: {
-                        VStack(alignment: .leading) { Text(device.name); Text(device.address).font(.caption) }
-                    }.disabled(model.selectingDiscoveredComma || pairing)
-                }
                 Toggle("Find address over Bluetooth", isOn: $model.findAddressAutomatically)
                 TextField("Comma IP address", text: $model.address).keyboardType(.numbersAndPunctuation)
                     .textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder)
