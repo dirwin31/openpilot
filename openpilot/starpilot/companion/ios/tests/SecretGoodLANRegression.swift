@@ -39,6 +39,9 @@ import Foundation
         lan.bind(to: "0123456789abcdef")
         let verified = await lan.probe()
         precondition(verified && server.sessions == 1)
+        _ = try await lan.request(path: LANPairing.windowPath, method: "POST", headers: [:], body: LANPairing.windowBody)
+        precondition(server.calls.last?.timeoutInterval == 35, "Pairing must cover comma’s 25-second daemon window plus preparation")
+        server.calls.removeAll()
         server.expired = true
         let result = try await lan.request(path: "/api/settings/confirm", method: "POST", headers: ["Cookie": "forged", "Origin": "http://evil.invalid"], body: Data("{}".utf8))
         precondition(result.status == 200 && server.sessions == 2)

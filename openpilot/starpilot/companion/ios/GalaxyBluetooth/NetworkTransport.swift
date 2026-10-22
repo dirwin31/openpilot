@@ -206,7 +206,8 @@ final class LANTransport: ObservableObject, GalaxyRequestTransport {
             var request = URLRequest(url: URL(string: endpoint.absoluteString + path)!)
             request.httpMethod = method
             request.httpBody = body.isEmpty ? nil : body
-            request.timeoutInterval = LocalRequest.isPackageUpload(method: method, target: path) ? 120 : 8
+            request.timeoutInterval = LocalRequest.isPackageUpload(method: method, target: path) ? 120
+                : (method == "POST" && path == LANPairing.windowPath ? 35 : 8)
             for (name, value) in headers where ["accept", "range", "content-type"].contains(name.lowercased()) {
                 request.setValue(value, forHTTPHeaderField: name)
             }

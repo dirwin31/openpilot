@@ -140,7 +140,10 @@ struct ConnectionSettingsView: View {
                     .foregroundStyle(Color(red: 0.12, green: 0.06, blue: 0.19))
             }.buttonStyle(.plain).disabled(pairing || connecting || (connected && !model.opened))
             if pairing {
+                message(model.connectionMessage)
                 Button("Cancel pairing") { model.cancelPairing() }.font(.system(size: 12)).frame(maxWidth: .infinity, minHeight: 30)
+            } else if !model.pairingFailure.isEmpty {
+                message(model.pairingFailure)
             } else if model.connectionMessage != "Connected over \(model.transport.label)." && !connected {
                 message(model.connectionMessage)
             }
@@ -201,7 +204,7 @@ struct ConnectionSettingsView: View {
                 message(lan.status)
             }
             if model.mode != .lan {
-                Button("Pair again") { model.pairWithComma() }.disabled(pairing)
+                Button(model.pairingKey.isEmpty ? "Pair Bluetooth with comma" : "Pair Bluetooth again") { model.pairWithComma() }.disabled(pairing)
                 SecureField("64-character pairing key", text: $model.pairingKey)
                     .textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder)
                 Button(bluetooth.isScanning ? "Scanning…" : "Scan for comma") { model.wantsConnection = true; bluetooth.scan() }

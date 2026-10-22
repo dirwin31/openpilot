@@ -21,10 +21,44 @@ extension GalaxyRequestTransport {
 enum LANPairing {
     static let windowPath = "/api/bluetooth/action"
     static let windowBody = Data("{\"operation\":\"accept_pair\"}".utf8)
-    @MainActor static func openWindow(over lan: any GalaxyRequestTransport) async -> Bool {
-        guard lan.connected,
-              let response = try? await lan.request(path: windowPath, method: "POST", headers: [:], body: windowBody) else { return false }
-        return response.status == 200
+    /// False means there is no LAN session and the user must open the window on comma.
+    /// A refused or uncertain LAN request must not silently start a Bluetooth claim.
+    @MainActor static func openWindow(over lan: any GalaxyRequestTransport,
+        pause: (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+        progress: (String) -> Void = { _ in }) async throws -> Bool {
+        guard lan.connected else { return false }
+        for attempt in 0...15 {
+            try Task.checkCancellation()
+            let response = try await lan.request(path: "/api/companion/bluetooth-ready", method: "GET", headers: [:], body: Data())
+            // Older comma versions do not expose readiness. The window POST remains authoritative.
+            guard response.status == 200,
+                  let json = try? JSONSerialization.jsonObject(with: response.bodyData) as? [String: Any],
+                  json["schema"] as? Int == 1, let ready = json["ready"] as? Bool else { break }
+            if ready { break }
+            let code = json["code"] as? String ?? ""
+            let message = json["message"] as? String ?? "Comma is not ready to pair."
+            guard ["starting", "bridge_starting"].contains(code), attempt < 15 else {
+                throw BridgeError.message(message)
+            }
+            progress(message)
+            try await pause(3_000_000_000)
+        }
+        for attempt in 0..<4 {
+            try Task.checkCancellation()
+            progress("Opening comma’s pairing window over Wi-Fi…")
+            let response = try await lan.request(path: windowPath, method: "POST", headers: [:], body: windowBody)
+            try Task.checkCancellation()
+            if response.status == 200 { return true }
+            let json = (try? JSONSerialization.jsonObject(with: response.bodyData)) as? [String: Any]
+            let code = json?["code"] as? String ?? ""
+            if response.status == 409 && code == "busy" && attempt < 3 {
+                progress("Comma’s Bluetooth is busy. Waiting to retry…")
+                try await pause(2_500_000_000)
+                continue
+            }
+            throw BridgeError.message("Couldn’t open comma’s pairing window (HTTP \(response.status)\(code.isEmpty ? "" : " · " + code)). Open Pair phone on comma or try again.")
+        }
+        return false
     }
 }
 

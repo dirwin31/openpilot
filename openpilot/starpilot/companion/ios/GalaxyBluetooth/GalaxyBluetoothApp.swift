@@ -120,6 +120,7 @@ final class AppModel: ObservableObject {
     }
     @Published var showConnections = false
     @Published var pairingInProgress = false
+    @Published var pairingFailure = ""
     @Published var opened = false
     @Published var connectionMessage = "Choose a connection, or use Automatic for Wi-Fi with Bluetooth fallback."
     @Published var wantsConnection = true
@@ -143,24 +144,46 @@ final class AppModel: ObservableObject {
     private var lastLANDiscovery = Date.distantPast
     private var triedLANAddresses = Set<String>()
     /// One step for the app and music: comma's open pairing window gives this iPhone its key, then music is set up in the same window.
+    private var pairingTask: Task<Void, Never>?
     func pairWithComma() {
         guard !pairingInProgress else { return }
         pairingInProgress = true
+        pairingFailure = ""
         offerAudioPairing = false
         showAudioPairing = false
         bluetooth.disconnect(reason: "Starting new phone pairing")
         connectionMessage = "Open Settings → Bluetooth → Pair phone on comma (or Pair phone in Galaxy). Looking for comma…"
-        Task { @MainActor in
-            defer { pairingInProgress = false }
-            if await LANPairing.openWindow(over: lan) {
-                connectionMessage = "Opened comma’s pairing window over Wi-Fi. Looking for comma…"
+        pairingTask = Task { @MainActor in
+            defer { pairingInProgress = false; pairingTask = nil }
+            do {
+                // Bluetooth-only invalidates the normal LAN session. Use a separate, identity-checked
+                // connection just for opening the pairing window; do not change the selected route.
+                let pairingLAN = LANTransport()
+                pairingLAN.bind(to: lan.expectedDeviceID)
+                if !lan.connected, !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    connectionMessage = "Checking comma over Wi-Fi before Bluetooth pairing…"
+                    try pairingLAN.configure(address: address)
+                    _ = await pairingLAN.probe()
+                }
+                try Task.checkCancellation()
+                let windowLAN = lan.connected ? lan : pairingLAN
+                connectionLog.record(windowLAN.connected ? "Opening phone pairing window over verified LAN" : "No verified LAN for pairing; open Pair phone on comma manually")
+                if try await LANPairing.openWindow(over: windowLAN, progress: { self.connectionMessage = $0 }) {
+                    connectionMessage = "Opened comma’s pairing window over Wi-Fi. Looking for comma…"
+                    connectionLog.record("Phone pairing window opened over verified LAN")
+                }
+                try Task.checkCancellation()
+                importClaim(try await claimer.claim(name: UIDevice.current.name))
             }
-            do { importClaim(try await claimer.claim(name: UIDevice.current.name)) }
             catch is CancellationError { connectionMessage = "Pairing cancelled." }
-            catch { connectionMessage = error.localizedDescription }
+            catch {
+                pairingFailure = error.localizedDescription
+                connectionMessage = pairingFailure
+                connectionLog.record("Phone pairing preparation or claim failed: " + error.localizedDescription)
+            }
         }
     }
-    func cancelPairing() { claimer.cancel() }
+    func cancelPairing() { pairingTask?.cancel(); claimer.cancel() }
     private func importClaim(_ outcome: ClaimTransport.Outcome) {
         // The key is saved only after the encrypted handshake, like any imported key.
         opened = false
