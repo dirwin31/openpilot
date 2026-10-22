@@ -23,13 +23,13 @@ struct ConnectionSettingsView: View {
     private let muted = Color(red: 0.70, green: 0.65, blue: 0.77)
     private var connected: Bool { model.transport.connected }
     private var pairing: Bool { model.pairingInProgress }
-    private var needsPairing: Bool { model.mode != .lan && model.pairingKey.isEmpty }
+    private var needsPairing: Bool { model.mode == .bluetooth && model.pairingKey.isEmpty }
     private var connecting: Bool { !connected && (bluetooth.connecting || bluetooth.isScanning) }
     private var primaryTitle: String {
         if pairing { return "Pairing…" }
         if connected { return model.opened ? "Open Galaxy" : "Preparing Galaxy…" }
         if connecting { return "Connecting…" }
-        return needsPairing ? "Pair with comma" : "Reconnect"
+        return needsPairing ? "Pair with comma" : (model.address.isEmpty && model.pairingKey.isEmpty ? "Connect" : "Reconnect")
     }
     private var checking: Bool { model.matchingGalaxy || assets.checking }
     private var status: String { pairing ? "Pairing with comma…" : connected ? "Connected via \(model.transport.label)" : connecting ? "Connecting to comma…" : "Not connected" }
@@ -124,7 +124,12 @@ struct ConnectionSettingsView: View {
             Button {
                 if connected && model.opened { select(.galaxy) }
                 else if needsPairing { model.pairWithComma() }
-                else { openAfterReconnect = true; model.connect(); openReconnectedGalaxy() }
+                else {
+                    openAfterReconnect = true
+                    if model.mode != .bluetooth && model.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { advanced = true }
+                    model.connect()
+                    openReconnectedGalaxy()
+                }
             } label: {
                 HStack(spacing: 7) {
                     if pairing { PairingSignal() }

@@ -241,8 +241,8 @@ final class AppModel: ObservableObject {
         do {
             if mode != .bluetooth, !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 try lan.configure(address: address)
-            } else if mode == .lan {
-                throw BridgeError.message("Enter comma’s current local IP address, or use Automatic and pair Bluetooth to find it.")
+            } else if mode != .bluetooth {
+                discovery.start()
             }
             UserDefaults.standard.set(address.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "galaxy.lan.address")
             wantsConnection = true
@@ -507,7 +507,9 @@ final class AppModel: ObservableObject {
                 } else if mode == .bluetooth {
                     connectionMessage = "Reconnecting over Bluetooth. If you forgot this phone on comma, open Pair phone on comma and Pair with comma here."
                 } else {
-                    connectionMessage = "Wi-Fi unavailable. Pair over Bluetooth below, or check your comma’s IP address."
+                    connectionMessage = discovery.searching || lan.endpoint == nil
+                        ? discovery.status
+                        : "Wi-Fi unavailable. Pair over Bluetooth below, or check your comma’s IP address."
                 }
             }
             do { try await Task.sleep(nanoseconds: 3_000_000_000) } catch { return }
