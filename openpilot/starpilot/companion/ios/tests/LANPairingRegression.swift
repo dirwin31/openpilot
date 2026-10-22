@@ -51,3 +51,4 @@ import Foundation
         print("LAN pairing: readiness, legacy fallback, busy retries, refusal, timeout and cancellation passed")
     }
 }
+

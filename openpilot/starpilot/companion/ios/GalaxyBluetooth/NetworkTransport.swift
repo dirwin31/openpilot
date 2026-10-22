@@ -142,12 +142,15 @@ final class LANTransport: ObservableObject, GalaxyRequestTransport {
             let changed = connected != available
             connected = available
             verifiedDeviceID = available ? identity : nil
-            status = available ? "Local comma verified." : "Local endpoint unavailable or does not match the paired comma."
-            if changed { onEvent?(available ? "LAN probe succeeded; comma identity verified" : "LAN probe rejected: HTTP \(response.statusCode), unavailable status or identity mismatch") }
+            if available { status = "Local comma verified." }
+            else if response.statusCode != 200 { status = "Galaxy answered HTTP \(response.statusCode)." }
+            else if identity == nil { status = "The address answered, but did not return a valid Galaxy identity." }
+            else { status = "This address belongs to a different comma than the saved pairing." }
+            if changed || !available { onEvent?(available ? "LAN probe succeeded; comma identity verified" : "LAN probe rejected: " + status) }
         } catch {
             if !Task.isCancelled, expectedGeneration == generation {
-                status = error.localizedDescription
-                invalidate(reason: "LAN probe failed: \(Self.failureCode(error))")
+                status = Self.failureCode(error)
+                invalidate(reason: "LAN probe failed: \(status)")
             }
         }
         return connected

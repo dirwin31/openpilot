@@ -35,7 +35,7 @@ enum ConnectionMode { case automatic, bluetooth, lan }
 }
 @MainActor final class Transport {
     let label = "Reconnecting…"
-    let connected = false
+    var connected = false
 }
 @MainActor final class Discovery { var searching = false; var status = "Find comma on Wi-Fi"; func start() { searching = true }; func stop() {} }
 @MainActor final class Audio { func refreshAudioRoute() {} }
@@ -48,6 +48,9 @@ enum ConnectionMode { case automatic, bluetooth, lan }
     var lastAddressCheck = Date.distantPast
     var localAddressNetwork = ""
     var opened = false
+    var showAudioPairing = false
+    var galaxyOpens = 0, galaxyChecks = 0, musicStarts = 0
+    var selectingDiscoveredComma = false
     var wantsConnection = true, pairingInProgress = false, openingGalaxy = false, offerAudioPairing = false
     var mode = ConnectionMode.automatic
     var pairingKey = "saved", address = "", connectionMessage = "", lastRoute = ""
@@ -56,9 +59,9 @@ enum ConnectionMode { case automatic, bluetooth, lan }
     func learnAddress() async {}
     func discoverAutomaticLAN() {}
     func logConnection(_ reason: String) {}
-    func openIfReady() {}
-    func checkGalaxyUpdates() async {}
-    func startAudioPairing() {}
+    func openIfReady() { galaxyOpens += 1 }
+    func checkGalaxyUpdates() async { galaxyChecks += 1 }
+    func startAudioPairing() { musicStarts += 1; showAudioPairing = true }
 '''
 tests = r'''
 }
@@ -76,6 +79,24 @@ tests = r'''
         saved.address = "192.168.1.20"
         saved.connect()
         precondition(saved.lan.endpoint != nil && !saved.discovery.searching)
+        let selecting = MonitorProbe()
+        selecting.selectingDiscoveredComma = true
+        let selectionMonitor = Task { await selecting.monitor() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        precondition(selecting.lan.probes == 0 && selecting.bluetooth.attempts == 0, "Background connections must not race a tapped comma")
+        selectionMonitor.cancel()
+        await selectionMonitor.value
+        let music = MonitorProbe()
+        music.mode = .bluetooth
+        music.bluetooth.connected = true
+        music.transport.connected = true
+        music.offerAudioPairing = true
+        let musicMonitor = Task { await music.monitor() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        precondition(music.musicStarts == 1 && music.galaxyOpens == 0 && music.galaxyChecks == 0,
+                     "Music setup must start before Galaxy can occupy the Bluetooth request queue")
+        musicMonitor.cancel()
+        await musicMonitor.value
         let model = MonitorProbe()
         let monitor = Task { await model.monitor() }
         for _ in 0..<100 where model.lan.probes == 0 {

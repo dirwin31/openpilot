@@ -14,6 +14,7 @@ struct ConnectionSettingsView: View {
     @Environment(\.openURL) private var openURL
     @State private var advanced = false
     @State private var confirmForget = false
+    @State private var showPairingHelp = false
     @State private var checked = false
     @State private var openAfterReconnect = false
     @State private var connectingCommaID: String?
@@ -31,7 +32,7 @@ struct ConnectionSettingsView: View {
         if pairing { return "Pairing…" }
         if connected { return model.opened ? "Open Galaxy" : "Preparing Galaxy…" }
         if connecting { return "Connecting…" }
-        return needsPairing ? "Pair with comma" : "Connect"
+        return needsPairing ? (model.hasLANPairingSetup ? "Pair with comma" : "Connect over Wi-Fi first") : "Connect"
     }
     private var connectionCandidates: [DiscoveredComma] {
         var devices = discovery.devices
@@ -93,6 +94,7 @@ struct ConnectionSettingsView: View {
                 .frame(maxWidth: 460).frame(maxWidth: .infinity)
         }.scrollBounceBehavior(.basedOnSize).background(background).foregroundStyle(Color.white)
             .onChange(of: connected) { _, _ in openReconnectedGalaxy() }
+            .onChange(of: pairing) { _, value in if value { openAfterReconnect = false } }
             .onChange(of: model.opened) { _, _ in openReconnectedGalaxy() }
             .onChange(of: model.wantsConnection) { _, value in if !value { openAfterReconnect = false } }
             .tint(accent).preferredColorScheme(.dark)
@@ -100,6 +102,11 @@ struct ConnectionSettingsView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("This hotspot address is available in the device list, but your iPhone couldn’t reach and verify comma there. In iPhone Settings → Wi-Fi, join comma’s TheGalaxy-… network using the hotspot password shown on comma. Then return here and tap the comma row again.")
+            }
+            .alert("Reset Bluetooth pairing", isPresented: $showPairingHelp) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("If Bluetooth still won’t connect, try a fresh pairing:\n\n1. In this app, open Advanced → Forget Bluetooth pairing.\n2. On comma, open Bluetooth settings and forget this iPhone. Remove its app pairing too if it is listed separately.\n3. On iPhone, open Settings → Bluetooth → ⓘ beside comma → Forget This Device, if listed.\n4. On comma, open Pair phone, then pair again in this app.\n\nThis resets device pairing, not the app’s Bluetooth permission.")
             }
             .confirmationDialog("Forget Bluetooth pairing?", isPresented: $confirmForget, titleVisibility: .visible) {
                 Button("Forget pairing", role: .destructive) {
@@ -110,7 +117,7 @@ struct ConnectionSettingsView: View {
     }
 
     private func openReconnectedGalaxy() {
-        guard openAfterReconnect, connected, model.opened else { return }
+        guard openAfterReconnect, !pairing, connected, model.opened else { return }
         openAfterReconnect = false
         select(.galaxy)
     }
@@ -135,14 +142,19 @@ struct ConnectionSettingsView: View {
                 Text("Bluetooth").tag(ConnectionMode.bluetooth)
                 Text("Wi-Fi").tag(ConnectionMode.lan)
             }.pickerStyle(.segmented).disabled(pairing)
-            Text(pairing ? "Keep Pair phone open on comma." : model.mode == .automatic ? "Wi-Fi first, Bluetooth as backup." : model.mode == .bluetooth ? "Local controls over Bluetooth." : "Uses your local Wi-Fi network.")
-                .font(.system(size: 11)).foregroundStyle(muted)
+            if !pairing {
+                Text(model.mode == .automatic ? "Wi-Fi first, Bluetooth as backup." : model.mode == .bluetooth ? "Local controls over Bluetooth." : "Uses your local Wi-Fi network.")
+                    .font(.system(size: 11)).foregroundStyle(muted)
+            }
             if model.mode != .bluetooth && !connected && !pairing && (discovery.searching || !connectionCandidates.isEmpty) {
                 discoveredCommas
             } else {
             Button {
                 if connected && model.opened { select(.galaxy) }
-                else if needsPairing { model.pairWithComma() }
+                else if needsPairing {
+                    if model.hasLANPairingSetup { model.pairWithComma() }
+                    else { model.mode = .automatic; model.connect() }
+                }
                 else {
                     openAfterReconnect = true
                     model.connect()
@@ -152,19 +164,24 @@ struct ConnectionSettingsView: View {
                 HStack(spacing: 7) {
                     if pairing { PairingSignal() }
                     else if connecting || (connected && !model.opened) { ProgressView().controlSize(.small) }
-                    Text(primaryTitle)
-                }.font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity, minHeight: 44)
+                    Text(pairing ? model.connectionMessage : primaryTitle)
+                        .lineLimit(2).minimumScaleFactor(0.85).multilineTextAlignment(.center)
+                }.font(.system(size: 12, weight: .medium)).padding(.horizontal, 18)
+                    .frame(maxWidth: .infinity, minHeight: 44)
                     .background(LinearGradient(colors: [Color(red: 0.73, green: 0.55, blue: 1), accent], startPoint: .leading, endPoint: .trailing), in: Capsule())
                     .foregroundStyle(Color(red: 0.12, green: 0.06, blue: 0.19))
             }.buttonStyle(.plain).disabled(pairing || connecting || (connected && !model.opened))
             }
             if pairing {
-                message(model.connectionMessage)
                 Button("Cancel pairing") { model.cancelPairing() }.font(.system(size: 12)).frame(maxWidth: .infinity, minHeight: 30)
             } else if !model.pairingFailure.isEmpty {
                 message(model.pairingFailure)
             } else if model.connectionMessage != "Connected over \(model.transport.label)." && !connected {
                 message(model.connectionMessage)
+            }
+            if !pairing && (!model.pairingFailure.isEmpty || (bluetooth.connectionFailed && model.mode != .lan)) {
+                Button("Bluetooth trouble? Try resetting pairing") { showPairingHelp = true }
+                    .font(.system(size: 11)).foregroundStyle(accent).frame(minHeight: 30)
             }
         }.padding(14).background(LinearGradient(colors: [panel, background], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(accent.opacity(0.25)))
@@ -284,7 +301,8 @@ struct ConnectionSettingsView: View {
                 message(lan.status)
             }
             if model.mode != .lan {
-                Button(model.pairingKey.isEmpty ? "Pair Bluetooth with comma" : "Pair Bluetooth again") { model.pairWithComma() }.disabled(pairing)
+                Button(model.pairingKey.isEmpty ? "Pair Bluetooth with comma" : "Pair Bluetooth again") { model.pairWithComma() }.disabled(pairing || !model.hasLANPairingSetup)
+                if !model.hasLANPairingSetup { message("Connect to comma over Wi-Fi before setting up Bluetooth.") }
                 SecureField("64-character pairing key", text: $model.pairingKey, prompt: Text("64-character pairing key").foregroundColor(muted))
                     .textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.plain)
                     .foregroundStyle(Color.white).tint(accent).padding(12)

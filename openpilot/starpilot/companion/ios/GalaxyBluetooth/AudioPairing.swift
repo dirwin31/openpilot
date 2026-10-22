@@ -28,13 +28,13 @@ final class AudioPairing: ObservableObject {
         var displayOnly: Bool
     }
 
+    var onEvent: ((String) -> Void)?
     @Published private(set) var phase: Phase = .idle
     private let transport: () -> (any GalaxyRequestTransport)?
     private let pause: () async -> Void
     private let audioOutput: (String) -> Bool
     private let attempts: Int
     private var task: Task<Void, Never>?
-    private var commaName: String?
 
     init(transport: @escaping () -> (any GalaxyRequestTransport)?, attempts: Int = 125,
          audioOutput: ((String) -> Bool)? = nil,
@@ -64,11 +64,6 @@ final class AudioPairing: ObservableObject {
         }
     }
 
-    func refreshAudioRoute() {
-        guard let commaName, phase == .done || phase == .connected else { return }
-        phase = audioOutput(commaName) ? .connected : .done
-    }
-
     nonisolated static func validAddress(_ value: String) -> Bool {
         value.range(of: "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", options: .regularExpression) != nil
     }
@@ -86,6 +81,7 @@ final class AudioPairing: ObservableObject {
     /// `windowOpen`: comma's pairing window is already open because the person just paired the app from comma's Pair phone.
     func start(windowOpen: Bool = false) {
         guard task == nil else { return }
+        onEvent?("Music setup started; reuse pairing window=\(windowOpen)")
         phase = .opening
         task = Task { [weak self] in
             await self?.run(windowOpen: windowOpen)
@@ -110,20 +106,41 @@ final class AudioPairing: ObservableObject {
         if wasOpen { Task { [weak self] in _ = try? await self?.post(["operation": "cancel_pair"]) } }
     }
 
-    func dismiss() { if phase == .done || phase == .connected { refreshAudioRoute() } else if case .message = phase { phase = .idle } else { cancel() } }
+    func dismiss() { if case .message = phase { phase = .idle } else if phase == .done || phase == .connected { phase = .idle } else { cancel() } }
 
     private func post(_ payload: [String: Any]) async throws -> BridgeResponse? {
         guard let transport = transport(), transport.connected else { return nil }
         let body = try JSONSerialization.data(withJSONObject: payload)
-        return try await transport.request(path: "/api/bluetooth/action", method: "POST",
-                                           headers: ["Content-Type": "application/json"], body: body)
+        let operation = payload["operation"] as? String ?? "unknown"
+        onEvent?("Music setup action started: " + operation)
+        do {
+            let response = try await transport.request(path: "/api/bluetooth/action", method: "POST",
+                                                       headers: ["Content-Type": "application/json"], body: body)
+            onEvent?("Music setup action finished: \(operation), HTTP \(response.status)")
+            return response
+        } catch {
+            onEvent?("Music setup action failed: \(operation), \(error.localizedDescription)")
+            throw error
+        }
     }
 
     private func status() async -> Snapshot? {
-        guard let transport = transport(), transport.connected,
-              let response = try? await transport.request(path: "/api/bluetooth/status", method: "GET", headers: [:], body: Data()),
-              response.status == 200 else { return nil }
-        return Self.parse(response.bodyData)
+        guard let transport = transport(), transport.connected else {
+            onEvent?("Music status unavailable: comma disconnected")
+            return nil
+        }
+        onEvent?("Music status request started")
+        do {
+            let response = try await transport.request(path: "/api/bluetooth/status", method: "GET", headers: [:], body: Data())
+            onEvent?("Music status request finished: HTTP \(response.status)")
+            guard response.status == 200 else { return nil }
+            let snapshot = Self.parse(response.bodyData)
+            onEvent?("Music status: window=\(snapshot?.state ?? "none"), valid adapter=\(snapshot.map { Self.validAddress($0.adapterAddress) } ?? false)")
+            return snapshot
+        } catch {
+            onEvent?("Music status request failed: " + error.localizedDescription)
+            return nil
+        }
     }
 
     private func run(windowOpen: Bool) async {
@@ -131,10 +148,8 @@ final class AudioPairing: ObservableObject {
         // An older comma reports no adapter address and has no pairing window.
         guard Self.validAddress(first.adapterAddress) else { phase = .idle; return }
         let name = first.adapterName.isEmpty ? "comma" : first.adapterName
-        commaName = name
         if audioOutput(name) { phase = .connected; return }
-        if windowOpen && first.state == "paired" { phase = .done; return }
-        if !windowOpen || first.state != "pairing" {
+        if !windowOpen {
             let opened: BridgeResponse?
             do { opened = try await post(["operation": "accept_pair"]) } catch { opened = nil }
             switch opened?.status {

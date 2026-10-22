@@ -17,6 +17,7 @@ final class LANDiscovery: NSObject, ObservableObject, @preconcurrency NetService
     var onDevicesChanged: (() -> Void)?
     private var browser: NetServiceBrowser?
     private var services: [String: NetService] = [:]
+    private var retriedServices = Set<String>()
     private var deadline: Task<Void, Never>?
     private var appActive = true
     private var resumeWhenActive = false
@@ -33,7 +34,7 @@ final class LANDiscovery: NSObject, ObservableObject, @preconcurrency NetService
         }
     }
 
-    func start() {
+    func start(retryEmpty: Bool = true) {
         stop()
         devices = []
         searching = true
@@ -46,6 +47,11 @@ final class LANDiscovery: NSObject, ObservableObject, @preconcurrency NetService
         deadline = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 12_000_000_000)
             guard !Task.isCancelled, let self else { return }
+            if self.devices.isEmpty && retryEmpty && self.appActive {
+                self.onEvent?("Wi-Fi discovery found no addresses; retrying once")
+                self.start(retryEmpty: false)
+                return
+            }
             self.stop()
             self.status = self.devices.isEmpty
                 ? "No comma found. Use the same Wi-Fi, allow Local Network access, and update comma for discovery. You can still enter its IP."
@@ -60,6 +66,7 @@ final class LANDiscovery: NSObject, ObservableObject, @preconcurrency NetService
         browser?.delegate = nil; browser?.stop(); browser = nil
         for service in services.values { service.delegate = nil; service.stop() }
         services.removeAll()
+        retriedServices.removeAll()
         if searching { status = devices.isEmpty ? "Search stopped." : "Select your comma below." }
         searching = false
     }
@@ -73,6 +80,12 @@ final class LANDiscovery: NSObject, ObservableObject, @preconcurrency NetService
             if appActive { start() }
             else { resumeWhenActive = true }
         }
+    }
+
+    private func pauseAfterSearchFailure() {
+        let resume = searching || resumeWhenActive
+        stop()
+        resumeWhenActive = resume
     }
 
     private func key(_ service: NetService) -> String { service.name + "/" + service.type + "/" + service.domain }
@@ -92,10 +105,18 @@ final class LANDiscovery: NSObject, ObservableObject, @preconcurrency NetService
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
         guard browser === self.browser else { return }
         let denied = errorDict[NetService.errorCode]?.intValue == -72008
-        stop()
+        pauseAfterSearchFailure()
         status = denied ? "Allow Local Network access for this app in iPhone Settings, then search again."
             : "Wi-Fi discovery couldn’t start. Check Local Network permission or enter comma’s IP."
         onEvent?("Wi-Fi discovery failed: code \(errorDict[NetService.errorCode]?.intValue ?? 0)")
+    }
+    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        let id = key(sender)
+        guard searching, services[id] === sender else { return }
+        onEvent?("Wi-Fi service address lookup failed: code \(errorDict[NetService.errorCode]?.intValue ?? 0)")
+        guard retriedServices.insert(id).inserted else { return }
+        onEvent?("Retrying Wi-Fi service address lookup")
+        sender.resolve(withTimeout: 5)
     }
     func netServiceDidResolveAddress(_ sender: NetService) {
         guard searching, services[key(sender)] === sender, sender.port == 8082 else { return }
@@ -109,7 +130,7 @@ final class LANDiscovery: NSObject, ObservableObject, @preconcurrency NetService
         devices.append(device)
         devices.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         status = "Found \(devices.count) comma device(s). Select one below."
-        onEvent?("Wi-Fi discovery found a Galaxy service")
+        onEvent?("Wi-Fi discovery found Galaxy at \(address):8082")
         onDevicesChanged?()
     }
     static func networkSignature() -> String {

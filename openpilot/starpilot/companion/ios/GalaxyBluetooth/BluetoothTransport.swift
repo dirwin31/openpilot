@@ -18,6 +18,7 @@ final class BluetoothTransport: NSObject, ObservableObject, GalaxyRequestTranspo
     var onEvent: ((String) -> Void)?
     @Published var connected = false
     @Published var connecting = false
+    @Published private(set) var connectionFailed = false
     @Published private(set) var fastReadFallback = false
     @Published var fastReads = UserDefaults.standard.bool(forKey: "galaxy.bluetooth.fastReads") {
         didSet {
@@ -143,6 +144,7 @@ final class BluetoothTransport: NSObject, ObservableObject, GalaxyRequestTranspo
     }
 
     func disconnect(reason: String = "Bluetooth connection closed") {
+        connectionFailed = false
         let wasConnected = connected
         central.stopScan()
         scanTimeout?.cancel()
@@ -188,6 +190,7 @@ final class BluetoothTransport: NSObject, ObservableObject, GalaxyRequestTranspo
             onEvent?("\(reason): \(active.method) \(LoopbackServer.reportPath(active.path)), queued=\(queue.count), sent=\(writeIndex)/\(outgoing.count), received packets=\(notificationCount), awaiting ack=\(awaitingAck)")
         }
         disconnect(reason: reason)
+        connectionFailed = central.state == .poweredOn
         onEvent?(reason)
         status = message
     }
@@ -378,6 +381,7 @@ final class BluetoothTransport: NSObject, ObservableObject, GalaxyRequestTranspo
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         guard peripheral == self.peripheral else { return }
         disconnect(reason: "Bluetooth peer disconnected: \(error.map { LANTransport.failureCode($0) } ?? "no OS error supplied")")
+        connectionFailed = error != nil && central.state == .poweredOn
         status = error?.localizedDescription ?? "Your comma disconnected. Scan to reconnect."
     }
 

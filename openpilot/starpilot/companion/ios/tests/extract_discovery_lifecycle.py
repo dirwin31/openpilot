@@ -16,12 +16,14 @@ import Foundation
 final class Service { var delegate: AnyObject?; func stop() {} }
 @MainActor final class DiscoveryProbe {
     var appActive = true, resumeWhenActive = false, searching = false
+    var retriedServices = Set<String>()
     var starts = 0
     var status = ""
     var devices: [String] = []
     var browser: Service?
     var services: [String: Service] = [:]
     var deadline: Task<Void, Never>?
+    func searchFailed() { pauseAfterSearchFailure() }
     func start() { stop(); starts += 1; searching = true }
 '''
 tests = '''
@@ -47,8 +49,21 @@ tests = '''
         precondition(!d.searching && d.starts == 3, "Explicit Stop cancels pending resume")
         d.networkChanged()
         precondition(!d.searching, "Network changes must not restart a finished or cancelled search")
+        let failed = DiscoveryProbe()
+        failed.start()
+        failed.searchFailed()
+        failed.setActive(false)
+        failed.setActive(true)
+        precondition(failed.searching && failed.starts == 2,
+                     "A browser failure before the permission prompt must preserve search intent")
+        failed.searchFailed()
+        failed.stop()
+        failed.setActive(false)
+        failed.setActive(true)
+        precondition(!failed.searching && failed.starts == 2,
+                     "Explicit Stop must cancel a permission-related retry")
         print("Discovery lifecycle: permission interruption, network change, duplicate events and explicit stop passed")
     }
 }
 '''
-Path(sys.argv[1]).write_text(stubs + '\n'.join(method(s) for s in ['    func setActive(', '    func stop()', '    func networkChanged()']) + tests)
+Path(sys.argv[1]).write_text(stubs + '\n'.join(method(s) for s in ['    func setActive(', '    func stop()', '    func networkChanged()', '    private func pauseAfterSearchFailure()']) + tests)
