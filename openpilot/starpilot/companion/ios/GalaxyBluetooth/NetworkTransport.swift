@@ -84,7 +84,11 @@ final class LANTransport: ObservableObject, GalaxyRequestTransport {
 
     // An explicit private IPv4 address prevents cloud/loopback endpoints from being treated as the local comma.
     static func endpoint(_ address: String) throws -> URL {
-        let parts = address.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ".", omittingEmptySubsequences: false)
+        var input = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        if input.hasPrefix("http://") { input = String(input.dropFirst(7)) }
+        if input.hasSuffix("/") { input.removeLast() }
+        if input.hasSuffix(":8082") { input = String(input.dropLast(5)) }
+        let parts = input.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 4, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }),
               parts.allSatisfy({ String(Int($0) ?? -1) == $0 }),
               let a = Int(parts[0]), let b = Int(parts[1]), parts.allSatisfy({ (0...255).contains(Int($0) ?? -1) }),

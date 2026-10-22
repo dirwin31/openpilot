@@ -32,6 +32,15 @@ struct ConnectionSettingsView: View {
         if connecting { return "Connecting…" }
         return needsPairing ? "Pair with comma" : "Connect"
     }
+    private var connectionCandidates: [DiscoveredComma] {
+        var devices = discovery.devices
+        if let host = try? LANTransport.endpoint(model.address).host,
+           !devices.contains(where: { $0.address == host }) {
+            devices.append(DiscoveredComma(id: "manual-" + host, name: "Comma", address: host))
+        }
+        return devices
+    }
+
     private var checking: Bool { model.matchingGalaxy || assets.checking }
     private var status: String { pairing ? "Pairing with comma…" : connected ? "Connected via \(model.transport.label)" : connecting ? "Connecting to comma…" : "Not connected" }
 
@@ -122,7 +131,7 @@ struct ConnectionSettingsView: View {
             }.pickerStyle(.segmented).disabled(pairing)
             Text(pairing ? "Keep Pair phone open on comma." : model.mode == .automatic ? "Wi-Fi first, Bluetooth as backup." : model.mode == .bluetooth ? "Local controls over Bluetooth." : "Uses your local Wi-Fi network.")
                 .font(.system(size: 11)).foregroundStyle(muted)
-            if model.mode != .bluetooth && !connected && !pairing && (discovery.searching || !discovery.devices.isEmpty) {
+            if model.mode != .bluetooth && !connected && !pairing && (discovery.searching || !connectionCandidates.isEmpty) {
                 discoveredCommas
             } else {
             Button {
@@ -157,7 +166,7 @@ struct ConnectionSettingsView: View {
 
     private var discoveredCommas: some View {
         VStack(spacing: 8) {
-            ForEach(discovery.devices) { device in
+            ForEach(connectionCandidates) { device in
                 Button {
                     connectingCommaID = device.id
                     openAfterReconnect = true
@@ -188,6 +197,16 @@ struct ConnectionSettingsView: View {
                     }.padding(.horizontal, 14).frame(minHeight: 58)
                         .background(LinearGradient(colors: [accent.opacity(0.18), panel], startPoint: .leading, endPoint: .trailing), in: RoundedRectangle(cornerRadius: 16))
                         .overlay(RoundedRectangle(cornerRadius: 16).stroke(accent.opacity(0.35)))
+                        .overlay(alignment: .bottomLeading) {
+                            if device.address == "172.31.254.1" {
+                                Label("Comma Hotspot", systemImage: "wifi")
+                                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(accent)
+                                    .padding(.horizontal, 7).padding(.vertical, 2)
+                                    .background(panel, in: Capsule())
+                                    .padding(.leading, 14).offset(y: 7)
+                            }
+                        }
+                        .padding(.bottom, device.address == "172.31.254.1" ? 7 : 0)
                         .contentShape(RoundedRectangle(cornerRadius: 16))
                 }.buttonStyle(.plain).disabled(model.selectingDiscoveredComma)
                     .accessibilityLabel("Connect to \(device.name), \(device.address)")
@@ -248,14 +267,20 @@ struct ConnectionSettingsView: View {
                 }
                 message(discovery.status)
                 Toggle("Find address over Bluetooth", isOn: $model.findAddressAutomatically)
-                TextField("Comma IP address", text: $model.address).keyboardType(.numbersAndPunctuation)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder)
+                TextField("Comma IP address", text: $model.address, prompt: Text("172.31.254.1 or IP:8082").foregroundColor(muted)).keyboardType(.numbersAndPunctuation)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.plain)
+                    .foregroundStyle(Color.white).tint(accent).padding(12)
+                    .background(background, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(accent.opacity(0.3)))
                 message(lan.status)
             }
             if model.mode != .lan {
                 Button(model.pairingKey.isEmpty ? "Pair Bluetooth with comma" : "Pair Bluetooth again") { model.pairWithComma() }.disabled(pairing)
-                SecureField("64-character pairing key", text: $model.pairingKey)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder)
+                SecureField("64-character pairing key", text: $model.pairingKey, prompt: Text("64-character pairing key").foregroundColor(muted))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.plain)
+                    .foregroundStyle(Color.white).tint(accent).padding(12)
+                    .background(background, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(accent.opacity(0.3)))
                 Button(bluetooth.isScanning ? "Scanning…" : "Scan for comma") { model.wantsConnection = true; bluetooth.scan() }
                     .disabled(bluetooth.isScanning || bluetooth.connecting || pairing)
                 message(bluetooth.status)

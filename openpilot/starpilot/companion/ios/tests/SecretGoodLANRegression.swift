@@ -33,6 +33,13 @@ import Foundation
 
 @main struct LANRegression {
     @MainActor static func main() async throws {
+        for address in ["172.31.254.1", "172.31.254.1:8082", " http://172.31.254.1:8082/ ", "http://172.31.254.1/"] {
+            let endpoint = try LANTransport.endpoint(address)
+            precondition(endpoint.absoluteString == "http://172.31.254.1:8082")
+        }
+        for address in ["172.31.254.1:80", "https://172.31.254.1", "http://user@172.31.254.1", "172.31.254.1/path", "172.31.254.1?x=1", "8.8.8.8:8082", "127.0.0.1:8082"] {
+            do { _ = try LANTransport.endpoint(address); preconditionFailure("Invalid LAN address accepted: \(address)") } catch {}
+        }
         let server = Server()
         let lan = LANTransport(load: server.load)
         try lan.configure(address: "192.168.1.86")
