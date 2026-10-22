@@ -19,7 +19,6 @@ a.out
 bin/
 !openpilot/starpilot/galaxy/bin/
 !openpilot/starpilot/soloist/pulseaudio/bin/
-!openpilot/starpilot/soloist/bluealsa/bin/
 
 # created at launch for comma hardware PYTHONPATH (PC uses editable installs via pyproject.toml)
 /msgq
@@ -48,7 +47,6 @@ bin/
 !openpilot/tools/replay/libmedia_mux.so
 !openpilot/starpilot/soloist/pulseaudio/lib/*.so
 !openpilot/starpilot/soloist/pulseaudio/modules/*.so
-!openpilot/starpilot/soloist/bluealsa/lib/*.so
 *.a
 st[0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z]
 *.unchunked

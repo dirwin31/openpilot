@@ -166,8 +166,10 @@ class SpotifySetup:
       raise SetupRejected('Invalid Spotify settings')
     values = {**current.__dict__, **{fields[key]: value for key, value in payload.items()}}
     changes_output = values['output'] != current.output or values['output_address'] != current.output_address
+    # Flipping between Spotify and the already chosen phone is a playback control; picking a different phone is setup.
+    if values['phone_address'] != current.phone_address:
+      self._require_parked('change the phone')
     if values['source'] != current.source or values['phone_address'] != current.phone_address:
-      self._require_parked('change the music source')
       if values['phone_address']:
         match = next((d for d in self.status(session)['devices'] if d['address'] == str(values['phone_address']).upper()), None)
         if match is None:

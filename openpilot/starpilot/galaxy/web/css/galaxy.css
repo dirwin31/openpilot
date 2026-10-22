@@ -1757,13 +1757,12 @@ progress { max-width: 100%; accent-color: var(--primary); }
 input[type="range"].gx-slider.gx-slider--galaxy,
 [data-theme="light"] input[type="range"].gx-slider.gx-slider--galaxy { height: 10px; border: none;
   background: linear-gradient(90deg, var(--secondary), var(--primary)) 0 0 / var(--fill, 0%) 100% no-repeat, var(--surface-container-high); }
-.gx-spotify-now__main { display: flex; gap: var(--sp-3); align-items: center; min-width: 0; }
+.gx-spotify-now__main { display: flex; gap: var(--sp-3); align-items: center; justify-content: center; min-width: 0; }
 .gx-spotify-now__text { min-width: 0; }
 .gx-spotify-now__text h3, .gx-spotify-now__text p { margin: 0; }
 .gx-spotify-now__progress { display: grid; gap: 2px; }
-.gx-spotify-now__controls { align-items: center; flex-wrap: wrap; }
+.gx-spotify-now__controls { align-items: center; justify-content: center; flex-wrap: wrap; }
 .gx-spotify-now__play { min-width: 64px; font-size: 1.4rem; }
-.gx-spotify-now__volume { display: flex; flex: 1 1 160px; align-items: center; gap: var(--sp-2); min-width: 0; }
 /* Auto Learn results use existing cards and plot colors. */
 .gx-flm__facts { display: flex; flex-wrap: wrap; gap: 1rem 2rem; }
 .gx-flm__facts dd { margin: .3rem 0 0; }

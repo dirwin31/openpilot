@@ -181,7 +181,9 @@ def test_phone_source_requires_park_and_a_paired_device_without_spotify(owner):
   setup, state, layout, _ = owner
   state['parked'] = False
   with pytest.raises(SetupRejected, match='Park'):
-    setup.save_preferences(SESSION, {'source': 'phone'})
+    setup.save_preferences(SESSION, {'source': 'phone', 'phoneAddress': 'AA:BB:CC:DD:EE:FF'})
+  assert setup.save_preferences(SESSION, {'source': 'phone'})['preferences']['source'] == 'phone'  # flipping source works while driving
+  assert setup.save_preferences(SESSION, {'source': 'spotify'})['preferences']['source'] == 'spotify'
   state['parked'] = True
   with pytest.raises(SetupRejected, match='Pair your phone'):
     setup.save_preferences(SESSION, {'source': 'phone', 'phoneAddress': '11:22:33:44:55:66'})

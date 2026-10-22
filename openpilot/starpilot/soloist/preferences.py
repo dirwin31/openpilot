@@ -19,7 +19,7 @@ MUTE_MAX = 1.5
 class Preferences:
   device_name: str = 'StarPilot'
   cache_mb: int = 256
-  initial_volume: int = 60
+  initial_volume: int = 100
   output: str = 'bluetooth'           # or 'android_auto' (the car's media channel), or 'test' (a silent sink)
   output_address: str = ''
   output_name: str = ''

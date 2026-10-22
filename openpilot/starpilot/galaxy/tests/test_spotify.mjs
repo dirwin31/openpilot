@@ -5,7 +5,7 @@ import { SpotifyFeed, SpotifyPage, archivePreflight, importProblem, installCheck
 const setup = {
   enabled: true, parked: true, keyPresent: true, audioReady: true,
   release: { installed: true, version: "1.3.9.32", expires: "2027-01-14T00:00:00+00:00", daysLeft: 80, level: "ok", expired: false },
-  preferences: { deviceName: "StarPilot", cacheMb: 256, initialVolume: 60, output: "bluetooth", outputAddress: "AA:BB:CC:DD:EE:FF", outputName: "Car" },
+  preferences: { deviceName: "StarPilot", cacheMb: 256, initialVolume: 100, output: "bluetooth", outputAddress: "AA:BB:CC:DD:EE:FF", outputName: "Car" },
   devices: [{ address: "AA:BB:CC:DD:EE:FF", name: "Car", connected: true }], service: null,
   import: { state: "idle" }, maxUploadBytes: 64 * 1024 * 1024, archiveName: "soloist_release_arm64.tar.gz", cacheChoices: [100, 256],
   links: { download: DOWNLOAD_PAGE, key: "https://developer.spotify.com/dashboard/soloist", help: "https://developer.spotify.com/" },

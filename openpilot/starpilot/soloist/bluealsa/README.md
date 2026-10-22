@@ -24,7 +24,9 @@ inactivity and short input interruptions. It inserts silence; it does not
 reconstruct missing music or eliminate interference. Playback leaves `hwcompat`
 at its default so a disconnected output is not silently consumed. Both paths
 explicitly set `softvol "true"` to preserve the previous software-volume mode
-instead of adopting 5.0's new native-volume default. Initial device volume state
+instead of adopting 5.0's new native-volume default. Playback also opens
+at `volume "100+"` (100%, unmuted) because 5.0 persists each device's last volume
+and applies it to samples in soft-volume mode. Phone capture is left unchanged. Initial device volume state
 is separate from 4.1; the user's existing 4.1 state is never rewritten.
 
 The build retains SBC reception, SBC/LDAC transmission, and oFono support. The

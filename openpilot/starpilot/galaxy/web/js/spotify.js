@@ -258,7 +258,7 @@ export const SpotifyPage = {
     setup: null, busy: false, error: "", uploadProgress: null, now: Date.now(),
     installOpen: false, removeOpen: false, resetOpen: false, showSetup: false, downloadStarted: false,
     archiveFile: null, archiveMagicError: "", archiveChecking: false, archiveSelection: 0, installAttempted: false, installBaseline: null,
-    keyValue: "", keyEditing: false, nameValue: "", volumeDraft: null, pauseDraft: null, skipDraft: null,
+    keyValue: "", keyEditing: false, nameValue: "", pauseDraft: null, skipDraft: null,
   }),
   mounted() {
     this.feed = new SpotifyFeed({ publish: (value) => Object.assign(this, value, { now: Date.now() }), unauthorized: this.unauthorized })
@@ -388,11 +388,6 @@ export const SpotifyPage = {
       this.skipDraft = null
       if (Number.isFinite(value)) return this.feed.post("./api/spotify/preferences", { skipMute: value })
     },
-    commitVolume(event) {
-      const volume = Math.round(Number(event.target.value))
-      this.volumeDraft = null
-      if (Number.isInteger(volume) && volume >= 0 && volume <= 100) return this.control("volume", { volume })
-    },
     openInstall() { this.chooseAgain(); Object.assign(this, { installOpen: true, downloadStarted: false }) },
     closeInstall() { this.installOpen = false },
     markDownloadStarted() {
@@ -444,7 +439,7 @@ export const SpotifyPage = {
       <section v-if="setup" class="gx-card gx-aa-step" aria-labelledby="gx-music-source-title">
         <h3 id="gx-music-source-title">Music Source</h3>
         <label class="gx-stack"><span>Play music from</span>
-          <select class="gx-field" :value="setup.preferences.source || 'spotify'" :disabled="busy || !setup.parked" @change="chooseSource">
+          <select class="gx-field" :value="setup.preferences.source || 'spotify'" :disabled="busy" @change="chooseSource">
             <option value="spotify">Spotify Connect on the comma</option>
             <option value="phone">Phone over Bluetooth</option>
           </select>
@@ -480,7 +475,7 @@ export const SpotifyPage = {
             <option value="test">Silent test (no speaker)</option>
           </select></label>
         </template>
-        <small v-if="!setup.parked" class="gx-note">Put the car in Park or use offroad mode to change the source.</small>
+        <small v-if="phoneSource && !setup.parked" class="gx-note">Put the car in Park or use offroad mode to change the phone.</small>
       </section>
 
       <section v-if="setup && setupDone && !phoneSource" class="gx-card gx-aa-step gx-aa-home gx-spotify-now" aria-labelledby="gx-spotify-now-title">
@@ -501,10 +496,8 @@ export const SpotifyPage = {
           <button type="button" class="gx-btn gx-spotify-now__play" :aria-label="playing ? 'Pause' : 'Play'" :disabled="!can.has(playing ? 'pause' : 'play') && !!track" @click="togglePlay">
             <i :class="playing ? 'bi bi-pause-fill' : 'bi bi-play-fill'" aria-hidden="true"></i></button>
           <button type="button" class="gx-icon-btn" aria-label="Next" :disabled="!can.has('skip_next')" @click="control('next')"><i class="bi bi-skip-end-fill"></i></button>
-          <label v-if="player.volume !== null" class="gx-spotify-now__volume"><i class="bi bi-volume-up" aria-hidden="true"></i>
-            <input type="range" class="gx-slider gx-slider--galaxy" min="0" max="100" step="1" :value="volumeDraft ?? player.volume" :style="{ '--fill': (volumeDraft ?? player.volume) + '%' }" aria-label="Volume"
-              @input="volumeDraft = Number($event.target.value)" @change="commitVolume" /></label>
         </div>
+        <small v-if="setup.enabled && player?.loggedIn && player.volume !== null" class="gx-note">Volume {{ player.volume }}% - change in Spotify app if needed, otherwise use car volume</small>
         <div v-if="setup.enabled && player?.loggedIn && !player.active" class="gx-stack">
           <button type="button" class="gx-btn gx-btn--tonal" @click="control('activate')">
             <i class="bi bi-broadcast" aria-hidden="true"></i> Move Spotify to {{ setup.preferences.deviceName || 'StarPilot' }}</button>

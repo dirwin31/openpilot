@@ -19,6 +19,8 @@ def test_capture_and_playback_select_matching_private_plugins():
   for config in (capture, playback):
     assert runtime.alsa_plugins() in config
     assert 'softvol "true"' in config
+  assert 'volume "100+"' in playback  # saved state must never leave Spotify quiet or muted
+  assert 'volume' not in capture  # phone audio level was already right; leave it to the phone
   assert 'hwcompat "silence"' in capture
   assert 'hwcompat' not in playback
 
