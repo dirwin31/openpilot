@@ -662,7 +662,7 @@ struct GalaxyRootView: View {
         .sheet(isPresented: $model.showAudioPairing, onDismiss: { model.audioPairing.dismiss() }) {
             AudioPairingSheet(pairing: model.audioPairing) { model.showAudioPairing = false }
         }
-        .alert("Set up Bluetooth too?", isPresented: $offerBluetoothSetup) {
+        .alert("Set Up Bluetooth Too?", isPresented: $offerBluetoothSetup) {
             Button("Set up Bluetooth") {
                 guard lan.connected, model.pairingKey.isEmpty, !model.pairingInProgress else { return }
                 select(.connections)
@@ -670,7 +670,7 @@ struct GalaxyRootView: View {
             }
             Button("Not now", role: .cancel) { bluetoothLaterNotice = true }
         } message: {
-            Text("Connect to your comma without Wi-Fi. You can always set this up later in Settings.")
+            Text("Setting up Bluetooth lets you connect to your comma without Wi-Fi and stream music directly to Android Auto. You can always set this up later in Settings.")
         }
         .overlay(alignment: .bottom) {
             if bluetoothLaterNotice && model.tab == .galaxy {
