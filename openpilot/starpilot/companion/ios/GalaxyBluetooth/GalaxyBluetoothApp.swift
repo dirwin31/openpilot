@@ -547,6 +547,15 @@ struct GalaxyRootView: View {
     @ObservedObject var discovery: LANDiscovery
     @ObservedObject var galaxyPage: GalaxyPageDiagnostics
     @State private var hasVisitedGalaxy = false
+    @State private var offerBluetoothSetup = false
+    @State private var bluetoothLaterNotice = false
+    private var bluetoothOfferKey: String? {
+        guard model.tab == .galaxy, model.opened, scenePhase == .active,
+              model.transport.usesLAN, lan.connected, model.pairingKey.isEmpty,
+              !model.pairingInProgress, !model.showAudioPairing, !editorFocused,
+              let identity = lan.verifiedDeviceID else { return nil }
+        return "galaxy.bluetooth.setup-offered." + identity
+    }
     private var galaxyColorScheme: ColorScheme? {
         guard model.tab == .galaxy, let dark = galaxyPage.darkAppearance else { return nil }
         return dark ? .dark : .light
@@ -652,6 +661,36 @@ struct GalaxyRootView: View {
         .onChange(of: bluetooth.connected) { _, connected in if connected { model.openIfReady() } }
         .sheet(isPresented: $model.showAudioPairing, onDismiss: { model.audioPairing.dismiss() }) {
             AudioPairingSheet(pairing: model.audioPairing) { model.showAudioPairing = false }
+        }
+        .alert("Set up Bluetooth too?", isPresented: $offerBluetoothSetup) {
+            Button("Set up Bluetooth") {
+                guard lan.connected, model.pairingKey.isEmpty, !model.pairingInProgress else { return }
+                select(.connections)
+                model.pairWithComma()
+            }
+            Button("Not now", role: .cancel) { bluetoothLaterNotice = true }
+        } message: {
+            Text("Connect to your comma without Wi-Fi. You can always set this up later in Settings.")
+        }
+        .overlay(alignment: .bottom) {
+            if bluetoothLaterNotice && model.tab == .galaxy {
+                Text("You can set up Bluetooth anytime in Settings → Advanced connection options.")
+                    .font(.footnote).multilineTextAlignment(.center)
+                    .padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .padding().allowsHitTesting(false).accessibilityAddTraits(.updatesFrequently)
+            }
+        }
+        .task(id: bluetoothLaterNotice) {
+            guard bluetoothLaterNotice else { return }
+            do { try await Task.sleep(nanoseconds: 6_000_000_000) } catch { return }
+            bluetoothLaterNotice = false
+        }
+        .task(id: bluetoothOfferKey) {
+            guard let key = bluetoothOfferKey, !UserDefaults.standard.bool(forKey: key) else { return }
+            do { try await Task.sleep(nanoseconds: 3_000_000_000) } catch { return }
+            guard bluetoothOfferKey == key, !Task.isCancelled else { return }
+            UserDefaults.standard.set(true, forKey: key)
+            offerBluetoothSetup = true
         }
         .task(id: scenePhase) {
             model.setPhoneActive(scenePhase == .active)
