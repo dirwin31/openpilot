@@ -18,6 +18,20 @@ final class LANDiscovery: NSObject, ObservableObject, @preconcurrency NetService
     private var browser: NetServiceBrowser?
     private var services: [String: NetService] = [:]
     private var deadline: Task<Void, Never>?
+    private var appActive = true
+    private var resumeWhenActive = false
+
+    func setActive(_ active: Bool) {
+        appActive = active
+        if !active {
+            let resume = searching || resumeWhenActive
+            stop()
+            resumeWhenActive = resume
+        } else if resumeWhenActive {
+            resumeWhenActive = false
+            start()
+        }
+    }
 
     func start() {
         stop()
@@ -41,6 +55,7 @@ final class LANDiscovery: NSObject, ObservableObject, @preconcurrency NetService
     }
 
     func stop() {
+        resumeWhenActive = false
         deadline?.cancel(); deadline = nil
         browser?.delegate = nil; browser?.stop(); browser = nil
         for service in services.values { service.delegate = nil; service.stop() }
@@ -50,9 +65,14 @@ final class LANDiscovery: NSObject, ObservableObject, @preconcurrency NetService
     }
 
     func networkChanged() {
+        let resume = searching || resumeWhenActive
         stop()
         devices = []
-        status = "Network changed. Looking for comma on the current network."
+        status = "Network changed. Find comma on the current network."
+        if resume {
+            if appActive { start() }
+            else { resumeWhenActive = true }
+        }
     }
 
     private func key(_ service: NetService) -> String { service.name + "/" + service.type + "/" + service.domain }
