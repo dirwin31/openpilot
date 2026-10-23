@@ -66,6 +66,9 @@ const APP_SETUP = `
       <li>Tap Connect here, then tap the WiFi button in Open Headunit.</li>
     </ol>
   </div>`
+export const CAR_TYPES = {
+  builtin: "Built-in wireless", adapter: "Wireless adapter", usb: "USB cable", app: "Tablet app"
+}
 const PROMPT = new Set(["pin", "passkey", "confirmation", "authorization", "display_pin", "display_passkey"])
 
 export function validPromptInput(prompt, value) {
@@ -283,7 +286,7 @@ export class AndroidAutoFeed {
 
   async control(action, extra = {}) {
     if (!this.active || this.busy || !this.setup?.enabled || this.pairing?.active ||
-      !["start", "stop", "select_receiver", "auto_connect", "connection"].includes(action)) return false
+      !["start", "stop", "select_receiver", "auto_connect", "connection", "car_type", "car_profile"].includes(action)) return false
     const result = await this.request("./api/android-auto/control", {
       method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...extra })
@@ -496,6 +499,15 @@ export const AndroidAutoPage = {
       return { label: "App", value: this.app || "Off", choices: ["Off", ...Object.values(HEAD_UNIT_APPS)], available: true, action: true,
         reason: "Project to a tablet app on the same Wi-Fi as the comma or the Galaxy Wi-Fi Hotspot instead of the car." }
     },
+    carType() { return this.runtime?.car_type || (this.wired ? "usb" : this.app ? "app" : "builtin") },
+    adapterSetup() { return this.carType === "adapter" },
+    pairsHere() { return this.carType === "builtin" || this.carType === "adapter" },
+    findLabel() { return this.adapterSetup ? "adapter" : "car" },
+    carTypeRow() {
+      return { label: "What’s in your car?", value: CAR_TYPES[this.carType], choices: Object.values(CAR_TYPES), available: true, action: true,
+        reason: "Built-in: the car supports wireless Android Auto. Adapter: a dongle such as AAWireless, Motorola MA1 or Carlinkit. Both the adapter and your car get paired." }
+    },
+    showProfile() { return !!(this.runtime?.car_profile_label || this.runtime?.car_profile_source === "override") },
     appDisabled() {
       return !this.setup?.enabled || !this.setup.parked || !!this.pairing?.active || !!this.runtime?.running
     },
@@ -580,6 +592,10 @@ export const AndroidAutoPage = {
   },
   methods: {
     switchRow,
+    saveCarType(index, value) {
+      const carType = Object.keys(CAR_TYPES).find(key => CAR_TYPES[key] === value)
+      return carType ? this.control("car_type", { carType }) : false
+    },
     saveApp(index, value) {
       const connection = Object.keys(HEAD_UNIT_APPS).find(key => HEAD_UNIT_APPS[key] === value) || "wireless"
       return this.control("connection", { connection })
@@ -763,9 +779,32 @@ export const AndroidAutoPage = {
         <li class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': !!selected && !pairing?.active }">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true"><i v-if="selected && !pairing?.active" class="bi bi-check-lg"></i><template v-else>2</template></span>
-            <div><h3>Pair Your Car</h3><p>Open your car’s phone pairing screen, then tap Find car. You can do this before step 1 is finished.</p></div>
+            <div><h3>{{ adapterSetup ? 'Pair Your Adapter and Car' : 'Pair Your Car' }}</h3><p>{{ adapterSetup ? 'An adapter needs two pairings: the adapter here, and your car on the Bluetooth page.' : pairsHere ? 'Open your car’s phone pairing screen, then tap Find car. You can do this before step 1 is finished.' : 'No Bluetooth pairing is needed for this setup.' }}</p></div>
           </div>
           <div class="gx-aa-step__body">
+            <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
+            <p v-if="showProfile" class="gx-note" role="status">
+              {{ runtime.car_profile_source === 'override' ? 'Using standard settings for this car.' : 'Tuned for ' + runtime.car_profile_label + ' (detected).' }}
+              <button type="button" class="gx-btn gx-btn--tonal" :disabled="busy || !setup.parked"
+                @click="control('car_profile', { profile: runtime.car_profile_source === 'override' ? '' : 'default' })">{{ runtime.car_profile_source === 'override' ? 'Use detected settings' : 'Use standard settings' }}</button></p>
+            <p v-if="carType === 'usb'" class="gx-note">Plug the car’s data USB port into the comma’s USB-C port, then turn on Wired USB Connection in step 3.</p>
+            <p v-else-if="carType === 'app'" class="gx-note">Pick your tablet app in step 3 and follow its setup steps.</p>
+            <template v-if="pairsHere">
+            <ol v-if="adapterSetup" class="gx-aa-list" aria-label="Pairings needed">
+              <li class="gx-aa-row">
+                <i class="bi bi-usb-symbol" aria-hidden="true"></i>
+                <span class="gx-aa-row__text"><strong>Adapter</strong><small>{{ selected ? selected.name : 'Put it in pairing mode, then tap Find adapter.' }}</small></span>
+                <span class="gx-aa-pill" :class="selected ? 'gx-aa-pill--ready' : ''">{{ selected ? 'Paired' : 'Not paired' }}</span>
+              </li>
+              <li class="gx-aa-row">
+                <i class="bi bi-car-front" aria-hidden="true"></i>
+                <span class="gx-aa-row__text"><strong>Your car</strong><small>{{ runtime?.companion_name ? runtime.companion_name : selected ? 'Pair your car on the Bluetooth page, then tap Connect there.' : 'Pair the adapter first.' }}</small></span>
+                <span v-if="runtime?.companion_name" class="gx-aa-pill gx-aa-pill--ready">Paired</span>
+                <a v-else-if="selected" class="gx-btn gx-btn--tonal" href="#/bluetooth">Open Bluetooth</a>
+                <span v-else class="gx-aa-pill">Not paired</span>
+              </li>
+            </ol>
+            <GxNotice v-if="!pairing?.active && runtime?.pairing_note" tone="warn">{{ runtime.pairing_note }}</GxNotice>
             <ul v-if="!pairing?.active && receivers.length" class="gx-aa-list" aria-label="Paired cars">
               <li v-for="car in receivers" :key="car.address" class="gx-aa-row">
                 <i class="bi bi-car-front" aria-hidden="true"></i>
@@ -806,14 +845,14 @@ export const AndroidAutoPage = {
             <p v-if="pairWhenReady" class="gx-note" role="status"><span class="gx-spinner" aria-hidden="true"></span> Turning on Android Auto, then searching…</p>
             <p v-else-if="!pairing?.active && pairingReason" class="gx-note" role="status">{{ pairingReason }}</p>
             <div class="gx-driving__actions gx-actions">
-              <button v-if="!pairing?.active" class="gx-btn" :class="{ 'gx-btn--tonal': !!selected }" :disabled="pairWhenReady || !!pairingReason" @click="startPairing"><i class="bi bi-search"></i> {{ selected ? 'Pair another' : 'Find car' }}</button>
+              <button v-if="!pairing?.active" class="gx-btn" :class="{ 'gx-btn--tonal': !!selected }" :disabled="pairWhenReady || !!pairingReason" @click="startPairing"><i class="bi bi-search"></i> {{ selected ? 'Pair another ' + findLabel : 'Find ' + findLabel }}</button>
               <button v-else class="gx-btn gx-btn--tonal" @click="cancelPairing">Cancel Search / Pairing</button>
             </div>
             <details class="gx-aa-wiki"><summary>Stuck pairing? Pairing order and wireless adapters</summary>
               <ul>
                 <li><strong>Keep this page open while pairing</strong> so the car’s PIN or code doesn’t time out.</li>
                 <li><strong>Cars with built-in wireless Android Auto:</strong> open the car’s phone pairing screen, then tap <strong>Find car</strong> above. Choose your car, then confirm the code on both screens.</li>
-                <li><strong>Wireless adapter</strong> (AAWireless, Motorola MA1, Carlinkit…): pair your car in Bluetooth under Tools first so calls keep working, then put the adapter in pairing mode and pair it here. Adapter names often look like AndroidAuto-XXXX.</li>
+                <li><strong>Wireless adapter</strong> (AAWireless, Motorola MA1, Carlinkit…): choose Wireless adapter above, put the adapter in pairing mode and pair it here, and pair your car in Bluetooth under Tools so calls keep working. Then connect the car there. Adapter names often look like AndroidAuto-XXXX.</li>
               </ul>
               <p><strong>Start fresh:</strong></p>
               <ol>
@@ -824,6 +863,7 @@ export const AndroidAutoPage = {
               </ol>
               <a class="gx-btn gx-btn--tonal" href="#/bluetooth">Open Bluetooth</a>
             </details>
+            </template>
           </div>
         </li>
 

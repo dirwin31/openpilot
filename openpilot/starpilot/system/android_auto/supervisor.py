@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from openpilot.common.hardware import COMMA_HARDWARE
-from openpilot.starpilot.system.android_auto import identity as identity_store
+from openpilot.starpilot.system.android_auto import car_profiles, identity as identity_store
 from openpilot.starpilot.system.android_auto.auto_connect import AutoConnectPolicy
 from openpilot.starpilot.system.android_auto.bootstrap import NAMES, BootstrapError, WirelessBootstrap
 from openpilot.starpilot.system.android_auto.bugsink_report import PairingAttempt
@@ -59,6 +59,7 @@ ENCODER_RECOVERIES = 3       # hardware encoder reopens allowed per window befor
 ENCODER_RECOVERY_WINDOW = 10.0
 CAR_LINK_HOLD = 10.0         # a hands-free connection from the car counts as "car present" this long
 HFP_FRESH = 3.0              # a hands-free link from the car this recent still means "the car is reaching out now"
+NO_ANDROID_AUTO_WAIT = 8.0    # a paired device must offer Android Auto within this long, or we say it does not
 USB_HANDSHAKE_WAIT = 10.0    # the car connected but sent no AOA START this long -> present as an accessory directly
 USB_CONFIGURE_WAIT = 15.0    # slower receivers need time to enumerate after the AOA switch
 LINK_CHECK_INTERVAL = 1.0    # how often the link watcher asks whether the car's Wi-Fi is still up
@@ -286,6 +287,8 @@ class EventLog:
 
 
 class Supervisor:
+  _pairing_note = ""      # why a paired car was not chosen, kept after the pairing window closes
+  _no_aa_since = 0.0
   def __init__(self, bluez_factory=None, lease_factory=None, bluetooth_client=None, frame_path: str | None = None,
                synthetic: bool = False, car_frame_path: str = CAR_FRAME_PATH, touch_path: str = DEFAULT_TOUCH_SOCKET,
                control_path: str = DEFAULT_CONTROL_SOCKET, renderer_command: list[str] | None = None, onroad=_is_onroad,
@@ -347,6 +350,9 @@ class Supervisor:
     status["receiver_name"] = self.config["receiver_name"]
     status["companion_address"] = self.config.get("companion_address", "")
     status["companion_name"] = self.config.get("companion_name", "")
+    status["pairing_note"] = self._pairing_note
+    status["car_type"] = self.car_type()
+    status.update(car_profiles.summary(self.config))
     status["configured_view"] = self.config["view"]
     status["connection"] = self.config["connection"]
     status["wired_blocked"] = wired_blocker()
@@ -430,7 +436,7 @@ class Supervisor:
       if self._bluez is not None and self.config['receiver_address'] and self.config['receiver_address'] != address:
         self._bluez.release()
       if self.config["receiver_address"] != address:
-        self.config.update(companion_address="", companion_name="")
+        self.config.update(companion_address="", companion_name="", car_fingerprint={})
       self.config.update(receiver_address=address, receiver_name=name or address)
       identity_store.save_config(self.config)
     self._unselect_car_audio(address)
@@ -458,7 +464,7 @@ class Supervisor:
       if chosen:
         if self._bluez is not None:
           self._bluez.release()
-        self.config.update(receiver_address="", receiver_name="", companion_address="", companion_name="")
+        self.config.update(receiver_address="", receiver_name="", companion_address="", companion_name="", car_fingerprint={})
       elif companion:
         self.config.update(companion_address="", companion_name="")
       identity_store.save_config(self.config)
@@ -487,6 +493,44 @@ class Supervisor:
       identity_store.save_config(self.config)
     self.log("connection_selected", connection=connection)
 
+  def car_type(self) -> str:
+    """What is in the car, for the setup page: wired and tablet follow the connection, wireless is built-in or an adapter."""
+    connection = self.config["connection"]
+    if connection == "wired":
+      return "usb"
+    if connection in ("headunitpad", "openheadunit"):
+      return "app"
+    return self.config["car_type"] or ("adapter" if self.config.get("companion_address") else "builtin")
+
+  def set_car_type(self, car_type: str) -> None:
+    if car_type not in ("builtin", "adapter", "usb", "app"):
+      raise RuntimeError(f"Unknown car type {car_type!r}")
+    connection = {"usb": "wired", "app": "headunitpad" if self.config["connection"] not in ("headunitpad", "openheadunit")
+                  else self.config["connection"]}.get(car_type, "wireless")
+    if connection != self.config["connection"]:
+      self.set_connection(connection)
+    if car_type in ("builtin", "adapter"):
+      with self._lock:
+        self.config["car_type"] = car_type
+        identity_store.save_config(self.config)
+    self.log("car_type_selected", car_type=car_type)
+
+  def set_car_profile(self, profile: str) -> None:
+    """Pin a car profile ("default" for standard behaviour) or go back to picking it by fingerprint ("")."""
+    if not car_profiles.valid_override(profile):
+      raise RuntimeError(f"Unknown car profile {profile!r}")
+    with self._lock:
+      self.config["car_profile_override"] = profile
+      identity_store.save_config(self.config)
+    self.log("car_profile_selected", profile=profile or "auto")
+
+  def _remember_fingerprint(self, head_unit: dict) -> None:
+    fingerprint = car_profiles.fingerprint_from(head_unit, self.config["receiver_address"])
+    if fingerprint and fingerprint != self.config.get("car_fingerprint"):
+      with self._lock:
+        self.config["car_fingerprint"] = fingerprint
+        identity_store.save_config(self.config)
+
   def prepare_pairing(self, seconds: float = 180.0) -> None:
     """Present as a phone (HFP gateway, smartphone class) while the car pairs."""
     if self._bluez_factory is None and (self._source_session is None or self._shared_bluetooth_owner is None or
@@ -506,6 +550,7 @@ class Supervisor:
       self._pairing_known = known
       self._pairing_until = time.monotonic() + seconds
       self._pairing_attempt, self._pairing_seen = PairingAttempt(seconds), ()
+      self._pairing_note, self._no_aa_since = "", 0.0
     self.log("pairing_window", seconds=seconds)
 
   def pair_device(self, address: str) -> None:
@@ -533,6 +578,8 @@ class Supervisor:
     with self._lock:
       attempt, self._pairing_attempt = getattr(self, '_pairing_attempt', None), None
     if attempt is not None:
+      if result in ("interrupted", "cancelled", "expired") and attempt.reached_connection():
+        values["ended"], result = result, "paired_not_selected"
       attempt.finish(result, **values)
 
   def pairing_response(self, prompt_id: str, accepted: bool, value: str = '') -> None:
@@ -715,6 +762,7 @@ class Supervisor:
               self._shared_bluetooth_owner.phone_lease is not None and
               self._shared_bluetooth_owner.phone_lease.receiver == device["address"])]
       if not new:
+        self._note_missing_android_auto(devices, receiver)
         return
     with self._lock:
       attempt, self._pairing_attempt = getattr(self, '_pairing_attempt', None), None
@@ -728,6 +776,22 @@ class Supervisor:
       self.log("car_select_failed", error=str(error))
       if attempt is not None:
         attempt.finish("select_failed", error=str(error))
+
+  def _note_missing_android_auto(self, devices: list, receiver: dict | None) -> None:
+    """An approved, paired device that still does not offer wireless Android Auto after a short wait is not a car we can use."""
+    device = next((item for item in devices if receiver is not None and item["address"] == receiver["address"] and
+                   item["paired"] and not item.get("android_auto")), None)
+    if device is None:
+      self._no_aa_since = 0.0
+      return
+    now = time.monotonic()
+    if not self._no_aa_since:
+      self._no_aa_since = now
+    elif now - self._no_aa_since >= NO_ANDROID_AUTO_WAIT and not self._pairing_note:
+      self._pairing_note = (f"{device['name'] or 'This device'} paired, but it doesn't offer wireless Android Auto. "
+                            "Using a wireless adapter? Choose Wireless adapter, pair the adapter here, then connect your car on the Bluetooth page.")
+      self._pairing_step("no_android_auto")
+      self.log("pairing_no_android_auto", address=device["address"])
 
   def close(self) -> None:
     self.stop()
@@ -1051,6 +1115,9 @@ class Supervisor:
       self.log('companion_car_connected', address=companion)
     elif device.get('android_auto') and '0000111e-0000-1000-8000-00805f9b34fb' not in device.get('uuids', []):
       raise RuntimeError('Connect your paired car in Galaxy Bluetooth first to select it for this Android Auto adapter')
+    if delay := car_profiles.tuning(config)["connect_delay_s"]:
+      self.log("car_profile_connect_delay", seconds=delay)
+      self._wait(delay)
     bluez.connect_device(address)
     self._wait(1.0)
 
@@ -1079,6 +1146,7 @@ class Supervisor:
     if source == "sdp":
       self._remember_channel(address, channel)
     self._set(head_unit=result.head_unit)
+    self._remember_fingerprint(result.head_unit)
     bluez.restore_class()  # the car has accepted the comma; stop looking like a phone to everything else
     keepalive_stop = threading.Event()
     threading.Thread(target=boot.keepalive, args=(keepalive_stop,), name="aa_rfcomm_keepalive", daemon=True).start()
