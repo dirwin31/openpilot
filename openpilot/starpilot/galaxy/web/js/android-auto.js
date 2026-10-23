@@ -503,8 +503,11 @@ export const AndroidAutoPage = {
     adapterSetup() { return this.carType === "adapter" },
     pairsHere() { return this.carType === "builtin" || this.carType === "adapter" },
     findLabel() { return this.adapterSetup ? "adapter" : "car" },
+    carTypeLabels() { return { ...CAR_TYPES, app: this.app ? `App (${this.app})` : CAR_TYPES.app } },
+    wiredUnavailable() { return !this.wired && !!this.runtime?.wired_blocked },
     carTypeRow() {
-      return { label: "What’s in your car?", value: CAR_TYPES[this.carType], choices: Object.values(CAR_TYPES), available: true, action: true,
+      const labels = this.carTypeLabels
+      return { label: "What’s in your car?", value: labels[this.carType], choices: Object.values(labels), available: true, action: true,
         reason: "Built-in: the car supports wireless Android Auto. Adapter: a dongle such as AAWireless, Motorola MA1 or Carlinkit. Both the adapter and your car get paired." }
     },
     showProfile() { return !!(this.runtime?.car_profile_label || this.runtime?.car_profile_source === "override") },
@@ -593,7 +596,14 @@ export const AndroidAutoPage = {
   methods: {
     switchRow,
     saveCarType(index, value) {
-      const carType = Object.keys(CAR_TYPES).find(key => CAR_TYPES[key] === value)
+      const labels = this.carTypeLabels
+      const carType = Object.keys(labels).find(key => labels[key] === value)
+      if (carType === "usb" && this.wiredUnavailable) {
+        this.feed.error = `Wired AA is unavailable: ${this.runtime.wired_blocked}.`
+        this.feed.emit()
+        return false
+      }
+      if (carType === this.carType) return false
       return carType ? this.control("car_type", { carType }) : false
     },
     saveApp(index, value) {
@@ -783,6 +793,7 @@ export const AndroidAutoPage = {
           </div>
           <div class="gx-aa-step__body">
             <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
+            <GxNotice v-if="wiredUnavailable" tone="warn">Wired AA is unavailable: {{ runtime.wired_blocked }}.</GxNotice>
             <GalaxySettingRow v-if="carType === 'app'" :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
             <p v-if="showProfile" class="gx-note" role="status">
               {{ runtime.car_profile_source === 'override' ? 'Using standard settings for this car.' : 'Tuned for ' + runtime.car_profile_label + ' (detected).' }}
