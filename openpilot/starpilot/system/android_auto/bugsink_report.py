@@ -387,6 +387,11 @@ class PairingAttempt:
       self.record["steps"].pop(0)
       self.record["steps_omitted"] = self.record.get("steps_omitted", 0) + 1
 
+  def reached_connection(self) -> bool:
+    """The car was approved or connected before the window ended."""
+    return any(step.get("step") == "status" and (step.get("approved") or step.get("state") in ("paired", "connected"))
+               for step in self.record["steps"])
+
   def finish(self, result: str, **values) -> None:
     self.step(result, **values)
     self._sink({**self.record, "result": result, "duration_s": round(self._clock() - self._opened, 1)})

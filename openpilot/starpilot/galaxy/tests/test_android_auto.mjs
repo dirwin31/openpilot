@@ -473,3 +473,33 @@ const audioTool = catalog.tools.find(tool => tool.path === "/android-auto").chil
 assert.equal(audioTool.name, "Spotify and Phone Audio")
 assert.match(AndroidAutoPage.template, /href="#\/android-auto\/audio"/)
 assert.ok(app.includes(`SpotifyPage v-else-if="['/android-auto/audio', '/spotify'].includes(route.path)"`))
+// Setup type: what is in the car decides which pairing steps appear.
+const typed = page(setup)
+assert.equal(typed.carType, 'builtin', 'built-in wireless is the default')
+typed.runtime = { car_type: 'adapter' }
+assert.equal(typed.adapterSetup, true)
+assert.equal(typed.pairsHere, true)
+assert.equal(typed.findLabel, 'adapter')
+typed.runtime = { car_type: 'usb' }
+assert.equal(typed.pairsHere, false, 'a USB cable needs no Bluetooth pairing')
+typed.runtime = { running: false, connection: 'wired' }
+assert.equal(typed.carType, 'usb', 'older daemons without car_type still follow the connection')
+typed.runtime = { connection: 'headunitpad' }
+assert.equal(typed.carType, 'app')
+const typedCalls = []
+typed.control = (action, extra) => typedCalls.push([action, extra])
+typed.saveCarType(0, 'Wireless adapter')
+typed.saveCarType(0, 'Not a type')
+assert.deepEqual(typedCalls, [['car_type', { carType: 'adapter' }]])
+assert.deepEqual(new Set(AndroidAutoPage.computed.carTypeRow.call(typed).choices), new Set(['Built-in wireless', 'Wireless adapter', 'USB cable', 'Tablet app']))
+// A tuned car profile only shows up when one is detected or pinned.
+const profiled = page(setup)
+assert.equal(profiled.showProfile, false, 'standard cars see nothing')
+profiled.runtime = { car_profile_label: 'Hyundai Palisade', car_profile_source: 'detected' }
+assert.equal(profiled.showProfile, true)
+profiled.runtime = { car_profile_label: '', car_profile_source: 'override' }
+assert.equal(profiled.showProfile, true, 'a pinned standard profile can be undone')
+assert.match(AndroidAutoPage.template, /What’s in your car\?|carTypeRow/)
+assert.match(AndroidAutoPage.template, /runtime\?\.pairing_note/)
+assert.match(AndroidAutoPage.template, /'Find ' \+ findLabel/)
+console.log('Android Auto page: setup type, adapter checklist and car profile line passed')
