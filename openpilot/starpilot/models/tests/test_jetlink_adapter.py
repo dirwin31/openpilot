@@ -174,7 +174,8 @@ POLICY = {"features_buffer": (1, 3, 4), "desire_pulse": (1, 3, 8), "traffic_conv
 
 
 @pytest.mark.parametrize("layout", ["split", "supercombo", "stateful"])
-def test_the_small_models_history_clears_in_place(layout):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_the_small_models_history_clears_in_place(layout, legacy):
   # after the big model drove, the catalog runner starts from a zero history on the buffers its JIT captured
   from tinygrad import Device, Tensor
   from tinygrad.helpers import Context
@@ -191,7 +192,10 @@ def test_the_small_models_history_clears_in_place(layout):
     small.input_queues, small.npy, small.prev_desire = queues, npy, np.ones(8, dtype=np.float32)
     buffers = {name: q.uop.base.buffer for name, q in queues.items()}
     warp.init_device(logging.getLogger(__name__))  # as modeld: the reset's kernels compile with no compile pool
-    reset = adapter.adapter().small_reset(small)
+    with patch("openpilot.starpilot.models.runtime_bridge.runtime.selected_legacy", return_value=legacy), \
+         patch.object(warp, "reset_queues", wraps=warp.reset_queues,
+                      side_effect=AssertionError("legacy reset must not compile") if legacy else None):
+      reset = adapter.adapter().small_reset(small)
     history = [name for name, q in queues.items() if q.device != "NPY" and name not in adapter.FRAME_INPUTS]
     for _ in range(3):
       for name in history:
