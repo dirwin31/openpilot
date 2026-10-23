@@ -2273,6 +2273,21 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
             self.json(403, {'error': 'Park before changing the connection type'})
             return
           command, arguments = 'set_connection', {'connection': payload['connection']}
+        elif (action == 'car_type' and set(payload) == {'action', 'carType'} and
+              payload['carType'] in ('builtin', 'adapter', 'usb', 'app')):
+          if not configuration_allowed():
+            self.json(403, {'error': 'Park before changing the setup type'})
+            return
+          command, arguments = 'set_car_type', {'car_type': payload['carType']}
+        elif action == 'car_profile' and set(payload) == {'action', 'profile'} and isinstance(payload['profile'], str):
+          from openpilot.starpilot.system.android_auto.car_profiles import valid_override
+          if not valid_override(payload['profile']):
+            self.json(400, {'error': 'Invalid car profile'})
+            return
+          if not configuration_allowed():
+            self.json(403, {'error': 'Park before changing car settings'})
+            return
+          command, arguments = 'set_car_profile', {'profile': payload['profile']}
         elif action == 'select_receiver' and set(payload) == {'action', 'address'} and isinstance(payload['address'], str):
           if not configuration_allowed():
             self.json(403, {'error': 'Park before changing the car'})

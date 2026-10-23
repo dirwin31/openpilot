@@ -131,6 +131,9 @@ DEFAULT_CONFIG = {
   "phone_class": True,         # while pairing/connecting, present as a phone: HFP gateway + smartphone Class of Device
   "auto_connect": True,        # start projection on its own when the chosen car is on (onroad, or it reaches the comma)
   "rfcomm_cache": {},          # car address -> Android Auto RFCOMM channel learned over SDP, to skip discovery next time
+  "car_type": "",              # wireless setup shown in Galaxy: "builtin" or "adapter"; "" = work it out from the saved companion car
+  "car_profile_override": "",  # "" = pick by fingerprint; "default" = standard behaviour; otherwise a profile id from car_profiles
+  "car_fingerprint": {},       # what the chosen car's head unit reported last time, used to pick a profile before it connects
 }
 
 
@@ -160,6 +163,9 @@ def load_config(path: Path | None = None) -> dict:
     config["connection"] = "wireless"
   if not 1024 <= int(config["headunitpad_port"]) <= 65535:
     config["headunitpad_port"] = DEFAULT_CONFIG["headunitpad_port"]
+  if config["car_type"] not in ("", "builtin", "adapter"):
+    config["car_type"] = ""
+  config["car_fingerprint"] = {str(k): str(v)[:80] for k, v in config["car_fingerprint"].items()}
   if config["usb_mode"] not in ("auto", "handshake", "direct"):
     config["usb_mode"] = "auto"
   config["bitrate_kbps"] = max(1000, min(12000, int(config["bitrate_kbps"])))
