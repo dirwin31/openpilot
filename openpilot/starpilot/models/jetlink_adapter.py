@@ -87,7 +87,23 @@ def _adapter_class():
       if not isinstance(small, CatalogModelState):
         return None
       from jetlink.openpilot.warp import reset_queues
+      from openpilot.starpilot.models.runtime_bridge.runtime import selected_legacy
       queues = [q for name, q in small.input_queues.items() if q.device != "NPY" and name not in FRAME_INPUTS]
+      if selected_legacy():
+        from tinygrad import Device
+        waits = tuple(Device[device].synchronize for device in dict.fromkeys(q.device for q in queues))
+        buffers = tuple((q.uop.base.buffer.host, bytes(q.uop.base.buffer.nbytes)) for q in queues)
+        arrays = tuple(small.npy.values()) + (small.prev_desire,)
+
+        def reset():
+          for wait in waits:
+            wait()
+          for host, zeros in buffers:
+            host[:] = zeros
+          for array in arrays:
+            array.fill(0)
+
+        return reset
       return reset_queues(queues, small.npy.values(), small.prev_desire)
 
   return StarPilotAdapter
