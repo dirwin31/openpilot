@@ -491,7 +491,7 @@ typed.control = (action, extra) => typedCalls.push([action, extra])
 typed.saveCarType(0, 'Wireless adapter')
 typed.saveCarType(0, 'Not a type')
 assert.deepEqual(typedCalls, [['car_type', { carType: 'adapter' }]])
-assert.deepEqual(new Set(AndroidAutoPage.computed.carTypeRow.call(typed).choices), new Set(['Built-in wireless', 'Wireless adapter', 'USB cable', 'Tablet app']))
+assert.deepEqual(new Set(AndroidAutoPage.computed.carTypeRow.call(typed).choices), new Set(['Built-in wireless', 'Wireless adapter', 'Wired AA', 'App']))
 // A tuned car profile only shows up when one is detected or pinned.
 const profiled = page(setup)
 assert.equal(profiled.showProfile, false, 'standard cars see nothing')

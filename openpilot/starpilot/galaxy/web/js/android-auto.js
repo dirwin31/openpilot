@@ -67,7 +67,7 @@ const APP_SETUP = `
     </ol>
   </div>`
 export const CAR_TYPES = {
-  builtin: "Built-in wireless", adapter: "Wireless adapter", usb: "USB cable", app: "Tablet app"
+  builtin: "Built-in wireless", adapter: "Wireless adapter", usb: "Wired AA", app: "App"
 }
 const PROMPT = new Set(["pin", "passkey", "confirmation", "authorization", "display_pin", "display_passkey"])
 
@@ -492,8 +492,8 @@ export const AndroidAutoPage = {
     connectionName() { return this.app === "HeadunitPad" ? "iPad" : this.app ? "tablet" : this.wired ? "car" : this.selected?.name || "car" },
     setupDone() { return !!(this.supportReady && (this.selected || this.wired || this.app) && !this.pairing?.active) },
     wiredRow() {
-      const detail = "Project over a USB cable from the car to the comma’s USB-C port instead of Bluetooth and Wi-Fi."
-      return switchRow("Wired USB Connection", this.wired, detail + (this.runtime?.wired_blocked ? ` ${this.runtime.wired_blocked}.` : ""))
+      const detail = "Turn this on for wired Android Auto. Connect the car’s Android Auto USB data port to the comma’s USB-C port with a data-capable cable."
+      return switchRow("Wired AA", this.wired, detail + (this.runtime?.wired_blocked ? ` ${this.runtime.wired_blocked}.` : ""))
     },
     appRow() {
       return { label: "App", value: this.app || "Off", choices: ["Off", ...Object.values(HEAD_UNIT_APPS)], available: true, action: true,
@@ -779,16 +779,22 @@ export const AndroidAutoPage = {
         <li class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': !!selected && !pairing?.active }">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true"><i v-if="selected && !pairing?.active" class="bi bi-check-lg"></i><template v-else>2</template></span>
-            <div><h3>{{ adapterSetup ? 'Pair Your Adapter and Car' : 'Pair Your Car' }}</h3><p>{{ adapterSetup ? 'An adapter needs two pairings: the adapter here, and your car on the Bluetooth page.' : pairsHere ? 'Open your car’s phone pairing screen, then tap Find car. You can do this before step 1 is finished.' : 'No Bluetooth pairing is needed for this setup.' }}</p></div>
+            <div><h3>{{ carType === 'usb' ? 'Set Up Wired AA' : carType === 'app' ? 'Set Up Your App' : adapterSetup ? 'Pair Your Adapter and Car' : 'Pair Your Car' }}</h3><p>{{ adapterSetup ? 'An adapter needs two pairings: the adapter here, and your car on the Bluetooth page.' : pairsHere ? 'Open your car’s phone pairing screen, then tap Find car. You can do this before step 1 is finished.' : 'No Bluetooth pairing is needed for this setup.' }}</p></div>
           </div>
           <div class="gx-aa-step__body">
             <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
+            <GalaxySettingRow v-if="carType === 'app'" :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
             <p v-if="showProfile" class="gx-note" role="status">
               {{ runtime.car_profile_source === 'override' ? 'Using standard settings for this car.' : 'Tuned for ' + runtime.car_profile_label + ' (detected).' }}
               <button type="button" class="gx-btn gx-btn--tonal" :disabled="busy || !setup.parked"
                 @click="control('car_profile', { profile: runtime.car_profile_source === 'override' ? '' : 'default' })">{{ runtime.car_profile_source === 'override' ? 'Use detected settings' : 'Use standard settings' }}</button></p>
-            <p v-if="carType === 'usb'" class="gx-note">Plug the car’s data USB port into the comma’s USB-C port, then turn on Wired USB Connection in step 3.</p>
-            <p v-else-if="carType === 'app'" class="gx-note">Pick your tablet app in step 3 and follow its setup steps.</p>
+            <template v-if="carType === 'usb'">
+              <GalaxySettingRow :row="wiredRow" :index="0" :busy="busy" :disabled="wiredDisabled"
+                :save-value="(index, value) => control('connection', { connection: value === 'On' ? 'wired' : 'wireless' })" />
+            </template>
+            <template v-else-if="carType === 'app'">
+              ${APP_SETUP}
+            </template>
             <template v-if="pairsHere">
             <ol v-if="adapterSetup" class="gx-aa-list" aria-label="Pairings needed">
               <li class="gx-aa-row">
@@ -882,10 +888,7 @@ export const AndroidAutoPage = {
             <GalaxySettingRow :row="switchRow('Automatic Connection', runtime?.auto_connect, 'Connect to your car whenever you start driving.')"
               :index="0" :busy="busy" :disabled="!setup.enabled || !setup.parked || !!pairing?.active"
               :save-value="(index, value) => control('auto_connect', { enabled: value === 'On' })" />
-            <GalaxySettingRow :row="wiredRow" :index="0" :busy="busy" :disabled="wiredDisabled"
-              :save-value="(index, value) => control('connection', { connection: value === 'On' ? 'wired' : 'wireless' })" />
-            <GalaxySettingRow :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
-            ${APP_SETUP}
+
             <p v-if="runtime?.companion_name" class="gx-note">Car: {{ runtime.companion_name }}</p>
             <details class="gx-aa-wiki"><summary>Stuck connecting? Wi-Fi and screen troubleshooting</summary>
               <ul>
@@ -893,7 +896,7 @@ export const AndroidAutoPage = {
                 <li><strong>First connection:</strong> stay in Park or offroad mode, and keep the car’s screen on.</li>
                 <li><strong>Black or frozen screen:</strong> tap Disconnect, wait a few seconds, then connect again. If it keeps happening, turn the car off and on.</li>
                 <li><strong>Car says the phone isn’t compatible:</strong> make sure wireless Android Auto (sometimes called “smartphone connection”) is turned on in the car’s settings, and that step 1 shows Ready.</li>
-                <li><strong>Wired USB:</strong> turn on Wired USB Connection, plug the car’s data USB port into the comma’s USB-C port with a data-capable cable, and drive. Bluetooth pairing is not needed.</li>
+                <li><strong>Wired AA:</strong> turn on Wired AA in step 2, plug the car’s data USB port into the comma’s USB-C port with a data-capable cable, and drive. Bluetooth pairing is not needed.</li>
               </ul>
             </details>
           </div>
