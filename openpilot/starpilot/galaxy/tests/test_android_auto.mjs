@@ -491,7 +491,28 @@ typed.control = (action, extra) => typedCalls.push([action, extra])
 typed.saveCarType(0, 'Wireless adapter')
 typed.saveCarType(0, 'Not a type')
 assert.deepEqual(typedCalls, [['car_type', { carType: 'adapter' }]])
-assert.deepEqual(new Set(AndroidAutoPage.computed.carTypeRow.call(typed).choices), new Set(['Built-in wireless', 'Wireless adapter', 'Wired AA', 'App']))
+assert.deepEqual(new Set(page(setup).carTypeRow.choices), new Set(['Built-in wireless', 'Wireless adapter', 'Wired AA', 'App']))
+// A blocked wired port explains itself instead of silently refusing the pick.
+const blocked = page(setup)
+blocked.feed = { error: '', emit() {} }
+blocked.runtime = { car_type: 'builtin', wired_blocked: 'Turn off Jetlink to use wired Android Auto' }
+assert.equal(blocked.wiredUnavailable, true)
+const blockedCalls = []
+blocked.control = (action, extra) => blockedCalls.push([action, extra])
+assert.equal(blocked.saveCarType(0, 'Wired AA'), false)
+assert.deepEqual(blockedCalls, [])
+assert.match(blocked.feed.error, /Turn off Jetlink/)
+blocked.runtime = { car_type: 'usb', connection: 'wired', wired_blocked: 'Turn off Jetlink to use wired Android Auto' }
+assert.equal(blocked.wiredUnavailable, false, 'already wired: the pick is not blocked')
+// The line names the chosen tablet app.
+const named = page(setup)
+named.runtime = { car_type: 'app', connection: 'openheadunit' }
+assert.equal(named.carTypeRow.value, 'App (Open Headunit)')
+assert.ok(named.carTypeRow.choices.includes('App (Open Headunit)'))
+const namedCalls = []
+named.control = (action, extra) => namedCalls.push([action, extra])
+named.saveCarType(0, 'Wireless adapter')
+assert.deepEqual(namedCalls, [['car_type', { carType: 'adapter' }]])
 // A tuned car profile only shows up when one is detected or pinned.
 const profiled = page(setup)
 assert.equal(profiled.showProfile, false, 'standard cars see nothing')
