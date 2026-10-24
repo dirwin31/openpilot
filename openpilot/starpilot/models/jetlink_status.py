@@ -1,4 +1,4 @@
-"""Read-only Jetlink status for the home icon and the Android Auto card, polled off the drawing thread."""
+"""Shared Jetlink presentation state and background polling for native and projected screens."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,13 +12,27 @@ STALE_NS = 2_500_000_000
 # The host's processing time for the last big-model frame (excludes USB); jetlink's runtime record does not carry it
 LATENCY_RECORD = "/dev/shm/jetlink/starpilot_latency.json"
 LATENCY_FRESH_S = 3.
-RUNNING = {'ready': 'ready', 'joining': 'connecting', 'retrying': 'connecting'}
+
+
+def connection_state(status) -> str:
+  """Project Jetlink's current API for every StarPilot surface, without changing its reconnect policy."""
+  if status is None or not status.enabled:
+    return 'unavailable'
+  # Presence intentionally survives brief enumeration gaps. An empty physical
+  # port is stronger evidence for the UI than that hold or a prior runtime record.
+  if status.port == 'empty':
+    return 'disconnected'
+  if status.reason:
+    return 'unavailable'
+  if not status.present:
+    return 'disconnected'
+  return status.phase
 
 
 @dataclass(frozen=True)
 class JetlinkStatus:
   device: str = ''
-  state: str = 'off'  # off, disconnected, connected, connecting, ready, active, unavailable
+  state: str = 'off'  # Jetlink phase, or off/disconnected/unavailable
   latency_ms: float | None = None
   port: str | None = None  # jetlink's port_state: 'connected' (host on the link), 'device' (plugged in), else None
 
@@ -66,22 +80,15 @@ def read_status() -> JetlinkStatus:
   status = hooks().status()
   if status is None:
     return JetlinkStatus(state='unavailable')
-  if not status.enabled:
-    return JetlinkStatus()  # a Chestnut is fitted
-  device = 'iPhone' if status.mode == 'ios' else 'Computer'
-  port = status.port_state if status.port_state in ('connected', 'device') else None
-  if not status.present:
-    return JetlinkStatus(device, 'disconnected', port=port)
-  if status.active:
-    return JetlinkStatus(device, 'active', read_latency(), port)
-  if status.reason:
-    return JetlinkStatus(device, 'unavailable', port=port)
-  return JetlinkStatus(device, RUNNING.get(status.running, 'connected'), port=port)
+  device = 'Mobile device (iOS)' if status.mode == 'ios' else 'USB host'
+  state = connection_state(status)
+  port = status.port_state if status.enabled and status.port != 'empty' and status.port_state in ('connected', 'device') else None
+  return JetlinkStatus(device, state, read_latency() if state == 'active' else None, port)
 
 
 class JetlinkStatusFeed:
-  """Polls once a second only while enabled; snapshot() never does file IO."""
-  def __init__(self, read=read_status, period=1.0):
+  """Polls off the render thread; snapshot() never does file IO."""
+  def __init__(self, read=read_status, period=0.25):
     self.read, self.period = read, period
     self._lock = threading.Lock()
     self._stop = threading.Event()
