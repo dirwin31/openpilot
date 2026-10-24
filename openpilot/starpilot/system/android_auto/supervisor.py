@@ -16,6 +16,7 @@ on Stop. Nothing here runs as root or touches vehicle control.
 
 from __future__ import annotations
 
+import errno
 import ipaddress
 import json
 import math
@@ -150,6 +151,14 @@ def _wifi_dbm(interface: str = "wlan0") -> int | None:
   except (OSError, ValueError, IndexError):
     pass
   return None
+
+
+LOCAL_SOCKET_ERRORS = (errno.ENOSYS, errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT)
+
+
+def car_never_answered(error: BaseException) -> bool:
+  """False when this device's own Bluetooth stack failed, so the car's cached channel says nothing about the car."""
+  return not (isinstance(error, OSError) and error.errno in LOCAL_SOCKET_ERRORS)
 
 
 def _where(error: BaseException, depth: int = 4) -> list[str]:
@@ -1149,8 +1158,8 @@ class Supervisor:
                                version_status=int(config.get("version_status", 0)))
       self._set(state="wifi_start")
       result = boot.run(lambda credentials: lease.acquire(credentials, cancelled=boot.join_is_cancelled), cancelled=self._stop.is_set)
-    except Exception:
-      if source == "cache" and not self._stop.is_set() and self._status["last_stage"] in ("rfcomm", "wifi_start"):
+    except Exception as error:
+      if source == "cache" and not self._stop.is_set() and self._status["last_stage"] in ("rfcomm", "wifi_start") and car_never_answered(error):
         self._remember_channel(address, None)  # the car never answered there; ask it over SDP next time
         self.log("rfcomm_cache_dropped", channel=channel)
       raise
