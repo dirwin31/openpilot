@@ -111,16 +111,16 @@ def adapter_warp(small, legacy):
     return adapter.model_warp(small, 1344, 760, GEOMETRY), log
 
 
-def test_adapter_uses_the_small_models_warp_on_either_runtime():
-  for legacy in (False, True):
-    warp, _ = adapter_warp(small_model()[0], legacy)
-    assert isinstance(warp, CatalogWarp)
+def test_adapter_loads_the_stock_warp_under_legacy9d():
+  for kw in ({}, {"descriptor": False}):
+    warp, log = adapter_warp(small_model(**kw)[0], legacy=True)
+    assert warp is None
+    log.exception.assert_not_called()
 
 
-def test_adapter_falls_back_to_the_stock_warp_only_under_legacy9d():
+def test_adapter_sends_the_small_models_warp_off_legacy9d():
+  warp, _ = adapter_warp(small_model()[0], legacy=False)
+  assert isinstance(warp, CatalogWarp)
   small, _, _ = small_model(descriptor=False)
-  warp, log = adapter_warp(small, legacy=True)
-  assert warp is None
-  log.exception.assert_called_once()
   with pytest.raises(RuntimeError, match="policy pipeline"):
     adapter_warp(small, legacy=False)
