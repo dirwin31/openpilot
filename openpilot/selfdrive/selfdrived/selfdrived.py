@@ -2071,9 +2071,11 @@ class SelfdriveD:
         not self.events.contains(ET.IMMEDIATE_DISABLE)):
       self.aol_soft_takeover_alert = True
     if (self.aol_replay and intent is not None and intent.lateralArmed and
-        CS.steerFaultTemporary and not CS.steerFaultPermanent):
+        CS.steerFaultTemporary and not CS.steerFaultPermanent and not CS.steeringPressed):
       # An armed AOL session still needs the ordinary temporary-steering warning
       # while actual steering is suspended and the stock state machine is off.
+      # Like CarSpecificEvents, skip it while the driver is steering: a hard
+      # override alone puts Honda EPS in NO_TORQUE_ALERT_1.
       if EventName.steerTempUnavailableSilent not in self.events.names:
         self.events.add(EventName.steerTempUnavailableSilent)
       if ET.WARNING not in self.state_machine.current_alert_types:
