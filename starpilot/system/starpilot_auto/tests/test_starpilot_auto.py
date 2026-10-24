@@ -11,8 +11,10 @@ import pytest
 from openpilot.starpilot.system.starpilot_auto import bootstrap as bs
 from openpilot.starpilot.system.starpilot_auto import hfp, sdp
 from openpilot.starpilot.system.starpilot_auto.frame_source import FrameConsumer, FrameProducer, FrameRequest, fit_content
-from openpilot.starpilot.system.starpilot_auto.session import (AuthenticationRejected, ProjectionSession, VideoMode, choose_video_mode)
-from openpilot.starpilot.system.starpilot_auto.tests.fake_head_unit import FakeHeadUnit, make_identity, rfcomm_head_unit
+from openpilot.starpilot.system.starpilot_auto.session import (AuthenticationRejected, ProjectionSession, START_CODE, VideoMode,
+                                                                choose_video_mode)
+from openpilot.starpilot.system.starpilot_auto.tests.fake_head_unit import (BLUETOOTH_CHANNEL, SENSOR_CHANNEL, FakeHeadUnit, make_identity,
+                                                                       rfcomm_head_unit)
 from openpilot.starpilot.system.starpilot_auto.wire import field, one, parse_fields, signed
 
 
@@ -543,6 +545,8 @@ def test_session_sends_codec_config_before_each_epoch(identity, ack_codec_config
   hu.thread.join(5)
   assert hu.error is None, hu.error
   sps_pps = b"\x00\x00\x00\x01\x67\x42\x00\x00\x00\x01\x68\xce"
+  for _, frame in hu.frames:  # like a phone: no AUD, no repeated SPS/PPS in the picture data
+    assert frame and all(frame[m.end()] & 31 not in (7, 8, 9) for m in START_CODE.finditer(frame))
   assert hu.codec_configs == [(1, sps_pps, 0), (2, sps_pps, 4)]  # one per epoch, before its keyframe
 
 
@@ -559,6 +563,68 @@ def test_session_keeps_unsolicited_focus_grant(identity):
   hu.thread.join(5)
   assert hu.error is None and hu.start_indications == [1]
 
+
+
+def test_session_opens_car_data_and_bluetooth_like_a_phone(identity):
+  hu = FakeHeadUnit(identity, phone_services=True)
+  session = connect(hu, identity)
+  session.phone_address = "39:90:21:64:07:00"
+  session.authenticate()
+  session.start("StarPilot", "comma.ai")
+  pump_until(session, lambda: session.focused and session.sensor_events)
+  session.shutdown()
+  session.peer.close()
+  hu.thread.join(5)
+  assert hu.error is None
+  assert {SENSOR_CHANNEL, BLUETOOTH_CHANNEL} <= set(hu.opened)
+  assert hu.sensor_requests == [13, 10]  # driving status and night only; never location
+  assert hu.pairing_requests == [("39:90:21:64:07:00", 2)]
+  assert session.stats()["sensor_events"] == 1
+
+
+def test_session_projects_without_a_bluetooth_address(identity):
+  hu = FakeHeadUnit(identity, phone_services=True)
+  session = connect(hu, identity)
+  session.authenticate()
+  session.start("StarPilot", "comma.ai")
+  pump_until(session, lambda: session.focused)
+  session.shutdown()
+  session.peer.close()
+  hu.thread.join(5)
+  assert hu.error is None and BLUETOOTH_CHANNEL in hu.opened and hu.pairing_requests == []
+
+
+@pytest.mark.parametrize("offered, used", [(30, 30), (100, ProjectionSession.MAX_WINDOW)])
+def test_session_streams_at_the_cars_window(identity, offered, used):
+  # At a window of 2 the 2019 Civic acked one frame, went silent and took its screen back.
+  hu = FakeHeadUnit(identity, window=offered)
+  session = connect(hu, identity)
+  session.authenticate()
+  session.start("StarPilot", "comma.ai")
+  pump_until(session, lambda: session.focused)
+  assert session.window == used
+  session.shutdown()
+  session.peer.close()
+  hu.thread.join(5)
+
+
+def test_session_reads_acks_already_received_before_calling_one_late(identity):
+  hu = FakeHeadUnit(identity)
+  session = connect(hu, identity)
+  session.authenticate()
+  session.start("StarPilot", "comma.ai")
+  pump_until(session, lambda: session.focused)
+  session.send_frame(keyframe_au(1), 1, keyframe=True)
+  deadline = time.monotonic() + 5.0
+  while not hu.frames and time.monotonic() < deadline:
+    time.sleep(0.01)
+  time.sleep(0.2)  # the ACK sits unread in the socket, as when the streaming loop stalls
+  session.check_progress(now=time.monotonic() + ProjectionSession.ACK_TIMEOUT + 0.5)
+  assert session.acked == 1
+  session.shutdown()
+  session.peer.close()
+  hu.thread.join(5)
+  assert hu.error is None
 
 def test_session_authentication_rejected(identity):
   hu = FakeHeadUnit(identity, reject_auth=True)

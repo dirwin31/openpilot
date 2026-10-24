@@ -63,12 +63,17 @@ def video_config(resolution: int, margin_w: int = 0, margin_h: int = 0) -> bytes
   return field(1, resolution) + field(2, 2) + field(3, margin_w) + field(4, margin_h) + field(5, 160)
 
 
+SENSOR_CHANNEL, BLUETOOTH_CHANNEL = 7, 8
+
+
 def discovery_response(video_channel: int = 3, input_channel: int = 1, *, resolutions: tuple[tuple[int, int, int], ...] = ((1, 0, 0), (2, 0, 240)),
-                       cluster_channel: int | None = None, cluster_input_channel: int | None = None, headunit_info: bool = False) -> bytes:
+                       cluster_channel: int | None = None, cluster_input_channel: int | None = None, headunit_info: bool = False,
+                       phone_services: bool = False) -> bytes:
   """The car's services. ``resolutions`` are (resolution index, margin width, margin height) on the main display;
   ``cluster_channel`` adds an instrument-cluster video sink (display 1) listed first, and ``cluster_input_channel``
   that display's own input, listed before the main one; ``headunit_info`` adds the newer
-  identity message (with a vehicle id that must never reach a log)."""
+  identity message (with a vehicle id that must never reach a log); ``phone_services`` adds the car-data and
+  Bluetooth channels as the 2019 Civic offers them (sensor types one per entry, pairing method packed)."""
   av = field(1, 3) + b"".join(field(4, video_config(*resolution)) for resolution in resolutions)
   video = field(1, video_channel) + field(3, av)
   audio = field(1, 4) + field(3, field(1, 1))
@@ -82,7 +87,12 @@ def discovery_response(video_channel: int = 3, input_channel: int = 1, *, resolu
   if headunit_info:
     info = field(5, "VIN-SECRET") + field(17, field(1, "Hyundai") + field(2, "IONIQ 6") + field(3, "2023") + field(4, "VIN-SECRET")
                                             + field(5, "Mobis") + field(6, "Gen5W"))
-  return cluster + field(1, video) + field(1, audio) + field(1, touch) + field(2, "Honda") + field(3, "Civic") + info
+  extra = b""
+  if phone_services:
+    sensors = b"".join(field(1, field(1, kind)) for kind in (1, 3, 7, 8, 10, 13, 21))
+    extra = (field(1, field(1, SENSOR_CHANNEL) + field(2, sensors)) +
+             field(1, field(1, BLUETOOTH_CHANNEL) + field(6, field(1, "F8:36:9B:0A:7D:C8") + field(2, bytes([2])))))
+  return cluster + field(1, video) + field(1, audio) + field(1, touch) + extra + field(2, "Honda") + field(3, "Civic") + info
 
 
 class FakeHeadUnit:
@@ -91,7 +101,10 @@ class FakeHeadUnit:
   def __init__(self, identity: dict[str, Path], *, window: int = 4, reject_auth: bool = False, require_client_cert: bool = True,
                unsolicited_focus: bool = False, version: tuple[int, int] = (1, 7), ack_codec_config: bool | int = True,
                ciphers: str | None = None, ping_during_auth: bool = False, discovery_delay: float = 0.0,
-               discovery: bytes | None = None, video_channel: int = 3, accepted_config: int = 1):
+               discovery: bytes | None = None, video_channel: int = 3, accepted_config: int = 1, phone_services: bool = False):
+    self.phone_services = phone_services
+    self.sensor_requests: list[int] = []
+    self.pairing_requests: list[tuple[str, int]] = []
     self.unsolicited_focus = unsolicited_focus
     self.ciphers = ciphers  # restrict the car's TLS offer, like an old head-unit stack
     self.ping_during_auth = ping_during_auth
@@ -236,7 +249,8 @@ class FakeHeadUnit:
       if channel == 0 and kind == 5:
         self.device_name = one(fields, 4, b"").decode()
         time.sleep(self.discovery_delay)  # a slow head unit, longer than the phone's streaming timeout
-        self._send(0, 6, self.discovery if self.discovery is not None else discovery_response(self.video_channel))
+        self._send(0, 6, self.discovery if self.discovery is not None else
+                   discovery_response(self.video_channel, phone_services=self.phone_services))
       elif channel == 0 and kind == 11:
         self._send(0, 12, data)
       elif channel == 0 and kind == 12:
@@ -248,6 +262,15 @@ class FakeHeadUnit:
       elif kind == 7:
         self.opened.append(channel)
         self._send(channel, 8, field(1, 0), control=True)
+      elif self.phone_services and channel == SENSOR_CHANNEL and kind == 0x8001:
+        self.sensor_requests.append(int(one(fields, 1, 0) or 0))
+        self._send(SENSOR_CHANNEL, 0x8002, field(1, 0))
+        if one(fields, 1) == 13:
+          self._send(SENSOR_CHANNEL, 0x8003, field(13, field(1, 0)))  # driving status: unrestricted
+      elif self.phone_services and channel == BLUETOOTH_CHANNEL and kind == 0x8001:
+        address = one(fields, 1, b"")
+        self.pairing_requests.append((address.decode() if isinstance(address, bytes) else "", int(one(fields, 2, 0) or 0)))
+        self._send(BLUETOOTH_CHANNEL, 0x8002, field(1, 1) + field(2, 0))  # what the Civic answers: not paired
       elif channel == self.video_channel and kind == 0x8000:
         self._send(channel, 0x8003, field(1, 2) + field(2, self.window) + field(3, self.accepted_config))
         if self.unsolicited_focus:  # like the DHU: grant focus before the phone asks
