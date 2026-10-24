@@ -81,24 +81,24 @@ def _adapter_class():
                             waiting=time.monotonic() - self._aol_since < AOL_GRACE_S)
 
     def model_warp(self, small, cam_w, cam_h, geometry):
-      # the small model's own warp (jetlink_warp), else None for jetlink's stock pickle, which only a legacy9d
-      # modeld can load: under native02e its failure would hide why the small model's warp was not used
+      # None for jetlink's stock pickle, which a legacy9d modeld loads directly and without the ~3 ms a frame
+      # CatalogWarp spends copying its output; any other runtime cannot load that pickle, so it sends the
+      # small model's own warp (jetlink_warp) and a failure there must surface
       from openpilot.starpilot.models.runner import CatalogModelState
       from openpilot.starpilot.models.runtime_bridge.runtime import selected_legacy
+      if selected_legacy():
+        return None
       try:
         if not isinstance(small, CatalogModelState):
           raise RuntimeError(f"the small model is a {type(small).__name__}, not a catalog model")
         from openpilot.starpilot.models.jetlink_warp import CatalogWarp
         warp = CatalogWarp(small, geometry)
-        self.log.warning("jetlink: the link sends the small model's warp (%s, %d bytes a frame, %s)",
-                         small.camera_warp_descriptor.output_shape, warp.output.nbytes,
-                         "legacy9d" if selected_legacy() else "native02e")
+        self.log.warning("jetlink: the link sends the small model's warp (%s, %d bytes a frame)",
+                         small.camera_warp_descriptor.output_shape, warp.output.nbytes)
         return warp
       except Exception:
-        if not selected_legacy():
-          raise
-        self.log.exception("jetlink: the small model's warp is not usable, loading the stock warp")
-        return None
+        self.log.exception("jetlink: the small model's warp is not usable")
+        raise
 
     def small_reset(self, small):
       # CatalogModelState's history zeroed in place: GPU queues, numpy inputs (prev_feat, packed inputs) and
