@@ -12,6 +12,9 @@ STALE_NS = 2_500_000_000
 # The host's processing time for the last big-model frame (excludes USB); jetlink's runtime record does not carry it
 LATENCY_RECORD = "/dev/shm/jetlink/starpilot_latency.json"
 LATENCY_FRESH_S = 3.
+# Whether this modeld's attach() joined the link. Without it a join that raised leaves no runtime record,
+# which jetlink reports as 'prepared' for the whole drive
+JOIN_RECORD = "/dev/shm/jetlink/starpilot_join.json"
 
 
 def connection_state(status) -> str:
@@ -73,6 +76,34 @@ def read_latency(path=LATENCY_RECORD) -> float | None:
     return None
 
 
+def write_join(joined: bool, path=JOIN_RECORD) -> None:
+  """modeld, once attach() has answered. Never raises: the drive goes on either way."""
+  try:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
+      json.dump({"pid": os.getpid(), "joined": joined}, f)
+    os.replace(tmp, path)
+  except OSError:
+    pass
+
+
+def join_failed(path=JOIN_RECORD) -> bool:
+  """A live modeld's attach() did not join the link."""
+  try:
+    with open(path) as f:
+      record = json.load(f)
+    pid = record.get("pid")
+    if type(pid) is not int or record.get("joined") is not False:
+      return False
+    os.kill(pid, 0)
+    return True
+  except PermissionError:
+    return record.get("joined") is False
+  except (OSError, ValueError, AttributeError):
+    return False
+
+
 def read_status() -> JetlinkStatus:
   from openpilot.starpilot.models.jetlink_adapter import hooks, link_on
   if not link_on():
@@ -82,6 +113,8 @@ def read_status() -> JetlinkStatus:
     return JetlinkStatus(state='unavailable')
   device = 'Mobile device (iOS)' if status.mode == 'ios' else 'USB host'
   state = connection_state(status)
+  if state == 'prepared' and join_failed():
+    state = 'failed'
   port = status.port_state if status.enabled and status.port != 'empty' and status.port_state in ('connected', 'device') else None
   return JetlinkStatus(device, state, read_latency() if state == 'active' else None, port)
 

@@ -18,10 +18,11 @@ def status(**kw):
   return Status(**{**base, **kw})
 
 
-def read(value, latency=24.6):
+def read(value, latency=24.6, failed=False):
   with patch.object(adapter, 'link_on', return_value=True), \
        patch.object(adapter, 'hooks', return_value=NS(status=lambda: value)), \
-       patch.object(jetlink_status, 'read_latency', return_value=latency):
+       patch.object(jetlink_status, 'read_latency', return_value=latency), \
+       patch.object(jetlink_status, 'join_failed', return_value=failed):
     return read_status()
 
 
@@ -48,6 +49,24 @@ def test_off_reads_nothing_of_jetlink():
 ])
 def test_states(kw, expected):
   assert read(status(**kw)) == expected
+
+
+def test_failed_join_reads_failed_not_prepared():
+  assert read(status(ready=True), failed=True) == JetlinkStatus('USB host', 'failed', port='connected')
+  # a live join's record decides over a stale failure
+  assert read(status(ready=True, running='joining'), failed=True) == JetlinkStatus('USB host', 'connecting', port='connected')
+
+
+def test_join_record_round_trip(tmp_path):
+  path = str(tmp_path / 'jetlink' / 'join.json')
+  assert not jetlink_status.join_failed(path)
+  jetlink_status.write_join(False, path)
+  assert jetlink_status.join_failed(path)
+  jetlink_status.write_join(True, path)
+  assert not jetlink_status.join_failed(path)
+  with open(path, 'w') as f:
+    json.dump({'pid': 2 ** 22 + 12345, 'joined': False}, f)  # a modeld that is gone
+  assert not jetlink_status.join_failed(path)
 
 
 def test_no_usable_jetlink_is_unavailable():

@@ -5,9 +5,10 @@ from openpilot.starpilot.models.jetlink_status import JetlinkStatus
 from openpilot.starpilot.ui.onroad_customization import JETLINK_SIZE, JETLINK_WIDGET
 from openpilot.starpilot.ui.presentation import FontRole
 
-LABELS = {'off': 'Off • not in use', 'active': 'Remote model active', 'waiting': 'Ready • not in use', 'prepared': 'Prepared • not in use',
-          'preparing': 'Preparing • not in use', 'reconnecting': 'Reconnecting • local', 'failed': 'Failed • not in use',
-          'connecting': 'Connecting • not in use', 'disconnected': 'Disconnected', 'unavailable': 'Unavailable'}
+# 'prepared' onroad is modeld still loading: a join that failed reads 'failed' (jetlink_status.join_failed)
+LABELS = {'off': 'Off • not in use', 'active': 'Remote model active', 'waiting': 'Ready • swaps when disengaged', 'prepared': 'Starting • local model',
+          'preparing': 'Preparing • local model', 'reconnecting': 'Reconnecting • local', 'failed': 'Failed • local model',
+          'connecting': 'Waiting for app • local model', 'disconnected': 'Disconnected', 'unavailable': 'Unavailable'}
 GREEN = rl.Color(70, 200, 110, 255)
 ORANGE = rl.Color(255, 150, 60, 255)
 ACCENT = rl.Color(199, 174, 247, 255)

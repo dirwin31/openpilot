@@ -759,7 +759,10 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     try:
       # the fork's own reset of its small model, else jetlink's from its shape
       ready['reset_small'] = getattr(op, 'small_reset', lambda small: None)(small) or prepare_reset(small)
-      warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h))
+      # the fork's warp over its small model's, else the stock warp pickle
+      warp = getattr(op, 'model_warp', lambda *args: None)(small, cam_w, cam_h, geometry)
+      if warp is None:
+        warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h))
     except Exception:
       link.close()
       raise
