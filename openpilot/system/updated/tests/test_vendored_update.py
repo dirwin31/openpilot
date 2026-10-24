@@ -267,6 +267,20 @@ class TestVendoredUpdate(unittest.TestCase):
       self.updated.finalize_update()
     self.assertFalse((self.finalized / ".overlay_consistent").exists())
 
+  def test_finalize_survives_a_git_cleanup_timeout(self):
+    shutil.rmtree(self.merged)
+    self.git(self.root, "clone", "--no-local", "--no-hardlinks", str(self.source), str(self.merged))
+    real_run = self.updated.run
+
+    def run(cmd, cwd=None):
+      if cmd == ["git", "gc"]:
+        raise subprocess.TimeoutExpired(cmd, 300)
+      return real_run(cmd, cwd)
+
+    with patch.object(self.updated, "run", side_effect=run):
+      self.updated.finalize_update()
+    self.assertTrue((self.finalized / ".overlay_consistent").exists())
+
 
 if __name__ == "__main__":
   unittest.main()
