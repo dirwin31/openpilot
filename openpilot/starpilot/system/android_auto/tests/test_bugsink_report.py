@@ -325,3 +325,41 @@ def test_supervisor_records_build_at_session_start(monkeypatch):
   sup._release_phone = lambda: None  # ty: ignore[invalid-assignment]  # test double
   sup._run(1)
   assert records[0]["software"] == {"commit": "session-build", "branch": "session-branch"}
+
+
+HANDSHAKE_FAILED = [
+  (0, 0, "session_start", {"receiver": "Honda HFL", "trigger": "auto"}),
+  (0, 1, "stage", {"state": "rfcomm"}),
+  (0, 2, "bootstrap_tx", {"message": "WifiVersionRequest", "bytes": 4}),
+  (0, 3, "hfp_command", {"command": "AT+CIND"}),
+  (0, 3, "nav_guidance_sent", {}),
+  (0, 4, "bootstrap_rx", {"message": "WifiVersionResponse", "bytes": 6}),
+  (0, 5, "sdp_retry", {"error": "[Errno 112] Host is down to AA:BB:CC:DD:EE:FF", "settle": 1.5}),
+  (0, 25, "attempt_failed", {"stage": "wifi_start", "error": "head unit did not answer in time", "kind": "BootstrapTimeout"}),
+]
+
+
+def test_failed_sessions_carry_a_scrubbed_handshake_trace(tmp_path):
+  event = br.drive_event([br.session_record(write_session(tmp_path, 1, HANDSHAKE_FAILED))])
+  trace = event["contexts"]["android_auto_trace_session_1"]
+  names = [item["event"] for item in trace["events"]]
+  assert names[:3] == ["session_start", "stage", "bootstrap_tx"] and "bootstrap_rx" in names and "sdp_retry" in names
+  assert "hfp_command" not in names and "nav_guidance_sent" not in names
+  assert trace["omitted"] == 0 and trace["events"][2]["at_s"] == 2.0
+  text = json.dumps(event)
+  assert "AA:BB:CC:DD:EE:FF" not in text and "Honda HFL" not in text
+
+
+def test_trace_keeps_the_newest_events_within_its_budget(tmp_path):
+  noisy = [(0, 0, "session_start", {})] + [(i // 60, i % 60, "sdp_retry", {"error": "x" * 250, "n": i}) for i in range(1, 400)]
+  noisy.append((9, 0, "attempt_failed", {"stage": "discovering", "error": "gone", "kind": "RuntimeError"}))
+  event = br.drive_event([br.session_record(write_session(tmp_path, 1, noisy))])
+  trace = event["contexts"]["android_auto_trace_session_1"]
+  assert trace["omitted"] > 0 and [e["event"] for e in trace["events"]][-2:] == ["attempt_failed", "session_stop"]
+  assert len(json.dumps(trace)) <= br.TRACE_SESSION_BYTES + 1024
+  assert len(json.dumps(event)) < 400 << 10
+
+
+def test_clean_drives_send_no_trace(tmp_path):
+  event = br.drive_event([br.session_record(write_session(tmp_path, 1, STREAMED))])
+  assert not any(key.startswith("android_auto_trace_session_") for key in event["contexts"])

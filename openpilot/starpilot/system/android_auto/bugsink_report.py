@@ -25,6 +25,10 @@ LOG_SETTLE_S = 120         # a log written this recently may still be a live ses
 MAX_SESSIONS = 20          # per drive report; the rest go in the next one
 MAX_FAILURES = 5           # distinct failures detailed per drive report
 MAX_BREADCRUMBS = 100
+TRACE_QUIET = frozenset({"nav_guidance_sent", "nav_focus", "nav_focus_requested", "nav_status_state", "media_key", "media_audio_state",
+                         "media_audio_focus", "media_status_state", "hfp_command", "video_focus"})
+TRACE_SESSION_BYTES = 40 << 10   # per failed session; the oldest events go first
+TRACE_TOTAL_BYTES = 160 << 10    # all traces in one report, well under the sender's event cap
 FINISHED_EVENT = '"event": "session_stop"'
 OUTCOME_RANK = ("streamed", "recovered", "stopped", "dropped", "failed")
 
@@ -92,6 +96,37 @@ def video_summary(events: list[dict]) -> dict:
   return {key: value for key, value in summary.items() if value is not None}
 
 
+def _trim(value):
+  if isinstance(value, str):
+    return value[:300]
+  if isinstance(value, (dict, list)) and len(json.dumps(value, default=str)) > 600:
+    return json.dumps(value, default=str)[:600]
+  return value
+
+
+def trace_events(events: list[dict]) -> list[dict]:
+  """The session log without routine media and navigation chatter, each event stamped with seconds since the start."""
+  trace = []
+  for event in events:
+    if event["event"] in TRACE_QUIET:
+      continue
+    values = {key: _trim(value) for key, value in event.items() if key not in ("t", "mono_s", "event")}
+    trace.append({"at_s": elapsed(events[0], event), "event": event["event"], **values})
+  return trace
+
+
+def bounded_trace(trace: list[dict], limit: int) -> dict:
+  """The newest events that fit in ``limit`` bytes of JSON, with how many older ones were left out."""
+  kept, size = [], 0
+  for event in reversed(trace):
+    size += len(json.dumps(event, default=str)) + 2
+    if size > limit:
+      break
+    kept.append(event)
+  kept.reverse()
+  return {"events": kept, "omitted": len(trace) - len(kept)}
+
+
 def session_record(path: Path) -> dict:
   """One finished session log reduced to its outcome, stage timings, video and the car it talked to."""
   from openpilot.starpilot.system.android_auto import compat_report
@@ -144,6 +179,7 @@ def session_record(path: Path) -> dict:
     "head_unit": {key: car[key] for key in ("head_unit_make", "head_unit_model", "head_unit_software_version",
                                             "car_make", "car_model", "car_year") if car.get(key)},
     "_report": report,
+    "_trace": trace_events(events),
     "_names": [car.get("bluetooth_name", ""), car.get("display_name", "")],
   }
 
@@ -309,6 +345,11 @@ def drive_event(sessions: list[dict]) -> dict:
     message += "".join(f"\n\n--- Session {session['seq']} ---\n" + sanitize(session_timeline(session), session.get("_names", ()))
                        for session in failed)
   latest = failures[0] if failures else {}
+  traces = {}
+  for session in failed[-4:]:
+    traces[f"android_auto_trace_session_{session['seq']}"] = sanitize(
+      bounded_trace(session.get("_trace", []), min(TRACE_SESSION_BYTES, TRACE_TOTAL_BYTES // max(1, len(failed[-4:])))),
+      session.get("_names", ()))
   return {
     "message": message,
     "level": {"streamed": "info", "recovered": "info", "failed": "error"}.get(summary["outcome"], "warning"),
@@ -324,7 +365,8 @@ def drive_event(sessions: list[dict]) -> dict:
                  **{f"android_auto_session_{index + 1}": _public(session) for index, session in enumerate(sessions)},
                  **{f"android_auto_failure_{index + 1}": {key: value for key, value in failure.items() if key != "summary"}
                     for index, failure in enumerate(failures)},
-                 **{f"android_auto_compat_report_session_{session['seq']}": {"text": compat_text(session)} for session in failed}},
+                 **{f"android_auto_compat_report_session_{session['seq']}": {"text": compat_text(session)} for session in failed},
+                 **traces},
   }
 
 
