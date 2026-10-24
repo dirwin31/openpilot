@@ -6,14 +6,16 @@ from types import SimpleNamespace as NS
 from unittest.mock import patch
 
 import pytest
+from jetlink.openpilot import Status
 
 from openpilot.starpilot.models import jetlink_adapter as adapter, jetlink_status
 from openpilot.starpilot.models.jetlink_status import JetlinkStatus, JetlinkStatusFeed, read_status
 
 
 def status(**kw):
-  base = {'enabled': True, 'mode': 'usb', 'present': True, 'port_state': 'connected', 'active': False, 'reason': None, 'running': None, 'ready': False}
-  return NS(**{**base, **kw})
+  base = {'enabled': True, 'mode': 'usb', 'transport': 'USB', 'present': True, 'port': 'host', 'ready': False,
+          'reason': None, 'progress': None, 'model': 'remote', 'default_model': 'remote'}
+  return Status(**{**base, **kw})
 
 
 def read(value, latency=24.6):
@@ -30,17 +32,19 @@ def test_off_reads_nothing_of_jetlink():
 
 
 @pytest.mark.parametrize('kw,expected', [
-  ({'active': True, 'running': 'running'}, JetlinkStatus('Computer', 'active', 24.6, 'connected')),
-  ({'running': 'ready'}, JetlinkStatus('Computer', 'ready', port='connected')),
-  ({'running': 'joining'}, JetlinkStatus('Computer', 'connecting', port='connected')),
-  ({'running': 'retrying'}, JetlinkStatus('Computer', 'connecting', port='connected')),
-  ({'running': None, 'ready': False}, JetlinkStatus('Computer', 'connected', port='connected')),
-  ({'reason': 'service stopped'}, JetlinkStatus('Computer', 'unavailable', port='connected')),
-  ({'present': False, 'port_state': 'device'}, JetlinkStatus('Computer', 'disconnected', port='device')),
-  ({'present': False, 'port_state': 'empty'}, JetlinkStatus('Computer', 'disconnected')),
-  ({'present': False, 'port_state': None}, JetlinkStatus('Computer', 'disconnected')),
-  ({'mode': 'ios', 'active': True}, JetlinkStatus('iPhone', 'active', 24.6, 'connected')),
-  ({'enabled': False}, JetlinkStatus()),
+  ({'active': True, 'running': 'running'}, JetlinkStatus('USB host', 'active', 24.6, 'connected')),
+  ({'running': 'ready'}, JetlinkStatus('USB host', 'waiting', port='connected')),
+  ({'running': 'joining'}, JetlinkStatus('USB host', 'connecting', port='connected')),
+  ({'running': 'retrying'}, JetlinkStatus('USB host', 'reconnecting', port='connected')),
+  ({'running': None}, JetlinkStatus('USB host', 'preparing', port='connected')),
+  ({'ready': True}, JetlinkStatus('USB host', 'prepared', port='connected')),
+  ({'reason': 'service stopped'}, JetlinkStatus('USB host', 'unavailable', port='connected')),
+  ({'present': False}, JetlinkStatus('USB host', 'disconnected', port='device')),
+  ({'present': False, 'port': 'empty'}, JetlinkStatus('USB host', 'disconnected')),
+  ({'present': True, 'port': 'empty', 'active': True}, JetlinkStatus('USB host', 'disconnected')),
+  ({'present': False, 'port': None}, JetlinkStatus('USB host', 'disconnected')),
+  ({'mode': 'ios', 'active': True}, JetlinkStatus('Mobile device (iOS)', 'active', 24.6, 'connected')),
+  ({'enabled': False, 'active': True}, JetlinkStatus('USB host', 'unavailable')),
 ])
 def test_states(kw, expected):
   assert read(status(**kw)) == expected

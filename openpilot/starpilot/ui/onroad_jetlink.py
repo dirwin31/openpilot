@@ -5,15 +5,16 @@ from openpilot.starpilot.models.jetlink_status import JetlinkStatus
 from openpilot.starpilot.ui.onroad_customization import JETLINK_SIZE, JETLINK_WIDGET
 from openpilot.starpilot.ui.presentation import FontRole
 
-LABELS = {'active': 'Link up', 'connected': 'Host connected', 'ready': 'Ready to switch',
-          'connecting': 'Connecting', 'disconnected': 'Disconnected', 'unavailable': 'Unavailable'}
+LABELS = {'off': 'Off • not in use', 'active': 'Remote model active', 'waiting': 'Ready • not in use', 'prepared': 'Prepared • not in use',
+          'preparing': 'Preparing • not in use', 'reconnecting': 'Reconnecting • local', 'failed': 'Failed • not in use',
+          'connecting': 'Connecting • not in use', 'disconnected': 'Disconnected', 'unavailable': 'Unavailable'}
 GREEN = rl.Color(70, 200, 110, 255)
 ORANGE = rl.Color(255, 150, 60, 255)
 ACCENT = rl.Color(199, 174, 247, 255)
 GRAY = rl.Color(140, 136, 152, 255)
 TEXT = rl.Color(245, 242, 252, 255)
 MUTED = rl.Color(184, 178, 200, 255)
-DOT = {'active': GREEN, 'ready': GREEN, 'unavailable': ORANGE, 'disconnected': GRAY}
+DOT = {'off': GRAY, 'active': GREEN, 'waiting': ACCENT, 'failed': ORANGE, 'unavailable': ORANGE, 'disconnected': GRAY}
 
 
 class JetlinkStatusWidget:
@@ -28,7 +29,7 @@ class JetlinkStatusWidget:
   def render(self, state):
     placed = state.customization['layouts']['large'].get(JETLINK_WIDGET)
     status = self.status
-    if not placed or not placed['enabled'] or status.state == 'off' or state.alert.size != 'none':
+    if not placed or not placed['enabled'] or state.alert.size != 'none':
       return
     rect = rl.Rectangle(placed['x'], placed['y'], *JETLINK_SIZE)
     h = rect.height
