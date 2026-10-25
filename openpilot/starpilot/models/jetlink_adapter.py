@@ -19,9 +19,10 @@ AOL_AXES = ("desiredLateral", "desiredLongitudinal", "lateralActive", "longitudi
 AOL_GRACE_S = 1.
 # CatalogModelState's per-frame camera input, not history
 FRAME_INPUTS = ("mapped_gpu_image",)
-# a Mac or iPad answers in ~37 ms with a tail past the 46 ms hold, and jetlink hands back on any held frame
-# before this many frames after a swap; past it only runs of holds do
-SETTLING_FRAMES = 20
+# a Mac or iPad answers in ~37 ms with a tail past the 46 ms hold (5 to 7 % of frames held), which a held frame
+# makes harmless: a plan one frame old. Jetlink hands back on any held frame in the first frames after a swap, and
+# on more than 20 in 10 s; this lets a host in that tail keep the drive, and only runs of holds hand back
+HOLD_TOLERANCE = {"SETTLING_FRAMES": 20, "HOLDS_ALLOWED": 50}
 
 
 def supported_device(device_type=None) -> bool:
@@ -135,7 +136,8 @@ def _adapter_class():
 def adapter():
   # modeld's side only: the gadget owner (owner_config) imports no numpy
   from jetlink.openpilot import model_state
-  model_state.SETTLING_FRAMES = max(model_state.SETTLING_FRAMES, SETTLING_FRAMES)
+  for name, value in HOLD_TOLERANCE.items():
+    setattr(model_state, name, max(getattr(model_state, name), value))
   return _adapter_class()()
 
 
