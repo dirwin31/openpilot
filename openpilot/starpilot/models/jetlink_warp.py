@@ -36,13 +36,15 @@ class CatalogWarp:
     # captured already, so this replays it and finds the output buffer every frame writes
     self._blank = [np.zeros(small.frame_buf_size, dtype=np.uint8) for _ in self._names]
     eye = np.eye(3, dtype=np.float32)
-    self._run(*(frame.ctypes.data for frame in self._blank), eye, eye)
+    frame, big_frame = self._blank
+    self._run(frame.ctypes.data, big_frame.ctypes.data, eye, eye)
     self._bind()
     self.output = memoryview(self._host)
     # as_memoryview() hands back a one-off copy where it finds no mapping of the buffer, which would send the
     # warm-up's frame forever: a flat frame under the identity samples to itself, so `output` must read it back
     self._probe = [np.full(small.frame_buf_size, PROBE, dtype=np.uint8) for _ in self._names]
-    self.start(*(frame.ctypes.data for frame in self._probe), eye, eye)
+    frame, big_frame = self._probe
+    self.start(frame.ctypes.data, big_frame.ctypes.data, eye, eye)
     self.wait()
     if not (self._host == PROBE).all():
       raise RuntimeError("the small model's warp output is not read live: the link would send a stale frame")

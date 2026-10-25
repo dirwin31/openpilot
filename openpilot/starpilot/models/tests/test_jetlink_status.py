@@ -13,9 +13,8 @@ from openpilot.starpilot.models.jetlink_status import JetlinkStatus, JetlinkStat
 
 
 def status(**kw):
-  base = {'enabled': True, 'mode': 'usb', 'transport': 'USB', 'present': True, 'port': 'host', 'ready': False,
-          'reason': None, 'progress': None, 'model': 'remote', 'default_model': 'remote'}
-  return Status(**{**base, **kw})
+  return Status(enabled=True, mode='usb', transport='USB', present=True, port='host', ready=False,
+                reason=None, progress=None, model='remote', default_model='remote')._replace(**kw)
 
 
 def read(value, latency=24.6, failed=False):
