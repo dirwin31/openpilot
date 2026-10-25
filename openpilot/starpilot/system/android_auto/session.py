@@ -207,6 +207,9 @@ def choose_video_mode(channels: list[dict]) -> VideoMode:
 class Session:
   """TLS, framing and control-channel handshake; one instance per TCP connection."""
 
+  # Wireless adapters relay to the car, which can take a while (or wait for the driver) before it answers.
+  DISCOVERY_TIMEOUT = 60.0
+
   def __init__(self, peer, cert: str, key: str, log: Callable[..., None] | None = None, ca: str | None = None, *,
                receive_timeout: float = 3.0, send_timeout: float = 3.0, handshake_timeout: float = 15.0):
     self.peer = peer
@@ -459,7 +462,7 @@ class Session:
 
   def discover(self, device_name: str, device_brand: str) -> list[dict]:
     self.send(0, MSG_SERVICE_DISCOVERY_REQUEST, field(4, device_name) + field(5, device_brand))
-    raw = self.wait_for(0, MSG_SERVICE_DISCOVERY_RESPONSE)
+    raw = self.wait_for(0, MSG_SERVICE_DISCOVERY_RESPONSE, timeout=self.DISCOVERY_TIMEOUT, patient=True)
     response = parse_fields(raw)
     channels = []
     for descriptor in response.get(1, []):
@@ -510,14 +513,23 @@ class Session:
                head_unit=head_unit)
     return channels
 
-  def wait_for(self, channel: int, kind: int, timeout: float = 10.0) -> bytes:
+  def wait_for(self, channel: int, kind: int, timeout: float = 10.0, patient: bool = False) -> bytes:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+      if patient and not self._await_readable(deadline):
+        break
       ch, message, data = self.receive()
       if ch == channel and message == kind:
         return data
       self.dispatch(ch, message, data, expected=f"{channel}/{kind:#x}")
     raise TimeoutError(f"Head unit did not send {channel}/{kind:#x}")
+
+  def _await_readable(self, deadline: float) -> bool:
+    """Wait for the first byte of the next message, so a slow adapter or car is not cut off by the per-message timeout."""
+    if not hasattr(self.peer, "fileno"):
+      return True
+    remaining = deadline - time.monotonic()
+    return remaining > 0 and bool(select.select([self.peer], [], [], remaining)[0])
 
   def dispatch(self, channel: int, kind: int, data: bytes, expected: str) -> None:
     """Handle a message that arrived while waiting for another one."""

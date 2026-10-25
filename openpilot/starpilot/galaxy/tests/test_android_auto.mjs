@@ -523,13 +523,13 @@ assert.equal(settingControl(dongle.adapterRow), 'select', 'the initial adapter p
 assert.match(dongle.pairingReason, /adapter model/)
 dongle.runtime = { car_type: 'adapter', car_profile: 'default', car_profile_source: 'override' }
 assert.equal(dongle.adapterRow.value, 'Other')
-assert.deepEqual(dongle.adapterRow.choices, ['AAWireless v1', 'Other'])
+assert.deepEqual(dongle.adapterRow.choices, ['AAWireless', 'Other'])
 dongle.runtime = { car_type: 'adapter', car_profile: 'aawireless', car_profile_source: 'override' }
-assert.equal(dongle.adapterRow.value, 'AAWireless v1')
+assert.equal(dongle.adapterRow.value, 'AAWireless')
 const dongleCalls = []
 dongle.control = (action, extra) => dongleCalls.push([action, extra])
 dongle.saveAdapter(0, 'Other')
-dongle.saveAdapter(0, 'AAWireless v1')
+dongle.saveAdapter(0, 'AAWireless')
 assert.deepEqual(dongleCalls, [['car_profile', { profile: 'default' }], ['car_profile', { profile: 'aawireless' }]])
 assert.match(AndroidAutoPage.template, /adapterSetup" :row="adapterRow"/)
 assert.match(AndroidAutoPage.template, /What’s in your car\?|carTypeRow/)

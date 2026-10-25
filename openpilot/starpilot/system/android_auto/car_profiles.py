@@ -15,7 +15,7 @@ FINGERPRINT_KEYS = ("head_unit_make", "head_unit_model", "car_make", "car_model"
 
 # {"id": "...", "label": "...", "match": {fingerprint key: regex, ...}, "tuning": {key from DEFAULTS: value}}
 RULES: list[dict] = [
-  {"id": "aawireless", "label": "AAWireless v1", "match": {},
+  {"id": "aawireless", "label": "AAWireless", "match": {},
    "tuning": {"max_window": 30, "phone_services": True, "phone_frames": True}},
 ]
 

@@ -44,7 +44,7 @@ export function uploadPackage(path, options, progress, makeRequest = () => new X
 }
 
 const ADDRESS = /^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$/
-const ADAPTER_MODELS = { aawireless: "AAWireless v1", default: "Other" }
+const ADAPTER_MODELS = { aawireless: "AAWireless", default: "Other" }
 const HEAD_UNIT_APPS = { headunitpad: "HeadunitPad", openheadunit: "Open Headunit" }
 const HOTSPOT_LINK = `<a class="gx-link" href="#/galaxy">Galaxy Wi-Fi Hotspot</a>`
 const WIRED_STATUS = `<div v-if="wired" class="gx-note">
@@ -542,7 +542,7 @@ export const AndroidAutoPage = {
       const chosen = this.runtime?.car_profile_source === "override"
       return { label: "Adapter", value: !chosen ? "Choose one" : this.runtime.car_profile === "aawireless" ? ADAPTER_MODELS.aawireless : ADAPTER_MODELS.default,
         choices: [...(!chosen ? ["Choose one"] : []), ...Object.values(ADAPTER_MODELS)], available: true, action: true,
-        reason: "AAWireless v1 gets video and car-data settings tuned for that dongle. Other adapters use the regular pairing." }
+        reason: "AAWireless gets video and car-data settings tuned for that dongle. Other adapters use the regular pairing." }
     },
     appDisabled() {
       return !this.setup?.enabled || !this.setup.parked || !!this.pairing?.active || this.linked
