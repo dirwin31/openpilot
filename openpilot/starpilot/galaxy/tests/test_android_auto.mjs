@@ -535,4 +535,14 @@ assert.match(AndroidAutoPage.template, /adapterSetup" :row="adapterRow"/)
 assert.match(AndroidAutoPage.template, /What’s in your car\?|carTypeRow/)
 assert.match(AndroidAutoPage.template, /runtime\?\.pairing_note/)
 assert.match(AndroidAutoPage.template, /'Find ' \+ findLabel/)
+// A session that is only waiting or retrying never locks the pickers or Find; it is stopped first.
+const idle = page(setup)
+idle.runtime = { car_type: 'builtin', running: true, state: 'backoff' }
+assert.equal(idle.appDisabled, false)
+assert.equal(idle.pairingReason, '')
+idle.runtime = { car_type: 'builtin', running: true, state: 'streaming' }
+assert.equal(idle.appDisabled, true)
+assert.match(idle.pairingReason, /Disconnect/)
+// The home card offers the setup type; the app picker belongs to App only.
+assert.match(AndroidAutoPage.template, /gx-aa-home[\s\S]*?:row="carTypeRow"[\s\S]*?v-if="carType === 'app'">\s*<GalaxySettingRow :row="appRow"/)
 console.log('Android Auto page: setup type, adapter checklist and adapter model passed')

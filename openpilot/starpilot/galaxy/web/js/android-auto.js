@@ -496,7 +496,13 @@ export const AndroidAutoPage = {
     wired() { return this.runtime?.connection === "wired" },
     app() { return HEAD_UNIT_APPS[this.runtime?.connection] || "" },
     connectionName() { return this.app === "HeadunitPad" ? "iPad" : this.app ? "tablet" : this.wired ? "car" : this.selected?.name || "car" },
-    setupDone() { return !!(this.supportReady && (this.selected || this.wired || this.app) && !this.pairing?.active) },
+    // Waiting or retrying is not a connection: only a live link blocks changes, and those stop the wait first.
+    linked() { return ["streaming", "suspended"].includes(this.runtime?.state) },
+    waiting() { return !!this.runtime?.running && !this.linked },
+    setupDone() {
+      return !!(this.supportReady && (this.selected || this.wired || this.app) && !this.pairing?.active &&
+        !(this.adapterSetup && this.runtime?.car_profile_source !== "override"))
+    },
     wiredStatus() {
       if (this.runtime?.wired_blocked) return { tone: "expired", label: "Wired Android Auto not enabled", detail: this.runtime.wired_blocked }
       if (this.wiredJetlinkBusy) return { tone: "expired", label: "Wired Android Auto not enabled", detail: "JetLink is using the USB-C port. Turn off JetLink, then return here." }
@@ -525,7 +531,7 @@ export const AndroidAutoPage = {
         reason: "AAWireless v1 gets video and car-data settings tuned for that dongle. Other adapters use the regular pairing." }
     },
     appDisabled() {
-      return !this.setup?.enabled || !this.setup.parked || !!this.pairing?.active || !!this.runtime?.running
+      return !this.setup?.enabled || !this.setup.parked || !!this.pairing?.active || this.linked
     },
     wiredJetlinkBusy() { return this.wired && !!this.runtime?.wired_busy },
     download() { return downloadLink(this.setup?.download, this.setup?.downloadPending === true) },
@@ -585,7 +591,7 @@ export const AndroidAutoPage = {
       if (!this.setup.bluetoothEnabled && this.setup.enabled) return "Turn on Bluetooth on the Bluetooth page."
       if (this.adapterSetup && this.runtime?.car_profile_source !== "override") return "Choose your adapter model first."
       if (!this.setup.parked) return "Use offroad mode or Park before starting pairing."
-      if (this.runtime?.running) return "Disconnect from your car before pairing."
+      if (this.linked) return "Disconnect from your car before pairing."
       return ""
     },
     connectReason() {
@@ -604,11 +610,17 @@ export const AndroidAutoPage = {
     },
     deviceSelectionBlocked() {
       return !!this.pairingReason || !this.pairing?.active ||
-        !!this.pairing?.prompt || ["pairing", "connecting"].includes(this.pairing?.state) || !!this.runtime?.running
+        !!this.pairing?.prompt || ["pairing", "connecting"].includes(this.pairing?.state) || !!this.linked
     },
   },
   methods: {
     switchRow,
+    stopWaiting() { return this.waiting ? this.control("stop") : null },
+    afterWaiting(next) {
+      const stopping = this.stopWaiting()
+      return stopping ? stopping.then((stopped) => stopped && next()) : next()
+    },
+    useCar(address) { return this.afterWaiting(() => this.control("select_receiver", { address })) },
     saveCarType(index, value) {
       const labels = this.carTypeLabels
       const carType = Object.keys(labels).find(key => labels[key] === value)
@@ -618,15 +630,15 @@ export const AndroidAutoPage = {
         return false
       }
       if (carType === this.carType) return false
-      return carType ? this.control("car_type", { carType }) : false
+      return carType ? this.afterWaiting(() => this.control("car_type", { carType })) : false
     },
     saveAdapter(index, value) {
       const profile = Object.keys(ADAPTER_MODELS).find(key => ADAPTER_MODELS[key] === value)
-      return profile ? this.control("car_profile", { profile }) : false
+      return profile ? this.afterWaiting(() => this.control("car_profile", { profile })) : false
     },
     saveApp(index, value) {
       const connection = Object.keys(HEAD_UNIT_APPS).find(key => HEAD_UNIT_APPS[key] === value) || "wireless"
-      return this.control("connection", { connection })
+      return this.afterWaiting(() => this.control("connection", { connection }))
     },
     async begin() {
       await this.feed.start()
@@ -658,7 +670,9 @@ export const AndroidAutoPage = {
       return enabled
     },
     startPairing() {
-      if (this.pairingReason || this.runtime?.running) return false
+      if (this.pairingReason) return false
+      const stopping = this.stopWaiting()
+      if (stopping) return stopping.then((stopped) => stopped && this.startPairing())
       if (!this.setup.enabled) return this.setEnabled(true).then((enabled) => {
         this.pairWhenReady = enabled
         return this.resumePairing()
@@ -753,8 +767,12 @@ export const AndroidAutoPage = {
             :index="0" :busy="busy" :disabled="!setup.enabled || !setup.parked || !!pairing?.active"
             :save-value="(index, value) => control('auto_connect', { enabled: value === 'On' })" />
           ${WIRED_STATUS}
-          <GalaxySettingRow :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
-          ${APP_SETUP}
+          <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
+          <GalaxySettingRow v-if="adapterSetup" :row="adapterRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveAdapter" />
+          <template v-if="carType === 'app'">
+            <GalaxySettingRow :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
+            ${APP_SETUP}
+          </template>
           <div class="gx-actions">
             <a class="gx-btn gx-btn--tonal" href="#/theme_maker/android_auto"><i class="bi bi-layout-text-window" aria-hidden="true"></i> Customize Layout</a>
             <button type="button" class="gx-btn gx-btn--tonal" :aria-expanded="showSteps" aria-controls="gx-aa-steps" @click="showSteps = !showSteps">
@@ -840,7 +858,7 @@ export const AndroidAutoPage = {
                 <i class="bi bi-car-front" aria-hidden="true"></i>
                 <span class="gx-aa-row__text"><strong>{{ car.name }}</strong><small>{{ selected?.address === car.address ? 'Used for Android Auto' : 'Paired' }}</small></span>
                 <span v-if="selected?.address === car.address" class="gx-aa-pill gx-aa-pill--ready"><i class="bi bi-check-lg"></i> Selected</span>
-                <button v-else class="gx-btn gx-btn--tonal" :disabled="!setup.parked || runtime?.running" @click="control('select_receiver', { address: car.address })">Use</button>
+                <button v-else class="gx-btn gx-btn--tonal" :disabled="!setup.parked || linked" @click="useCar(car.address)">Use</button>
               </li>
             </ul>
             <p v-else-if="!pairing?.active && selected" class="gx-aa-row"><i class="bi bi-car-front" aria-hidden="true"></i><span class="gx-aa-row__text"><strong>{{ selected.name }}</strong><small>Used for Android Auto</small></span></p>
