@@ -1,7 +1,7 @@
 """Per-car tuning, picked by fingerprint so nobody has to choose their car from a list.
 
-A car is recognised from what its head unit reported on a previous connection. Cars without a rule
-keep the standard behaviour exactly. Add a rule to ship a variation for one car; ``car_profile_override``
+A car is recognized from what its head unit reported on a previous connection. Cars without a rule
+keep the standard behavior exactly. Add a rule to ship a variation for one car; ``car_profile_override``
 in the config pins a profile (or "default") for a single comma while testing with someone.
 """
 import re
@@ -60,7 +60,7 @@ def tuning(config: dict) -> dict:
 
 
 def summary(config: dict) -> dict:
-  """What the UI may show: nothing at all while the standard behaviour applies."""
+  """What the UI may show: nothing at all while the standard behavior applies."""
   profile, source = resolve(config)
   rule = next((item for item in RULES if item["id"] == profile), None)
   return {"car_profile": profile, "car_profile_source": source, "car_profile_label": rule["label"] if rule else "",

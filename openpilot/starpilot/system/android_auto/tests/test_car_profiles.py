@@ -1,4 +1,4 @@
-"""Car profiles are picked by fingerprint; cars without a rule keep the standard behaviour."""
+"""Car profiles are picked by fingerprint; cars without a rule keep the standard behavior."""
 
 import json
 import threading

@@ -495,7 +495,7 @@ class ModelManager:
       return {"schemaVersion": 1, "models": models, "activeSmallModel": prefs["small"], "activeBigModel": prefs["big"],
               "currentModel": prefs["big"] if gpu and prefs["big"] else prefs["small"], "userFavorites": prefs["userFavorites"],
               "sortMode": prefs["sortMode"], "randomizer": prefs["randomizer"], "blacklistedModels": prefs["blacklistedModels"],
-              "summary": {"total": len(models), "installed": count, "missing": sum(m["downloadRequired"] for m in models)},
+              "summary": {"total": len(models), "installed": count, "missing": sum(bool(m["downloadRequired"]) for m in models)},
               "jobId": job.get("jobId", ""), "cancelRequested": job.get("cancelRequested", False),
               "downloadVariant": job.get("variant", "standard"),
               "modelToDownload": job.get("model", ""), "downloadAll": job.get("downloadAll", False),

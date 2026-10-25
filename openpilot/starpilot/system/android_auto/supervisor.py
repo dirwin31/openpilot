@@ -541,7 +541,7 @@ class Supervisor:
     self.log("car_type_selected", car_type=car_type)
 
   def set_car_profile(self, profile: str) -> None:
-    """Pin a car profile ("default" for standard behaviour) or go back to picking it by fingerprint ("")."""
+    """Pin a car profile ("default" for standard behavior) or go back to picking it by fingerprint ("")."""
     if not car_profiles.valid_override(profile):
       raise RuntimeError(f"Unknown car profile {profile!r}")
     with self._lock:
