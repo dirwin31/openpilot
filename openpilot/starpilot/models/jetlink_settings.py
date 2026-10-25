@@ -81,7 +81,7 @@ class JetlinkSettings:
     if not payload or set(payload) - {"mode", "chargePhone"}:
       raise ValueError("Invalid Jetlink settings")
     if "mode" in payload and payload["mode"] not in MODES:
-      raise ValueError("Choose Off, USB host, or Mobile device (iOS)")
+      raise ValueError("Choose Off, USB host (Android / PC / Jetson), or iPhone / iPad")
     if "chargePhone" in payload and type(payload["chargePhone"]) is not bool:
       raise ValueError("Invalid mobile device charging setting")
     view = self.snapshot()
