@@ -536,7 +536,7 @@ export const AndroidAutoPage = {
     carTypeRow() {
       const labels = this.carTypeLabels
       return { label: "What’s in your car?", value: labels[this.carType], choices: Object.values(labels), available: true, action: true,
-        reason: "Built-in: the car supports wireless Android Auto. Adapter: a dongle such as AAWireless, Motorola MA1 or Carlinkit. Both the adapter and your car get paired." }
+        reason: "Built-in: the car supports wireless Android Auto. Adapter: a dongle such as AAWireless, Motorola MA1 or Carlinkit. Only the adapter gets paired." }
     },
     adapterRow() {
       const chosen = this.runtime?.car_profile_source === "override"
@@ -783,7 +783,7 @@ export const AndroidAutoPage = {
         <h2>Android Auto</h2>
         <p>Show the StarPilot driving view on your car’s screen. Set up support, {{ wired ? 'plug in your car' : 'pair your car' }}, then connect.</p>
       </header>
-      <GxNotice tone="warn" v-if="!wired && !app">Android Auto uses the comma’s Wi-Fi to project to your car and disconnects it from your current Wi-Fi network. Use the Galaxy hotspot for local access during projection. Remote Galaxy access requires Internet on the comma.</GxNotice>
+      <GxNotice tone="warn" v-if="!wired && !app && runtime?.dedicated_wifi_interface === false">Android Auto uses the comma’s Wi-Fi to project to your car and disconnects it from your current Wi-Fi network. Use the Galaxy hotspot for local access during projection. Remote Galaxy access requires Internet on the comma.</GxNotice>
       <GxNotice tone="danger" v-if="error && setup">{{ error }}</GxNotice>
       <GxNotice v-if="!setup" :busy="!error" :tone="error ? 'danger' : 'info'">{{ error || "Checking Android Auto setup… Reconnecting automatically…" }}</GxNotice>
         <section v-if="setup" class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': supportReady }">
@@ -826,40 +826,11 @@ export const AndroidAutoPage = {
             </details>
           </div>
         </section>
-      <section v-if="setup && setupDone" class="gx-card gx-aa-step gx-aa-home" aria-labelledby="gx-aa-home-title">
-        <div class="gx-aa-step__head">
-          <span class="gx-aa-step__num" :class="{ 'gx-aa-home__icon--live': projecting }" aria-hidden="true"><i class="bi bi-car-front"></i></span>
-          <div><h3 id="gx-aa-home-title">{{ homeTitle }}</h3>
-            <p role="status">{{ runtime?.running && runtime.state !== 'streaming' && runtime.label ? runtime.label : runtime?.running ? 'Showing StarPilot on your car’s screen.' : wired ? wiredStatus.label : runtime?.auto_connect ? 'Connects automatically when you start driving.' : 'Ready to connect.' }}</p></div>
-        </div>
-        <div class="gx-aa-step__body">
-          <p v-if="expiry.level === 'soon'" class="gx-aa-pill gx-aa-pill--soon" role="status">{{ expiry.label }}</p>
-          <template v-if="wirelessHome">
-            ${CONNECT}
-            ${AUTO_CONNECT}
-            <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
-            <GalaxySettingRow v-if="adapterSetup" :row="adapterRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveAdapter" />
-          </template>
-          <template v-else>
-            <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
-            <GalaxySettingRow v-if="app" :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
-            ${AUTO_CONNECT}
-            ${WIRED_STATUS}
-            ${APP_SETUP}
-            ${CONNECT}
-          </template>
-          <div class="gx-actions">
-            <a class="gx-btn gx-btn--tonal" href="#/theme_maker/android_auto"><i class="bi bi-layout-text-window" aria-hidden="true"></i> Customize Layout</a>
-            <button type="button" class="gx-btn gx-btn--tonal" :aria-expanded="showSteps" aria-controls="gx-aa-steps" @click="showSteps = !showSteps">
-              <i :class="showSteps ? 'bi bi-chevron-up' : 'bi bi-gear'" aria-hidden="true"></i> {{ showSteps ? 'Hide Setup' : 'Setup and Pairing' }}</button>
-          </div>
-        </div>
-      </section>
       <ol v-if="setup" id="gx-aa-steps" class="gx-aa__steps">
         <li v-show="!setupDone || showSteps" class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': !!selected && !pairing?.active }">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true"><i v-if="selected && !pairing?.active" class="bi bi-check-lg"></i><template v-else>2</template></span>
-            <div><h3>{{ carType === 'usb' ? 'Set Up Wired AA' : carType === 'app' ? 'Set Up Your App' : adapterSetup ? 'Pair Your Adapter and Car' : 'Pair Your Car' }}</h3><p>{{ adapterSetup ? 'An adapter needs two pairings: the adapter here, and your car on the Bluetooth page.' : pairsHere ? 'Open your car’s phone pairing screen, then tap Find car. You can do this before step 1 is finished.' : 'No Bluetooth pairing is needed for this setup.' }}</p></div>
+            <div><h3>{{ carType === 'usb' ? 'Set Up Wired AA' : carType === 'app' ? 'Set Up Your App' : adapterSetup ? 'Pair Your Adapter' : 'Pair Your Car' }}</h3><p>{{ adapterSetup ? 'Put the adapter in pairing mode, then tap Find adapter. Your car doesn’t need to be paired.' : pairsHere ? 'Open your car’s phone pairing screen, then tap Find car. You can do this before step 1 is finished.' : 'No Bluetooth pairing is needed for this setup.' }}</p></div>
           </div>
           <div class="gx-aa-step__body">
             <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
@@ -873,18 +844,11 @@ export const AndroidAutoPage = {
               ${APP_SETUP}
             </template>
             <template v-if="pairsHere">
-            <ol v-if="adapterSetup" class="gx-aa-list" aria-label="Pairings needed">
+            <ol v-if="adapterSetup" class="gx-aa-list" aria-label="Adapter pairing">
               <li class="gx-aa-row">
                 <i class="bi bi-usb-symbol" aria-hidden="true"></i>
                 <span class="gx-aa-row__text"><strong>Adapter</strong><small>{{ selected ? selected.name : 'Put it in pairing mode, then tap Find adapter.' }}</small></span>
                 <span class="gx-aa-pill" :class="selected ? 'gx-aa-pill--ready' : ''">{{ selected ? 'Paired' : 'Not paired' }}</span>
-              </li>
-              <li class="gx-aa-row">
-                <i class="bi bi-car-front" aria-hidden="true"></i>
-                <span class="gx-aa-row__text"><strong>Your car</strong><small>{{ runtime?.companion_name ? runtime.companion_name : selected ? 'Pair your car on the Bluetooth page, then tap Connect there.' : 'Pair the adapter first.' }}</small></span>
-                <span v-if="runtime?.companion_name" class="gx-aa-pill gx-aa-pill--ready">Paired</span>
-                <a v-else-if="selected" class="gx-btn gx-btn--tonal" href="#/bluetooth">Open Bluetooth</a>
-                <span v-else class="gx-aa-pill">Not paired</span>
               </li>
             </ol>
             <GxNotice v-if="!pairing?.active && runtime?.pairing_note" tone="warn">{{ runtime.pairing_note }}</GxNotice>
@@ -943,7 +907,7 @@ export const AndroidAutoPage = {
               <ul>
                 <li><strong>Keep this page open while pairing</strong> so the car’s PIN or code doesn’t time out.</li>
                 <li><strong>Cars with built-in wireless Android Auto:</strong> open the car’s phone pairing screen, then tap <strong>Find car</strong> above. Choose your car, then confirm the code on both screens.</li>
-                <li><strong>Wireless adapter</strong> (AAWireless, Motorola MA1, Carlinkit…): choose Wireless adapter above, put the adapter in pairing mode and pair it here, and pair your car in Bluetooth under Tools so calls keep working. Then connect the car there. Adapter names often look like AndroidAuto-XXXX.</li>
+                <li><strong>Wireless adapter</strong> (AAWireless, Motorola MA1, Carlinkit…): choose Wireless adapter above, put the adapter in pairing mode and pair it here Your car doesn’t need to be paired. Adapter names often look like AndroidAuto-XXXX.</li>
               </ul>
               <p><strong>Start fresh:</strong></p>
               <ol>
@@ -958,7 +922,7 @@ export const AndroidAutoPage = {
           </div>
         </li>
 
-        <li v-show="!setupDone || showSteps" class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': projecting }">
+        <li v-show="!setupDone" class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': projecting }">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true"><i v-if="projecting" class="bi bi-check-lg"></i><template v-else>3</template></span>
             <div><h3>Connect &amp; Drive</h3><p>Start streaming to your dashboard.</p></div>
@@ -987,6 +951,48 @@ export const AndroidAutoPage = {
           </div>
         </li>
 
+      </ol>
+      <section v-if="setup && setupDone" class="gx-card gx-aa-step gx-aa-home" aria-labelledby="gx-aa-home-title">
+        <div class="gx-aa-step__head">
+          <span class="gx-aa-step__num" :class="{ 'gx-aa-home__icon--live': projecting }" aria-hidden="true"><i class="bi bi-car-front"></i></span>
+          <div><h3 id="gx-aa-home-title">{{ homeTitle }}</h3>
+            <p role="status">{{ runtime?.running && runtime.state !== 'streaming' && runtime.label ? runtime.label : runtime?.running ? 'Showing StarPilot on your car’s screen.' : wired ? wiredStatus.label : runtime?.auto_connect ? 'Connects automatically when you start driving.' : 'Ready to connect.' }}</p></div>
+        </div>
+        <div class="gx-aa-step__body">
+          <p v-if="expiry.level === 'soon'" class="gx-aa-pill gx-aa-pill--soon" role="status">{{ expiry.label }}</p>
+          <ul v-if="wirelessHome" class="gx-aa-list" aria-label="Setup steps">
+            <li class="gx-aa-row"><i class="bi bi-shield-check" aria-hidden="true"></i>
+              <span class="gx-aa-row__text"><strong>1. Android Auto support</strong><small>{{ expiry.label }}</small></span>
+              <span class="gx-aa-pill" :class="supportReady ? 'gx-aa-pill--ready' : ''">{{ supportReady ? 'Ready' : 'Not ready' }}</span></li>
+            <li class="gx-aa-row"><i class="bi bi-bluetooth" aria-hidden="true"></i>
+              <span class="gx-aa-row__text"><strong>2. {{ adapterSetup ? 'Adapter' : 'Car' }} paired</strong><small>{{ selected ? selected.name : 'Not paired yet.' }}</small></span>
+              <span class="gx-aa-pill" :class="selected ? 'gx-aa-pill--ready' : ''">{{ selected ? 'Paired' : 'Not paired' }}</span></li>
+            <li class="gx-aa-row"><i class="bi bi-car-front" aria-hidden="true"></i>
+              <span class="gx-aa-row__text"><strong>3. Connect</strong><small>{{ projecting ? 'Showing on your car’s screen.' : 'Tap Connect below.' }}</small></span>
+              <span class="gx-aa-pill" :class="projecting ? 'gx-aa-pill--ready' : ''">{{ projecting ? 'Connected' : 'Waiting' }}</span></li>
+          </ul>
+          <template v-if="wirelessHome">
+            ${CONNECT}
+            ${AUTO_CONNECT}
+            <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
+            <GalaxySettingRow v-if="adapterSetup" :row="adapterRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveAdapter" />
+          </template>
+          <template v-else>
+            <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
+            <GalaxySettingRow v-if="app" :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
+            ${AUTO_CONNECT}
+            ${WIRED_STATUS}
+            ${APP_SETUP}
+            ${CONNECT}
+          </template>
+          <div class="gx-actions">
+            <a class="gx-btn gx-btn--tonal" href="#/theme_maker/android_auto"><i class="bi bi-layout-text-window" aria-hidden="true"></i> Customize Layout</a>
+            <button type="button" class="gx-btn gx-btn--tonal" :aria-expanded="showSteps" aria-controls="gx-aa-steps" @click="showSteps = !showSteps">
+              <i :class="showSteps ? 'bi bi-chevron-up' : 'bi bi-gear'" aria-hidden="true"></i> {{ showSteps ? 'Hide Setup' : 'Setup and Pairing' }}</button>
+          </div>
+        </div>
+      </section>
+      <ol v-if="setup" class="gx-aa__steps">
         <li v-show="!setupDone || showSteps" class="gx-card gx-aa-step">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true">4</span>
