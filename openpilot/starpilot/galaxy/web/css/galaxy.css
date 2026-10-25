@@ -1454,6 +1454,7 @@ input[type="checkbox"]:disabled { opacity: .4; cursor: not-allowed; }
 .gx-aa-step__head { display: flex; align-items: flex-start; gap: var(--sp-4); min-width: 0; }
 .gx-aa-step__head h3 { margin: 2px 0 var(--sp-1); font-size: var(--fs-lg); }
 .gx-aa-step__head p { margin: 0; color: var(--text-muted); line-height: 1.45; }
+.gx-aa-step__head > .gx-btn { margin-left: auto; flex: none; }
 .gx-aa-step__num { flex: 0 0 auto; display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--radius-full);
   background: var(--primary-container); color: var(--on-primary-container); font-weight: var(--fw-bold); }
 .gx-aa-step--done .gx-aa-step__num { background: var(--success); color: var(--background); }

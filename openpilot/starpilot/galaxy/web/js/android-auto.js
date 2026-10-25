@@ -461,7 +461,7 @@ export const AndroidAutoPage = {
     setup: null, pairing: null, selected: null, runtime: null, receivers: [], endReason: "", busy: false, error: "",
     pairValue: "", packageFile: null, uploadProgress: null, installOpen: false, removeOpen: false, installAttempted: false, installBaseline: null,
     downloadStarted: false, packageMagicError: "", packageChecking: false, packageSelection: 0,
-    installFileName: "", pairWhenReady: false, enableOpen: false, showSteps: false
+    installFileName: "", pairWhenReady: false, enableOpen: false, showSteps: false, starting: false, supportOpen: false
   }),
   mounted() {
     this.feed = new AndroidAutoFeed({ publish: (value) => Object.assign(this, value), unauthorized: this.unauthorized })
@@ -499,6 +499,7 @@ export const AndroidAutoPage = {
     // Waiting or retrying is not a connection: only a live link blocks changes, and those stop the wait first.
     linked() { return ["streaming", "suspended"].includes(this.runtime?.state) },
     waiting() { return !!this.runtime?.running && !this.linked },
+    supportCollapsed() { return this.supportReady && this.setup.installReady && !this.supportOpen },
     setupDone() {
       return !!(this.supportReady && (this.selected || this.wired || this.app) && !this.pairing?.active &&
         !(this.adapterSetup && this.runtime?.car_profile_source !== "override"))
@@ -604,6 +605,21 @@ export const AndroidAutoPage = {
       if (this.wiredJetlinkBusy) return "Turn off Jetlink first."
       return ""
     },
+    pairSteps() {
+      const state = this.pairing?.state, active = !!this.pairing?.active
+      const paired = ["paired", "connected"].includes(state)
+      const picked = !!(this.pairing?.receiver || this.pairing?.approved || ["pairing", "connecting"].includes(state) || paired)
+      const what = this.adapterSetup ? "adapter" : "car"
+      const rank = paired ? 4 : this.pairing?.prompt ? 3 : picked ? 2 : active ? 1 : 0
+      const steps = [
+        `Start the search${this.starting ? "…" : ""}`,
+        `Put your ${what} in pairing mode, then pick it from the list`,
+        "Confirm the code on both screens",
+        "Paired"
+      ]
+      return steps.map((label, index) => ({ label, status: index < rank ? "done" : index === rank ? "active" : "pending" }))
+    },
+    showPairSteps() { return this.starting || !!this.pairing?.active },
     waitingForCar() {
       return this.pairing?.active && !this.pairing?.receiver && !this.pairing?.prompt && !this.pairing?.approved &&
         !["pairing", "connecting", "paired", "connected", "failed"].includes(this.pairing?.state)
@@ -668,6 +684,10 @@ export const AndroidAutoPage = {
       const enabled = await this.feed.setEnabled(true, true)
       this.finishEnable(enabled)
       return enabled
+    },
+    async beginPairing() {
+      this.starting = true
+      try { return await this.startPairing() } finally { this.starting = false }
     },
     startPairing() {
       if (this.pairingReason) return false
@@ -780,13 +800,14 @@ export const AndroidAutoPage = {
           </div>
         </div>
       </section>
-      <ol v-if="setup" v-show="!setupDone || showSteps" id="gx-aa-steps" class="gx-aa__steps">
+      <ol v-if="setup" id="gx-aa-steps" class="gx-aa__steps">
         <li class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': supportReady }">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true"><i v-if="supportReady" class="bi bi-check-lg"></i><template v-else>1</template></span>
-            <div><h3>Android Auto Support</h3><p>Turn on Android Auto and install support. Wireless pairing also needs Bluetooth on; Galaxy will offer to enable it.</p></div>
+            <div><h3>Android Auto Support</h3><p v-if="supportCollapsed" role="status">{{ expiry.label }}</p><p v-else>Turn on Android Auto and install support. Wireless pairing also needs Bluetooth on; Galaxy will offer to enable it.</p></div>
+            <button v-if="supportReady && setup.installReady" type="button" class="gx-btn gx-btn--tonal" :aria-expanded="!supportCollapsed" aria-controls="gx-aa-support" @click="supportOpen = !supportOpen">{{ supportCollapsed ? 'Manage' : 'Hide' }}</button>
           </div>
-          <div class="gx-aa-step__body">
+          <div id="gx-aa-support" v-show="!supportCollapsed" class="gx-aa-step__body">
             <p v-if="!setup.installReady" class="gx-aa-pill gx-aa-pill--expired" role="status">Not available on this build — the Android Auto display and encoder are missing.</p>
             <template v-else>
               <div class="gx-aa-status">
@@ -821,7 +842,7 @@ export const AndroidAutoPage = {
           </div>
         </li>
 
-        <li class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': !!selected && !pairing?.active }">
+        <li v-show="!setupDone || showSteps" class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': !!selected && !pairing?.active }">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true"><i v-if="selected && !pairing?.active" class="bi bi-check-lg"></i><template v-else>2</template></span>
             <div><h3>{{ carType === 'usb' ? 'Set Up Wired AA' : carType === 'app' ? 'Set Up Your App' : adapterSetup ? 'Pair Your Adapter and Car' : 'Pair Your Car' }}</h3><p>{{ adapterSetup ? 'An adapter needs two pairings: the adapter here, and your car on the Bluetooth page.' : pairsHere ? 'Open your car’s phone pairing screen, then tap Find car. You can do this before step 1 is finished.' : 'No Bluetooth pairing is needed for this setup.' }}</p></div>
@@ -864,6 +885,14 @@ export const AndroidAutoPage = {
             <p v-else-if="!pairing?.active && selected" class="gx-aa-row"><i class="bi bi-car-front" aria-hidden="true"></i><span class="gx-aa-row__text"><strong>{{ selected.name }}</strong><small>Used for Android Auto</small></span></p>
             <p v-if="!pairing?.active && endReason === 'canceled'" class="gx-note" role="status">Pairing canceled. Start again when your car is ready.</p>
             <p v-else-if="!pairing?.active && endReason" class="gx-note" role="status">The pairing window ended without choosing a car. Try again when your car’s pairing screen is open.</p>
+            <ol v-if="showPairSteps" class="gx-aa-list" aria-label="Pairing progress">
+              <li v-for="step in pairSteps" :key="step.label" class="gx-aa-row" :aria-current="step.status === 'active' ? 'step' : undefined">
+                <i v-if="step.status === 'done'" class="bi bi-check-circle-fill gx-aa-ok" aria-hidden="true"></i>
+                <span v-else-if="step.status === 'active'" class="gx-spinner" aria-hidden="true"></span>
+                <i v-else class="bi bi-circle" aria-hidden="true"></i>
+                <span class="gx-aa-row__text"><strong>{{ step.label }}</strong></span>
+              </li>
+            </ol>
             <p v-if="waitingForCar" role="status">{{ pairing.discovering ? "Searching for nearby cars and adapters…" : "Choose your car or wireless adapter below." }}</p>
             <p v-else-if="pairing?.active && pairing.approved && (!pairing.state || pairing.state === 'idle')" role="status">Approved {{ pairing.receiver?.name }}. Finishing Bluetooth pairing…</p>
             <p v-if="pairing?.state === 'pairing' && !pairing.prompt && !pairing.approved" role="status">Pairing with {{ pairing.receiver?.name || 'the selected device' }}…</p>
@@ -893,7 +922,7 @@ export const AndroidAutoPage = {
             <p v-if="pairWhenReady" class="gx-note" role="status"><span class="gx-spinner" aria-hidden="true"></span> Turning on Android Auto, then searching…</p>
             <p v-else-if="!pairing?.active && pairingReason" class="gx-note" role="status">{{ pairingReason }}</p>
             <div class="gx-driving__actions gx-actions">
-              <button v-if="!pairing?.active" class="gx-btn" :class="{ 'gx-btn--tonal': !!selected }" :disabled="pairWhenReady || !!pairingReason" @click="startPairing"><i class="bi bi-search"></i> {{ selected ? 'Pair another ' + findLabel : 'Find ' + findLabel }}</button>
+              <button v-if="!pairing?.active" class="gx-btn" :class="{ 'gx-btn--tonal': !!selected }" :disabled="pairWhenReady || !!pairingReason" @click="beginPairing"><span v-if="starting" class="gx-spinner" aria-hidden="true"></span><i v-else class="bi bi-search"></i> {{ starting ? 'Starting search…' : selected ? 'Pair another ' + findLabel : 'Find ' + findLabel }}</button>
               <button v-else class="gx-btn gx-btn--tonal" @click="cancelPairing">Cancel Search / Pairing</button>
             </div>
             <details class="gx-aa-wiki"><summary>Stuck pairing? Pairing order and wireless adapters</summary>
@@ -915,7 +944,7 @@ export const AndroidAutoPage = {
           </div>
         </li>
 
-        <li class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': projecting }">
+        <li v-show="!setupDone || showSteps" class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': projecting }">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true"><i v-if="projecting" class="bi bi-check-lg"></i><template v-else>3</template></span>
             <div><h3>Connect &amp; Drive</h3><p>Start streaming to your dashboard.</p></div>
@@ -944,7 +973,7 @@ export const AndroidAutoPage = {
           </div>
         </li>
 
-        <li class="gx-card gx-aa-step">
+        <li v-show="!setupDone || showSteps" class="gx-card gx-aa-step">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true">4</span>
             <div><h3>Customize Your Dashboard</h3><p>Once connected, customize your dashboard setup.</p></div>
