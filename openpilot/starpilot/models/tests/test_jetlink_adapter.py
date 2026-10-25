@@ -43,6 +43,18 @@ def test_one_held_frame_while_proving_does_not_hand_back():
   assert model_state.JetlinkModelState._note_hold(state, True) is not None
 
 
+def test_a_tail_of_held_frames_does_not_hand_back_but_a_run_does():
+  import time
+  from collections import deque
+  from jetlink.openpilot import model_state
+  adapter.adapter()
+  now = time.monotonic()
+  state = SimpleNamespace(_frame_id=500, _holds=deque([now] * 30), _holds_in_a_row=0, trips=SimpleNamespace(held=0))
+  assert model_state.JetlinkModelState._note_hold(state, True) is None
+  state._holds = deque([now] * 60)
+  assert model_state.JetlinkModelState._note_hold(state, True) is not None
+
+
 def test_interface_keys():
   # conformance is check_adapter's; the params directory is Stock's, held against Params in test_jetlink_lifecycle
   op = adapter.adapter()
