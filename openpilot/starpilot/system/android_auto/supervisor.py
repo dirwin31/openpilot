@@ -413,7 +413,7 @@ class Supervisor:
       if not self._projection_enabled():
         raise RuntimeError("Android Auto is disabled")
       if self._adapter_choice_needed():
-        raise RuntimeError("Choose your adapter model (AAWireless v1 or Other) in Galaxy first")
+        raise RuntimeError("Choose your adapter model (AAWireless or Other) in Galaxy first")
       if self.config["connection"] == "wired" and (reason := wired_blocker()):
         raise RuntimeError(reason)
       if self._thread is not None and self._thread.is_alive():
@@ -559,7 +559,7 @@ class Supervisor:
   def prepare_pairing(self, seconds: float = 180.0) -> None:
     """Present as a phone (HFP gateway, smartphone class) while the car pairs."""
     if self._adapter_choice_needed():
-      raise RuntimeError("Choose your adapter model (AAWireless v1 or Other) in Galaxy first")
+      raise RuntimeError("Choose your adapter model (AAWireless or Other) in Galaxy first")
     if self._bluez_factory is None and (self._source_session is None or self._shared_bluetooth_owner is None or
                                         not self._shared_bluetooth_owner.session_valid(self._source_session)):
       raise RuntimeError('Current Galaxy pairing authorization required')

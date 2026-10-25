@@ -1259,3 +1259,15 @@ def test_chestnut_still_stops_choosing_wired(identity, tmp_path, monkeypatch):
   monkeypatch.setattr(supervisor_module, "chestnut_blocker", lambda: "Wired Android Auto is unavailable while Chestnut is connected")
   with pytest.raises(RuntimeError, match="Chestnut"):
     sup.set_connection("wired")
+
+
+def test_discovery_waits_past_the_message_timeout_for_a_slow_adapter():
+  from openpilot.starpilot.system.android_auto.session import Session
+  a, b = socket.socketpair()
+  session = Session.__new__(Session)
+  session.peer = a
+  threading.Timer(0.3, b.send, args=(b"x",)).start()
+  assert session._await_readable(time.monotonic() + 5)
+  a.recv(1)
+  assert not session._await_readable(time.monotonic() + 0.1)
+  assert Session.DISCOVERY_TIMEOUT >= 30
