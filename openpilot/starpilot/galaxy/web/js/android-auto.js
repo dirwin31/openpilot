@@ -773,35 +773,7 @@ export const AndroidAutoPage = {
       <GxNotice tone="warn" v-if="!wired && !app">Android Auto uses the comma’s Wi-Fi to project to your car and disconnects it from your current Wi-Fi network. Use the Galaxy hotspot for local access during projection. Remote Galaxy access requires Internet on the comma.</GxNotice>
       <GxNotice tone="danger" v-if="error && setup">{{ error }}</GxNotice>
       <GxNotice v-if="!setup" :busy="!error" :tone="error ? 'danger' : 'info'">{{ error || "Checking Android Auto setup… Reconnecting automatically…" }}</GxNotice>
-      <section v-if="setup && setupDone" class="gx-card gx-aa-step gx-aa-home" aria-labelledby="gx-aa-home-title">
-        <div class="gx-aa-step__head">
-          <span class="gx-aa-step__num" :class="{ 'gx-aa-home__icon--live': projecting }" aria-hidden="true"><i class="bi bi-car-front"></i></span>
-          <div><h3 id="gx-aa-home-title">{{ projecting ? 'Connected to ' + connectionName : runtime?.running ? 'Connecting to ' + connectionName : connectionName }}</h3>
-            <p role="status">{{ runtime?.running && runtime.state !== 'streaming' && runtime.label ? runtime.label : runtime?.running ? 'Showing StarPilot on your car’s screen.' : wired ? wiredStatus.label : runtime?.auto_connect ? 'Connects automatically when you start driving.' : 'Ready to connect.' }}</p></div>
-        </div>
-        <div class="gx-aa-step__body">
-          <p v-if="expiry.level === 'soon'" class="gx-aa-pill gx-aa-pill--soon" role="status">{{ expiry.label }}</p>
-          <button v-if="!runtime?.running" class="gx-btn gx-aa-cta" :disabled="!!connectReason" @click="connect">Connect</button>
-          <button v-else class="gx-btn gx-btn--tonal gx-aa-cta" @click="control('stop')">Disconnect</button>
-          <GalaxySettingRow :row="switchRow('Automatic Connection', runtime?.auto_connect, 'Connect to your car whenever you start driving.')"
-            :index="0" :busy="busy" :disabled="!setup.enabled || !setup.parked || !!pairing?.active"
-            :save-value="(index, value) => control('auto_connect', { enabled: value === 'On' })" />
-          ${WIRED_STATUS}
-          <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
-          <GalaxySettingRow v-if="adapterSetup" :row="adapterRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveAdapter" />
-          <template v-if="carType === 'app'">
-            <GalaxySettingRow :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
-            ${APP_SETUP}
-          </template>
-          <div class="gx-actions">
-            <a class="gx-btn gx-btn--tonal" href="#/theme_maker/android_auto"><i class="bi bi-layout-text-window" aria-hidden="true"></i> Customize Layout</a>
-            <button type="button" class="gx-btn gx-btn--tonal" :aria-expanded="showSteps" aria-controls="gx-aa-steps" @click="showSteps = !showSteps">
-              <i :class="showSteps ? 'bi bi-chevron-up' : 'bi bi-gear'" aria-hidden="true"></i> {{ showSteps ? 'Hide Setup' : 'Setup and Pairing' }}</button>
-          </div>
-        </div>
-      </section>
-      <ol v-if="setup" id="gx-aa-steps" class="gx-aa__steps">
-        <li class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': supportReady }">
+        <section v-if="setup" class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': supportReady }">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true"><i v-if="supportReady" class="bi bi-check-lg"></i><template v-else>1</template></span>
             <div><h3>Android Auto Support</h3><p v-if="supportCollapsed" role="status">{{ expiry.label }}</p><p v-else>Turn on Android Auto and install support. Wireless pairing also needs Bluetooth on; Galaxy will offer to enable it.</p></div>
@@ -840,8 +812,35 @@ export const AndroidAutoPage = {
               </ul>
             </details>
           </div>
-        </li>
-
+        </section>
+      <section v-if="setup && setupDone" class="gx-card gx-aa-step gx-aa-home" aria-labelledby="gx-aa-home-title">
+        <div class="gx-aa-step__head">
+          <span class="gx-aa-step__num" :class="{ 'gx-aa-home__icon--live': projecting }" aria-hidden="true"><i class="bi bi-car-front"></i></span>
+          <div><h3 id="gx-aa-home-title">{{ projecting ? 'Connected to ' + connectionName : runtime?.running ? 'Connecting to ' + connectionName : connectionName }}</h3>
+            <p role="status">{{ runtime?.running && runtime.state !== 'streaming' && runtime.label ? runtime.label : runtime?.running ? 'Showing StarPilot on your car’s screen.' : wired ? wiredStatus.label : runtime?.auto_connect ? 'Connects automatically when you start driving.' : 'Ready to connect.' }}</p></div>
+        </div>
+        <div class="gx-aa-step__body">
+          <p v-if="expiry.level === 'soon'" class="gx-aa-pill gx-aa-pill--soon" role="status">{{ expiry.label }}</p>
+          <button v-if="!runtime?.running" class="gx-btn gx-aa-cta" :disabled="!!connectReason" @click="connect">Connect</button>
+          <button v-else class="gx-btn gx-btn--tonal gx-aa-cta" @click="control('stop')">Disconnect</button>
+          <GalaxySettingRow :row="switchRow('Automatic Connection', runtime?.auto_connect, 'Connect to your car whenever you start driving.')"
+            :index="0" :busy="busy" :disabled="!setup.enabled || !setup.parked || !!pairing?.active"
+            :save-value="(index, value) => control('auto_connect', { enabled: value === 'On' })" />
+          ${WIRED_STATUS}
+          <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
+          <GalaxySettingRow v-if="adapterSetup" :row="adapterRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveAdapter" />
+          <template v-if="carType === 'app'">
+            <GalaxySettingRow :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
+            ${APP_SETUP}
+          </template>
+          <div class="gx-actions">
+            <a class="gx-btn gx-btn--tonal" href="#/theme_maker/android_auto"><i class="bi bi-layout-text-window" aria-hidden="true"></i> Customize Layout</a>
+            <button type="button" class="gx-btn gx-btn--tonal" :aria-expanded="showSteps" aria-controls="gx-aa-steps" @click="showSteps = !showSteps">
+              <i :class="showSteps ? 'bi bi-chevron-up' : 'bi bi-gear'" aria-hidden="true"></i> {{ showSteps ? 'Hide Setup' : 'Setup and Pairing' }}</button>
+          </div>
+        </div>
+      </section>
+      <ol v-if="setup" id="gx-aa-steps" class="gx-aa__steps">
         <li v-show="!setupDone || showSteps" class="gx-card gx-aa-step" :class="{ 'gx-aa-step--done': !!selected && !pairing?.active }">
           <div class="gx-aa-step__head">
             <span class="gx-aa-step__num" aria-hidden="true"><i v-if="selected && !pairing?.active" class="bi bi-check-lg"></i><template v-else>2</template></span>
