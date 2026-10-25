@@ -1,3 +1,4 @@
+import { settingControl } from "../web/js/galaxy-setting-row.js"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { AndroidAutoFeed, AndroidAutoPage, validPairingStatus, validPromptInput, uploadPackage, uploadTimeout,
@@ -18,7 +19,7 @@ assert.equal(validPromptInput({ kind: "passkey" }, "1234567"), false)
 assert.equal(validPromptInput(prompt, ""), true)
 assert.match(AndroidAutoPage.template, /Check that this code matches your car/)
 assert.match(AndroidAutoPage.template, /Cancel Search \/ Pairing/)
-assert.match(AndroidAutoPage.template, /:row="wiredRow"[^>]*:disabled="wiredDisabled"/)
+assert.doesNotMatch(AndroidAutoPage.template, /:row="wiredRow"/)
 assert.match(AndroidAutoPage.template, /Read the Android Auto troubleshooting guide/)
 assert.doesNotMatch(AndroidAutoPage.template, /v-html|autoaccept/i)
 const app = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8")
@@ -160,32 +161,24 @@ function page(selectedSetup = setup) {
   for (const [key, method] of Object.entries(AndroidAutoPage.methods)) vm[key] = method.bind(vm)
   return vm
 }
-// Wired setup is available, while the existing parked/session/ownership gates remain enforced.
 const wiredSetup = page()
-wiredSetup.runtime = { connection: "wireless", running: false }
-assert.equal(wiredSetup.wiredDisabled, false)
-for (const field of ["enabled", "parked"]) {
-  const blocked = page({ ...setup, [field]: false })
-  assert.equal(blocked.wiredDisabled, true, field)
-}
-wiredSetup.pairing = { active: true }
-assert.equal(wiredSetup.wiredDisabled, true, "pairing owns the connection")
-wiredSetup.pairing = null
-wiredSetup.runtime.running = true
-assert.equal(wiredSetup.wiredDisabled, true, "a running session cannot change connection")
-wiredSetup.runtime = { connection: "wireless", running: false, wired_blocked: "USB is busy" }
-assert.equal(wiredSetup.wiredDisabled, true, "another USB owner blocks enabling wired mode")
-wiredSetup.runtime.connection = "wired"
-assert.equal(wiredSetup.wiredDisabled, false, "the existing wired connection can still be disabled")
-
-// Jetlink only delays wired: it can be chosen, with a shortcut to switch Jetlink off.
-wiredSetup.runtime = { connection: "wireless", running: false, wired_busy: "Turn off Jetlink to use wired Android Auto" }
-assert.equal(wiredSetup.wiredDisabled, false, "Jetlink does not stop wired being chosen")
-assert.equal(wiredSetup.wiredJetlinkBusy, false, "no notice until wired is chosen")
-wiredSetup.runtime.connection = "wired"
+wiredSetup.runtime = { connection: "wired", running: false, wired_busy: "Turn off Jetlink to use wired Android Auto" }
 assert.equal(wiredSetup.wiredJetlinkBusy, true)
+assert.equal(wiredSetup.wiredStatus.tone, "expired")
+assert.equal(wiredSetup.wiredStatus.label, "Wired Android Auto not enabled")
 assert.match(wiredSetup.connectReason, /Jetlink/)
-assert.match(AndroidAutoPage.template, /href="#\/manage_models"/)
+assert.match(AndroidAutoPage.template, /class="gx-link" href="#\/manage_models"/)
+assert.match(AndroidAutoPage.template, /bi-arrow-right/)
+wiredSetup.runtime.wired_busy = ""
+assert.equal(wiredSetup.wiredStatus.tone, "ready")
+assert.equal(wiredSetup.wiredStatus.label, "Wired Android Auto enabled")
+assert.equal(wiredSetup.connectReason, "")
+wiredSetup.runtime.wired_blocked = "USB is unavailable"
+assert.equal(wiredSetup.wiredStatus.tone, "expired")
+assert.equal(wiredSetup.connectReason, "USB is unavailable")
+wiredSetup.runtime.wired_blocked = ""
+wiredSetup.setup.enabled = false
+assert.equal(wiredSetup.wiredStatus.tone, "expired")
 
 const uploadPage = page({ ...setup, enabled: false })
 const uploadCalls = []
@@ -526,6 +519,7 @@ assert.deepEqual(namedCalls, [['car_type', { carType: 'adapter' }]])
 const dongle = page(setup)
 dongle.runtime = { car_type: 'adapter', car_profile: 'default', car_profile_source: 'standard' }
 assert.equal(dongle.adapterRow.value, 'Choose one', 'no default: the owner picks')
+assert.equal(settingControl(dongle.adapterRow), 'select', 'the initial adapter prompt must open a picker')
 assert.match(dongle.pairingReason, /adapter model/)
 dongle.runtime = { car_type: 'adapter', car_profile: 'default', car_profile_source: 'override' }
 assert.equal(dongle.adapterRow.value, 'Other')

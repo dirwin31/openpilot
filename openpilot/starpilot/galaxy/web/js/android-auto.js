@@ -47,8 +47,11 @@ const ADDRESS = /^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$/
 const ADAPTER_MODELS = { aawireless: "AAWireless v1", default: "Other" }
 const HEAD_UNIT_APPS = { headunitpad: "HeadunitPad", openheadunit: "Open Headunit" }
 const HOTSPOT_LINK = `<a class="gx-link" href="#/galaxy">Galaxy Wi-Fi Hotspot</a>`
-const WIRED_JETLINK = `<p v-if="wiredJetlinkBusy" class="gx-note" role="status">Jetlink is using the USB-C port, so wired Android Auto can’t connect yet. Turn off Jetlink, then reconnect.
-  <a class="gx-btn gx-btn--tonal" href="#/manage_models">Open Jetlink settings</a></p>`
+const WIRED_STATUS = `<div v-if="wired" class="gx-note">
+  <p class="gx-aa-pill" :class="'gx-aa-pill--' + wiredStatus.tone" role="status">{{ wiredStatus.label }}</p>
+  <p>{{ wiredStatus.detail }}</p>
+  <a v-if="wiredJetlinkBusy" class="gx-link" href="#/manage_models">Turn off JetLink <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+</div>`
 const APP_SETUP = `
   <div v-if="app === 'HeadunitPad'" class="gx-note" role="note">
     <strong>HeadunitPad setup (iPad)</strong>
@@ -494,9 +497,11 @@ export const AndroidAutoPage = {
     app() { return HEAD_UNIT_APPS[this.runtime?.connection] || "" },
     connectionName() { return this.app === "HeadunitPad" ? "iPad" : this.app ? "tablet" : this.wired ? "car" : this.selected?.name || "car" },
     setupDone() { return !!(this.supportReady && (this.selected || this.wired || this.app) && !this.pairing?.active) },
-    wiredRow() {
-      const detail = "Turn this on for wired Android Auto. Connect the car’s Android Auto USB data port to the comma’s USB-C port with a data-capable cable."
-      return switchRow("Wired AA", this.wired, detail + (this.runtime?.wired_blocked ? ` ${this.runtime.wired_blocked}.` : ""))
+    wiredStatus() {
+      if (this.runtime?.wired_blocked) return { tone: "expired", label: "Wired Android Auto not enabled", detail: this.runtime.wired_blocked }
+      if (this.wiredJetlinkBusy) return { tone: "expired", label: "Wired Android Auto not enabled", detail: "JetLink is using the USB-C port. Turn off JetLink, then return here." }
+      if (!this.setup?.enabled) return { tone: "expired", label: "Wired Android Auto not enabled", detail: "Turn on Android Auto Support in step 1." }
+      return { tone: "ready", label: "Wired Android Auto enabled", detail: "Connect the car’s Android Auto USB data port to the comma’s USB-C port with a data-capable cable." }
     },
     appRow() {
       return { label: "App", value: this.app || "Off", choices: ["Off", ...Object.values(HEAD_UNIT_APPS)], available: true, action: true,
@@ -516,17 +521,13 @@ export const AndroidAutoPage = {
     adapterRow() {
       const chosen = this.runtime?.car_profile_source === "override"
       return { label: "Adapter", value: !chosen ? "Choose one" : this.runtime.car_profile === "aawireless" ? ADAPTER_MODELS.aawireless : ADAPTER_MODELS.default,
-        choices: Object.values(ADAPTER_MODELS), available: true, action: true,
+        choices: [...(!chosen ? ["Choose one"] : []), ...Object.values(ADAPTER_MODELS)], available: true, action: true,
         reason: "AAWireless v1 gets video and car-data settings tuned for that dongle. Other adapters use the regular pairing." }
     },
     appDisabled() {
       return !this.setup?.enabled || !this.setup.parked || !!this.pairing?.active || !!this.runtime?.running
     },
     wiredJetlinkBusy() { return this.wired && !!this.runtime?.wired_busy },
-    wiredDisabled() {
-      return !this.setup?.enabled || !this.setup.parked || !!this.pairing?.active || !!this.runtime?.running ||
-        (!!this.runtime?.wired_blocked && !this.wired)
-    },
     download() { return downloadLink(this.setup?.download, this.setup?.downloadPending === true) },
     uploadPercent() {
       const { loaded, total } = this.uploadProgress || {}
@@ -593,6 +594,7 @@ export const AndroidAutoPage = {
       if (!this.setup.serviceReady) return "Waiting for the Android Auto service to start."
       if (this.pairing?.active) return "Finish or cancel pairing first."
       if (this.adapterSetup && this.runtime?.car_profile_source !== "override") return "Choose your adapter model in step 2 first."
+      if (this.wired && this.runtime?.wired_blocked) return this.runtime.wired_blocked
       if (this.wiredJetlinkBusy) return "Turn off Jetlink first."
       return ""
     },
@@ -741,7 +743,7 @@ export const AndroidAutoPage = {
         <div class="gx-aa-step__head">
           <span class="gx-aa-step__num" :class="{ 'gx-aa-home__icon--live': projecting }" aria-hidden="true"><i class="bi bi-car-front"></i></span>
           <div><h3 id="gx-aa-home-title">{{ projecting ? 'Connected to ' + connectionName : runtime?.running ? 'Connecting to ' + connectionName : connectionName }}</h3>
-            <p role="status">{{ runtime?.running && runtime.state !== 'streaming' && runtime.label ? runtime.label : runtime?.running ? 'Showing StarPilot on your car’s screen.' : runtime?.auto_connect ? 'Connects automatically when you start driving.' : 'Ready to connect.' }}</p></div>
+            <p role="status">{{ runtime?.running && runtime.state !== 'streaming' && runtime.label ? runtime.label : runtime?.running ? 'Showing StarPilot on your car’s screen.' : wired ? wiredStatus.label : runtime?.auto_connect ? 'Connects automatically when you start driving.' : 'Ready to connect.' }}</p></div>
         </div>
         <div class="gx-aa-step__body">
           <p v-if="expiry.level === 'soon'" class="gx-aa-pill gx-aa-pill--soon" role="status">{{ expiry.label }}</p>
@@ -750,9 +752,7 @@ export const AndroidAutoPage = {
           <GalaxySettingRow :row="switchRow('Automatic Connection', runtime?.auto_connect, 'Connect to your car whenever you start driving.')"
             :index="0" :busy="busy" :disabled="!setup.enabled || !setup.parked || !!pairing?.active"
             :save-value="(index, value) => control('auto_connect', { enabled: value === 'On' })" />
-          <GalaxySettingRow :row="wiredRow" :index="0" :busy="busy" :disabled="wiredDisabled"
-            :save-value="(index, value) => control('connection', { connection: value === 'On' ? 'wired' : 'wireless' })" />
-            ${WIRED_JETLINK}
+          ${WIRED_STATUS}
           <GalaxySettingRow :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
           ${APP_SETUP}
           <div class="gx-actions">
@@ -814,9 +814,7 @@ export const AndroidAutoPage = {
             <GalaxySettingRow v-if="carType === 'app'" :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
             <GalaxySettingRow v-if="adapterSetup" :row="adapterRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveAdapter" />
             <template v-if="carType === 'usb'">
-              <GalaxySettingRow :row="wiredRow" :index="0" :busy="busy" :disabled="wiredDisabled"
-                :save-value="(index, value) => control('connection', { connection: value === 'On' ? 'wired' : 'wireless' })" />
-              ${WIRED_JETLINK}
+              ${WIRED_STATUS}
             </template>
             <template v-else-if="carType === 'app'">
               ${APP_SETUP}
