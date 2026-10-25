@@ -38,6 +38,30 @@ class JetlinkStatus:
   state: str = 'off'  # Jetlink phase, or off/disconnected/unavailable
   latency_ms: float | None = None
   port: str | None = None  # jetlink's port_state: 'connected' (host on the link), 'device' (plugged in), else None
+  stage: str = ''
+  percent: int | None = None
+
+
+def preparation_progress(status, state):
+  """Only attach progress to pending states; live readiness wins over old progress.
+
+  Build estimates are Jetson-specific and server warm-up fractions may be paced,
+  so only byte transfers get a percentage. Never present those estimates as a
+  countdown on a phone.
+  """
+  if state not in ('preparing', 'connecting'):
+    return '', None
+  progress = status.progress
+  if not isinstance(progress, dict):
+    return '', None
+  stage = progress.get('code') or progress.get('stage')
+  if stage not in ('download', 'downloading', 'upload', 'patch', 'parse', 'convert', 'compile', 'build', 'load', 'warm',
+                   'finding_model', 'model_missing', 'download_stalled', 'downloaded_waiting_host'):
+    return '', None
+  frac = progress.get('frac')
+  percent = (int(frac * 100) if stage in ('download', 'downloading', 'upload') and
+             type(frac) in (int, float) and math.isfinite(frac) and 0 <= frac <= 1 else None)
+  return stage, percent
 
 
 def _write_latency(model, path) -> None:
@@ -113,10 +137,13 @@ def read_status() -> JetlinkStatus:
     return JetlinkStatus(state='unavailable')
   device = 'Mobile device (iOS)' if status.mode == 'ios' else 'USB host'
   state = connection_state(status)
+  if state == 'disconnected' and status.port == 'host':
+    state = 'detected'
   if state == 'prepared' and join_failed():
     state = 'failed'
   port = status.port_state if status.enabled and status.port != 'empty' and status.port_state in ('connected', 'device') else None
-  return JetlinkStatus(device, state, read_latency() if state == 'active' else None, port)
+  stage, percent = preparation_progress(status, state)
+  return JetlinkStatus(device, state, read_latency() if state == 'active' else None, port, stage, percent)
 
 
 class JetlinkStatusFeed:

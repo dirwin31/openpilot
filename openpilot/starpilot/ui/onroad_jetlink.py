@@ -6,9 +6,33 @@ from openpilot.starpilot.ui.onroad_customization import JETLINK_SIZE, JETLINK_WI
 from openpilot.starpilot.ui.presentation import FontRole
 
 # 'prepared' onroad is modeld still loading: a join that failed reads 'failed' (jetlink_status.join_failed)
-LABELS = {'off': 'Off • not in use', 'active': 'Remote model active', 'waiting': 'Ready • swaps when disengaged', 'prepared': 'Starting • local model',
-          'preparing': 'Preparing • local model', 'reconnecting': 'Reconnecting • local', 'failed': 'Failed • local model',
-          'connecting': 'Waiting for app • local model', 'disconnected': 'Disconnected', 'unavailable': 'Unavailable'}
+LABELS = {'off': 'JetLink off', 'active': 'Remote model active', 'waiting': 'Ready to switch', 'prepared': 'Starting model',
+          'preparing': 'Device connected', 'reconnecting': 'Reconnecting', 'failed': 'JetLink failed',
+          'connecting': 'Device connected', 'detected': 'Device detected', 'disconnected': 'No device connected',
+          'unavailable': 'JetLink unavailable'}
+DETAILS = {'off': 'Local model', 'waiting': 'Local model • waiting to disengage', 'prepared': 'Local model • starting remote model',
+           'preparing': 'Local model • waiting for model', 'reconnecting': 'Local model • restoring connection',
+           'failed': 'Local model • check JetLink', 'connecting': 'Local model • waiting for app',
+           'detected': 'Local model • waiting for USB', 'disconnected': 'Local model • connect device',
+           'unavailable': 'Local model • check JetLink'}
+STAGES = {'download': 'Downloading model', 'downloading': 'Downloading model', 'upload': 'Sending model',
+          'patch': 'Preparing model', 'parse': 'Reading model', 'convert': 'Converting model',
+          'compile': 'Compiling model', 'build': 'Building model', 'load': 'Loading model', 'warm': 'Warming up model',
+          'finding_model': 'Finding model', 'model_missing': 'Model not downloaded',
+          'download_stalled': 'Download stalled', 'downloaded_waiting_host': 'Waiting for device'}
+
+
+def status_lines(status):
+  title = LABELS.get(status.state, 'JetLink unavailable')
+  detail = DETAILS.get(status.state, 'Local model • check JetLink')
+  if status.state == 'active':
+    detail = f'JetLink • {status.device}' if status.device else 'JetLink'
+  elif status.state in ('preparing', 'connecting') and status.stage in STAGES:
+    title = STAGES[status.stage]
+    detail = 'Local model • device connected'
+    if status.percent is not None:
+      detail = f'Local model • {status.percent}% transferred'
+  return title, detail
 GREEN = rl.Color(70, 200, 110, 255)
 ORANGE = rl.Color(255, 150, 60, 255)
 ACCENT = rl.Color(199, 174, 247, 255)
@@ -32,6 +56,8 @@ class JetlinkStatusWidget:
     status = self.status
     if not placed or not placed['enabled'] or state.alert.size != 'none':
       return
+    if placed.get('hideDisconnected', False) and status.state in ('off', 'disconnected'):
+      return
     rect = rl.Rectangle(placed['x'], placed['y'], *JETLINK_SIZE)
     h = rect.height
     rl.draw_rectangle_rounded(rect, 1.0, 16, rl.Color(15, 13, 23, round(235 * placed.get('opacity', 85) / 100)))
@@ -47,7 +73,6 @@ class JetlinkStatusWidget:
       right -= value_w + 16
     left = rect.x + h - 6
     width = right - left
-    title = LABELS.get(status.state, 'Unavailable')
-    detail = f'Jetlink • {status.device}' if status.device else 'Jetlink'
+    title, detail = status_lines(status)
     self.fonts.draw(title, FontRole.SEMI_BOLD, self._fit(title, FontRole.SEMI_BOLD, 28, width), left, rect.y + 12, TEXT)
     self.fonts.draw(detail, FontRole.NORMAL, self._fit(detail, FontRole.NORMAL, 22, width), left, rect.y + 46, MUTED)
