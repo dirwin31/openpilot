@@ -42,6 +42,22 @@ class JetlinkStatus:
   percent: int | None = None
 
 
+RECONNECT_WHY = ('lost', 'behind', 'load_failed', 'bad_output')
+
+
+def reconnect_reason(progress) -> str:
+  """Why jetlink handed the drive back and is rejoining, as 'reconnect_<why>'; a link that has dropped repeatedly
+  is 'reconnect_cable'. '' when jetlink did not say."""
+  if not isinstance(progress, dict) or progress.get('code') != 'reconnecting':
+    return ''
+  args = progress.get('args')
+  why = args.get('why') if isinstance(args, dict) else None
+  if why not in RECONNECT_WHY:
+    return ''
+  drops = progress.get('drops')
+  return 'reconnect_cable' if why == 'lost' and type(drops) is int and drops > 0 else f'reconnect_{why}'
+
+
 def preparation_progress(status, state):
   """Only attach progress to pending states; live readiness wins over old progress.
 
@@ -49,9 +65,11 @@ def preparation_progress(status, state):
   so only byte transfers get a percentage. Never present those estimates as a
   countdown on a phone.
   """
+  progress = status.progress
+  if state == 'reconnecting':
+    return reconnect_reason(progress), None
   if state not in ('preparing', 'connecting'):
     return '', None
-  progress = status.progress
   if not isinstance(progress, dict):
     return '', None
   stage = progress.get('code') or progress.get('stage')

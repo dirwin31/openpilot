@@ -33,6 +33,16 @@ def test_the_modeld_seam():
   assert check_seam(ROOT / "openpilot/selfdrive/modeld/modeld.py") == []
 
 
+def test_one_held_frame_while_proving_does_not_hand_back():
+  from collections import deque
+  from jetlink.openpilot import model_state
+  adapter.adapter()
+  state = SimpleNamespace(_frame_id=10, _holds=deque(), _holds_in_a_row=0, trips=SimpleNamespace(held=0))
+  assert model_state.JetlinkModelState._note_hold(state, True) is None
+  state._frame_id, state._holds_in_a_row = 21, 4
+  assert model_state.JetlinkModelState._note_hold(state, True) is not None
+
+
 def test_interface_keys():
   # conformance is check_adapter's; the params directory is Stock's, held against Params in test_jetlink_lifecycle
   op = adapter.adapter()

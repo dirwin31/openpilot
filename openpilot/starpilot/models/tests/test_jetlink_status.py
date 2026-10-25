@@ -123,6 +123,15 @@ def test_preparation_progress_survives_snapshot(stage):
   assert result.percent == (42 if stage in ('download', 'upload') else None)
 
 
+@pytest.mark.parametrize('why, drops, stage', [
+  ('lost', 0, 'reconnect_lost'), ('lost', 2, 'reconnect_cable'), ('behind', 0, 'reconnect_behind'),
+  ('load_failed', 0, 'reconnect_load_failed'), ('bad_output', 0, 'reconnect_bad_output'), ('other', 0, ''), (None, 0, ''),
+])
+def test_reconnect_reason_is_read_from_the_progress_record(why, drops, stage):
+  progress = {'stage': 'connect', 'frac': 0.0, 'drops': drops, 'code': 'reconnecting', 'args': {'why': why}}
+  assert read(status(running='retrying', progress=progress)).stage == stage
+
+
 @pytest.mark.parametrize('kw', [
   {'active': True, 'running': 'running'}, {'running': 'ready'}, {'running': 'retrying'},
   {'present': False}, {'port': 'empty'}, {'reason': 'service stopped'},

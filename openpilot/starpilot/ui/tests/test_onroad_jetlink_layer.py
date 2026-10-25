@@ -56,12 +56,16 @@ def test_opted_in_widget_shows_off_and_hides_under_alerts():
 def test_widget_uses_preparation_detail_and_ready_overrides_progress():
   from openpilot.starpilot.models.jetlink_status import JetlinkStatus
   from openpilot.starpilot.ui.onroad_jetlink import status_lines
-  assert status_lines(JetlinkStatus(state='detected')) == ('Device detected', 'Local model • waiting for USB')
-  assert status_lines(JetlinkStatus(state='connecting')) == ('Device connected', 'Local model • waiting for app')
-  assert status_lines(JetlinkStatus(state='preparing', stage='warm')) == ('Warming up model', 'Local model • device connected')
-  assert status_lines(JetlinkStatus(state='preparing', stage='upload', percent=42)) == ('Sending model', 'Local model • 42% transferred')
-  assert status_lines(JetlinkStatus(state='waiting', stage='warm')) == ('Ready to switch', 'Local model • waiting to disengage')
-  assert status_lines(JetlinkStatus(state='active', stage='warm')) == ('Remote model active', 'JetLink')
+  assert status_lines(JetlinkStatus(state='detected')) == ('JetLink', 'Device detected • waiting for USB')
+  assert status_lines(JetlinkStatus(state='connecting')) == ('JetLink', 'Device connected • waiting for app')
+  assert status_lines(JetlinkStatus(state='preparing', stage='warm')) == ('JetLink', 'Warming up model • device connected')
+  assert status_lines(JetlinkStatus(state='preparing', stage='upload', percent=42)) == ('JetLink', 'Sending model • 42% transferred')
+  assert status_lines(JetlinkStatus(state='waiting', stage='warm')) == ('JetLink', 'Ready to switch • waiting to disengage')
+  assert status_lines(JetlinkStatus(state='reconnecting')) == ('JetLink', 'Reconnecting • restoring connection')
+  assert status_lines(JetlinkStatus(state='reconnecting', stage='reconnect_behind')) == ('JetLink', 'Reconnecting • device too slow')
+  assert status_lines(JetlinkStatus(state='reconnecting', stage='reconnect_cable')) == (
+    'JetLink', 'Reconnecting • link keeps dropping, check cable')
+  assert status_lines(JetlinkStatus(state='active', stage='warm')) == ('JetLink', 'Remote model active')
 
 
 @pytest.mark.parametrize('projected', [False, True], ids=['native-3x', 'android-auto'])
