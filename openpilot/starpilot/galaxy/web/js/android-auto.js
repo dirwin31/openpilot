@@ -48,10 +48,17 @@ const ADAPTER_MODELS = { aawireless: "AAWireless v1", default: "Other" }
 const HEAD_UNIT_APPS = { headunitpad: "HeadunitPad", openheadunit: "Open Headunit" }
 const HOTSPOT_LINK = `<a class="gx-link" href="#/galaxy">Galaxy Wi-Fi Hotspot</a>`
 const WIRED_STATUS = `<div v-if="wired" class="gx-note">
-  <p class="gx-aa-pill" :class="'gx-aa-pill--' + wiredStatus.tone" role="status">{{ wiredStatus.label }}</p>
+  <div class="gx-aa-status">
+    <span class="gx-aa-pill" :class="'gx-aa-pill--' + wiredStatus.tone" role="status">{{ wiredStatus.label }}</span>
+    <a v-if="wiredJetlinkBusy" class="gx-link" href="#/manage_models">Turn off JetLink <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+  </div>
   <p>{{ wiredStatus.detail }}</p>
-  <a v-if="wiredJetlinkBusy" class="gx-link" href="#/manage_models">Turn off JetLink <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
 </div>`
+const CONNECT = `<button v-if="!runtime?.running" class="gx-btn gx-aa-cta" :disabled="!!connectReason" @click="connect">Connect</button>
+  <button v-else class="gx-btn gx-btn--tonal gx-aa-cta" @click="control('stop')">Disconnect</button>`
+const AUTO_CONNECT = `<GalaxySettingRow :row="switchRow('Automatic Connection', runtime?.auto_connect, 'Connect to your car whenever you start driving.')"
+    :index="0" :busy="busy" :disabled="!setup.enabled || !setup.parked || !!pairing?.active"
+    :save-value="(index, value) => control('auto_connect', { enabled: value === 'On' })" />`
 const APP_SETUP = `
   <div v-if="app === 'HeadunitPad'" class="gx-note" role="note">
     <strong>HeadunitPad setup (iPad)</strong>
@@ -495,6 +502,12 @@ export const AndroidAutoPage = {
     // Returning drivers see a status card; the setup steps fold away below it.
     wired() { return this.runtime?.connection === "wired" },
     app() { return HEAD_UNIT_APPS[this.runtime?.connection] || "" },
+    homeTitle() {
+      if (this.wired) return "Wired Android Auto"
+      if (this.app) return "Headunit Emulator"
+      return this.projecting ? "Connected to " + this.connectionName : this.runtime?.running ? "Connecting to " + this.connectionName : this.connectionName
+    },
+    wirelessHome() { return !this.wired && !this.app },
     connectionName() { return this.app === "HeadunitPad" ? "iPad" : this.app ? "tablet" : this.wired ? "car" : this.selected?.name || "car" },
     // Waiting or retrying is not a connection: only a live link blocks changes, and those stop the wait first.
     linked() { return ["streaming", "suspended"].includes(this.runtime?.state) },
@@ -816,22 +829,24 @@ export const AndroidAutoPage = {
       <section v-if="setup && setupDone" class="gx-card gx-aa-step gx-aa-home" aria-labelledby="gx-aa-home-title">
         <div class="gx-aa-step__head">
           <span class="gx-aa-step__num" :class="{ 'gx-aa-home__icon--live': projecting }" aria-hidden="true"><i class="bi bi-car-front"></i></span>
-          <div><h3 id="gx-aa-home-title">{{ projecting ? 'Connected to ' + connectionName : runtime?.running ? 'Connecting to ' + connectionName : connectionName }}</h3>
+          <div><h3 id="gx-aa-home-title">{{ homeTitle }}</h3>
             <p role="status">{{ runtime?.running && runtime.state !== 'streaming' && runtime.label ? runtime.label : runtime?.running ? 'Showing StarPilot on your car’s screen.' : wired ? wiredStatus.label : runtime?.auto_connect ? 'Connects automatically when you start driving.' : 'Ready to connect.' }}</p></div>
         </div>
         <div class="gx-aa-step__body">
           <p v-if="expiry.level === 'soon'" class="gx-aa-pill gx-aa-pill--soon" role="status">{{ expiry.label }}</p>
-          <button v-if="!runtime?.running" class="gx-btn gx-aa-cta" :disabled="!!connectReason" @click="connect">Connect</button>
-          <button v-else class="gx-btn gx-btn--tonal gx-aa-cta" @click="control('stop')">Disconnect</button>
-          <GalaxySettingRow :row="switchRow('Automatic Connection', runtime?.auto_connect, 'Connect to your car whenever you start driving.')"
-            :index="0" :busy="busy" :disabled="!setup.enabled || !setup.parked || !!pairing?.active"
-            :save-value="(index, value) => control('auto_connect', { enabled: value === 'On' })" />
-          ${WIRED_STATUS}
-          <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
-          <GalaxySettingRow v-if="adapterSetup" :row="adapterRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveAdapter" />
-          <template v-if="carType === 'app'">
-            <GalaxySettingRow :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
+          <template v-if="wirelessHome">
+            ${CONNECT}
+            ${AUTO_CONNECT}
+            <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
+            <GalaxySettingRow v-if="adapterSetup" :row="adapterRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveAdapter" />
+          </template>
+          <template v-else>
+            <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
+            <GalaxySettingRow v-if="app" :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
+            ${AUTO_CONNECT}
+            ${WIRED_STATUS}
             ${APP_SETUP}
+            ${CONNECT}
           </template>
           <div class="gx-actions">
             <a class="gx-btn gx-btn--tonal" href="#/theme_maker/android_auto"><i class="bi bi-layout-text-window" aria-hidden="true"></i> Customize Layout</a>
