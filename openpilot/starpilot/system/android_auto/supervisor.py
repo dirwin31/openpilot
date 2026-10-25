@@ -885,6 +885,8 @@ class Supervisor:
     owner = self._shared_bluetooth_owner
     if owner is None:
       return None
+    if operation == 'forget' and self.config['receiver_address'].upper() == address.upper():
+      return self._forget_selected_car(owner, address, session)
     # select_receiver takes the supervisor lock before releasing an owner lease.
     # Keep that same order through connection, save and admission pruning so an
     # old adapter's successful action cannot save its car under a new adapter.
@@ -916,6 +918,22 @@ class Supervisor:
         self.config.update(companion_address='', companion_name='')
         identity_store.save_config(self.config)
       return result
+
+  def _forget_selected_car(self, owner, address: str, session: tuple):
+    """Forget the chosen car even while auto-connect is retrying it: stop the attempt, then delete the pairing."""
+    from openpilot.starpilot.bluetooth.owner import BluetoothRejected
+    lease = owner.phone_lease
+    if not owner.session_valid(session):
+      raise BluetoothRejected('Galaxy session expired', code='session_expired')
+    if lease is not None and not lease.released and lease.session is not None:
+      raise BluetoothRejected('Finish Android Auto pairing first', code='busy')
+    self.auto.manual_stop(self._session_alive())
+    self.stop()
+    if self._session_alive():
+      raise BluetoothRejected('Android Auto is still stopping', code='busy')
+    result = owner.request('forget', address=address)
+    self.forget_receiver(address)
+    return result
 
   def _hfp_connected(self, address: str) -> None:
     if address.upper() in (self.config["receiver_address"].upper(), self.config.get("companion_address", "").upper()):
