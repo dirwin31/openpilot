@@ -1238,3 +1238,24 @@ def test_supervisor_retries_wifi_recovery_while_idle(monkeypatch):
   sup._session_alive = lambda: True  # ty: ignore[invalid-assignment]  # test double
   sup.recover_wifi(2000)  # never while a session owns wlan0
   assert len(calls) == 2
+
+
+def test_jetlink_delays_wired_but_does_not_stop_choosing_it(identity, tmp_path, monkeypatch):
+  from openpilot.starpilot.system.android_auto import supervisor as supervisor_module
+  sup, _ = make_supervisor(identity, tmp_path, monkeypatch, lambda *a, **k: None)
+  monkeypatch.setattr(supervisor_module, "jetlink_blocker", lambda: "Turn off Jetlink to use wired Android Auto")
+  monkeypatch.setattr(supervisor_module, "chestnut_blocker", lambda: "")
+  sup.set_connection("wired")
+  status = sup.status()
+  assert sup.config["connection"] == "wired" and status["wired_blocked"] == "" and "Jetlink" in status["wired_busy"]
+  with pytest.raises(RuntimeError, match="Turn off Jetlink"):
+    sup.start()
+
+
+def test_chestnut_still_stops_choosing_wired(identity, tmp_path, monkeypatch):
+  from openpilot.starpilot.system.android_auto import supervisor as supervisor_module
+  sup, _ = make_supervisor(identity, tmp_path, monkeypatch, lambda *a, **k: None)
+  monkeypatch.setattr(supervisor_module, "jetlink_blocker", lambda: "")
+  monkeypatch.setattr(supervisor_module, "chestnut_blocker", lambda: "Wired Android Auto is unavailable while Chestnut is connected")
+  with pytest.raises(RuntimeError, match="Chestnut"):
+    sup.set_connection("wired")
