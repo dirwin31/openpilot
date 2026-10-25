@@ -19,6 +19,9 @@ AOL_AXES = ("desiredLateral", "desiredLongitudinal", "lateralActive", "longitudi
 AOL_GRACE_S = 1.
 # CatalogModelState's per-frame camera input, not history
 FRAME_INPUTS = ("mapped_gpu_image",)
+# a Mac or iPad answers in ~37 ms with a tail past the 46 ms hold, and jetlink hands back on any held frame
+# before this many frames after a swap; past it only runs of holds do
+SETTLING_FRAMES = 20
 
 
 def supported_device(device_type=None) -> bool:
@@ -130,6 +133,9 @@ def _adapter_class():
 
 
 def adapter():
+  # modeld's side only: the gadget owner (owner_config) imports no numpy
+  from jetlink.openpilot import model_state
+  model_state.SETTLING_FRAMES = max(model_state.SETTLING_FRAMES, SETTLING_FRAMES)
   return _adapter_class()()
 
 

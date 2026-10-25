@@ -20,19 +20,26 @@ STAGES = {'download': 'Downloading model', 'downloading': 'Downloading model', '
           'compile': 'Compiling model', 'build': 'Building model', 'load': 'Loading model', 'warm': 'Warming up model',
           'finding_model': 'Finding model', 'model_missing': 'Model not downloaded',
           'download_stalled': 'Download stalled', 'downloaded_waiting_host': 'Waiting for device'}
+REASONS = {'reconnect_lost': 'link lost', 'reconnect_cable': 'link keeps dropping, check cable',
+           'reconnect_behind': 'device too slow', 'reconnect_load_failed': 'model failed to load',
+           'reconnect_bad_output': 'bad model output'}
 
 
 def status_lines(status):
-  title = LABELS.get(status.state, 'JetLink unavailable')
+  step = LABELS.get(status.state, 'JetLink unavailable')
   detail = DETAILS.get(status.state, 'Local model • check JetLink')
-  if status.state == 'active':
-    detail = f'JetLink • {status.device}' if status.device else 'JetLink'
-  elif status.state in ('preparing', 'connecting') and status.stage in STAGES:
-    title = STAGES[status.stage]
+  if status.state in ('preparing', 'connecting') and status.stage in STAGES:
+    step = STAGES[status.stage]
     detail = 'Local model • device connected'
     if status.percent is not None:
       detail = f'Local model • {status.percent}% transferred'
-  return title, detail
+  if status.state == 'reconnecting' and status.stage in REASONS:
+    detail = REASONS[status.stage]
+  if status.state != 'active':
+    step = f"{step} • {detail.removeprefix('Local model • ')}"
+  return 'JetLink', step
+
+
 GREEN = rl.Color(70, 200, 110, 255)
 ORANGE = rl.Color(255, 150, 60, 255)
 ACCENT = rl.Color(199, 174, 247, 255)
