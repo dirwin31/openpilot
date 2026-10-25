@@ -44,6 +44,7 @@ export function uploadPackage(path, options, progress, makeRequest = () => new X
 }
 
 const ADDRESS = /^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$/
+const ADAPTER_MODELS = { aawireless: "AAWireless v1", default: "Other" }
 const HEAD_UNIT_APPS = { headunitpad: "HeadunitPad", openheadunit: "Open Headunit" }
 const HOTSPOT_LINK = `<a class="gx-link" href="#/galaxy">Galaxy Wi-Fi Hotspot</a>`
 const APP_SETUP = `
@@ -510,7 +511,12 @@ export const AndroidAutoPage = {
       return { label: "What’s in your car?", value: labels[this.carType], choices: Object.values(labels), available: true, action: true,
         reason: "Built-in: the car supports wireless Android Auto. Adapter: a dongle such as AAWireless, Motorola MA1 or Carlinkit. Both the adapter and your car get paired." }
     },
-    showProfile() { return !!(this.runtime?.car_profile_label || this.runtime?.car_profile_source === "override") },
+    adapterRow() {
+      const chosen = this.runtime?.car_profile_source === "override"
+      return { label: "Adapter", value: !chosen ? "Choose one" : this.runtime.car_profile === "aawireless" ? ADAPTER_MODELS.aawireless : ADAPTER_MODELS.default,
+        choices: Object.values(ADAPTER_MODELS), available: true, action: true,
+        reason: "AAWireless v1 gets video and car-data settings tuned for that dongle. Other adapters use the regular pairing." }
+    },
     appDisabled() {
       return !this.setup?.enabled || !this.setup.parked || !!this.pairing?.active || !!this.runtime?.running
     },
@@ -573,6 +579,7 @@ export const AndroidAutoPage = {
       if (!this.setup.installReady) return "This build is missing the Android Auto display or encoder."
       if (this.setup.enabled && !this.setup.serviceReady) return "Waiting for the Android Auto service to start."
       if (!this.setup.bluetoothEnabled && this.setup.enabled) return "Turn on Bluetooth on the Bluetooth page."
+      if (this.adapterSetup && this.runtime?.car_profile_source !== "override") return "Choose your adapter model first."
       if (!this.setup.parked) return "Use offroad mode or Park before starting pairing."
       if (this.runtime?.running) return "Disconnect from your car before pairing."
       return ""
@@ -582,6 +589,7 @@ export const AndroidAutoPage = {
       if (!this.setup?.enabled) return "Turn on Android Auto Support in step 1."
       if (!this.setup.serviceReady) return "Waiting for the Android Auto service to start."
       if (this.pairing?.active) return "Finish or cancel pairing first."
+      if (this.adapterSetup && this.runtime?.car_profile_source !== "override") return "Choose your adapter model in step 2 first."
       return ""
     },
     waitingForCar() {
@@ -605,6 +613,10 @@ export const AndroidAutoPage = {
       }
       if (carType === this.carType) return false
       return carType ? this.control("car_type", { carType }) : false
+    },
+    saveAdapter(index, value) {
+      const profile = Object.keys(ADAPTER_MODELS).find(key => ADAPTER_MODELS[key] === value)
+      return profile ? this.control("car_profile", { profile }) : false
     },
     saveApp(index, value) {
       const connection = Object.keys(HEAD_UNIT_APPS).find(key => HEAD_UNIT_APPS[key] === value) || "wireless"
@@ -795,10 +807,7 @@ export const AndroidAutoPage = {
             <GalaxySettingRow :row="carTypeRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveCarType" />
             <GxNotice v-if="wiredUnavailable" tone="warn">Wired AA is unavailable: {{ runtime.wired_blocked }}.</GxNotice>
             <GalaxySettingRow v-if="carType === 'app'" :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
-            <p v-if="showProfile" class="gx-note" role="status">
-              {{ runtime.car_profile_source === 'override' ? 'Using standard settings for this car.' : 'Tuned for ' + runtime.car_profile_label + ' (detected).' }}
-              <button type="button" class="gx-btn gx-btn--tonal" :disabled="busy || !setup.parked"
-                @click="control('car_profile', { profile: runtime.car_profile_source === 'override' ? '' : 'default' })">{{ runtime.car_profile_source === 'override' ? 'Use detected settings' : 'Use standard settings' }}</button></p>
+            <GalaxySettingRow v-if="adapterSetup" :row="adapterRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveAdapter" />
             <template v-if="carType === 'usb'">
               <GalaxySettingRow :row="wiredRow" :index="0" :busy="busy" :disabled="wiredDisabled"
                 :save-value="(index, value) => control('connection', { connection: value === 'On' ? 'wired' : 'wireless' })" />

@@ -36,6 +36,36 @@ def config(**values):
   return {"receiver_address": ADAPTER, "car_profile_override": "", "car_fingerprint": {}, **values}
 
 
+def test_aawireless_tuning_applies_only_when_chosen():
+  chosen = config(car_profile_override="aawireless", receiver_name="AAWireless-4F2A")
+  assert car_profiles.resolve(chosen) == ("aawireless", "override")
+  assert car_profiles.tuning(chosen) == {"connect_delay_s": 0.0, "max_window": 30, "phone_services": True, "phone_frames": True}
+  assert car_profiles.summary(chosen)["car_profile_label"] == "AAWireless v1"
+  for other in (config(receiver_name="AAWireless-4F2A"), config(car_profile_override="default")):
+    assert car_profiles.tuning(other) == car_profiles.DEFAULTS
+
+
+def test_leaving_the_adapter_setup_clears_the_adapter_model(sup):
+  sup.config["car_type"] = "adapter"
+  sup.set_car_profile("aawireless")
+  sup.set_car_type("builtin")
+  assert sup.config["car_profile_override"] == ""
+
+
+def test_an_adapter_setup_must_choose_its_model_before_pairing_or_starting(sup):
+  sup.config["car_type"] = "adapter"
+  assert sup.status()["adapter_choice_needed"] is True
+  with pytest.raises(RuntimeError, match="adapter model"):
+    sup.prepare_pairing()
+  with pytest.raises(RuntimeError, match="adapter model"):
+    sup.start()
+  sup.set_car_profile("default")
+  assert sup.status()["adapter_choice_needed"] is False
+  sup.config["car_type"] = "builtin"
+  sup.config["car_profile_override"] = ""
+  assert sup.status()["adapter_choice_needed"] is False
+
+
 def test_every_car_is_standard_without_rules():
   assert car_profiles.resolve(config(car_fingerprint={"address": ADAPTER, "car_make": "Hyundai"})) == ("default", "standard")
   assert car_profiles.tuning(config()) == car_profiles.DEFAULTS
@@ -51,7 +81,7 @@ def test_fingerprint_picks_a_profile_only_for_the_chosen_receiver(palisade):
 
 def test_tuning_keeps_only_known_keys(palisade):
   tuned = car_profiles.tuning(config(car_profile_override="palisade"))
-  assert tuned == {"connect_delay_s": 10.0}
+  assert tuned == {**car_profiles.DEFAULTS, "connect_delay_s": 10.0}
 
 
 def test_override_pins_a_profile_or_forces_standard(palisade):
@@ -171,3 +201,20 @@ def test_the_new_result_has_a_bugsink_report():
   attempt.step("status", state="connected", prompt=False, approved=True)
   event = br.pairing_event({**attempt.record, "result": "paired_not_selected", "duration_s": 5.0})
   assert event["fingerprint"] == ["android-auto-pairing", "paired_not_selected"] and event["level"] == "warning"
+
+
+@pytest.mark.parametrize("stored, kept", [({"car_type": "adapter"}, True), ({"car_type": "", "companion_address": "AA:BB:CC:DD:EE:02"}, True),
+                                          ({"car_type": "builtin", "companion_address": "AA:BB:CC:DD:EE:02"}, False), ({}, False),
+                                          ({"car_type": "adapter", "car_profile_override": "aawireless"}, True)])
+def test_adapter_owners_from_before_the_model_choice_keep_connecting(tmp_path, stored, kept):
+  path = tmp_path / "config.json"
+  path.write_text(json.dumps({"config_version": 6, **stored}))
+  config = identity_store.load_config(path)
+  assert (config["car_profile_override"] != "") is kept
+  assert config["car_profile_override"] == stored.get("car_profile_override", "default" if kept else "")
+
+
+def test_a_new_adapter_setup_is_not_migrated(tmp_path):
+  path = tmp_path / "config.json"
+  path.write_text(json.dumps({"config_version": identity_store.CONFIG_VERSION, "car_type": "adapter"}))
+  assert identity_store.load_config(path)["car_profile_override"] == ""
