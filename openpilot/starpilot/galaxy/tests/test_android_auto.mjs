@@ -178,6 +178,15 @@ assert.equal(wiredSetup.wiredDisabled, true, "another USB owner blocks enabling 
 wiredSetup.runtime.connection = "wired"
 assert.equal(wiredSetup.wiredDisabled, false, "the existing wired connection can still be disabled")
 
+// Jetlink only delays wired: it can be chosen, with a shortcut to switch Jetlink off.
+wiredSetup.runtime = { connection: "wireless", running: false, wired_busy: "Turn off Jetlink to use wired Android Auto" }
+assert.equal(wiredSetup.wiredDisabled, false, "Jetlink does not stop wired being chosen")
+assert.equal(wiredSetup.wiredJetlinkBusy, false, "no notice until wired is chosen")
+wiredSetup.runtime.connection = "wired"
+assert.equal(wiredSetup.wiredJetlinkBusy, true)
+assert.match(wiredSetup.connectReason, /Jetlink/)
+assert.match(AndroidAutoPage.template, /href="#\/manage_models"/)
+
 const uploadPage = page({ ...setup, enabled: false })
 const uploadCalls = []
 uploadPage.feed = {

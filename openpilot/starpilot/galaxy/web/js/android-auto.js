@@ -47,6 +47,8 @@ const ADDRESS = /^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$/
 const ADAPTER_MODELS = { aawireless: "AAWireless v1", default: "Other" }
 const HEAD_UNIT_APPS = { headunitpad: "HeadunitPad", openheadunit: "Open Headunit" }
 const HOTSPOT_LINK = `<a class="gx-link" href="#/galaxy">Galaxy Wi-Fi Hotspot</a>`
+const WIRED_JETLINK = `<p v-if="wiredJetlinkBusy" class="gx-note" role="status">Jetlink is using the USB-C port, so wired Android Auto can’t connect yet. Turn off Jetlink, then reconnect.
+  <a class="gx-btn gx-btn--tonal" href="#/manage_models">Open Jetlink settings</a></p>`
 const APP_SETUP = `
   <div v-if="app === 'HeadunitPad'" class="gx-note" role="note">
     <strong>HeadunitPad setup (iPad)</strong>
@@ -520,6 +522,7 @@ export const AndroidAutoPage = {
     appDisabled() {
       return !this.setup?.enabled || !this.setup.parked || !!this.pairing?.active || !!this.runtime?.running
     },
+    wiredJetlinkBusy() { return this.wired && !!this.runtime?.wired_busy },
     wiredDisabled() {
       return !this.setup?.enabled || !this.setup.parked || !!this.pairing?.active || !!this.runtime?.running ||
         (!!this.runtime?.wired_blocked && !this.wired)
@@ -590,6 +593,7 @@ export const AndroidAutoPage = {
       if (!this.setup.serviceReady) return "Waiting for the Android Auto service to start."
       if (this.pairing?.active) return "Finish or cancel pairing first."
       if (this.adapterSetup && this.runtime?.car_profile_source !== "override") return "Choose your adapter model in step 2 first."
+      if (this.wiredJetlinkBusy) return "Turn off Jetlink first."
       return ""
     },
     waitingForCar() {
@@ -748,6 +752,7 @@ export const AndroidAutoPage = {
             :save-value="(index, value) => control('auto_connect', { enabled: value === 'On' })" />
           <GalaxySettingRow :row="wiredRow" :index="0" :busy="busy" :disabled="wiredDisabled"
             :save-value="(index, value) => control('connection', { connection: value === 'On' ? 'wired' : 'wireless' })" />
+            ${WIRED_JETLINK}
           <GalaxySettingRow :row="appRow" :index="0" :busy="busy" :disabled="appDisabled" :save-value="saveApp" />
           ${APP_SETUP}
           <div class="gx-actions">
@@ -811,6 +816,7 @@ export const AndroidAutoPage = {
             <template v-if="carType === 'usb'">
               <GalaxySettingRow :row="wiredRow" :index="0" :busy="busy" :disabled="wiredDisabled"
                 :save-value="(index, value) => control('connection', { connection: value === 'On' ? 'wired' : 'wireless' })" />
+              ${WIRED_JETLINK}
             </template>
             <template v-else-if="carType === 'app'">
               ${APP_SETUP}

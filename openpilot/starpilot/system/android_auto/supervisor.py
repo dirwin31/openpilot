@@ -95,11 +95,8 @@ def _is_onroad() -> bool:
     return False
 
 
-def wired_blocker() -> str:
-  """Why wired USB must not take the comma's USB-C port, or "" when it is free.
-
-  Chestnut and Jetlink's computer link both use that port.
-  """
+def jetlink_blocker() -> str:
+  """Why wired USB cannot connect right now: Jetlink's computer link is using the USB-C port. Wired can still be chosen."""
   try:
     from openpilot.common.params import Params
     mode = Params().get("JetlinkMode")
@@ -107,6 +104,11 @@ def wired_blocker() -> str:
       return "Turn off Jetlink to use wired Android Auto"
   except Exception:
     pass
+  return ""
+
+
+def chestnut_blocker() -> str:
+  """Why wired USB cannot be chosen at all: a Chestnut is plugged into the comma's USB-C port."""
   try:
     from openpilot.starpilot.models.jetlink_adapter import adapter
     if adapter().chestnut_present():
@@ -114,6 +116,11 @@ def wired_blocker() -> str:
   except Exception:
     pass
   return ""
+
+
+def wired_blocker() -> str:
+  """Why wired USB must not take the comma's USB-C port, or "" when it is free."""
+  return jetlink_blocker() or chestnut_blocker()
 
 
 class Cancelled(Exception):
@@ -365,7 +372,8 @@ class Supervisor:
     status["adapter_choice_needed"] = self._adapter_choice_needed()
     status["configured_view"] = self.config["view"]
     status["connection"] = self.config["connection"]
-    status["wired_blocked"] = wired_blocker()
+    status["wired_blocked"] = chestnut_blocker()
+    status["wired_busy"] = jetlink_blocker()
     status["pairing_ready"] = self._pairing_active()
     status["auto_connect"] = bool(self.config["auto_connect"])
     status["dedicated_wifi_interface"] = bool(self.config["dedicated_wifi_interface"])
@@ -499,7 +507,7 @@ class Supervisor:
     """Choose wireless (Bluetooth + car Wi-Fi), wired (USB), or HeadunitPad or Open Headunit (on the Galaxy hotspot) projection."""
     if connection not in identity_store.CONNECTIONS:
       raise RuntimeError(f"Unknown connection {connection!r}")
-    if connection == "wired" and (reason := wired_blocker()):
+    if connection == "wired" and (reason := chestnut_blocker()):
       raise RuntimeError(reason)
     with self._lock:
       if self._thread is not None and self._thread.is_alive():
