@@ -40,7 +40,7 @@ def test_off_reads_nothing_of_jetlink():
   ({'running': None}, JetlinkStatus('USB host', 'preparing', port='connected')),
   ({'ready': True}, JetlinkStatus('USB host', 'prepared', port='connected')),
   ({'reason': 'service stopped'}, JetlinkStatus('USB host', 'unavailable', port='connected')),
-  ({'present': False}, JetlinkStatus('USB host', 'disconnected', port='device')),
+  ({'present': False}, JetlinkStatus('USB host', 'detected', port='device')),
   ({'present': False, 'port': 'empty'}, JetlinkStatus('USB host', 'disconnected')),
   ({'present': True, 'port': 'empty', 'active': True}, JetlinkStatus('USB host', 'disconnected')),
   ({'present': False, 'port': None}, JetlinkStatus('USB host', 'disconnected')),
@@ -115,3 +115,33 @@ def test_feed_stale_and_failed_reads_drop_latency_and_port():
   feed.read = lambda: 1 / 0
   feed.poll()
   assert feed.snapshot() == JetlinkStatus(state='unavailable')
+
+
+@pytest.mark.parametrize('stage', ['download', 'upload', 'compile', 'load', 'warm'])
+def test_preparation_progress_survives_snapshot(stage):
+  result = read(status(running='joining', progress={'stage': stage, 'frac': 0.42}))
+  assert result.stage == stage
+  assert result.percent == (42 if stage in ('download', 'upload') else None)
+
+
+@pytest.mark.parametrize('kw', [
+  {'active': True, 'running': 'running'}, {'running': 'ready'}, {'running': 'retrying'},
+  {'present': False}, {'port': 'empty'}, {'reason': 'service stopped'},
+])
+def test_live_state_overrides_old_progress(kw):
+  result = read(status(progress={'stage': 'warm', 'frac': 0.9}, **kw))
+  assert result.stage == ''
+  assert result.percent is None
+
+
+@pytest.mark.parametrize('frac', [None, True, '0.5', float('nan'), float('inf'), -1, 2])
+def test_invalid_transfer_fraction_is_not_displayed(frac):
+  result = read(status(progress={'stage': 'upload', 'frac': frac}))
+  assert result.stage == 'upload'
+  assert result.percent is None
+
+
+def test_progress_code_and_unknown_stage():
+  result = read(status(progress={'stage': 'connect', 'code': 'model_missing'}))
+  assert result.stage == 'model_missing'
+  assert read(status(progress={'stage': 'future_stage'})).stage == ''

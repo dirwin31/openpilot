@@ -40,6 +40,7 @@ class WidgetPlacement(TypedDict):
   width: NotRequired[int]
   height: NotRequired[int]
   opacity: NotRequired[int]
+  hideDisconnected: NotRequired[bool]
 
 
 class Widget(TypedDict):
@@ -61,6 +62,7 @@ class Widget(TypedDict):
   opacity: NotRequired[dict[str, int]]
   anchorShift: NotRequired[float]
   expandable: NotRequired[bool]
+  hideDisconnectedToggle: NotRequired[bool]
 
 
 class LayoutProfile(TypedDict):
@@ -188,7 +190,8 @@ JETLINK_WIDGET = "jetlink_status"
 JETLINK_SIZE = (420, 84)
 JETLINK_OPACITY = (0, 100, 85)  # percent: min, max, default
 _jetlink = _widget("Jetlink status", JETLINK_WIDGET, *JETLINK_SIZE, 30, 650)
-_jetlink["default"].update(enabled=False, opacity=JETLINK_OPACITY[2])
+_jetlink["default"].update(enabled=False, opacity=JETLINK_OPACITY[2], hideDisconnected=False)
+_jetlink["hideDisconnectedToggle"] = True
 _jetlink["opacity"] = dict(zip(("min", "max", "default"), JETLINK_OPACITY, strict=True))
 _jetlink["note"] = "Jetlink setting, connection, remote model use and host processing time. Opacity sets the card background."
 PROFILES["large"]["widgets"][JETLINK_WIDGET] = _jetlink
@@ -514,6 +517,8 @@ def validate_document(value):
       raise ValueError("Invalid widget IDs")
     for key, widget in data["widgets"].items():
       placement = layout[key]
+      if key == JETLINK_WIDGET and type(placement) is dict:
+        placement = {"hideDisconnected": False, **placement}
       bounds = widget_bounds(profile, key)
       if value['version'] < 8 and key in SPEED_LAYOUT_V7[profile]:
         bounds = data['bounds']
@@ -523,6 +528,10 @@ def validate_document(value):
         expected |= {"width", "height", "opacity"}
       elif widget.get("opacity"):
         expected.add("opacity")
+      if key == JETLINK_WIDGET:
+        expected.add("hideDisconnected")
+        if type(placement) is dict and type(placement["hideDisconnected"]) is not bool:
+          raise ValueError("Invalid hide when disconnected setting")
       if type(placement) is not dict or set(placement) != expected or type(placement["enabled"]) is not bool:
         raise ValueError("Invalid widget placement")
       if widget.get("box"):
