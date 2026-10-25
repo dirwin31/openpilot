@@ -544,5 +544,10 @@ idle.runtime = { car_type: 'builtin', running: true, state: 'streaming' }
 assert.equal(idle.appDisabled, true)
 assert.match(idle.pairingReason, /Disconnect/)
 // The home card offers the setup type; the app picker belongs to App only.
-assert.match(AndroidAutoPage.template, /gx-aa-home[\s\S]*?:row="carTypeRow"[\s\S]*?v-if="carType === 'app'">\s*<GalaxySettingRow :row="appRow"/)
+assert.match(AndroidAutoPage.template, /v-if="app" :row="appRow"/)
+assert.equal(page(setup).homeTitle, 'car')
+const wiredHome = page(setup); wiredHome.runtime = { car_type: 'usb', connection: 'wired' }
+assert.equal(wiredHome.homeTitle, 'Wired Android Auto')
+const appHome = page(setup); appHome.runtime = { car_type: 'app', connection: 'headunitpad' }
+assert.equal(appHome.homeTitle, 'Headunit Emulator')
 console.log('Android Auto page: setup type, adapter checklist and adapter model passed')
