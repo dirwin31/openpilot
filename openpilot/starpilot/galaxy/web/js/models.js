@@ -491,11 +491,11 @@ export const ModelsPage = {
               <label for="gx-jetlink-mode" class="gx-row__label">Remote model connection</label>
               <GalaxySelect id="gx-jetlink-mode" class="gx-field" :value="pendingChoice?.action === 'jetlink' ? pendingChoice.value : status.jetlink.mode" :disabled="!actionAvailable('jetlink')" @change="configureJetlink($event.target.value)">
                 <option value="off">Off</option>
-                <option value="usb" :disabled="!status.jetlink.supported || status.jetlink.chestnut">USB host</option>
-                <option value="ios" :disabled="!status.jetlink.supported || status.jetlink.chestnut">Mobile device (iOS)</option>
+                <option value="usb" :disabled="!status.jetlink.supported || status.jetlink.chestnut">USB host (Android / PC / Jetson)</option>
+                <option value="ios" :disabled="!status.jetlink.supported || status.jetlink.chestnut">iPhone / iPad</option>
               </GalaxySelect>
             </div>
-            <p class="gx-model-reason">USB host supports computers, Jetson devices, and Android mobile devices. Use Mobile device (iOS) for the iOS app connection.</p>
+            <p class="gx-model-reason">Choose USB host for Android phones and tablets, computers, or Jetson devices. Choose iPhone / iPad for the Jetlink iOS app.</p>
             <p class="gx-note" role="status"><span class="gx-chip">{{ status.jetlink.state }}</span><span v-if="status.jetlink.active"> · running: {{ status.jetlink.activeModel || 'Remote model' }}</span><span v-else-if="status.jetlink.model"> · selected: {{ status.jetlink.model }} · not in use</span></p>
             <p v-if="status.jetlink.progress">{{ status.jetlink.progress }}</p>
             <p v-if="status.jetlink.reason" class="gx-model-reason">{{ status.jetlink.reason }}</p>
