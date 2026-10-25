@@ -513,14 +513,23 @@ const namedCalls = []
 named.control = (action, extra) => namedCalls.push([action, extra])
 named.saveCarType(0, 'Wireless adapter')
 assert.deepEqual(namedCalls, [['car_type', { carType: 'adapter' }]])
-// A tuned car profile only shows up when one is detected or pinned.
-const profiled = page(setup)
-assert.equal(profiled.showProfile, false, 'standard cars see nothing')
-profiled.runtime = { car_profile_label: 'Hyundai Palisade', car_profile_source: 'detected' }
-assert.equal(profiled.showProfile, true)
-profiled.runtime = { car_profile_label: '', car_profile_source: 'override' }
-assert.equal(profiled.showProfile, true, 'a pinned standard profile can be undone')
+// The adapter model picks the AAWireless tuning; any other adapter keeps the regular pairing.
+const dongle = page(setup)
+dongle.runtime = { car_type: 'adapter', car_profile: 'default', car_profile_source: 'standard' }
+assert.equal(dongle.adapterRow.value, 'Choose one', 'no default: the owner picks')
+assert.match(dongle.pairingReason, /adapter model/)
+dongle.runtime = { car_type: 'adapter', car_profile: 'default', car_profile_source: 'override' }
+assert.equal(dongle.adapterRow.value, 'Other')
+assert.deepEqual(dongle.adapterRow.choices, ['AAWireless v1', 'Other'])
+dongle.runtime = { car_type: 'adapter', car_profile: 'aawireless', car_profile_source: 'override' }
+assert.equal(dongle.adapterRow.value, 'AAWireless v1')
+const dongleCalls = []
+dongle.control = (action, extra) => dongleCalls.push([action, extra])
+dongle.saveAdapter(0, 'Other')
+dongle.saveAdapter(0, 'AAWireless v1')
+assert.deepEqual(dongleCalls, [['car_profile', { profile: 'default' }], ['car_profile', { profile: 'aawireless' }]])
+assert.match(AndroidAutoPage.template, /adapterSetup" :row="adapterRow"/)
 assert.match(AndroidAutoPage.template, /What’s in your car\?|carTypeRow/)
 assert.match(AndroidAutoPage.template, /runtime\?\.pairing_note/)
 assert.match(AndroidAutoPage.template, /'Find ' \+ findLabel/)
-console.log('Android Auto page: setup type, adapter checklist and car profile line passed')
+console.log('Android Auto page: setup type, adapter checklist and adapter model passed')

@@ -83,7 +83,7 @@ def load_identity(directory: Path | None = None, now: datetime | None = None) ->
                   expires.isoformat() if expires is not None else "unknown", days_left)
 
 
-CONFIG_VERSION = 6
+CONFIG_VERSION = 7
 # Before config versions, every save wrote these defaults, which pinned projection
 # at 12 fps / 4000 kbps. Unversioned files holding exactly them get today's defaults.
 LEGACY_DEFAULTS = {"fps": 12, "bitrate_kbps": 4000}
@@ -132,7 +132,7 @@ DEFAULT_CONFIG = {
   "auto_connect": True,        # start projection on its own when the chosen car is on (onroad, or it reaches the comma)
   "rfcomm_cache": {},          # car address -> Android Auto RFCOMM channel learned over SDP, to skip discovery next time
   "car_type": "",              # wireless setup shown in Galaxy: "builtin" or "adapter"; "" = work it out from the saved companion car
-  "car_profile_override": "",  # "" = pick by fingerprint; "default" = standard behaviour; otherwise a profile id from car_profiles
+  "car_profile_override": "",  # "" = pick by fingerprint (a wireless adapter must choose); "default" = standard; otherwise a car_profiles id
   "car_fingerprint": {},       # what the chosen car's head unit reported last time, used to pick a profile before it connects
 }
 
@@ -152,6 +152,10 @@ def load_config(path: Path | None = None) -> dict:
         stored = {key: value for key, value in stored.items() if key not in VERIFY_RESET}
       if not isinstance(version, int) or version < 6:
         stored = {key: value for key, value in stored.items() if key not in DEDICATED_WIFI_RESET}
+      if not isinstance(version, int) or version < 7:  # adapter owners from before the adapter model choice keep connecting
+        on_adapter = stored.get("car_type") == "adapter" or (not stored.get("car_type") and stored.get("companion_address"))
+        if on_adapter and not stored.get("car_profile_override"):
+          stored = {**stored, "car_profile_override": "default"}
       config.update({key: value for key, value in stored.items() if key in DEFAULT_CONFIG and isinstance(value, type(DEFAULT_CONFIG[key]))})
   except (OSError, ValueError):
     pass

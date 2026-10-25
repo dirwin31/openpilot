@@ -68,6 +68,17 @@ INPUT_EVENT = 0x8001
 INPUT_BINDING_REQUEST = 0x8002
 INPUT_BINDING_RESPONSE = 0x8003
 
+# Car data (sensor) and Bluetooth channels, opened the way a phone does.
+SENSOR_SERVICE = 2
+BLUETOOTH_SERVICE = 6
+SENSOR_START_REQUEST = 0x8001
+SENSOR_START_RESPONSE = 0x8002
+SENSOR_EVENT = 0x8003
+BLUETOOTH_PAIRING_REQUEST = 0x8001
+BLUETOOTH_PAIRING_RESPONSE = 0x8002
+BLUETOOTH_AUTH_DATA = 0x8003
+SENSOR_NIGHT, SENSOR_DRIVING_STATUS = 10, 13
+
 CODEC_H264_BP = 3
 SETUP_STATUS_READY = 2
 FOCUS_PROJECTED = 1
@@ -116,6 +127,18 @@ def codec_config(access_unit: bytes) -> bytes:
     if match.end() < end and access_unit[match.end()] & 31 in (7, 8):
       units.append(b"\x00\x00\x00\x01" + access_unit[match.end():end])
   return b"".join(units)
+
+
+def wire_frame(access_unit: bytes, *, drop_config: bool) -> bytes:
+  """The picture NAL units as Android's encoder sends them: no AUD, and no SPS/PPS when the codec config went separately."""
+  starts = list(START_CODE.finditer(access_unit))
+  drop = {9, 7, 8} if drop_config else {9}
+  units = []
+  for index, match in enumerate(starts):
+    end = starts[index + 1].start() if index + 1 < len(starts) else len(access_unit)
+    if match.end() < end and access_unit[match.end()] & 31 not in drop:
+      units.append(b"\x00\x00\x00\x01" + access_unit[match.end():end])
+  return b"".join(units) or access_unit
 
 
 @dataclass(frozen=True)
@@ -469,6 +492,16 @@ class Session:
           item["input_config"] = parse_input_config(one(fields, 4))
         except ValueError:
           item["input_config"] = InputConfig()
+      if isinstance(one(fields, SENSOR_SERVICE), bytes):
+        try:
+          item["sensors"] = [one(parse_fields(s), 1) for s in parse_fields(one(fields, SENSOR_SERVICE)).get(1, []) if isinstance(s, bytes)]
+        except ValueError:
+          item["sensors"] = []
+      if isinstance(one(fields, BLUETOOTH_SERVICE), bytes):
+        try:
+          item["bluetooth"] = parse_bluetooth(one(fields, BLUETOOTH_SERVICE))
+        except ValueError:
+          item["bluetooth"] = {}
       channels.append(item)
     # Everything but the channel list: make, model, year, software and, on newer units, headunit_info.
     head_unit = redact_head_unit(describe_fields({number: values for number, values in response.items() if number != 1}))
@@ -497,6 +530,33 @@ class Session:
 SDR_VEHICLE_ID = 5          # ServiceDiscoveryResponse.vehicle_id
 HEAD_UNIT_INFO = 17         # ServiceDiscoveryResponse.headunit_info
 HEAD_UNIT_INFO_VEHICLE_ID = 4
+
+
+def packed_varints(value) -> list[int]:
+  """A repeated enum: packed bytes on newer units, one varint per field on older ones."""
+  if isinstance(value, int):
+    return [value]
+  out, pos = [], 0
+  while pos < len(value):
+    number, shift = 0, 0
+    while True:
+      if pos >= len(value) or shift > 63:
+        raise ValueError("Truncated packed varint")
+      byte = value[pos]
+      pos += 1
+      number |= (byte & 127) << shift
+      shift += 7
+      if byte < 128:
+        break
+    out.append(number)
+  return out
+
+
+def parse_bluetooth(data: bytes) -> dict:
+  fields = parse_fields(data)
+  address = one(fields, 1)
+  methods = [m for value in fields.get(2, []) for m in packed_varints(value)]
+  return {"car_address": address.decode(errors="replace") if isinstance(address, bytes) else "", "pairing_methods": methods}
 
 
 def redact_head_unit(described: dict) -> dict:
@@ -549,6 +609,13 @@ class ProjectionSession(Session):
     self.epoch_acked = 0
     self.video_confirmed = False
     self.input_channel: int | None = None
+    self.max_window = self.MAX_WINDOW  # raised by the supervisor for adapters that need the car's full window
+    self.phone_services = False  # open the car-data and Bluetooth channels like a phone (adapter profile)
+    self.phone_frames = False  # send picture NAL units only (adapter profile)
+    self.phone_address = ""  # this comma's Bluetooth address, for the pairing request
+    self.sensor_channel: int | None = None
+    self.sensor_events: dict[int, int] = {}
+    self.bluetooth_channel: int | None = None
     self.nav = None  # NavStatus, attached by the supervisor when the head unit offers turn-by-turn
     self.audio = None  # MediaAudio, attached by the supervisor when Spotify plays through Android Auto
     self.input_events = 0
@@ -567,6 +634,8 @@ class ProjectionSession(Session):
     self.mode = choose_video_mode(self.channels)
     self.open_video()
     self.open_input()
+    if self.phone_services:
+      self.open_phone_services()
     self.request_projection()
     return self.mode
 
@@ -585,7 +654,7 @@ class ProjectionSession(Session):
     configs = setup.get(3, [])
     if configs and mode.config_index not in configs:
       raise ValueError(f"Head unit did not accept video configuration {mode.config_index}: {json_fields(setup)}")
-    self.window = min(window, self.MAX_WINDOW)
+    self.window = min(window, self.max_window)
     self.event("video_setup", mode=mode.as_dict(), window=window, used_window=self.window)
 
   def open_input(self) -> None:
@@ -608,6 +677,36 @@ class ProjectionSession(Session):
                  touch=f"{config.touch_width}x{config.touch_height}")
     except (TimeoutError, ValueError) as error:
       self.event("input_unavailable", error=str(error))
+
+  def _open_optional(self, channel: dict, name: str) -> bool:
+    try:
+      self.send(channel["id"], MSG_CHANNEL_OPEN_REQUEST, field(1, 0) + field(2, channel["id"]), control=True)
+      opened = parse_fields(self.wait_for(channel["id"], MSG_CHANNEL_OPEN_RESPONSE, timeout=3.0))
+      if signed(one(opened, 1)) != 0:
+        raise ValueError(f"channel open rejected: {signed(one(opened, 1))}")
+      return True
+    except (TimeoutError, ValueError) as error:
+      self.event(f"{name}_unavailable", channel=channel["id"], error=str(error))
+      return False
+
+  def open_phone_services(self) -> None:
+    """Open the car-data and Bluetooth channels before asking for the screen, as a phone does. Failures are not fatal."""
+    sensors = next((ch for ch in self.channels if "sensors" in ch), None)
+    if sensors is not None and self._open_optional(sensors, "sensors"):
+      self.sensor_channel = sensors["id"]
+      # Only what decides whether the screen may project; location would put the car's position in the session log.
+      wanted = [kind for kind in (SENSOR_DRIVING_STATUS, SENSOR_NIGHT) if kind in sensors["sensors"]]
+      for kind in wanted:
+        self.send(sensors["id"], SENSOR_START_REQUEST, field(1, kind) + field(2, 0))
+      self.event("sensors_opened", channel=sensors["id"], requested=wanted)
+    bluetooth = next((ch for ch in self.channels if "bluetooth" in ch), None)
+    if bluetooth is not None and self._open_optional(bluetooth, "bluetooth"):
+      self.bluetooth_channel = bluetooth["id"]
+      methods = bluetooth["bluetooth"].get("pairing_methods") or []
+      if self.phone_address:
+        self.send(bluetooth["id"], BLUETOOTH_PAIRING_REQUEST, field(1, self.phone_address) + field(2, methods[0] if methods else 2))
+      self.event("bluetooth_opened", channel=bluetooth["id"], phone_address=self.phone_address,
+                 car_address=bluetooth["bluetooth"].get("car_address", ""), pairing_methods=methods)
 
   def request_projection(self) -> None:
     """Ask for display focus; the Mazda donor needed this, DHU grants it unsolicited."""
@@ -693,6 +792,24 @@ class ProjectionSession(Session):
         self.event("input_bound", status=signed(one(fields, 1, 0)))
       else:
         self.ignored("input_ignored", channel, kind, data)
+    elif channel is not None and channel == self.sensor_channel:
+      if kind == SENSOR_START_RESPONSE:
+        self.event("sensor_started", status=signed(one(fields, 1, 0)))
+      elif kind == SENSOR_EVENT:
+        for number, values in fields.items():
+          first = number not in self.sensor_events
+          self.sensor_events[number] = self.sensor_events.get(number, 0) + len(values)
+          if first:
+            self.event("sensor_event", field=number, data=describe_fields(fields))
+      else:
+        self.ignored("sensor_ignored", channel, kind, data)
+    elif channel is not None and channel == self.bluetooth_channel:
+      if kind == BLUETOOTH_PAIRING_RESPONSE:
+        self.event("bluetooth_pairing_response", already_paired=one(fields, 1), status=signed(one(fields, 2, 0)))
+      elif kind == BLUETOOTH_AUTH_DATA:
+        self.event("bluetooth_auth_data", data=describe_fields(fields))
+      else:
+        self.ignored("bluetooth_ignored", channel, kind, data)
     else:
       self.ignored("channel_ignored", channel, kind, data)
 
@@ -803,12 +920,15 @@ class ProjectionSession(Session):
       raise ValueError("A fresh media epoch must start with SPS/PPS and an IDR frame")
     assert self.mode is not None
     fragments = 0
+    config = b""
     if self.needs_keyframe:
       config = codec_config(data)
       if config:
         fragments += self.send(self.mode.channel, AV_MEDIA_CODEC_CONFIG, config)
         if not self.fragment_acks:
           self.config_ack_slack += 1
+    if self.phone_frames:
+      data = wire_frame(data, drop_config=bool(config))
     fragments += self.send(self.mode.channel, AV_MEDIA_WITH_TIMESTAMP, struct.pack(">Q", timestamp_us) + data)
     if self.fragment_acks:
       self.frame_fragments.append(fragments)
@@ -839,4 +959,5 @@ class ProjectionSession(Session):
   def stats(self) -> dict:
     return {"frames_sent": self.frames_sent, "frames_acked": self.acked, "pending": self.unacked,
             "focus_epoch": self.focus_epoch, "focused": self.focused, "max_ack_ms": round(self.max_ack_seconds * 1000),
-            "input_events": self.input_events, "touch": self.touch is not None}
+            "input_events": self.input_events, "touch": self.touch is not None,
+            "sensor_events": sum(self.sensor_events.values())}

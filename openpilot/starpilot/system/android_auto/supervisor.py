@@ -353,6 +353,7 @@ class Supervisor:
     status["pairing_note"] = self._pairing_note
     status["car_type"] = self.car_type()
     status.update(car_profiles.summary(self.config))
+    status["adapter_choice_needed"] = self._adapter_choice_needed()
     status["configured_view"] = self.config["view"]
     status["connection"] = self.config["connection"]
     status["wired_blocked"] = wired_blocker()
@@ -387,10 +388,15 @@ class Supervisor:
       identity_store.save_config(self.config)
     self.log("dedicated_wifi_selected", enabled=bool(enabled))
 
+  def _adapter_choice_needed(self) -> bool:
+    return self.car_type() == "adapter" and not self.config.get("car_profile_override")
+
   def start(self, trigger: str = "manual") -> None:
     with self._lock:
       if not self._projection_enabled():
         raise RuntimeError("Android Auto is disabled")
+      if self._adapter_choice_needed():
+        raise RuntimeError("Choose your adapter model (AAWireless v1 or Other) in Galaxy first")
       if self.config["connection"] == "wired" and (reason := wired_blocker()):
         raise RuntimeError(reason)
       if self._thread is not None and self._thread.is_alive():
@@ -512,6 +518,8 @@ class Supervisor:
     if car_type in ("builtin", "adapter"):
       with self._lock:
         self.config["car_type"] = car_type
+        if car_type != "adapter":
+          self.config["car_profile_override"] = ""  # the adapter model only applies to a wireless adapter
         identity_store.save_config(self.config)
     self.log("car_type_selected", car_type=car_type)
 
@@ -533,6 +541,8 @@ class Supervisor:
 
   def prepare_pairing(self, seconds: float = 180.0) -> None:
     """Present as a phone (HFP gateway, smartphone class) while the car pairs."""
+    if self._adapter_choice_needed():
+      raise RuntimeError("Choose your adapter model (AAWireless v1 or Other) in Galaxy first")
     if self._bluez_factory is None and (self._source_session is None or self._shared_bluetooth_owner is None or
                                         not self._shared_bluetooth_owner.session_valid(self._source_session)):
       raise RuntimeError('Current Galaxy pairing authorization required')
@@ -788,8 +798,9 @@ class Supervisor:
     if not self._no_aa_since:
       self._no_aa_since = now
     elif now - self._no_aa_since >= NO_ANDROID_AUTO_WAIT and not self._pairing_note:
-      self._pairing_note = (f"{device['name'] or 'This device'} paired, but it doesn't offer wireless Android Auto. "
-                            "Using a wireless adapter? Choose Wireless adapter, pair the adapter here, then connect your car on the Bluetooth page.")
+      name = device["name"] or "This device"
+      hint = "Using a wireless adapter? Choose Wireless adapter, pair the adapter here, then connect your car on the Bluetooth page."
+      self._pairing_note = f"{name} paired, but it doesn't offer wireless Android Auto. {hint}"
       self._pairing_step("no_android_auto")
       self.log("pairing_no_android_auto", address=device["address"])
 
@@ -1352,12 +1363,25 @@ class Supervisor:
         self._wait(1.0 + attempt * 0.5)
     raise RuntimeError(f"Car did not accept the projection connection: {last_error}")
 
+  def _adapter_address(self) -> str:
+    """This comma's Bluetooth address for the head unit's pairing request; empty when BlueZ is not up."""
+    try:
+      return str(self._bluez.adapter()[1].get("Address", "")).upper() if self._bluez is not None else ""
+    except Exception:  # DBus errors vary; the pairing request is optional
+      return ""
+
   def _project(self, result, lease, ident, connect=None, fragment_acks: bool = False) -> None:
     config = self.config
     sock = connect() if connect is not None else self._connect_tcp(result, lease)
     ca = ident.root if config.get("verify_head_unit", False) else None
     session = ProjectionSession(sock, ident.cert, ident.key, self.log, ca)
     session.fragment_acks = fragment_acks
+    tuning = car_profiles.tuning(config)
+    session.max_window = tuning["max_window"]
+    session.phone_frames = tuning["phone_frames"]
+    if tuning["phone_services"]:
+      session.phone_services = True
+      session.phone_address = self._adapter_address()
     self._stage("authenticating")
     session.authenticate()
     self._stage("negotiating")
