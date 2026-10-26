@@ -193,14 +193,25 @@ export const LayoutWidgetPreview = {
           style="filter: drop-shadow(2px 2px 1px #000000aa)">{{ clock24Hour ? '18:00' : '12:00 PM' }}</text>
       </template>
       <g v-else-if="widget.kind === 'now_playing'">
-        <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
-        <circle :cx="widget.height / 2" :cy="widget.height / 2" r="30" fill="#c7aef7" />
-        <rect :x="widget.height / 2 - 9" :y="widget.height / 2 - 12" width="6" height="24" rx="3" fill="#0f0d17" />
-        <rect :x="widget.height / 2 + 3" :y="widget.height / 2 - 12" width="6" height="24" rx="3" fill="#0f0d17" />
-        <text :x="widget.height + 4" y="40" font-size="30" font-weight="600" fill="#f5f2fc">Midnight City</text>
-        <text :x="widget.height + 4" y="68" font-size="22" fill="#b8b2c8">M83</text>
-        <rect :x="widget.height + 4" :y="widget.height - 16" :width="widget.width - widget.height * 1.5 - 4" height="4" rx="2" fill="#ffffff" fill-opacity=".2" />
-        <rect :x="widget.height + 4" :y="widget.height - 16" :width="(widget.width - widget.height * 1.5 - 4) * .38" height="4" rx="2" fill="#c7aef7" />
+        <defs><linearGradient id="gx-np-cover" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8a3a52" /><stop offset="1" stop-color="#3a2340" /></linearGradient></defs>
+        <rect x="0" y="0" :width="widget.width" :height="widget.height" rx="64" fill="url(#gx-np-cover)" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
+        <text x="46" y="40" font-size="20" font-weight="600" fill="#d6d2e0">Starpilot Auto</text>
+        <path :transform="'translate(' + (widget.width - 58) + ' 34)'" d="M-13 -10 L-13 10 L4 0 Z" fill="#f5f2fc" />
+        <path :transform="'translate(' + (widget.width - 58) + ' 34)'" d="M6 -14 A16 16 0 0 1 6 14" fill="none" stroke="#f5f2fc" stroke-width="3.5" />
+        <text :x="widget.width / 2" y="80" text-anchor="middle" font-size="28" font-weight="600" fill="#f5f2fc">Midnight City  •  M83</text>
+        <rect x="50" y="118" :width="widget.width - 100" height="8" rx="4" fill="#ffffff" fill-opacity=".24" />
+        <rect x="50" y="118" :width="(widget.width - 100) * .38" height="8" rx="4" fill="#f0506e" />
+        <circle :cx="50 + (widget.width - 100) * .38" cy="122" r="15" fill="#ffffff" /><circle :cx="50 + (widget.width - 100) * .38" cy="122" r="12" fill="#f0506e" />
+        <text x="50" y="158" font-size="18" fill="#d6d2e0">01:32</text>
+        <text :x="widget.width - 50" y="158" text-anchor="end" font-size="18" fill="#d6d2e0">04:03</text>
+        <g v-for="index in [1, 2, 3]" :key="index" :transform="'translate(' + (widget.width / 2 + (index - 2) * widget.width * .16) + ' 214)'">
+          <circle r="36" fill="#ffffff" fill-opacity=".18" />
+          <path v-if="index === 1" d="M10 -13 L10 13 L-8 0 Z M-14 -13 H-9 V13 H-14 Z" fill="#f5f2fc" />
+          <path v-else-if="index === 3" d="M-10 -13 L-10 13 L8 0 Z M9 -13 H14 V13 H9 Z" fill="#f5f2fc" />
+          <path v-else d="M-10 -13 H-4 V13 H-10 Z M4 -13 H10 V13 H4 Z" fill="#f5f2fc" />
+        </g>
+        <path :transform="'translate(' + (widget.width / 2 - widget.width * .32) + ' 214)'" d="M-15 -10 L13 10 M-15 10 L13 -10" fill="none" stroke="#f5f2fc" stroke-width="4" />
+        <path :transform="'translate(' + (widget.width / 2 + widget.width * .32) + ' 214)'" d="M-14 4 V-8 H12 M14 -4 V8 H-12 M7 -14 L13 -8 L7 -2 M-7 2 L-13 8 L-7 14" fill="none" stroke="#f5f2fc" stroke-width="4" />
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
