@@ -2,13 +2,13 @@
 
 `./heatdeath` exports the joined replay fixture used during StarPilot Controls CPU optimization. It runs actual Card, SelfdriveD, Controls, RadarD and planner processes, feeds recorded CAN and peer messages at their recorded cadence, and captures bounded timing and native-safety evidence. It changes only owned benchmark processes' affinity. It does not change production scheduling, IRQ affinity, CPU governors, online cores, installed preferences or source files.
 
-This first export retains the existing **active-long Ioniq 6 steady-state fixture**. It is a CPU-placement benchmark, not a general vehicle replay test. It explicitly restores the recorded remembered cruise speed and post-ECU-handoff initialization phase; it never restores an armed latch, command, native permission or healthy receipt. Discovery, physical ECU handoff and startup performance are excluded. Native permission must be earned by fresh replay inputs.
+The steady-state fixture supports the existing **active-long Ioniq 6** contract and a narrowly specified **radarless Honda Civic 2022 active-long** recording (flags 2060, alternative experience 32, one Honda Bosch safety configuration with parameter 10). Other Honda configurations are rejected. It is a CPU-placement benchmark, not a general vehicle replay test. It explicitly restores the recorded remembered cruise speed and initialization phase; it never restores an armed latch, command, native permission or healthy receipt. The Honda checkpoint restores only `ci_initialized`; Ioniq-specific handoff flags remain untouched. Discovery, physical ECU handoff and startup performance are excluded. Native permission must be earned by fresh replay inputs.
 
 ## Requirements
 
 - A parked, offroad Linux ARM64 comma bench device with the normal compiled StarPilot dependencies and development compiler installed. Build the checkout normally before preparation. Execution requires root for the production realtime setup and private namespaces.
 - A clean source checkout. A bundle is pinned to that exact revision and source hashes. Prepare/build a separate bundle when comparing a different revision.
-- Local full rlogs, including startup CarParams, from a compatible Ioniq 6 active-long drive. Recordings and compiled binaries are not bundled in Git.
+- Local full rlogs, including startup CarParams, from one of the exact supported configurations above. Recordings and compiled binaries are not bundled in Git.
 - An explicit JSON preference snapshot, mapping parameter names to base64 bytes. Provide the actual intended benchmark settings, including `OpenpilotEnabledToggle=1` and `IsOffroad=0` for the **private** Params namespace. Production readiness/CarParams keys cannot be supplied. No physical device preferences are changed.
 - Explicit source clock context: the source boot-minus-monotonic offset and whether `deviceMotion` timestamps use monotonic or boottime. Do not infer this from your current device clock.
 
@@ -29,6 +29,13 @@ Use a 60-second window with two clean, stable cruise-speed samples immediately b
 
 sudo ./heatdeath build --bundle /data/bench/heatdeath-bundle
 ```
+
+For the Civic active-long development profile, use `build --allow-debug-safety`.
+This explicitly compiles the private test library with the same `ALLOW_DEBUG`
+profile support used by development safety tests and records that choice in
+`native/receipt.json`. Without it the native library excludes this Honda
+longitudinal profile and the host correctly refuses its missing acknowledgement.
+It never builds or installs Panda firmware.
 
 Use zero boot offset only when verified appropriate for the recording. The bundle retains input hashes, actual CarParams, source/helper hashes and the explicit checkpoint. Build compiles a virtual transport around current production pandad and its safety test library. USB/SPI implementations are not linked; it cannot send commands to the vehicle. Build output remains in the external bundle, with a receipt and logs.
 
@@ -59,5 +66,7 @@ The reserve is an **optional synthetic CFS CPU workload**, with measured dose an
 A completed command is not a headroom or steering pass. Check native RX/TX admission, sustained actual active output, source-feed completeness/lateness, source ages, lag episodes and scheduling records together. The fixture refuses unsupported/mixed CarParams and stale native/authority evidence; do not disable those checks to obtain prettier timings. Timing rings that overflow are rejected by the report.
 
 Recorded model and driver-monitoring messages are inputs. Actual model inference, camera decoding, audio and Android Auto are not launched by this harness. This benchmark cannot alone establish real co-load headroom, ECU acceptance, physical firmware-heartbeat equivalence, or road behavior. The bounded observer and virtual endpoint themselves consume CPU and RAM; include their cost.
+
+For Android Auto or Soloist placement studies, measure the actual connected projection and actively playing audio separately. Include renderer delivery rate, frame age, encoder time, transport acknowledgements, audio drops and per-thread scheduling wait. A paused or logged-out Soloist process is not an audio workload. The camera-driven road view has a 20 Hz source even when the encoder advertises 30 FPS. Do not interpret the encoder setting as 30 unique camera frames per second, or choose a core from a Controls-only replay result.
 
 Runs stop if the physical device leaves offroad/disengaged state and have a 180-second supervisor bound. Cleanup targets only actors carrying that run's unique token and only the journaled private message namespace. A per-device lock prevents concurrent Heatdeath runs/builds. It does not coordinate other developers' unrelated bench harnesses; keep the test device exclusively assigned while measuring. Interrupt normally with Ctrl-C; do not delete another active run's files.

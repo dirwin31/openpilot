@@ -1,6 +1,7 @@
 """Portable qualification of the exported benchmark control plane and reporting."""
 
 import hashlib
+import errno
 import importlib.util
 import json
 import os
@@ -22,7 +23,7 @@ package_spec = importlib.util.spec_from_file_location('heatdeath_bench_tests_pac
 package = importlib.util.module_from_spec(package_spec)
 sys.modules[package_spec.name] = package
 package_spec.loader.exec_module(package)
-from heatdeath_bench_tests_package import actor, heatdeath as cli, placement, report
+from heatdeath_bench_tests_package import actor, heatdeath as cli, placement, report, vehicle
 
 install = actor.install
 apply, load_plan, parked = placement.apply, placement.load_plan, placement.parked
@@ -30,6 +31,22 @@ phase, summarize = report.phase, report.summarize
 
 
 class HeatdeathTests(unittest.TestCase):
+  def test_honda_checkpoint_is_exact_and_never_restores_hyundai_authority(self):
+    cp = types.SimpleNamespace(brand='honda', carFingerprint='HONDA_CIVIC_2022',
+                              openpilotLongitudinalControl=True, pcmCruise=False, passive=False,
+                              dashcamOnly=False, notCar=False, flags=2060, alternativeExperience=32,
+                              safetyConfigs=[types.SimpleNamespace(safetyModel='hondaBosch', safetyParam=10)])
+    module = types.SimpleNamespace(eligible=lambda cp: False)
+    with patch.dict(sys.modules, {'openpilot.starpilot.longitudinal.ioniq6_start': module}):
+      kind = vehicle.checkpoint_kind(cp)
+      self.assertEqual(vehicle.restored_fields(kind), {'ci_initialized': True})
+      for key, value in (('carFingerprint', 'HONDA_ACCORD'), ('flags', 4), ('pcmCruise', True),
+                         ('passive', True), ('openpilotLongitudinalControl', False), ('alternativeExperience', 0)):
+        with self.subTest(key=key), patch.object(cp, key, value), self.assertRaises(ValueError):
+          vehicle.checkpoint_kind(cp)
+      with patch.object(cp.safetyConfigs[0], 'safetyParam', 2), self.assertRaises(ValueError):
+        vehicle.checkpoint_kind(cp)
+
   def test_cli_help_needs_no_device_or_native_import(self):
     for command in ([], ['prepare'], ['build'], ['run'], ['report']):
       result = subprocess.run([sys.executable, '-B', str(HERE / 'heatdeath.py'), *command, '--help'], capture_output=True, text=True, timeout=5)
@@ -144,6 +161,14 @@ class HeatdeathTests(unittest.TestCase):
 
   @unittest.skipUnless(sys.platform == 'linux' and os.geteuid() == 0, 'Root Linux process-identity check')
   def test_actual_owned_child_reaped_without_touching_foreign_child(self):
+    try:
+      descriptor = os.pidfd_open(os.getpid())
+    except OSError as error:
+      if error.errno == errno.ENOSYS:
+        self.skipTest('Device kernel lacks pidfd_open; identity-bound orphan reaping is unavailable')
+      raise
+    else:
+      os.close(descriptor)
     token = uuid.uuid4().hex
     owned = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], env=dict(os.environ, SP_PRIVATE_IRQ_LEASE_TOKEN=token))
     foreign = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])

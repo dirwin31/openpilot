@@ -16,9 +16,11 @@ import struct
 import subprocess
 import sys
 import time
+import traceback
 import uuid
 
 from bounded_capture_v1 import BoundedCapture
+from vehicle import checkpoint_kind, restored_fields
 
 HERE = Path(__file__).resolve().parent
 MAGIC = 0x3143415254425053
@@ -466,7 +468,7 @@ def run(args):
     assert digest(repo / 'opendbc_repo/opendbc/car/car.capnp') == args.car_schema_sha256
   with car.CarParams.from_bytes(args.car_params.read_bytes()) as cp:
     expected_cp = cp.to_dict()
-    assert cp.carFingerprint == 'HYUNDAI_IONIQ_6' and cp.brand == 'hyundai' and len(cp.safetyConfigs) == 1
+    vehicle_kind = checkpoint_kind(cp)
     assert not cp.passive and not cp.dashcamOnly and not cp.notCar
     pinned_cp = cp.as_builder()
   output = args.output.resolve()
@@ -805,12 +807,8 @@ def run(args):
             assert checkpoint['routeCpSha256'] == args.route_car_params_sha256
             assert checkpoint['carSchemaSha256'] == args.car_schema_sha256
             assert checkpoint['paramsRoot'] == str(params_root) and checkpoint['prefix'] == prefix
-            assert checkpoint['restoredFieldsAfter'] == {
-              'ci_initialized': True,
-              'ioniq6_long_selected': True,
-              'ioniq6_long_prearmed': True,
-              'ioniq6_long_pending': False,
-            }
+            assert checkpoint['vehicleCheckpoint'] == vehicle_kind
+            assert checkpoint['restoredFieldsAfter'] == restored_fields(vehicle_kind)
             assert checkpoint['restoredPrivateParamsAfter'] == {'FirmwareQueryDone': True, 'ControlsReady': True}
             if cruise_checkpoint is not None:
               restored = checkpoint['cruiseMemory']
@@ -902,6 +900,7 @@ def run(args):
         time.sleep(0.001)
   except BaseException as error:
     failure = f'{type(error).__name__}: {error}'
+    traceback.print_exc()
   finally:
     pre_cleanup_exit_codes = {name: child.poll() for name, child in children.items()}
     near_source_end = 'deadline' in locals() and time.monotonic_ns() >= deadline - 200_000_000

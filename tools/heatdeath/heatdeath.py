@@ -21,8 +21,10 @@ import uuid
 
 if __package__:
   from .placement import load_plan, parked
+  from .vehicle import checkpoint_kind
 else:
   from placement import load_plan, parked
+  from vehicle import checkpoint_kind
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -103,8 +105,7 @@ def prepare(args):
   if cp is None:
     raise ValueError('Include the route startup rlog containing its original CarParams')
   with car.CarParams.from_bytes(cp) as parsed:
-    if parsed.carFingerprint != 'HYUNDAI_IONIQ_6' or not parsed.openpilotLongitudinalControl:
-      raise ValueError('This exported steady-state fixture supports active-long Ioniq 6 recordings only')
+    checkpoint_kind(parsed)
   prior.sort(key=lambda row: row['monoNs'])
   last = prior[-2:]
   if (
@@ -253,6 +254,7 @@ def build(args):
       '-std=gnu11',
       '-Wfatal-errors',
       '-Wno-pointer-to-int-cast',
+      *(['-DALLOW_DEBUG'] if args.allow_debug_safety else []),
       '-g',
       '-O0',
       '-fno-omit-frame-pointer',
@@ -278,6 +280,7 @@ def build(args):
     out / 'receipt.json',
     {
       'sourceHead': info['sourceHead'],
+      'allowDebugSafety': args.allow_debug_safety,
       'commands': commands,
       'inputs': inputs,
       'outputs': {name: sha(out / name) for name in ('native_endpoint', 'libsafety.so')},
@@ -495,6 +498,8 @@ def main():
   prep.add_argument('--output', type=Path, required=True)
   compile_parser = commands.add_parser('build', help='Build the virtual native endpoint using existing compiled dependencies')
   compile_parser.add_argument('--bundle', type=Path, required=True)
+  compile_parser.add_argument('--allow-debug-safety', action='store_true',
+                              help='Compile the private safety library with ALLOW_DEBUG for recorded development longitudinal profiles')
   execute = commands.add_parser('run', help='Run an offroad joined replay; no physical CAN I/O')
   execute.add_argument('--bundle', type=Path, required=True)
   execute.add_argument('--output', type=Path, required=True)

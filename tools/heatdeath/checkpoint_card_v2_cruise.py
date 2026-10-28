@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit private Ioniq6 checkpoint including pinned remembered cruise speed.
+"""Explicit private vehicle checkpoint including pinned remembered cruise speed.
 
 No daemon method, clock, socket, native admission, or grant is replaced. This
 restores only the declared post-handoff phase. Fresh parser/panda/session/lease
@@ -146,7 +146,7 @@ def main():
   from openpilot.common.params import Params
   from openpilot.common.realtime import Priority, config_realtime_process
   from openpilot.selfdrive.car.card import Car
-  from openpilot.starpilot.longitudinal.ioniq6_start import eligible
+  from vehicle import checkpoint_kind, restored_fields as vehicle_fields
 
   config_realtime_process(4, Priority.CTRL_HIGH)
   from placement import apply
@@ -154,7 +154,7 @@ def main():
   apply('card')
   with car.CarParams.from_bytes(pinned) as source:
     cp = source.as_builder()
-  assert eligible(cp), 'Only exact current Ioniq6 active-LONG CP checkpoint is supported'
+  kind = checkpoint_kind(cp)
   interface = interfaces[cp.carFingerprint]
   selected = Car(CI=interface(cp), RI=interface.RadarInterface(cp))
   try:
@@ -165,7 +165,7 @@ def main():
     assert not selected.ioniq6_host_warmed and not selected.ioniq6_panda_armed
     assert not selected.ioniq6_long_lost
     assert selected.ioniq6_keepalive is None and selected.ioniq6_restore_callbacks is None
-    restored_fields = {'ci_initialized': True, 'ioniq6_long_selected': True, 'ioniq6_long_prearmed': True, 'ioniq6_long_pending': False}
+    restored_fields = vehicle_fields(kind)
     before = {name: getattr(selected, name) for name in restored_fields}
     # Explicit root-authorized phase checkpoint only. No accepted command,
     # driver latch, parser sample, native status, proof, clock or session is copied.
@@ -177,6 +177,7 @@ def main():
     memory = cruise_memory(args, repo, selected.v_cruise_helper)
     receipt = {
       'kind': 'private-already-running-card-checkpoint',
+      'vehicleCheckpoint': kind,
       'startupExcluded': True,
       'excluded': [
         'vehicle discovery',
