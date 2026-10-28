@@ -140,3 +140,7 @@ dbus-next 0.2.3 (MIT), ifaddr 0.2.0 (MIT) and Zeroconf 0.151.3
 `vendor/VENDOR.json` records each PyPI source file and its SHA-256. Zeroconf is
 kept as separate, unmodified source files that can be replaced with another
 compatible version, as the LGPL requires.
+
+## Uniden detector protocol
+
+The detector alert parser and command framing in `openpilot/starpilot/uniden/` are based on [AegisX86/UnidenR8wlink](https://github.com/AegisX86/UnidenR8wlink)'s MIT-licensed protocol documentation, copyright (c) 2026 Aegis "P.R Aigis". The complete notice is retained in [UPSTREAM-LICENSE](openpilot/starpilot/uniden/UPSTREAM-LICENSE).

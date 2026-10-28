@@ -301,6 +301,7 @@ class StarShellSession:
         pass  # Car-screen speed-limit taps stay unavailable without affecting the native UI.
     self.onroad_map = self.onroad_jetlink = None
     if profile == Profile.LARGE:
+      self.view.onroad.uniden.runtime_active = True
       from openpilot.starpilot.ui.onroad_map_layer import NativeMapLayer
       self.onroad_map = NativeMapLayer(self.fonts, ui_state)
       self.view.onroad.map_layer = self.onroad_map.render
@@ -1372,6 +1373,8 @@ class StarShellSession:
     return snapshot
 
   def render(self, mode: ShellMode, rect: rl.Rectangle, parent_clip: rl.Rectangle | None = None) -> None:
+    if mode != ShellMode.ONROAD and (uniden := getattr(self.view.onroad, 'uniden', None)):
+      uniden.feed.set_enabled(False)
     self._poll_aol_save()
     if mode == ShellMode.ONROAD and self.profile == Profile.LARGE:
       if rect.width != self._onroad_page_width:
@@ -1625,6 +1628,12 @@ class StarShellSession:
   def press(self, mode: ShellMode, x: float, y: float) -> None:
     self._request_emitted = False
     self._mode = mode
+    uniden = getattr(self.view.onroad, 'uniden', None)
+    if mode == ShellMode.ONROAD and uniden and not self.favorites.is_open and uniden.touch('down', x, y, self.snapshot(mode).onroad):
+      self._uniden_claimed = True
+      self.input.cancel()
+      return
+    self._uniden_claimed = False
     if mode == ShellMode.SETTINGS:
       snapshot = self._settings_press_snapshot()
       self.input.press(x, y, time.monotonic(), snapshot)
@@ -1656,6 +1665,9 @@ class StarShellSession:
 
   def move(self, mode: ShellMode, x: float, y: float, *, timestamp: float | None = None) -> None:
     self._mode = mode
+    if getattr(self, '_uniden_claimed', False):
+      self.view.onroad.uniden.touch('move', x, y, self.snapshot(mode).onroad if mode == ShellMode.ONROAD else None)
+      return
     if mode == ShellMode.SETTINGS:
       if snapshot := self._settings_gesture_snapshot():
         self.input.move(x, y, timestamp, snapshot)
@@ -1671,6 +1683,10 @@ class StarShellSession:
 
   def release(self, mode: ShellMode, x: float, y: float, *, timestamp: float | None = None) -> bool:
     self._mode = mode
+    if getattr(self, '_uniden_claimed', False):
+      self._uniden_claimed = False
+      self.view.onroad.uniden.touch('up', x, y, self.snapshot(mode).onroad if mode == ShellMode.ONROAD else None)
+      return True
     if mode == ShellMode.SETTINGS:
       snapshot = self._settings_gesture_snapshot()
       self._settings_touch = None
@@ -1691,6 +1707,9 @@ class StarShellSession:
     return self._request_emitted or getattr(self, '_onroad_claimed', False)
 
   def cancel(self) -> None:
+    self._uniden_claimed = False
+    if uniden := getattr(self.view.onroad, 'uniden', None):
+      uniden.touch('cancel', 0, 0, None)
     if pending := getattr(self, "_aol_save", None):
       pending.cancel.set()
     self._settings_touch = None
@@ -1706,6 +1725,8 @@ class StarShellSession:
     self._favorite_claimed = False
 
   def close(self) -> None:
+    if uniden := getattr(self.view.onroad, 'uniden', None):
+      uniden.close()
     if layer := getattr(self, 'onroad_jetlink', None):
       layer.close()
       self.onroad_jetlink = None

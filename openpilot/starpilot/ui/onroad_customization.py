@@ -40,6 +40,8 @@ class WidgetPlacement(TypedDict):
   size: NotRequired[int]
   width: NotRequired[int]
   height: NotRequired[int]
+  transparency: NotRequired[int]
+  hide_when_no_alert: NotRequired[bool]
   opacity: NotRequired[int]
 
 
@@ -191,6 +193,12 @@ _nav_map["note"] = ("Road lines and your route over the camera. Drag the corner 
                     + "Turning it on here turns it off in the other screen's layout.")
 PROFILES["large"]["widgets"][NAV_MAP_WIDGET] = _nav_map
 
+UNIDEN_WIDGET = "uniden_alerts"
+_uniden = _widget("Uniden alerts", UNIDEN_WIDGET, 620, 260, 700, 780)
+_uniden["default"].update(transparency=8, hide_when_no_alert=True)
+_uniden["note"] = "R4/R8 detector alerts. Pair and select the detector in Galaxy Bluetooth. Tap an alert to mute."
+PROFILES["large"]["widgets"][UNIDEN_WIDGET] = _uniden
+
 JETLINK_WIDGET = "jetlink_status"
 JETLINK_SIZE = (420, 84)
 JETLINK_OPACITY = (0, 100, 85)  # percent: min, max, default
@@ -221,7 +229,8 @@ for _key, _widget_data in PROFILES["large"]["widgets"].items():
   _widget_data["bounds"] = {**_base, "x": _base["x"] - ANCHOR_SHIFT.get(_key, 0) * SIDEBAR_EXTRA, "width": _base["width"] + SIDEBAR_EXTRA}
   _widget_data["expandable"] = True
 # Older documents retain every saved placement and gain this independent widget.
-OPTIONAL_WIDGETS = frozenset({MODE_WIDGET, CLOCK_WIDGET, STOPPED_TIMER_WIDGET, CEM_GAUGE_WIDGET, NAV_CARD_WIDGET, NAV_MAP_WIDGET, JETLINK_WIDGET})
+OPTIONAL_WIDGETS = frozenset({MODE_WIDGET, CLOCK_WIDGET, STOPPED_TIMER_WIDGET, CEM_GAUGE_WIDGET, NAV_CARD_WIDGET, NAV_MAP_WIDGET,
+                              JETLINK_WIDGET, UNIDEN_WIDGET})
 
 # The torque arc grows when the developer sidebar closes; protect both road widths.
 _torque = PROFILES['large']['widgets']['torque_bar']
@@ -247,6 +256,7 @@ WIDGET_COLORS = {
     MODE_WIDGET: {"text": "#FFFFFFFF"},
     CLOCK_WIDGET: {"text": "#FFFFFFFF"},
     CEM_GAUGE_WIDGET: {},
+    UNIDEN_WIDGET: {"cardFill": "#10191FFF", "cardBorder": "#9D72FFFF", "text": None},
     "current_speed": {"text": None},
     "cruise_limits": {"cardFill": "#10191FFF", "cardBorder": "#35434DFF", "text": None},
     "speed_limit_actions": {"cardFill": "#10191FFF", "cardBorder": "#35434DFF", "text": "#F1F6F3FF"},
@@ -269,7 +279,7 @@ WIDGET_COLORS = {
 # Back-to-front order used when a layout first opts into custom layers.
 DEFAULT_WIDGET_ORDER = {
   "large": (NAV_MAP_WIDGET, "pip_left", "pip_right", "cruise_limits", "speed_limit_actions", CEM_GAUGE_WIDGET, "current_speed",
-            "steering_wheel", "torque_bar", "driver_monitor", MODE_WIDGET, CLOCK_WIDGET, STOPPED_TIMER_WIDGET, NAV_CARD_WIDGET, JETLINK_WIDGET),
+            "steering_wheel", "torque_bar", "driver_monitor", MODE_WIDGET, CLOCK_WIDGET, STOPPED_TIMER_WIDGET, NAV_CARD_WIDGET, JETLINK_WIDGET, UNIDEN_WIDGET),
   "compact": ("pip_left", "pip_right", "speed_limit", "max_speed", "steering_wheel", "torque_bar",
               "speed_limit_actions", "driver_monitor", *RAIL_WIDGETS, MODE_WIDGET, CLOCK_WIDGET, STOPPED_TIMER_WIDGET),
 }
@@ -592,6 +602,11 @@ def validate_document(value):
       raise ValueError("Invalid widget IDs")
     for key, widget in data["widgets"].items():
       placement = layout[key]
+      if key == UNIDEN_WIDGET and type(placement) is dict:
+        placement = dict(placement)
+        placement.setdefault('transparency', 8)
+        placement.setdefault('hide_when_no_alert', True)
+        layout[key] = placement
       bounds = widget_bounds(profile, key)
       if value['version'] < 8 and key in SPEED_LAYOUT_V7[profile]:
         bounds = data['bounds']
@@ -601,6 +616,11 @@ def validate_document(value):
         expected |= {"width", "height", "opacity"}
       elif widget.get("opacity"):
         expected.add("opacity")
+      if key == UNIDEN_WIDGET:
+        expected |= {'transparency', 'hide_when_no_alert'}
+        if (type(placement) is not dict or type(placement.get('transparency')) is not int or
+            not 0 <= placement['transparency'] <= 100 or type(placement.get('hide_when_no_alert')) is not bool):
+          raise ValueError("Invalid Uniden display settings")
       if type(placement) is not dict or set(placement) != expected or type(placement["enabled"]) is not bool:
         raise ValueError("Invalid widget placement")
       if widget.get("box"):

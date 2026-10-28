@@ -151,6 +151,8 @@ class OnroadView:
       self.steering_wheel = SteeringWheelWidget(asset_directory)
       from openpilot.starpilot.ui.onroad_jetlink import JetlinkStatusWidget
       self.jetlink_status = JetlinkStatusWidget(fonts)
+      from openpilot.starpilot.ui.onroad_uniden import UnidenWidget
+      self.uniden = UnidenWidget(fonts)
     else:
       self.compact_hud = CompactHudRenderer(fonts, asset_directory)
       self.compact_sidebar = MiciSidebarWidgets(fonts)
@@ -321,6 +323,9 @@ class OnroadView:
       if "now_playing" in state.customization["layouts"]["large"]:
         if now_playing := getattr(self, "now_playing", None):
           submit("now_playing", lambda: now_playing.render(state))
+      if "uniden_alerts" in state.customization["layouts"]["large"]:
+        if uniden := getattr(self, "uniden", None):
+          submit("uniden_alerts", lambda: uniden.render(state))
       if "jetlink_status" in state.customization["layouts"]["large"]:
         if jetlink := getattr(self, "jetlink_status", None):
           submit("jetlink_status", lambda: jetlink.render(state))
@@ -439,6 +444,8 @@ class OnroadView:
           self.navigation_favorites.render(key, state)
         if now_playing := getattr(self, "now_playing", None):
           now_playing.render(state)
+        if uniden := getattr(self, "uniden", None):
+          uniden.render(state)
         if jetlink := getattr(self, "jetlink_status", None):
           jetlink.render(state)
         self._driving_mode(state, right_shift / 2)

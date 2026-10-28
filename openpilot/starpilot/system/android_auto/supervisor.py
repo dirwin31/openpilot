@@ -895,6 +895,16 @@ class Supervisor:
     with self._lock:
       return owner.companion_power(enabled, session)
 
+  def uniden_exchange(self, address, model, session, *, mute=None):
+    from openpilot.starpilot.uniden.transport import exchange
+    owner = self._shared_bluetooth_owner
+    if owner is None:
+      return None
+    with self._lock, owner.lock:
+      if owner.phone_lease is None:
+        return None
+      return exchange(owner, address, model, session, mute=mute)
+
   def companion_bluetooth_action(self, operation: str, address: str, session: tuple):
     owner = self._shared_bluetooth_owner
     if owner is None:

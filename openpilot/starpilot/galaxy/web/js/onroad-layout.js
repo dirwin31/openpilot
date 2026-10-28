@@ -150,6 +150,10 @@ export class OnroadLayoutFeed {
 export const LayoutWidgetPreview = {
   props: ["widget", "palette", "profile", "scene", "clock24Hour", "native", "art"],
   methods: {
+    unidenSignal(strength, index) {
+      const t = index / Math.max(1, strength - 1)
+      return `rgb(${Math.round(77 + 80 * t)},${Math.round(232 - 118 * t)},${Math.round(232 + 23 * t)})`
+    },
     withAlpha,
     modeLines(scene, profile) {
       const { mode, experimental } = previewScene(scene), aol = scene === "aol"
@@ -202,6 +206,19 @@ export const LayoutWidgetPreview = {
         <rect :x="widget.height + 4" :y="widget.height - 16" :width="widget.width - widget.height * 1.5 - 4" height="4" rx="2" fill="#ffffff" fill-opacity=".2" />
         <rect :x="widget.height + 4" :y="widget.height - 16" :width="(widget.width - widget.height * 1.5 - 4) * .38" height="4" rx="2" fill="#c7aef7" />
       </g>
+      <g v-else-if="widget.kind === 'uniden_alerts'">
+        <rect :width="widget.width" height="172" rx="14" :stroke="palette.cardBorder || '#9d72ff'" stroke-width="2" :fill="palette.cardFill || '#10191f'" :fill-opacity="(100 - (widget.transparency ?? 8)) / 100" />
+        <text x="24" y="34" font-size="22" :fill="palette.text || '#ffffff'" fill-opacity=".7">UNIDEN R8 • 2 THREATS</text>
+        <g v-for="(threat, index) in [{band: 'KA', freq: '35.500', strength: 8}, {band: 'K', freq: '24.150', strength: 3}]" :key="index"
+          :transform="'translate(0,' + (index * 44) + ')'">
+          <text x="24" y="73" font-size="27" font-weight="600" :fill="index ? '#ffba4e' : '#ff5b65'">{{ threat.band }}</text>
+          <text x="124" y="73" font-size="24" :fill="palette.text || '#ffffff'">{{ threat.freq }} GHz</text>
+          <rect v-for="i in 8" :key="i" :x="304 + (i - 1) * 12" :y="75 - (8 + (i - 1) * 2)" width="8" :height="8 + (i - 1) * 2"
+            :fill="i > threat.strength ? '#35434d' : unidenSignal(threat.strength, i - 1)" />
+          <path :d="index ? 'M466 53 L452 77 L480 77 Z' : 'M466 77 L480 53 L452 53 Z'" :fill="index ? '#ffba4e' : '#ff5b65'" />
+        </g>
+        <text x="24" y="163" font-size="21" :fill="palette.text || '#ffffff'" fill-opacity=".7">Tap anywhere to mute</text>
+      </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
         <circle :cx="widget.height / 2" :cy="widget.height / 2" r="9" fill="#46c86e" />
@@ -250,6 +267,19 @@ export const LayoutWidgetPreview = {
           <path d="M54 20 H24 V76 H54" />
           <path d="M38 48 H78 M67 37 L78 48 L67 59" />
         </g>
+      </g>
+      <g v-else-if="widget.kind === 'uniden_alerts'">
+        <rect :width="widget.width" height="172" rx="14" :stroke="palette.cardBorder || '#9d72ff'" stroke-width="2" :fill="palette.cardFill || '#10191f'" :fill-opacity="(100 - (widget.transparency ?? 8)) / 100" />
+        <text x="24" y="34" font-size="22" :fill="palette.text || '#ffffff'" fill-opacity=".7">UNIDEN R8 • 2 THREATS</text>
+        <g v-for="(threat, index) in [{band: 'KA', freq: '35.500', strength: 8}, {band: 'K', freq: '24.150', strength: 3}]" :key="index"
+          :transform="'translate(0,' + (index * 44) + ')'">
+          <text x="24" y="73" font-size="27" font-weight="600" :fill="index ? '#ffba4e' : '#ff5b65'">{{ threat.band }}</text>
+          <text x="124" y="73" font-size="24" :fill="palette.text || '#ffffff'">{{ threat.freq }} GHz</text>
+          <rect v-for="i in 8" :key="i" :x="304 + (i - 1) * 12" :y="75 - (8 + (i - 1) * 2)" width="8" :height="8 + (i - 1) * 2"
+            :fill="i > threat.strength ? '#35434d' : unidenSignal(threat.strength, i - 1)" />
+          <path :d="index ? 'M466 53 L452 77 L480 77 Z' : 'M466 77 L480 53 L452 53 Z'" :fill="index ? '#ffba4e' : '#ff5b65'" />
+        </g>
+        <text x="24" y="163" font-size="21" :fill="palette.text || '#ffffff'" fill-opacity=".7">Tap anywhere to mute</text>
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
@@ -462,6 +492,7 @@ export const OnroadLayoutPage = {
         const [width, height] = widgetSize(widget, this.layout[widget.id])
         return {
           ...widget, width, height, ...(widget.iconSize ? { display: this.layout[widget.id].display } : {}),
+          ...(widget.kind === "uniden_alerts" ? { transparency: this.layout[widget.id].transparency } : {}),
           ...(widget.opacity ? { opacity: this.layout[widget.id].opacity } : {}),
           ...(widget.backgroundToggle ? { background: this.layout[widget.id].background } : {}),
           ...(widget.collapseToggle ? { collapse: this.layout[widget.id].collapse } : {})
@@ -1065,6 +1096,16 @@ export const OnroadLayoutPage = {
       if (Number.isFinite(number)) this.resizeBox(this.state.selected, axis === "width" ? number : this.selectedPosition.width,
         axis === "height" ? number : this.selectedPosition.height)
       event.target.value = this.selectedPosition[axis]
+    },
+    setUnidenDisplay(field, value) {
+      if (!this.editable || this.state.drag || this.state.layerDrag || this.selectedWidget?.kind !== 'uniden_alerts') return
+      if (field === 'transparency' ? !Number.isInteger(value) || value < 0 || value > 100 :
+          field !== 'hide_when_no_alert' || typeof value !== 'boolean') return
+      this.finishColorEdit()
+      const before = clone(this.state.draft)
+      this.selectedPosition[field] = value
+      this.recordChange(before, this.state.profile + ":" + this.state.selected + ":" + field)
+      this.state.notice = ""
     },
     opacityInput(event) {
       const value = Number(event.target.value), range = this.selectedWidget?.opacity
