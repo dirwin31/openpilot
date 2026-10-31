@@ -15,7 +15,6 @@ COMPANION_PROTOCOL = 1
 LEASE_SECONDS = 15
 LEASE_PATH = Path('/dev/shm/starpilot-companion.json')
 STATUS_PATH = Path('/run/starpilot-companion/status.json')
-APK_PATH = Path(__file__).parent / 'bin/starpilot-companion.apk'
 UPLOAD_DENY_HOSTS = ['commadataci.blob.core.windows.net', 'commadata2.blob.core.windows.net',
                      'upload.comma.ai', 'logs.comma.ai']
 
@@ -117,10 +116,6 @@ class CompanionRegistry:
 
   def snapshot(self):
     lease = self.lease()
-    try:
-      shipped = APK_PATH.with_suffix('.apk.version').read_text().strip()
-    except OSError:
-      shipped = ''
     active = phone_uplink_active(self.status_path, self.clock)
     reason = ''
     try:
@@ -133,5 +128,5 @@ class CompanionRegistry:
             'active': active, 'state': 'active' if active else ('error' if reason else 'waiting') if self.enabled() else 'disabled',
             'reason': reason,
             'bytes': lease['bytes'] if lease else 0, 'version': lease['version'] if lease else None,
-            'appAvailable': APK_PATH.is_file(), 'shippedVersion': shipped,
-            'updateAvailable': bool(lease and shipped and lease['version'] != shipped)}
+            # Retain protocol-1 fields for existing phone clients; APKs are no longer bundled.
+            'appAvailable': False, 'shippedVersion': '', 'updateAvailable': False}

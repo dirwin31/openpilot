@@ -3,17 +3,6 @@ import { GxNotice } from './notice.js'
 import { BluetoothNotice, bluetoothConnection } from './bluetooth-notice.js'
 import { ANDROID_BETA_URL } from './install-app.js'
 
-export function newerCompanionVersion(available, installed) {
-  const parts = version => typeof version === 'string' && /^\d+(?:\.\d+){1,3}$/.test(version) ? version.split('.').map(Number) : []
-  const next = parts(available), current = parts(installed)
-  if (!next.length || !current.length || ![...next, ...current].every(Number.isSafeInteger)) return false
-  for (let index = 0; index < Math.max(next.length, current.length); index++) {
-    const difference = (next[index] || 0) - (current[index] || 0)
-    if (difference) return difference > 0
-  }
-  return false
-}
-
 export function validCompanion(value) {
   return value?.protocol === 1 && ['enabled', 'connected', 'active', 'appAvailable', 'updateAvailable'].every(key => typeof value[key] === 'boolean') &&
     Number.isSafeInteger(value.bytes) && value.bytes >= 0 && typeof value.shippedVersion === 'string' &&

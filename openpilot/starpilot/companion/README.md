@@ -1,11 +1,10 @@
 # StarPilot companion apps
 
-Phone apps for Galaxy. Both talk to the comma over Wi-Fi/LAN or Bluetooth and
+The iPhone app and comma-side integration for Galaxy. Phone apps talk to the comma over Wi-Fi/LAN or Bluetooth and
 share one pairing key.
 
 ```
 companion/
-├── android/   Android app (Gradle project, build_apk.sh, host tests)
 ├── ios/       iPhone app (Xcode project, CarPlay, tests) — see ios/README.md
 └── run_host_tests.py
 ```
@@ -16,7 +15,7 @@ The comma side lives elsewhere:
   the pairing screen, run by the `galaxy_phone` process.
 - `openpilot/starpilot/galaxy/companion*.py` — phone internet sharing.
 
-Over Bluetooth, pairing, phone internet sharing, APK downloads, recordings,
+Over Bluetooth, pairing, phone internet sharing, recordings,
 replay, cameras and map tiles are blocked; they need Wi-Fi.
 
 ## Pairing and phone music
@@ -70,25 +69,11 @@ Refused through the remote tunnel.
 
 ## Android
 
-Install: join the Galaxy hotspot, open Galaxy → **Galaxy Access & Install** →
-**Android companion**, and install the APK. Later updates install from inside
-the app: tap **Update app** while connected over Galaxy Wi-Fi/LAN, allow
-installation from StarPilot if Android asks, and confirm the Android update dialog.
-The APK streams into Android's installer; there is no file to find in Downloads.
-After replacement, an **Update installed → Reopen** notification opens the new app.
-Enable app notifications for this prompt. If notifications are disabled, open
-StarPilot normally; the app confirms the completed update on launch.
-
-### When an APK rebuild is needed
-
-| Change | Rebuild Android APK? |
-| --- | --- |
-| Kotlin/Java code, native bridge, updater, phone GPS, Bluetooth or services | Yes |
-| Android manifest, permissions, resources, icons, Gradle config or dependencies | Yes |
-| Files in `android/app/src/main/assets/`, including `bluetooth-fetch.js` | Yes |
-| Galaxy HTML/CSS/JS used over Bluetooth | No: the app downloads these pages from comma over Wi-Fi/LAN (see below) |
-| Galaxy HTML/CSS/JS used over Wi-Fi/LAN | No: screens load from comma |
-| Comma-side Python/services/API changes only | No, unless the phone protocol also needs a change |
+The Android app is maintained separately in
+[StarPilotAndroid](https://github.com/dirwin31/StarPilotAndroid). This repository
+does not include Android app source, APKs, signing workflows, or an APK download
+service. Existing apps can still use pairing, phone GPS, Galaxy screens, and
+phone internet sharing. Installation and updates are managed separately.
 
 ### Galaxy screens over Bluetooth
 
@@ -103,13 +88,6 @@ Wi-Fi/LAN once** before using Bluetooth. Until then the Bluetooth route says it 
   Join comma's Wi-Fi to refresh.
 - A comma without the manifest route is too old to share its screens; update comma.
 
-### Handing the signing key to another developer
-
-Updates install over an existing app only when signed with the same `companion.jks`; a different key forces every user to
-uninstall first. To pass signing on, copy `~/.starpilot/companion.jks` and `~/.starpilot/companion-signing-password` to the
-new developer over a private channel (a password manager share, not git or chat), or have them point `COMPANION_KEYSTORE`
-and `COMPANION_PASSWORD_FILE` at wherever the files live. Keep a backup: losing the key means a forced reinstall.
-
 ## Tests
 
 From the repo root:
@@ -117,8 +95,6 @@ From the repo root:
 ```sh
 uv run --extra testing --with pycryptodome==3.23.0 --with dbus-next==0.2.3 --with zeroconf==0.151.3 \
   python openpilot/starpilot/companion/run_host_tests.py
-node --test openpilot/starpilot/companion/android/tests/test_bluetooth_fetch.mjs
-(cd openpilot/starpilot/companion/android && ./gradlew testDebugUnitTest)
 ```
 
 `run_host_tests.py` stubs native modules so it runs on a laptop; it also takes

@@ -65,28 +65,20 @@ def test_auth_and_local_mutations(companion_http):
     status, body, _ = request('/api/companion/status', cookie=cookie)
     assert status == 200 and json.loads(body)['enabled']
     assert b'pass' not in body
-    assert request('/api/companion/qr.svg', cookie=cookie)[0] == 404
+    assert request('/api/companion/qr.svg', cookie=cookie)[0] == 410
 
 
-def test_apk_direct_download_without_cookie_and_head(companion_http, tmp_path):
-  request, _, server = companion_http
-  apk = tmp_path / 'sample.apk'
-  apk.write_bytes(b'APK' * 30000)
-  # Path is captured during server construction; patch its file operation.
-  from openpilot.starpilot.galaxy.companion import APK_PATH
-  real_open = type(APK_PATH).open
-
-  def open_apk(path, *args, **kwargs):
-    return real_open(apk if path == APK_PATH else path, *args, **kwargs)
-
-  with patch('openpilot.starpilot.galaxy.server.direct_local_connection', return_value=True), patch('pathlib.Path.open', open_apk):
-    code, body, headers = request('/app.apk')
-    assert code == 200 and body == apk.read_bytes()
-    assert headers['Content-Type'] == 'application/vnd.android.package-archive'
-    code, body, headers = request('/api/companion/app.apk', method='HEAD')
-    assert code == 200 and body == b'' and headers['Content-Length'] == '90000'
-    server.remote_transport = True
-    assert request('/app.apk')[0] == 403
+@pytest.mark.parametrize('method', ['GET', 'HEAD'])
+def test_android_download_routes_are_retired(companion_http, method):
+  request, registry, server = companion_http
+  for remote in (False, True):
+    server.remote_transport = remote
+    for path in ('/app.apk', '/api/companion/app.apk', '/api/companion/qr.svg'):
+      assert request(path, method=method)[0] == (403 if remote else 410)
+  status = registry.snapshot()
+  assert status['appAvailable'] is False
+  assert status['shippedVersion'] == ''
+  assert status['updateAvailable'] is False
 
 
 def phone_bridge_proxy(port):

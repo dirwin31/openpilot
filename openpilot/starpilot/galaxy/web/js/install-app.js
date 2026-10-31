@@ -22,7 +22,7 @@ export const ANDROID_BETA_URL = 'https://groups.google.com/g/galaxy-starpilot-an
 
 export const InstallApp = {
   name: 'InstallApp',
-  props: { url: { type: String, default: '' }, updateAvailable: { type: Boolean, default: false } },
+  props: { url: { type: String, default: '' } },
   data: () => ({ prompt: null, installed: false, message: '', betaUrl: ANDROID_BETA_URL,
     android: isAndroidDevice(), ios: isIosDevice() }),
   computed: { playDistribution() { return window.StarPilotApp?.distribution?.() === 'play' }, onPublicGalaxy() { return window.location?.hostname === 'galaxy.firestar.link' } },
@@ -54,13 +54,6 @@ export const InstallApp = {
         await prompt.userChoice
       } catch { this.message = installHelp() }
     },
-    installAndroid() {
-      if (this.updateAvailable && typeof window.StarPilotApp?.installUpdate === 'function') {
-        window.StarPilotApp.installUpdate()
-        return
-      }
-      location.assign(ANDROID_BETA_URL)
-    },
   },
   template: `<div class="gx-install-app">
     <p v-if="installed" class="gx-note" role="status">Galaxy is installed.</p>
@@ -72,8 +65,7 @@ export const InstallApp = {
     <a v-else-if="url" class="gx-btn" :href="url" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Install web app</a>
     <p v-else class="gx-note">Pair in step 1 to get your install link.</p>
     <a v-if="ios" class="gx-btn" href="https://apps.apple.com/ca/app/starpilot-bt/id6821039119" target="_blank" rel="noopener"><i class="bi bi-apple" aria-hidden="true"></i> Download StarPilot BT on the App Store</a>
-    <button v-if="android && !ios && !playDistribution && updateAvailable" type="button" class="gx-btn" @click="installAndroid"><i class="bi bi-download" aria-hidden="true"></i><span>Update offline app (Android)</span></button>
-    <a v-else-if="android && !ios && !playDistribution && !installed" class="gx-btn" :href="betaUrl" target="_blank" rel="noopener"><i class="bi bi-google-play" aria-hidden="true"></i><span>Join the Android beta</span></a>
+    <a v-if="android && !ios && !playDistribution && !installed" class="gx-btn" :href="betaUrl" target="_blank" rel="noopener"><i class="bi bi-google-play" aria-hidden="true"></i><span>Join the Android beta</span></a>
     <p v-if="playDistribution" class="gx-note">Updates come from Google Play.</p>
   </div>`,
 }

@@ -46,23 +46,10 @@ InstallApp.beforeUnmount.call(late)
 
 // Android sends users to the Google Groups beta instead of a direct APK download.
 navigator.userAgent = 'Android'
-let apk
-globalThis.location = { protocol: 'http:', assign: value => { apk = value } }
-let nativeUpdates = 0
-window.StarPilotApp = { installUpdate: () => nativeUpdates++ }
-const nativeUpdate = { ...InstallApp.data(), updateAvailable: true }
-InstallApp.methods.installAndroid.call(nativeUpdate)
-assert.equal(nativeUpdates, 1)
-assert.equal(apk, undefined, 'Native updates never hand the APK to a browser')
-delete window.StarPilotApp
 const android = { ...InstallApp.data() }
-InstallApp.methods.installAndroid.call(android)
-assert.equal(apk, ANDROID_BETA_URL)
-assert.match(InstallApp.template, /Install web app/)
+assert.equal(android.betaUrl, ANDROID_BETA_URL)
 assert.match(InstallApp.template, /Join the Android beta/)
-assert.doesNotMatch(InstallApp.template, /app\.apk|Download Android APK/)
-assert.match(InstallApp.template, /Update offline app \(Android\)/)
-assert.match(InstallApp.template, /android && !ios/)
+assert.doesNotMatch(InstallApp.template, /app\.apk|installAndroid|Update offline app/)
 
 // Choosing the web app on Android always keeps web-install guidance.
 const webHelp = InstallApp.methods.installHelp.call(android)

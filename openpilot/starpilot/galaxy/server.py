@@ -99,7 +99,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
                 starport_client=None, navigation=None, offline_maps=None, drive_state=None, cloud_provider=None, cloud_offroad=None, projection_layout=None,
                 local_access=None, tmux_live=None, starport_logs=None, hotspot=None, toyota_tools=None, replay_client=None, replay_root=None,
                 spotify_setup=None, companion=None, phone_location=None, reverse_proxy=None):
-  from openpilot.starpilot.galaxy.companion import CompanionRegistry, APK_PATH
+  from openpilot.starpilot.galaxy.companion import CompanionRegistry
   from openpilot.starpilot.gps.phone import PhoneGpsPublisher
   companion_source = companion if companion is not None else CompanionRegistry()
   training_results_source = training_results if training_results is not None else FlmTrainingResults()
@@ -768,27 +768,8 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
         else:
           if self.require_session():
             self.json(200, result)
-      elif path in ('/app.apk', '/api/companion/app.apk'):
-        if getattr(self.server, 'remote_transport', False):
-          self.json(403, {'error': 'Download the app over local Wi-Fi'})
-          return
-        if not self.direct_local() and not self.require_session():
-          return
-        try:
-          handle = APK_PATH.open('rb')
-        except OSError:
-          self.json(404, {'error': 'Companion APK is not installed'})
-          return
-        with handle:
-          self.send_response(200)
-          self.send_header('Content-Type', 'application/vnd.android.package-archive')
-          self.send_header('Content-Length', str(os.fstat(handle.fileno()).st_size))
-          self.send_header('Content-Disposition', 'attachment; filename="starpilot-companion.apk"')
-          self.send_header('Cache-Control', 'no-store')
-          self.end_headers()
-          if self.command != 'HEAD':
-            while chunk := handle.read(65536):
-              self.wfile.write(chunk)
+      elif path in ('/app.apk', '/api/companion/app.apk', '/api/companion/qr.svg'):
+        self.json(410, {'error': 'Android app downloads are no longer hosted on comma'})
       elif path == '/api/companion/status':
         if self.require_session():
           try:
