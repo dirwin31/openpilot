@@ -17,7 +17,7 @@ from typing import Any
 from openpilot.starpilot.galaxy.access import AccessStatus, GalaxyAccessOwner
 from openpilot.starpilot.ui.appearance_preferences import CameraViewChoice, OnroadAppearance, onroad_appearance
 from openpilot.starpilot.ui.brand import DISPLAY_VERSION, home_description
-from openpilot.starpilot.curve_speed.status import observation as curve_observation
+from openpilot.starpilot.curve_speed.status import CurvatureDisplay, observation as curve_observation
 from openpilot.starpilot.conditional_mode.policy import ModeChoice
 from openpilot.starpilot.conditional_mode.manual import TRAFFIC_MODE_ACTION, read_button_map
 from openpilot.starpilot.feature_capabilities import lateral_supported, longitudinal_supported
@@ -324,6 +324,7 @@ class RuntimeSnapshotAdapter:
     self._conditional_read_ns: int | None = None
     self._traffic = TrafficDisplayProjector()
     self._switchback = SwitchbackStatusOwner()
+    self._curve_curvature = CurvatureDisplay()
     self._traffic_settings = ConditionalSettingsOwner(ui_state.params)
     self._traffic_context_ns: int | None = None
     self._traffic_map_fingerprint: str | None = None
@@ -463,7 +464,7 @@ class RuntimeSnapshotAdapter:
       now_ns=now_ns, native_alert=native_alert, hide=self._appearance_value.hide_personality_alerts)
     slc = display_message(sm, "slcState", now_ns, after_frame=after) if started else None
     curve_envelope = current_curve_message(sm, now_ns, after_frame=after) if started else None
-    curve = curve_observation(curve_envelope, now_ns) if curve_envelope is not None else None
+    curve = self._curve_curvature.update(curve_observation(curve_envelope, now_ns) if curve_envelope is not None else None, now_ns)
     conditional_envelope = display_message(sm, 'starpilotSelfdriveState', now_ns, after_frame=after) if started else None
 
     from openpilot.starpilot.navigation.wire import navigation_state
