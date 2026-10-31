@@ -11,6 +11,7 @@ from openpilot.starpilot.lateral.signal_turn import SignalTurnEvidence
 SERVICE = 'starpilotNavigation'
 MAX_AGE_NS = 2_500_000_000
 NAVIGATION_BRAKE_MAGNITUDE = 1.0
+SMOOTH_CEILING_CAR = 'HONDA_CIVIC_2022'
 TARGET_MPH = {'uturn': 5., 'sharpLeft': 10., 'sharpRight': 10., 'left': 14., 'right': 14.}
 
 
@@ -56,19 +57,50 @@ def turn_desire(sm, now_ns: int, current_desire, *, supported: bool):
   return current_desire
 
 
-def turn_speed(maneuver, min_steer_speed: float) -> float | None:
+def turn_target(maneuver, min_steer_speed: float) -> float | None:
   kind, modifier = maneuver.maneuverType, maneuver.maneuverModifier
   target = TARGET_MPH.get(modifier) if kind == 'turn' else None
   if modifier == 'uturn' or 'uturn' in kind or 'u-turn' in kind:
     target = 5.
   elif 'roundabout' in kind or 'rotary' in kind:
     target = 12.
-  if target is None or not math.isfinite(maneuver.distanceMeters) or maneuver.distanceMeters < 0:
+  if target is None:
     return None
-  target = max(target * CV.MPH_TO_MS, min_steer_speed)
-  ordinary = kind == 'turn' and modifier in ('left', 'right')
-  approach_decel, settling_distance = (.75, 20.) if ordinary else (.45, 8.)
-  return math.sqrt(target * target + 2 * approach_decel * max(0., maneuver.distanceMeters - settling_distance))
+  return max(target * CV.MPH_TO_MS, min_steer_speed)
+
+
+def approach_profile(maneuver) -> tuple[float, float]:
+  ordinary = maneuver.maneuverType == 'turn' and maneuver.maneuverModifier in ('left', 'right')
+  return (.75, 20.) if ordinary else (.45, 8.)
+
+
+def turn_speed(maneuver, min_steer_speed: float, distance: float | None = None) -> float | None:
+  target = turn_target(maneuver, min_steer_speed)
+  distance = maneuver.distanceMeters if distance is None else distance
+  if target is None or not math.isfinite(distance) or distance < 0:
+    return None
+  approach_decel, settling_distance = approach_profile(maneuver)
+  return math.sqrt(target * target + 2 * approach_decel * max(0., distance - settling_distance))
+
+
+def smooth_turn_ceiling(CP) -> bool:
+  # Route distance only refreshes about once a second, which stepped the cap and pulsed the brakes.
+  return getattr(CP, 'brand', None) == 'honda' and getattr(CP, 'carFingerprint', None) == SMOOTH_CEILING_CAR
+
+
+def smoothed_turn_speed(maneuver, min_steer_speed: float, nav, v_ego: float, now_ns: int) -> float | None:
+  # Advance the last routed distance by the distance driven since that location fix.
+  distance = maneuver.distanceMeters
+  if not math.isfinite(distance) or distance < 0 or not math.isfinite(v_ego):
+    return None
+  distance = max(0., distance - max(0., v_ego) * max(0., now_ns - nav.locationMonoTime) * 1e-9)
+  profile = turn_speed(maneuver, min_steer_speed, distance)
+  target = turn_target(maneuver, min_steer_speed)
+  settling_distance = approach_profile(maneuver)[1]
+  if profile is None or target is None or v_ego <= profile or distance - settling_distance <= 1.:
+    return profile
+  # Above the profile (e.g. after a gas override), brake only as hard as reaching the turn speed requires.
+  return max(profile, v_ego - (v_ego * v_ego - target * target) / (2 * (distance - settling_distance)))
 
 
 def cruise_ceiling(sm, CP, now_ns: int, cruise_mps: float) -> float | None:
@@ -82,8 +114,12 @@ def cruise_ceiling(sm, CP, now_ns: int, cruise_mps: float) -> float | None:
   minimum = float(CP.minSteerSpeed)
   if not math.isfinite(minimum):
     return None
+  smooth = smooth_turn_ceiling(CP)
   for instruction in (nav.instruction, nav.nextManeuver):
-    target = turn_speed(instruction, max(minimum, 0.))
+    if smooth:
+      target = smoothed_turn_speed(instruction, max(minimum, 0.), nav, cs.vEgo, now_ns)
+    else:
+      target = turn_speed(instruction, max(minimum, 0.))
     if target is not None and target + .25 < cruise_mps:
       return target
   return None
