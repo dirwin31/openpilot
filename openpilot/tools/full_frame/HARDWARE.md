@@ -33,7 +33,26 @@ settings and needs no Chestnut. Missing entries are reported as missing; a
 saved model ID alone cannot identify weights, geometry or the training ABI.
 The cloud workspace cannot access the Mac's USB connection automatically.
 
-Once the row identifies the source, inspect the actual source graph: camera
+The uploaded catalog now identifies Mountain Dew v3 as
+`mountaindewv3_driving_supercombo.onnx`, SHA-256
+`1cfd2c45353d876b5b257b24d77537de58ab90a44ae595f15b1f64b6ea3fd770`.
+Its separate compiled Chestnut artifact is 804,589,195 bytes with SHA-256
+`b93bcff2c7c012ff711967535112dd16f19747b1e51fe0eaee5a810d4b858096`.
+See `validation/mountain-dew-v3-identity.json`. These identify the intended
+weights but do not reveal input shapes or establish trainability.
+
+The GitLab LFS endpoint did not return this source object. The cloud network
+cannot reach the Hugging Face source archive. `source_index.py` runs with only
+Python's standard library on a Mac and collects every paginated ONNX object
+entry from the archive without downloading weights. Upload its JSON report to
+locate the actual archived source path; no assumed URL should count as verified.
+
+After obtaining the source, `inspect_source` accepts `--catalog`, `--model` and
+`--output`, verifies the source hash before parsing the graph, and records graph
+inputs/outputs, temporal state names and operator counts. It does not execute
+the graph, unpickle metadata or load external tensor paths.
+
+Next inspect the actual source graph: camera
 input sizes/format, temporal state, outputs and metadata. A compiled inference
 pickle alone is insufficient evidence that fine-tuning the intended model is
 possible. The earlier split-model proof used a different historical small

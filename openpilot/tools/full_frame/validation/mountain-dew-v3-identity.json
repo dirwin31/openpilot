@@ -1,0 +1,27 @@
+{
+  "catalog_file_sha256": "554b26c543bba88acd1fb1bf0f085ab21c593f01724597a2d526bfdf4e11635a",
+  "catalog_generation": "v26",
+  "compiler_revision": "9d0446a4ba8a532c8b674fb6ad795af015cd9dcf",
+  "artifact_abi": "tinygrad_single_v1_arena",
+  "model": {
+    "artifact_chunk_count": 18,
+    "artifact_format": "tinygrad_single_v1_arena",
+    "artifact_sha256": "b93bcff2c7c012ff711967535112dd16f19747b1e51fe0eaee5a810d4b858096",
+    "artifact_size": 804589195,
+    "community_favorite": false,
+    "id": "mountaindewv3",
+    "name": "Mountain Dew v3 \ud83d\udc40\ud83d\udce1",
+    "released": "2026-10-14",
+    "series": "OP Series",
+    "source_sha256": {
+      "mountaindewv3_driving_supercombo.onnx": "1cfd2c45353d876b5b257b24d77537de58ab90a44ae595f15b1f64b6ea3fd770"
+    },
+    "uses_external_gpu": true,
+    "version": "v16"
+  },
+  "source_graph_inspected": false,
+  "artifact_is_not_source": true,
+  "gitlab_lfs_lookup": "object missing or permission unavailable",
+  "source_archive_location": "StarPilot rebuild scripts use onnx/<source_id>/ within StarPilot-Driving/StarPilot-Resources Hugging Face bucket; v3 source path not yet confirmed",
+  "full_view_adapted": false
+}

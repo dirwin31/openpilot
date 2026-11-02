@@ -16,7 +16,7 @@
   "stock_chestnut_benchmarked": false,
   "dom_runtime_integration_complete": false,
   "vehicle_deployed": false,
-  "targeted_tests_passed": 41,
+  "targeted_tests_passed": 45,
   "real_training_completed": true,
   "real_model_export_parity_passed": true,
   "smooth_acceleration_head_implemented": true,
@@ -30,5 +30,8 @@
   "full_frame_correct_driving_responses_validated": false,
   "mountain_dew_v3_adapted": false,
   "read_only_adb_inventory_implemented": true,
-  "research_compute_benchmark_cpu_smoke_passed": true
+  "research_compute_benchmark_cpu_smoke_passed": true,
+  "mountain_dew_v3_catalog_source_identity_verified": true,
+  "mountain_dew_v3_source_graph_inspected": false,
+  "mountain_dew_v3_source_sha256": "1cfd2c45353d876b5b257b24d77537de58ab90a44ae595f15b1f64b6ea3fd770"
 }
