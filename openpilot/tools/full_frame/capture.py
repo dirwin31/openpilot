@@ -36,6 +36,36 @@ def decode(path, indices):
   return np.stack([selected[i] for i in indices]), width, height
 
 
+
+def event_contract(fields):
+  def choose(*names):
+    for name in names:
+      if name in fields:
+        return name
+    raise ValueError(f'No supported event among {names}; supply schemas matching the recording')
+  return {'pose':choose('deviceMotion','livePose'),
+          'calibration':choose('extrinsicsCalibration','liveCalibration'),
+          'road_state':choose('narrowRoadCameraState','roadCameraState'),
+          'road_index':choose('narrowRoadEncodeIdx','roadEncodeIdx')}
+
+
+def pose_row(msg,name):
+  pose = getattr(msg,name)
+  orientation = np.array([pose.orientationNED.x,pose.orientationNED.y,pose.orientationNED.z])
+  velocity = np.array([pose.velocityDevice.x,pose.velocityDevice.y,pose.velocityDevice.z])
+  good = bool(msg.valid and pose.inputsOK and pose.sensorsOK and pose.posenetOK and
+              pose.orientationNED.valid and pose.velocityDevice.valid and
+              np.isfinite(orientation).all() and np.isfinite(velocity).all())
+  timestamp = msg.logMonoTime/1e9
+  if name=='deviceMotion':
+    good = good and bool(pose.timestamp)
+    if pose.timestamp:
+      timestamp = pose.timestamp/1e9
+  # Invalid vector placeholders remain explicitly masked, so they cannot become
+  # labels or make unrelated valid windows fail the global finite-array check.
+  return timestamp,np.nan_to_num(orientation,nan=0.,posinf=0.,neginf=0.),np.nan_to_num(velocity,nan=0.,posinf=0.,neginf=0.),good
+
+
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument('--schema-root', type=Path, help='Historical cereal schema directory matching the recorded software')
@@ -51,28 +81,27 @@ def main():
   if args.max_frames < 5 or args.frame_step < 1 or args.output.exists():
     raise ValueError('Need at least five frames and a new output path')
   from openpilot.tools.full_frame.local_log import read_events, log_schema
-  if 'livePose' not in log_schema(args.schema_root).Event.schema.fields:
-    raise ValueError('Capture currently supports historical livePose recordings only; pass --schema-root matching that recording. Current deviceMotion labels require a separate adapter.')
+  names = event_contract(log_schema(args.schema_root).Event.schema.fields)
   from openpilot.tools.full_frame.calibration import nominal_warp
   calibration, device, sensor = None, None, None
-  streams = {'roadEncodeIdx': [], 'wideRoadEncodeIdx': []}
+  streams = {names['road_index']: [], 'wideRoadEncodeIdx': []}
   segments = set()
   poses = []
+  source_commit = ''
   for msg in sorted(read_events(args.rlog, args.schema_root), key=lambda m: m.logMonoTime):
     kind = msg.which()
-    if (kind == 'liveCalibration' and msg.valid and len(msg.liveCalibration.rpyCalib) == 3 and
-        str(msg.liveCalibration.calStatus) == 'calibrated'):
-      calibration = np.array(msg.liveCalibration.rpyCalib)
+    if kind == 'initData':
+      source_commit = str(msg.initData.gitCommit)
+    elif kind == names['calibration']:
+      message = getattr(msg,kind)
+      calibration = (np.array(message.rpyCalib) if msg.valid and len(message.rpyCalib)==3 and
+                     str(message.calStatus)=='calibrated' else None)
     elif kind == 'deviceState':
       device = str(msg.deviceState.deviceType)
-    elif kind == 'roadCameraState':
-      sensor = str(msg.roadCameraState.sensor)
-    elif kind == 'livePose':
-      pose = msg.livePose
-      good = (msg.valid and pose.inputsOK and pose.sensorsOK and pose.posenetOK and
-              pose.orientationNED.valid and pose.velocityDevice.valid)
-      poses.append((msg.logMonoTime / 1e9, [pose.orientationNED.x, pose.orientationNED.y, pose.orientationNED.z],
-                    [pose.velocityDevice.x, pose.velocityDevice.y, pose.velocityDevice.z], good))
+    elif kind == names['road_state']:
+      sensor = str(getattr(msg,kind).sensor)
+    elif kind == names['pose']:
+      poses.append(pose_row(msg,names['pose']))
     elif kind in streams and msg.valid and calibration is not None and device is not None and sensor is not None:
       event = getattr(msg, kind)
       segments.add(int(event.segmentNum))
@@ -87,17 +116,12 @@ def main():
     if args.future_rlog.parent.name.rsplit('--', 1)[0] != args.rlog.parent.name.rsplit('--', 1)[0]:
       raise ValueError('Future-motion log must belong to the same route')
     for msg in read_events(args.future_rlog, args.schema_root):
-      if msg.which() != 'livePose':
-        continue
-      pose = msg.livePose
-      good = (msg.valid and pose.inputsOK and pose.sensorsOK and pose.posenetOK and
-              pose.orientationNED.valid and pose.velocityDevice.valid)
-      poses.append((msg.logMonoTime/1e9, [pose.orientationNED.x, pose.orientationNED.y, pose.orientationNED.z],
-                    [pose.velocityDevice.x, pose.velocityDevice.y, pose.velocityDevice.z], good))
-    poses.sort(key=lambda row: row[0])
-    if any(poses[i][0] >= poses[i+1][0] for i in range(len(poses)-1)):
-      raise ValueError('Motion logs overlap or have duplicated timestamps')
-  road = sorted(streams['roadEncodeIdx'], key=lambda x: x[2])
+      if msg.which() == names['pose']:
+        poses.append(pose_row(msg,names['pose']))
+  # The current filter can publish revised snapshots for one effective sample
+  # time. Keep its last snapshot, then restore strict measurement-time order.
+  poses = sorted({row[0]:row for row in poses}.values(),key=lambda row:row[0])
+  road = sorted(streams[names['road_index']], key=lambda x: x[2])
   wide = {x[0]: x for x in streams['wideRoadEncodeIdx']}
   if len(wide) != len(streams['wideRoadEncodeIdx']) or len({x[0] for x in road}) != len(road):
     raise ValueError('Repeated encoded frame IDs; capture requires one unambiguous stream per camera')
@@ -109,13 +133,15 @@ def main():
   if (width, height) != (wide_w, wide_h):
     raise ValueError('Road/wide resolutions differ')
   if not poses:
-    raise ValueError('No livePose stream for recorded-motion labels')
+    raise ValueError('No supported motion stream for recorded-motion labels')
   np.savez_compressed(args.output, road_nv12=road_data, wide_nv12=wide_data,
     road_times=np.array([r[2] for r, _ in pairs]), wide_times=np.array([w[2] for _, w in pairs]),
     road_tfm=np.stack([r[3] for r, _ in pairs]), wide_tfm=np.stack([w[3] for _, w in pairs]),
     calibration=np.stack([r[4] for r, _ in pairs]), pose_times=np.array([p[0] for p in poses]),
     orientation_ned=np.array([p[1] for p in poses]), velocity_device=np.array([p[2] for p in poses]),
     pose_valid=np.array([p[3] for p in poses]),
+    pose_time_source=np.array('sensor timestamp' if names['pose']=='deviceMotion' else 'historical publication timestamp'),
+    pose_event=np.array(names['pose']),recorded_source_commit=np.array(source_commit),
     route_id=np.array(args.route_id), frame_period=np.array(.05*args.frame_step))
   print(f'Exported {len(pairs)} pairs at {width}x{height}; baseline uses nominal calibration and zero custom camera offset')
 

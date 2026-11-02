@@ -39,8 +39,8 @@ Install the research dependencies NumPy, tinygrad's CPU compiler prerequisites,
 pycapnp, zstandard, ONNX, Pillow, OpenCV, matplotlib, and ffmpeg as needed.
 The log reader defaults to current Dom schemas. For these uploaded historical
 recordings, `capture --schema-root /path/to/old-checkout/cereal` is required:
-current Dom renamed livePose, calibration and camera events. Capture rejects
-current deviceMotion schemas until their own label adapter is implemented.
+current Dom renamed livePose, calibration and camera events. Capture now supports current deviceMotion messages using their sensor timestamps
+and renamed camera/calibration events. Historical captures require matching schemas.
 A historical schema directory must be complete, including its imported car
 schema. Keep it separate from current Dom; never overwrite current schemas.
 

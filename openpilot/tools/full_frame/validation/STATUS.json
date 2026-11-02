@@ -16,7 +16,7 @@
   "stock_chestnut_benchmarked": false,
   "dom_runtime_integration_complete": false,
   "vehicle_deployed": false,
-  "targeted_tests_passed": 69,
+  "targeted_tests_passed": 73,
   "real_training_completed": true,
   "real_model_export_parity_passed": true,
   "smooth_acceleration_head_implemented": true,
@@ -56,5 +56,10 @@
   "mountain_dew_v3_20hz_sequence_guard_tested": true,
   "calibrated_delayed_action_proxy_tests_passed": true,
   "mountain_dew_v3_adapter_only_training_fixture_passed": true,
-  "mountain_dew_v3_action_training_on_actual_weights_completed": false
+  "mountain_dew_v3_action_training_on_actual_weights_completed": false,
+  "current_device_motion_sensor_timestamp_capture_tested": true,
+  "manual_route_4b_action_signal_audit_complete": true,
+  "manual_route_4b_candidate_moving_seconds": 265.75,
+  "manual_route_4b_paired_camera_indexes": 6464,
+  "manual_route_4b_videos_received": false
 }

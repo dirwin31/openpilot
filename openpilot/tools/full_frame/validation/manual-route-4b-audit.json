@@ -1,0 +1,273 @@
+{
+  "segments": [
+    {
+      "segment": "0000004b--855ea3ca69--0",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1156,
+      "matched_valid_control_state": 1156,
+      "moving_frames_speed_over_2mps": 535,
+      "moving_both_axes_unassisted": 535,
+      "moving_at_least_one_axis_assisted": 0,
+      "matched_valid_pose_yaw_rate": 399,
+      "matched_valid_pose_acceleration": 399,
+      "matched_valid_pose_velocity": 399,
+      "matched_calibrated_frames": 401,
+      "stock_cruise_enabled_frames": 0,
+      "candidate_moving_drive_no_stock_cruise_calibrated": 398,
+      "motion_publication_delay_ms_percentiles": [
+        16.029352,
+        23.567809,
+        28.351318,
+        30.275239
+      ],
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.3447122275829315,
+        0.08102671802043915
+      ],
+      "can_acceleration_range_mps2": [
+        -2.036412239074707,
+        2.2293269634246826
+      ],
+      "first_valid_pose_seconds_after_first_camera": 40.01879349799947,
+      "candidate_moving_unassisted_with_pose": 398
+    },
+    {
+      "segment": "0000004b--855ea3ca69--1",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1198,
+      "matched_valid_control_state": 1198,
+      "moving_frames_speed_over_2mps": 1133,
+      "moving_both_axes_unassisted": 1133,
+      "moving_at_least_one_axis_assisted": 0,
+      "matched_valid_pose_yaw_rate": 1198,
+      "matched_valid_pose_acceleration": 1198,
+      "matched_valid_pose_velocity": 1198,
+      "matched_calibrated_frames": 1196,
+      "stock_cruise_enabled_frames": 0,
+      "candidate_moving_drive_no_stock_cruise_calibrated": 1133,
+      "motion_publication_delay_ms_percentiles": [
+        15.360427,
+        23.933684999999997,
+        28.7320399,
+        30.949546
+      ],
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.3988279402256012,
+        0.08450670540332794
+      ],
+      "can_acceleration_range_mps2": [
+        -1.8690983057022095,
+        2.1987593173980713
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.07102006700006314,
+      "candidate_moving_unassisted_with_pose": 1133
+    },
+    {
+      "segment": "0000004b--855ea3ca69--2",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1198,
+      "matched_valid_control_state": 1198,
+      "moving_frames_speed_over_2mps": 1186,
+      "moving_both_axes_unassisted": 1186,
+      "moving_at_least_one_axis_assisted": 0,
+      "matched_valid_pose_yaw_rate": 1198,
+      "matched_valid_pose_acceleration": 1198,
+      "matched_valid_pose_velocity": 1198,
+      "matched_calibrated_frames": 1196,
+      "stock_cruise_enabled_frames": 0,
+      "candidate_moving_drive_no_stock_cruise_calibrated": 1184,
+      "motion_publication_delay_ms_percentiles": [
+        15.198971,
+        23.6678735,
+        28.45055745,
+        30.155261
+      ],
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.4957481324672699,
+        0.09582944214344025
+      ],
+      "can_acceleration_range_mps2": [
+        -2.267435073852539,
+        1.4231101274490356
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.06960528699983115,
+      "candidate_moving_unassisted_with_pose": 1186
+    },
+    {
+      "segment": "0000004b--855ea3ca69--3",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1198,
+      "matched_valid_control_state": 1198,
+      "moving_frames_speed_over_2mps": 1126,
+      "moving_both_axes_unassisted": 1126,
+      "moving_at_least_one_axis_assisted": 0,
+      "matched_valid_pose_yaw_rate": 1198,
+      "matched_valid_pose_acceleration": 1198,
+      "matched_valid_pose_velocity": 1198,
+      "matched_calibrated_frames": 1196,
+      "stock_cruise_enabled_frames": 0,
+      "candidate_moving_drive_no_stock_cruise_calibrated": 1126,
+      "motion_publication_delay_ms_percentiles": [
+        14.842039,
+        23.447776,
+        28.433385400000002,
+        31.160163
+      ],
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.10424195975065231,
+        0.5529457330703735
+      ],
+      "can_acceleration_range_mps2": [
+        -3.127117395401001,
+        2.7892234325408936
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.069539371999781,
+      "candidate_moving_unassisted_with_pose": 1126
+    },
+    {
+      "segment": "0000004b--855ea3ca69--4",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1198,
+      "matched_valid_control_state": 1198,
+      "moving_frames_speed_over_2mps": 1146,
+      "moving_both_axes_unassisted": 1146,
+      "moving_at_least_one_axis_assisted": 0,
+      "matched_valid_pose_yaw_rate": 1198,
+      "matched_valid_pose_acceleration": 1198,
+      "matched_valid_pose_velocity": 1198,
+      "matched_calibrated_frames": 1196,
+      "stock_cruise_enabled_frames": 0,
+      "candidate_moving_drive_no_stock_cruise_calibrated": 1144,
+      "motion_publication_delay_ms_percentiles": [
+        15.338421,
+        24.045837499999998,
+        28.788743699999998,
+        32.027306
+      ],
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.5459060668945312,
+        0.409890741109848
+      ],
+      "can_acceleration_range_mps2": [
+        -2.0208797454833984,
+        1.6509692668914795
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.07077088799997,
+      "candidate_moving_unassisted_with_pose": 1146
+    },
+    {
+      "segment": "0000004b--855ea3ca69--5",
+      "camera_frames": 464,
+      "matched_valid_car_state": 462,
+      "matched_valid_control_state": 462,
+      "moving_frames_speed_over_2mps": 332,
+      "moving_both_axes_unassisted": 332,
+      "moving_at_least_one_axis_assisted": 0,
+      "matched_valid_pose_yaw_rate": 462,
+      "matched_valid_pose_acceleration": 462,
+      "matched_valid_pose_velocity": 462,
+      "matched_calibrated_frames": 460,
+      "stock_cruise_enabled_frames": 0,
+      "candidate_moving_drive_no_stock_cruise_calibrated": 330,
+      "motion_publication_delay_ms_percentiles": [
+        16.052548,
+        23.756722,
+        28.198608999999998,
+        30.724646
+      ],
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.5466163754463196,
+        0.4906286597251892
+      ],
+      "can_acceleration_range_mps2": [
+        -1.7083702087402344,
+        0.8293311595916748
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.07317485899966414,
+      "candidate_moving_unassisted_with_pose": 332
+    }
+  ],
+  "scope": "Signal availability audit only, not expert driving labels or a training benchmark",
+  "pose_time": "deviceMotion sensor timestamp when present; historical livePose publication time otherwise",
+  "lateral_units": "Raw CAN/pose yaw rates are inspected, not silently converted to calibrated action targets",
+  "assistance": "Unassisted flags and stock-cruise exclusions are candidate criteria, not quality labels",
+  "totals": {
+    "camera_frames": 6464,
+    "moving_frames_speed_over_2mps": 5458,
+    "moving_both_axes_unassisted": 5458,
+    "moving_at_least_one_axis_assisted": 0,
+    "matched_valid_pose_yaw_rate": 5653,
+    "stock_cruise_enabled_frames": 0,
+    "candidate_moving_drive_no_stock_cruise_calibrated": 5315
+  },
+  "candidate_moving_seconds_at_20hz": 265.75,
+  "recorded_source_commit": "cbd6e1eb52e8a46f9837a750d675b877d5ac8762",
+  "archive": {
+    "bytes": 52111360,
+    "sha256": "a9a7bc4c96dbebc7e29d4a91fd556a46044c41e40756c21a85ddbf1a16ef4692",
+    "parts": 3,
+    "raw_logs_committed": false
+  },
+  "camera_profile": {
+    "route": "0000004b--855ea3ca69",
+    "road_frames": 6464,
+    "paired_frames": 6464,
+    "camera_span_seconds": 323.13667368699953,
+    "camera_dt_seconds_percentiles": [
+      0.0499352650003857,
+      0.04999386300005426,
+      0.05001812419995986,
+      0.05007900900000095
+    ],
+    "max_camera_pair_skew_ms": 0.1267139996343758,
+    "motion_rows": 5683,
+    "motion_unique_sample_times": 5683,
+    "nonfinite_pose_vectors": 0,
+    "candidate_stationary_intervals_in_drive": [
+      {
+        "route_seconds": [
+          61.15302594399964,
+          62.253505356999995
+        ],
+        "duration_seconds": 1.1004794130003575,
+        "semantic_label": "unreviewed stop; sign/light/parking unknown"
+      }
+    ]
+  },
+  "capture_smoke": {
+    "real_rlog_segments": [
+      1,
+      2
+    ],
+    "synchronized_pairs": 8,
+    "motion_rows": 2400,
+    "pose_time_source": "sensor timestamp",
+    "monotonic_motion": true,
+    "image_payload": "stubbed decode, not real-video validation"
+  },
+  "review_status": "Manual/stock-cruise/timing criteria checked; visual scenario quality remains unreviewed until video is available"
+}

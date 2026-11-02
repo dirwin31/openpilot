@@ -318,3 +318,36 @@ changes, preservation of frozen model weights, and rejection of an optimizer
 containing frozen parameters. No actual Mountain Dew training run has occurred.
 Auxiliary loss alone does not qualify the resulting auxiliary heads or vehicle
 behavior; they must be evaluated on held-out replay.
+
+## New manual route 4b: log audit
+
+Three uploaded 24 MiB-or-smaller parts reconstruct a 52,111,360-byte tar with six
+complete rlog files, for route `0000004b--855ea3ca69`. Raw logs stay outside Git.
+The logs identify Dom source `cbd6e1eb52e8a46f9837a750d675b877d5ac8762`, so the
+current schema applies, including renamed narrow-camera/calibration events and
+`deviceMotion.timestamp`. No openpilot assistance or stock-cruise activation was
+observed in the matched candidate frames. This is a promising demonstration
+route; visual corner/clearance/sign correctness has not been reviewed yet.
+
+There are 6,464 matched road/wide frame indexes over 323.14 seconds, with no
+20 Hz timing gaps in the measured camera intervals. Worst inter-camera skew is
+0.127 ms. After initialization at about 40 seconds, the per-segment audit finds
+5,315 moving frames (265.75 s at 20 Hz) meeting valid pose, calibration, drive
+gear, no-openpilot and no-stock-cruise criteria. Whole-route context can recover
+a few boundary frames that a per-segment as-of lookup excludes. CAN yawRate is
+still unusably zero; use calibrated motion instead.
+
+The current motion sensor timestamp precedes publication by typically 24 ms.
+Capture now explicitly maps old/current event names from the chosen schema,
+uses current sensor timestamps for valid poses, masks missing timestamps or
+nonfinite vectors, and retains the last snapshot at a repeated sample time.
+Historical livePose retains its publication-time provenance. Output metadata
+records the pose event/time source and recorded source commit. A smoke capture
+on real current rlogs from segments 1 and 2 passed with eight paired frame
+indexes and 2,400 monotonically ordered motion rows; image decoding was stubbed,
+so this is not a real-video or model inference check.
+
+The cameras for all six segments are needed next, preserving both views and
+history across the minute boundaries. A kinematic stationary interval near
+61–62 seconds is only an unreviewed event candidate; logs alone cannot label it
+as a stop sign, traffic signal, parking maneuver or verified correct stop line.
