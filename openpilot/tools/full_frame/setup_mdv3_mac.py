@@ -56,7 +56,10 @@ def main():
   parser.add_argument('--graph',type=Path,default=downloads/'mdv3-full-view-research.onnx')
   parser.add_argument('--device',default='AUTO')
   parser.add_argument('--diagnose',action='store_true',help='Run parity isolation controls instead of the basic comparison')
+  parser.add_argument('--repair',action='store_true',help='Try graph feature buffers and accept the saved candidate only after parity passes')
   args = parser.parse_args()
+  if args.diagnose and args.repair:
+    parser.error('Choose --diagnose or --repair')
   for path in (args.source,args.graph,args.graph.with_suffix('.contract.json')):
     if not path.is_file():
       parser.error(f'Required existing file missing: {path}')
@@ -83,7 +86,13 @@ def main():
   with urlopen(SCRIPT_URL,timeout=40) as response:
     code = response.read()
   adapter.write_bytes(code)
-  if args.diagnose:
+  if args.repair:
+    repair = downloads/'repair_mdv3.py'
+    with urlopen(SCRIPT_URL.rsplit('/',1)[0]+'/repair_mdv3.py',timeout=40) as response:
+      repair.write_bytes(response.read())
+    subprocess.check_call([str(python),str(repair),'--source',str(args.source),'--graph',str(args.graph),
+                            '--device',args.device])
+  elif args.diagnose:
     diagnostic = downloads/'diagnose_mdv3.py'
     with urlopen(SCRIPT_URL.rsplit('/',1)[0]+'/diagnose_mdv3.py',timeout=40) as response:
       diagnostic.write_bytes(response.read())

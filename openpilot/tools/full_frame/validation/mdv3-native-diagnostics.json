@@ -1,0 +1,76 @@
+{
+  "report_sha256": "9836f01cd0a6e2e102e2c7324c6e75bf4aac7512669f8787167feb8e40b023c6",
+  "device": "METAL",
+  "frames": 3,
+  "original_initializers_checked": 653,
+  "original_initializers_identical": true,
+  "original_repeatability": {
+    "all_outputs_and_states_match": true,
+    "max_abs_difference": {
+      "outputs": 0,
+      "next_state_img_q": 0,
+      "next_state_desire_q": 0,
+      "next_state_feat_q": 0
+    }
+  },
+  "variants": {
+    "residual": {
+      "all_outputs_and_states_match": false,
+      "max_abs_difference": {
+        "outputs": 0.1875,
+        "next_state_img_q": 0,
+        "next_state_desire_q": 0,
+        "next_state_feat_q": 0.0078125
+      }
+    },
+    "identity_control": {
+      "all_outputs_and_states_match": true,
+      "max_abs_difference": {
+        "outputs": 0,
+        "next_state_img_q": 0,
+        "next_state_desire_q": 0,
+        "next_state_feat_q": 0
+      }
+    },
+    "buffered_add_control": {
+      "all_outputs_and_states_match": true,
+      "max_abs_difference": {
+        "outputs": 0,
+        "next_state_img_q": 0,
+        "next_state_desire_q": 0,
+        "next_state_feat_q": 0
+      }
+    },
+    "fp32_add_control": {
+      "all_outputs_and_states_match": false,
+      "max_abs_difference": {
+        "outputs": 0.1875,
+        "next_state_img_q": 0,
+        "next_state_desire_q": 0,
+        "next_state_feat_q": 0.0078125
+      }
+    }
+  },
+  "residual_max_per_frame": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "base_feature_difference_per_frame": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "feature_after_sum_difference_per_frame": [
+    0.0078125,
+    0.0078125,
+    0.0078125
+  ],
+  "action_mean_difference_per_frame": [
+    0.0,
+    0.00048828125,
+    0.0
+  ],
+  "conclusion": "The zero residual and matching base feature become different at the unbuffered addition. The eager buffered-add control exactly matches all original outputs/states. The exported lazy-buffer candidate has not yet been validated on the actual Mac model.",
+  "modeld_ready": false
+}

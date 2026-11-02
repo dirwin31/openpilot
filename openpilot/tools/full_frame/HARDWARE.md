@@ -204,3 +204,32 @@ changed frozen constants, unstable native execution and fusion/rounding effects.
 The small CPU fixture verifies that a deliberately nonzero branch fails while
 its identity control passes, without incorrectly marking the model as qualified.
 Native diagnostic results on the actual Mac weights remain pending.
+
+### Metal diagnostic result and saved-graph repair candidate
+
+The uploaded diagnostics establish: all 653 original initializer tensors match;
+the original repeats with zero error; all observed encoder/base-feature values
+match; and the full-view residual is exactly zero. The unbuffered addition
+changes the resulting features by up to 0.0078125. Its action-mean difference is
+0.00048828125 on the second synthetic frame. An FP32 addition alone reproduces
+the error. The eager buffered-add control matches every output and recurrent
+state exactly on all three Metal frames. These are synthetic numerical results,
+not driving performance evidence. See `validation/mdv3-native-diagnostics.json`.
+
+New exports put three `org.tinygrad::Contiguous` nodes around the FP16 addition.
+Unlike eager realization, these are lazy graph barriers, so the exact runtime
+control result does not automatically establish parity for the saved export.
+Action-loss gradients through these graph buffers pass on a small CPU fixture.
+Training must differentiate a fresh lazy forward before realizing inference
+buffers; the pinned tinygrad realization discards already materialized graphs.
+
+`setup_mdv3_mac.py --repair` downloads the updated standalone repair utility.
+It verifies the original source digest and requires the research graph to remain
+untrained with a zero projection. It needs about 0.9 GB temporary disk space,
+adds graph buffers to a candidate, checks/saves it, and compares the saved file
+against the original with the unchanged tolerances. Only a completed successful
+comparison replaces the existing derived research ONNX. A failure preserves it
+and removes the temporary candidate. The original source remains unchanged.
+The old parity report is backed up before the familiar parity JSON is updated.
+CPU tests cover both candidate publication paths and the graph-buffer gradient.
+The actual saved-graph repair result on Metal remains pending.

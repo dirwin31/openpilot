@@ -128,14 +128,17 @@ def diagnose(source_path, adapted_path, device, frames=3):
   adapted_weights = fingerprints(runner,original_weights)
   differing_weights = sorted(name for name,value in original_weights.items() if adapted_weights.get(name)!=value)
   nodes, ops = runner.graph_nodes, dict(runner.onnx_ops)
-  fusion = [n for n in nodes if n.outputs==('view_39',) and n.op=='Add' and n.inputs[0]=='ff_base_features']
+  fusion = [n for n in nodes if n.outputs==('view_39',) and
+            ((n.op=='Add' and n.inputs==('ff_base_features','ff_residual')) or
+             (n.op=='Contiguous' and n.inputs==('ff_sum',)))]
   if len(fusion) != 1:
     raise ValueError('Expected exactly one audited residual fusion node')
   variants = {}
   controls = [('residual',None,None),('identity_control','Identity',None),
               ('buffered_add_control','FFBufferedAdd',buffered_add),('fp32_add_control','FFFloat32Add',fp32_add)]
   for label,op,function in controls:
-    runner.graph_nodes = tuple(replace(n,op=op,inputs=(n.inputs[0],) if op=='Identity' else n.inputs,opts={})
+    runner.graph_nodes = tuple(replace(n,op=op,inputs=('ff_base_features',) if op=='Identity' else
+                                      ('ff_base_features','ff_residual'),opts={})
                                if op and n is fusion[0] else n for n in nodes)
     runner.onnx_ops = dict(ops)
     if function:

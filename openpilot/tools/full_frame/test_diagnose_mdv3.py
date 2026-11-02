@@ -14,7 +14,7 @@ class TestMountainDewDiagnostics(unittest.TestCase):
     import onnx
     from onnx import numpy_helper
     source = fixture()
-    graph,_ = add_full_view_branch(source)
+    graph,_ = add_full_view_branch(source,buffered=False)
     bias = next(t for t in graph.graph.initializer if t.name=='ff_projection_bias')
     bias.CopyFrom(numpy_helper.from_array(np.full((512,),.03,np.float32),'ff_projection_bias'))
     with tempfile.TemporaryDirectory() as directory:
@@ -30,3 +30,14 @@ class TestMountainDewDiagnostics(unittest.TestCase):
     self.assertFalse(report['variants']['buffered_add_control']['all_outputs_and_states_match'])
     self.assertGreater(report['variants']['residual']['per_frame'][0]['candidate_residual_max_abs'],0)
     self.assertFalse(report['modeld_ready'])
+
+  def test_exported_buffered_graph_is_supported(self):
+    import onnx
+    source = fixture()
+    graph,_ = add_full_view_branch(source)
+    with tempfile.TemporaryDirectory() as directory:
+      original,full = Path(directory)/'original.onnx',Path(directory)/'full.onnx'
+      onnx.save(source,original);onnx.save(graph,full)
+      report = diagnose(original,full,'CPU',frames=2)
+    self.assertTrue(report['all_outputs_and_states_match'])
+    self.assertTrue(report['original_initializers_identical'])

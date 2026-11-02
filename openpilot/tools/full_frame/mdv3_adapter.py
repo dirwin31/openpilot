@@ -18,7 +18,34 @@ import numpy as np
 SOURCE_SHA256 = '1cfd2c45353d876b5b257b24d77537de58ab90a44ae595f15b1f64b6ea3fd770'
 
 
-def add_full_view_branch(source, seed=42):
+def buffer_feature_fusion(model):
+  """Put explicit tensor buffers around the FP16 residual sum in the graph.
+
+  The native Metal control with eager buffers restored exact baseline parity.
+  These portable tinygrad Contiguous nodes still need saved-graph replay:
+  a lazy graph barrier is not assumed equivalent to the eager control.
+  """
+  from onnx import helper
+  matches = [i for i,n in enumerate(model.graph.node)
+             if list(n.output)==['view_39'] and n.op_type=='Add' and list(n.input)==['ff_base_features','ff_residual']]
+  if len(matches) != 1:
+    raise ValueError('Expected exactly one unbuffered research feature sum')
+  i = matches[0]
+  replacement = [helper.make_node('Contiguous',['ff_base_features'],['ff_base_buffer'],
+                                  name='ff_base_buffer',domain='org.tinygrad'),
+                 helper.make_node('Contiguous',['ff_residual'],['ff_residual_buffer'],
+                                  name='ff_residual_buffer',domain='org.tinygrad'),
+                 helper.make_node('Add',['ff_base_buffer','ff_residual_buffer'],['ff_sum'],name='ff_sum'),
+                 helper.make_node('Contiguous',['ff_sum'],['view_39'],name='ff_fused_buffer',domain='org.tinygrad')]
+  original = list(model.graph.node)
+  del model.graph.node[:]
+  model.graph.node.extend(original[:i]+replacement+original[i+1:])
+  if not any(v.domain=='org.tinygrad' for v in model.opset_import):
+    model.opset_import.append(helper.make_opsetid('org.tinygrad',1))
+  return model
+
+
+def add_full_view_branch(source, seed=42, buffered=True):
   import onnx
   from onnx import helper, numpy_helper, TensorProto
   model = copy.deepcopy(source)
@@ -75,11 +102,15 @@ def add_full_view_branch(source, seed=42):
   del model.graph.node[:]
   model.graph.node.extend(original_nodes[:index+1]+nodes+original_nodes[index+1:])
   model.graph.input.append(helper.make_tensor_value_info('full_img',TensorProto.UINT8,[2,6,128,256]))
+  if buffered:
+    buffer_feature_fusion(model)
   contract = {'original_source_sha256':SOURCE_SHA256,'full_camera_canvas':[512,256],
               'input':'full_img: two complete road/wide views, aspect-preserving YUV420 letterbox',
               'feature_tap':'view_39','residual_shape':[1,32,512], 'trainable_branch_parameters':parameters,
               'original_image_path_retained':True, 'zero_projection_initialized':True,
               'action_loss_required':True,'all_original_outputs_and_state_pairs_retained':True,
+              'feature_fusion_revision':2 if buffered else 1,
+              'feature_fusion':'three explicit tinygrad Contiguous buffers around FP16 addition' if buffered else 'unbuffered FP16 addition',
               'trained':False,'native_output_parity_verified':False,'modeld_ready':False}
   props = {p.key:p.value for p in model.metadata_props}
   props['full_view_research_contract'] = json.dumps(contract)

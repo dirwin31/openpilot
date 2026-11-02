@@ -44,6 +44,9 @@ class TestMountainDewAdapter(unittest.TestCase):
       output = full({'full_img':Tensor(image),'state_feat_q':state})
       for name in ('outputs','next_state_feat_q'):
         np.testing.assert_array_equal(output[name].numpy(),expected[name].numpy())
+      # Build a fresh lazy training forward before differentiating; realizing
+      # inference buffers discards their graph in this tinygrad revision.
+      output = full({'full_img':Tensor(image),'state_feat_q':state})
       # Projection is the first trainable stage at zero initialization.
       loss = (output['outputs']-1).square().mean()
       projection = full.graph_values['ff_projection_weight']

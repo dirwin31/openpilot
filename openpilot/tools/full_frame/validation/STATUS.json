@@ -16,7 +16,7 @@
   "stock_chestnut_benchmarked": false,
   "dom_runtime_integration_complete": false,
   "vehicle_deployed": false,
-  "targeted_tests_passed": 53,
+  "targeted_tests_passed": 56,
   "real_training_completed": true,
   "real_model_export_parity_passed": true,
   "smooth_acceleration_head_implemented": true,
@@ -43,5 +43,8 @@
   "mountain_dew_v3_native_comparison_executed": true,
   "mountain_dew_v3_native_attempt_error": null,
   "mountain_dew_v3_native_comparison_device": "METAL",
-  "mountain_dew_v3_native_max_output_difference": 0.1875
+  "mountain_dew_v3_native_max_output_difference": 0.1875,
+  "mountain_dew_v3_metal_buffered_runtime_control_exact_match": true,
+  "mountain_dew_v3_original_initializer_count_verified": 653,
+  "mountain_dew_v3_exported_buffer_repair_native_verified": false
 }
