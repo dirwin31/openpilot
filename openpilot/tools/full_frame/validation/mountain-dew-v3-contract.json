@@ -1,0 +1,100 @@
+{
+  "model_id": "mountaindewv3",
+  "source_sha256": "1cfd2c45353d876b5b257b24d77537de58ab90a44ae595f15b1f64b6ea3fd770",
+  "checkpoint": "f22e06e5-3b3f-48d2-a6b9-2f32dc20e707/56320/1365126a-e71e-4778-be00-8ab92dc82c09/12864",
+  "camera_canvas": [
+    512,
+    256
+  ],
+  "camera_packed_input": {
+    "name": "new_img",
+    "dtype": "UINT8",
+    "shape": [
+      2,
+      6,
+      128,
+      256
+    ]
+  },
+  "output_slices": {
+    "lane_lines": [
+      0,
+      528
+    ],
+    "lane_lines_prob": [
+      528,
+      536
+    ],
+    "road_edges": [
+      536,
+      800
+    ],
+    "meta": [
+      800,
+      855
+    ],
+    "desire_pred": [
+      855,
+      887
+    ],
+    "pose": [
+      887,
+      899
+    ],
+    "wide_from_device_euler": [
+      899,
+      905
+    ],
+    "road_transform": [
+      905,
+      917
+    ],
+    "plan": [
+      917,
+      1907
+    ],
+    "lead": [
+      1907,
+      2051
+    ],
+    "lead_prob": [
+      2051,
+      2054
+    ],
+    "desire_state": [
+      2054,
+      2062
+    ],
+    "action": [
+      2062,
+      2066
+    ],
+    "hidden_state": [
+      2066,
+      18450
+    ],
+    "pad": [
+      18450,
+      18452
+    ]
+  },
+  "recurrent_state_bytes": {
+    "state_img_q": 1966080,
+    "state_desire_q": 4224,
+    "state_feat_q": 8388608
+  },
+  "recurrent_state_total_bytes": 10358912,
+  "initializer_elements": 395302147,
+  "feature_tap": "view_39",
+  "feature_reaches_action_head": true,
+  "feature_reaches_next_memory": true,
+  "new_img_reaches_action_head": true,
+  "past_features_reach_action_head": true,
+  "dom_v16_action": "Parsed action means: lateral acceleration / max(1,vEgo)^2 -> curvature; longitudinal acceleration -> acceleration, followed by runtime smoothing",
+  "training_requirement": "Train and validate action output and recurrent rollout; plan-only loss is insufficient for the Dom v16 action contract",
+  "proposed_full_view_branch": "Preserve calibrated new_img path; encode two uncropped letterboxed full_img views into a zero-initialized feature residual at view_39",
+  "scope": "Static graph report analysis, not native execution or driving validation",
+  "full_view_adapted_on_actual_weights": false,
+  "modeld_ready": false,
+  "uploaded_report_sha256": "41744bfe8a073c79add8b232458de6a4ed5859b2cd8739668af996f3442679f7"
+}

@@ -111,3 +111,49 @@ No vehicle-control service is contacted.
    research outputs fed to vehicle controls, to check end-to-end timing and state.
 
 No experimental model has been installed or selected on Nathan's device.
+
+## Verified Mountain Dew v3 graph and proposed full-view feature branch
+
+The Mac report verifies the source SHA and identifies `new_img` as
+`(2,6,128,256)` uint8: two 512x256 packed-YUV views. It has three recurrent
+state pairs, including a `(128,1,16384)` float feature history. State buffers
+alone total 10,358,912 bytes, excluding weights, activations and workspaces.
+The graph has 395,302,147 initializer elements and 18,452 output values.
+
+The action slice is `[2062:2066]`, separate from the plan `[917:1907]`.
+Dom's v16 runner parses the action means and uses lateral acceleration divided
+by `max(1,vEgo)^2` for curvature, and longitudinal acceleration for acceleration,
+followed by runtime smoothing. Training only trajectory positions does not
+establish correct v16 driving actions. Static dependency tracing confirms that
+`view_39` feeds both this action head and the next feature-memory state.
+See `validation/mountain-dew-v3-contract.json`.
+
+`mdv3_adapter.py` constructs an offline research graph retaining the original
+calibrated camera path and adding a second input `full_img`, the complete
+letterboxed road/wide views at 512x256. A 58,160-parameter image branch produces
+a `(1,32,512)` residual at `view_39`. Its projection starts at zero to preserve
+the baseline; gradients first update that projection, then reach the new image
+encoder. The branch feeds the actual action/policy path and recurrent memory.
+It does not use independent object-detection boxes or a hard-coded sign rule.
+
+The graph retains all original output/state names and adds one image input.
+It still requires a production dual-view warp and loader integration; the
+existing compiler/runner must not be assumed to provide `full_img`. Changed
+features can also affect auxiliary heads, so those require validation too.
+
+Tests verify output and recurrent-state preservation, action-loss gradients to
+the image encoder, and sensitivity to peripheral image content on a small
+synthetic fixture. These tests are not execution of Mountain Dew's full weights
+or evidence of improved driving.
+
+The standalone script can construct and verify the graph on the Mac, where the
+actual source already exists. Its `--verify-device AUTO` selects METAL on Apple
+silicon Mac, otherwise CPU, and prints the backend. Install tinygrad revision
+`9d0446a4ba8a532c8b674fb6ad795af015cd9dcf` into the existing audit virtualenv;
+its ONNX runner source matches Dom's vendored historical runner byte-for-byte.
+Three synthetic frames compare every output and recurrent state against the
+original at `atol=rtol=1e-4`. This is zero-branch numerical parity, not a warmed
+real-camera replay, training run, hardware timing check or driving validation.
+It writes `.contract.json` and `.parity.json` beside the untrained ONNX. Keep
+the original source; allow another approximately 793 MB for the research graph.
+Never select this graph in modeld. It remains explicitly `modeld_ready=false`.

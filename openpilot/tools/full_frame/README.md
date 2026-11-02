@@ -308,3 +308,25 @@ copies those newer routes' road-camera files and full logs through USB ADB.
 - [comma2k19](https://github.com/commaai/comma2k19): older single-road-camera
   data, useful for pipeline research but insufficient for paired current-camera
   full-view claims.
+
+
+## Mountain Dew v3: actual graph contract and full-view feature branch
+
+The uploaded report verifies the exact 792,542,056-byte Mountain Dew v3 source.
+See `validation/mountain-dew-v3-contract.json` and `HARDWARE.md` for the seven
+inputs, three state pairs, separate plan/action slices and Dom v16 action units.
+Unlike the earlier historical split-model proof, this architecture uses its
+own image queues and a 16,384-element feature per recurrent time step.
+
+`mdv3_adapter.py` preserves the original calibrated camera path and adds both
+complete full-frame camera views through a small feature residual at `view_39`.
+The graph trace confirms that this tensor reaches both the actual action head
+and the next feature-memory state. The branch starts with a zero projection,
+so it needs training before it can change behavior. It is not a detector overlay.
+Action-loss gradients and peripheral sensitivity are verified on a small
+synthetic fixture, along with baseline output/state parity over three steps.
+Those tests do not constitute running or improving Mountain Dew's full weights.
+The actual ONNX remains on the Mac, where the standalone builder can run its
+optional native replay parity check with pinned tinygrad. Current production
+modeld has no full_img input feed yet, and all these artifacts are untrained
+and marked modeld_ready=false. There is still no improved driving model.
