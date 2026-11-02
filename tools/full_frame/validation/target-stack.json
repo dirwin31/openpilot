@@ -1,0 +1,21 @@
+{
+  "user_fork": "natehuby76/StarPilotBT",
+  "software_base": "StarPilotHQ/StarPilot branch Dom",
+  "device": "comma four",
+  "current_connection": "USB or network via user Mac; no direct cloud ADB attachment",
+  "chestnut_currently_connected": false,
+  "saved_model_profiles": {
+    "big": "mountaindewv3",
+    "small": "rdf43"
+  },
+  "goal": "correct trajectory and braking response to relevant objects across the complete camera view",
+  "focus": [
+    "corner cutting",
+    "parked-car clearance",
+    "stop signs"
+  ],
+  "current_research_base_commit": "934dadbcdbaaaac78dd6badd09a1ebadd298bae8",
+  "recorded_device_commit": "d9b60fddc18fb5970e89a128bf642728cb9ea0bd",
+  "local_data_root": "/workspace/full-frame-data",
+  "readiness": "offline research only"
+}

@@ -1,0 +1,52 @@
+{
+  "experiment": "single-example driving-loss gradient/overfit check",
+  "vision_sha256": "1dc66bc06f250b577653ccbeaa2c6521b3d46749f601d0a1a366419e929ca438",
+  "policy_sha256": "66f406ee179d984a4d8c93e38da479dcd1893127308dd3a7c322a7481a6b51b2",
+  "input_geometry": "complete prepared sensor view resized again to a 512x256 letterbox; 25 cached trunk features at 5 Hz",
+  "trainable_parameters": [
+    "summarizer._mu.weight",
+    "summarizer._mu.bias"
+  ],
+  "frozen": "pretrained vision trunk and original temporal policy",
+  "head_forward_precision": "original per-frame FP16 ONNX Gemm and ReduceL2; FP32 optimizer master weights",
+  "driving_loss_gradient_l2": 2.2064805030822754,
+  "training_losses": [
+    1.2079945802688599,
+    1.2046198844909668,
+    1.2046887874603271,
+    1.1981488466262817,
+    1.194845199584961,
+    1.1946049928665161,
+    1.1782379150390625,
+    1.177281141281128,
+    1.1779528856277466,
+    1.1677738428115845,
+    1.166738510131836,
+    1.1674518585205078,
+    1.153071403503418,
+    1.15073561668396,
+    1.1512292623519897,
+    1.1454030275344849,
+    1.14291512966156,
+    1.1388996839523315,
+    1.1269571781158447,
+    1.1261992454528809
+  ],
+  "initial_plan_loss": 1.2073278427124023,
+  "adapted_plan_loss": 1.1261992454528809,
+  "scope": "not a held-out evaluation; no stop-sign response claim; no vehicle deployment",
+  "limitations": [
+    "Zero desire history and assumed right-hand traffic; not exact runtime replay",
+    "Uses bundled ONNX weights, not verified as the selected on-device model",
+    "Cached trunk is frozen; only the original summarizer is adapted",
+    "Other vision heads are not trained or validated for the new geometry"
+  ],
+  "export": {
+    "onnx_checker": "passed",
+    "modeld_ready": false,
+    "replayed_original_temporal_policy": true,
+    "plan_max_abs_difference_after_fp16_export_m": 0.0207061767578125,
+    "plan_numerical_match_within_1mm": false,
+    "replayed_driving_loss": 1.1261587142944336
+  }
+}

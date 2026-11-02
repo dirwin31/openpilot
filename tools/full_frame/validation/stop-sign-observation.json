@@ -1,0 +1,24 @@
+{
+  "segment": "00000049--acbe342311--0",
+  "camera": "wide",
+  "video_frame_index": 350,
+  "video_seconds": 17.5,
+  "review": "assistant visually confirmed a STOP sign in this frame",
+  "approximate_reference_box_source_pixels": [
+    968,
+    266,
+    1006,
+    312
+  ],
+  "reference_box_status": "visual annotation; approximate boundaries",
+  "source_camera_size": [
+    1344,
+    760
+  ],
+  "pretrained_probe_full_score": 0.4863724708557129,
+  "pretrained_probe_nominal_mask_score": 0.0006036178092472255,
+  "pretrained_probe_reduced_full_score": 0.37370485067367554,
+  "driving_model_sign_response_verified": false,
+  "exact_installed_model_crop_verified": false,
+  "motion_target": "livePose not available for this sign approach; excluded from XY training"
+}

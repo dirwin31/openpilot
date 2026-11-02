@@ -1,0 +1,10 @@
+{
+  "parameter": "summarizer._mu.weight",
+  "shape": [
+    512,
+    512
+  ],
+  "finite": true,
+  "nonzero": true,
+  "gradient_l2": 4.210227966308594
+}

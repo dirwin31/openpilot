@@ -1,0 +1,96 @@
+{
+  "smoothfull": {
+    "metrics": {
+      "average_displacement_m": 9.790614128112793,
+      "final_displacement_m": 43.38856887817383,
+      "average_displacement_0_to_3s_m": 0.8526965379714966,
+      "average_displacement_3_to_5s_m": 7.365721225738525,
+      "average_displacement_5_to_10s_m": 26.19751739501953,
+      "lateral_rmse_m": 13.417866706848145,
+      "longitudinal_rmse_m": 9.71253490447998
+    },
+    "scenario_proxies": {
+      "curved_reference_paths": 0,
+      "mean_max_inward_deviation_from_recorded_path_m": null,
+      "recorded_stop_approaches": 41,
+      "mean_predicted_speed_at_recorded_stop_mps": 8.35259723823714,
+      "mean_position_error_at_recorded_stop_m": 30.996484750654638,
+      "limits": "Inward deviation is relative to a demonstration, not a curb or lane. Recorded stops are not stop-sign labels.",
+      "corner_boundary_clearance": "not evaluated: road-boundary and ego-footprint labels required",
+      "parked_car_clearance": "not evaluated: parked-vehicle geometry and ego-footprint labels required",
+      "stop_sign_detection": "not evaluated: sign identity/location/visibility labels required",
+      "stop_line_compliance": "not evaluated: applicable stop-line geometry and event labels required"
+    },
+    "steps": 400,
+    "seed": 42,
+    "view": "full_view"
+  },
+  "smoothcrop": {
+    "metrics": {
+      "average_displacement_m": 5.417206764221191,
+      "final_displacement_m": 24.354154586791992,
+      "average_displacement_0_to_3s_m": 0.46383413672447205,
+      "average_displacement_3_to_5s_m": 3.9579062461853027,
+      "average_displacement_5_to_10s_m": 14.567590713500977,
+      "lateral_rmse_m": 5.178097248077393,
+      "longitudinal_rmse_m": 9.072196006774902
+    },
+    "scenario_proxies": {
+      "curved_reference_paths": 0,
+      "mean_max_inward_deviation_from_recorded_path_m": null,
+      "recorded_stop_approaches": 41,
+      "mean_predicted_speed_at_recorded_stop_mps": 7.207026444734271,
+      "mean_position_error_at_recorded_stop_m": 27.302911377534635,
+      "limits": "Inward deviation is relative to a demonstration, not a curb or lane. Recorded stops are not stop-sign labels.",
+      "corner_boundary_clearance": "not evaluated: road-boundary and ego-footprint labels required",
+      "parked_car_clearance": "not evaluated: parked-vehicle geometry and ego-footprint labels required",
+      "stop_sign_detection": "not evaluated: sign identity/location/visibility labels required",
+      "stop_line_compliance": "not evaluated: applicable stop-line geometry and event labels required"
+    },
+    "steps": 400,
+    "seed": 42,
+    "view": "legacy_regions_only"
+  },
+  "waypointfull": {
+    "metrics": {
+      "average_displacement_m": 7.968168258666992,
+      "final_displacement_m": 26.874034881591797,
+      "average_displacement_0_to_3s_m": 0.9181526899337769,
+      "average_displacement_3_to_5s_m": 7.818589210510254,
+      "average_displacement_5_to_10s_m": 20.027982711791992,
+      "lateral_rmse_m": 8.754852294921875,
+      "longitudinal_rmse_m": 9.979504585266113
+    },
+    "scenario_proxies": {
+      "curved_reference_paths": 0,
+      "mean_max_inward_deviation_from_recorded_path_m": null,
+      "recorded_stop_approaches": 41,
+      "mean_predicted_speed_at_recorded_stop_mps": 8.394127586781757,
+      "mean_position_error_at_recorded_stop_m": 31.51542244306425,
+      "limits": "Inward deviation is relative to a demonstration, not a curb or lane. Recorded stops are not stop-sign labels.",
+      "corner_boundary_clearance": "not evaluated: road-boundary and ego-footprint labels required",
+      "parked_car_clearance": "not evaluated: parked-vehicle geometry and ego-footprint labels required",
+      "stop_sign_detection": "not evaluated: sign identity/location/visibility labels required",
+      "stop_line_compliance": "not evaluated: applicable stop-line geometry and event labels required"
+    },
+    "steps": 400,
+    "seed": 42,
+    "view": "full_view"
+  },
+  "constant_velocity": {
+    "average_displacement_m": 4.343364197677281,
+    "final_displacement_m": 19.460101613447904,
+    "average_displacement_0_to_3s_m": 0.41363203887556904,
+    "average_displacement_3_to_5s_m": 3.3196448467427087,
+    "average_displacement_5_to_10s_m": 11.535768543107476,
+    "lateral_rmse_m": 2.2396371867350404,
+    "longitudinal_rmse_m": 10.667340914747975
+  },
+  "limits": [
+    "Development comparison on a reused evaluation drive, not a final generalization test",
+    "One daytime highway drive for training; one nighttime urban drive for evaluation",
+    "Training drive has zero stops, zero confirmed stop-sign labels, and zero confirmed parked-clearance labels",
+    "Sampled frames do not establish absence of signs/parked vehicles throughout a recording",
+    "All examples are highly overlapping and recorded while assistance was active"
+  ]
+}

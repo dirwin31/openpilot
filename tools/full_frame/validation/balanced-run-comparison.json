@@ -1,0 +1,73 @@
+{
+  "training_routes": [
+    "00000046--1da68dd16e",
+    "00000047--75e099f3f9",
+    "00000048--381f867805"
+  ],
+  "evaluation_routes": [
+    "00000049--acbe342311"
+  ],
+  "training_examples": 1318,
+  "evaluation_examples": 429,
+  "steps": 800,
+  "seed": 42,
+  "sampling": "balanced_motion",
+  "full": {
+    "average_displacement_m": 9.860977172851562,
+    "final_displacement_m": 42.782142639160156,
+    "average_displacement_0_to_3s_m": 0.9854571223258972,
+    "average_displacement_3_to_5s_m": 7.678937911987305,
+    "average_displacement_5_to_10s_m": 26.040380477905273,
+    "lateral_rmse_m": 15.915602684020996,
+    "longitudinal_rmse_m": 9.527129173278809
+  },
+  "nominal_crop": {
+    "average_displacement_m": 10.786226272583008,
+    "final_displacement_m": 47.54767990112305,
+    "average_displacement_0_to_3s_m": 1.032004952430725,
+    "average_displacement_3_to_5s_m": 8.265626907348633,
+    "average_displacement_5_to_10s_m": 28.62870216369629,
+    "lateral_rmse_m": 17.751705169677734,
+    "longitudinal_rmse_m": 9.893162727355957
+  },
+  "constant_velocity": {
+    "average_displacement_m": 7.363748445318206,
+    "final_displacement_m": 30.902821387793907,
+    "average_displacement_0_to_3s_m": 0.8246011476692556,
+    "average_displacement_3_to_5s_m": 6.0354604530002725,
+    "average_displacement_5_to_10s_m": 19.144442847480388,
+    "lateral_rmse_m": 11.266874610371158,
+    "longitudinal_rmse_m": 10.860546084967273
+  },
+  "full_scenario_proxies": {
+    "curved_reference_paths": 216,
+    "mean_max_inward_deviation_from_recorded_path_m": 1.7731680227490392,
+    "recorded_stop_approaches": 8,
+    "mean_predicted_speed_at_recorded_stop_mps": 5.988561240066975,
+    "mean_position_error_at_recorded_stop_m": 35.277207136154175,
+    "limits": "Inward deviation is relative to a demonstration, not a curb or lane. Recorded stops are not stop-sign labels.",
+    "corner_boundary_clearance": "not evaluated: road-boundary and ego-footprint labels required",
+    "parked_car_clearance": "not evaluated: parked-vehicle geometry and ego-footprint labels required",
+    "stop_sign_detection": "not evaluated: sign identity/location/visibility labels required",
+    "stop_line_compliance": "not evaluated: applicable stop-line geometry and event labels required"
+  },
+  "nominal_crop_scenario_proxies": {
+    "curved_reference_paths": 216,
+    "mean_max_inward_deviation_from_recorded_path_m": 2.0783054234514786,
+    "recorded_stop_approaches": 8,
+    "mean_predicted_speed_at_recorded_stop_mps": 7.2261202976842425,
+    "mean_position_error_at_recorded_stop_m": 41.921382427215576,
+    "limits": "Inward deviation is relative to a demonstration, not a curb or lane. Recorded stops are not stop-sign labels.",
+    "corner_boundary_clearance": "not evaluated: road-boundary and ego-footprint labels required",
+    "parked_car_clearance": "not evaluated: parked-vehicle geometry and ego-footprint labels required",
+    "stop_sign_detection": "not evaluated: sign identity/location/visibility labels required",
+    "stop_line_compliance": "not evaluated: applicable stop-line geometry and event labels required"
+  },
+  "limits": [
+    "These small from-scratch predictors fail to beat constant velocity",
+    "Overlapping frames are not independent trials",
+    "The visual stop-sign example has no valid livePose trajectory at that time",
+    "No direct stop-sign supervision or complete metric parked-car/curb labels",
+    "Actual on-device selected model and crop are not verified; archive contains no device-model-settings.txt"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "onnx_checker": "passed",
+  "tinygrad_roundtrip": "passed",
+  "maximum_absolute_error_m": 0.0,
+  "modeld_compatible": false
+}

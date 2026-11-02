@@ -1,0 +1,198 @@
+{
+  "dom_reference": "934dadbcdbaaaac78dd6badd09a1ebadd298bae8",
+  "models": {
+    "/workspace/StarPilotBT/selfdrive/modeld/models/driving_vision.onnx": {
+      "sha256": "1dc66bc06f250b577653ccbeaa2c6521b3d46749f601d0a1a366419e929ca438",
+      "resolved_path": "/workspace/StarPilotBT/selfdrive/modeld/models/driving_vision.onnx",
+      "checkpoint": "6a7d09ad-bcc9-43bc-916d-29287e60cee2/200",
+      "inputs": {
+        "img": {
+          "shape": [
+            1,
+            12,
+            128,
+            256
+          ],
+          "dtype": "dtypes.uchar"
+        },
+        "big_img": {
+          "shape": [
+            1,
+            12,
+            128,
+            256
+          ],
+          "dtype": "dtypes.uchar"
+        }
+      },
+      "outputs": {
+        "outputs": [
+          1,
+          1576
+        ]
+      },
+      "slices": {
+        "meta": [
+          0,
+          55,
+          null
+        ],
+        "desire_pred": [
+          55,
+          87,
+          null
+        ],
+        "pose": [
+          87,
+          99,
+          null
+        ],
+        "wide_from_device_euler": [
+          99,
+          105,
+          null
+        ],
+        "road_transform": [
+          105,
+          117,
+          null
+        ],
+        "lane_lines": [
+          117,
+          645,
+          null
+        ],
+        "lane_lines_prob": [
+          645,
+          653,
+          null
+        ],
+        "road_edges": [
+          653,
+          917,
+          null
+        ],
+        "lead": [
+          917,
+          1061,
+          null
+        ],
+        "lead_prob": [
+          1061,
+          1064,
+          null
+        ],
+        "hidden_state": [
+          1064,
+          1576,
+          null
+        ],
+        "pad": [
+          0,
+          null,
+          null
+        ]
+      },
+      "weight_elements": 23057880,
+      "ops": {
+        "Cast": 2,
+        "Concat": 2,
+        "Sub": 1,
+        "Div": 3,
+        "Conv": 60,
+        "Mul": 128,
+        "Constant": 78,
+        "Add": 70,
+        "Tanh": 19,
+        "ReduceMean": 1,
+        "Relu": 54,
+        "Sigmoid": 1,
+        "GlobalAveragePool": 1,
+        "Flatten": 2,
+        "Gemm": 66,
+        "ReduceL2": 2,
+        "Clip": 2,
+        "Shape": 2,
+        "Expand": 2
+      }
+    },
+    "/workspace/StarPilotBT/selfdrive/modeld/models/driving_policy.onnx": {
+      "sha256": "66f406ee179d984a4d8c93e38da479dcd1893127308dd3a7c322a7481a6b51b2",
+      "resolved_path": "/workspace/StarPilotBT/selfdrive/modeld/models/driving_policy.onnx",
+      "checkpoint": "f1d30a23-4122-400a-80a6-557502284c36/200",
+      "inputs": {
+        "desire_pulse": {
+          "shape": [
+            1,
+            25,
+            8
+          ],
+          "dtype": "dtypes.half"
+        },
+        "traffic_convention": {
+          "shape": [
+            1,
+            2
+          ],
+          "dtype": "dtypes.half"
+        },
+        "features_buffer": {
+          "shape": [
+            1,
+            25,
+            512
+          ],
+          "dtype": "dtypes.half"
+        }
+      },
+      "outputs": {
+        "outputs": [
+          1,
+          1000
+        ]
+      },
+      "slices": {
+        "plan": [
+          0,
+          990,
+          null
+        ],
+        "desire_state": [
+          990,
+          998,
+          null
+        ],
+        "pad": [
+          -2,
+          null,
+          null
+        ]
+      },
+      "weight_elements": 6949495,
+      "ops": {
+        "Constant": 17,
+        "Gather": 2,
+        "Reshape": 3,
+        "MatMul": 8,
+        "Add": 17,
+        "Sigmoid": 3,
+        "Mul": 11,
+        "Gemm": 16,
+        "Unsqueeze": 2,
+        "LayerNormalization": 2,
+        "Transpose": 3,
+        "Split": 1,
+        "Squeeze": 3,
+        "Where": 1,
+        "Softmax": 1,
+        "Tanh": 1,
+        "Relu": 10,
+        "Concat": 1
+      }
+    }
+  },
+  "camera_payload_MB_per_second_at_20Hz": {
+    "1344x760": 61.2864,
+    "1928x1208": 139.74144
+  }
+}

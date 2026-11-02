@@ -1,0 +1,100 @@
+{
+  "data": "two uploaded real one-minute assisted-driving segments",
+  "images_used_per_drive": 200,
+  "overlapping_examples_per_drive": 196,
+  "training_steps_per_model": 200,
+  "seed": 42,
+  "base_channels": 8,
+  "full_view_model": {
+    "samples": 196,
+    "full_view": {
+      "average_displacement_m": 3.0412940979003906,
+      "final_displacement_m": 11.012700080871582,
+      "lateral_rmse_m": 4.546011447906494,
+      "longitudinal_rmse_m": 1.0077085494995117
+    },
+    "legacy_regions_only": {
+      "average_displacement_m": 3.0484812259674072,
+      "final_displacement_m": 11.035737037658691,
+      "lateral_rmse_m": 4.5595173835754395,
+      "longitudinal_rmse_m": 1.0036840438842773
+    },
+    "constant_velocity": {
+      "average_displacement_m": 2.826946364340387,
+      "final_displacement_m": 11.370529925829334,
+      "lateral_rmse_m": 4.598526375065982,
+      "longitudinal_rmse_m": 0.4804667452429318
+    },
+    "new_context_ablation_prediction_change_m": 0.08683251589536667,
+    "inference_including_first_compile_ms_p50": 62.71336899999369,
+    "inference_including_first_compile_ms_p95": 69.40342950008471,
+    "interpretation": "Full-view error must beat baselines on held-out drives. Ablation sensitivity alone is insufficient; masking is out of distribution.",
+    "scope": "Open-loop recorded-motion prediction, no closed-loop evaluation or modeld deployment."
+  },
+  "matched_nominal_crop_model": {
+    "samples": 196,
+    "full_view": {
+      "average_displacement_m": 3.3174190521240234,
+      "final_displacement_m": 10.95483112335205,
+      "lateral_rmse_m": 4.794686794281006,
+      "longitudinal_rmse_m": 1.0002760887145996
+    },
+    "legacy_regions_only": {
+      "average_displacement_m": 3.3176424503326416,
+      "final_displacement_m": 10.951712608337402,
+      "lateral_rmse_m": 4.795008659362793,
+      "longitudinal_rmse_m": 0.9992907643318176
+    },
+    "constant_velocity": {
+      "average_displacement_m": 2.826946364340387,
+      "final_displacement_m": 11.370529925829334,
+      "lateral_rmse_m": 4.598526375065982,
+      "longitudinal_rmse_m": 0.4804667452429318
+    },
+    "new_context_ablation_prediction_change_m": 0.003206853289157152,
+    "inference_including_first_compile_ms_p50": 62.76592999984132,
+    "inference_including_first_compile_ms_p95": 71.35887449987877,
+    "interpretation": "Full-view error must beat baselines on held-out drives. Ablation sensitivity alone is insufficient; masking is out of distribution.",
+    "scope": "Open-loop recorded-motion prediction, no closed-loop evaluation or modeld deployment."
+  },
+  "input_audit": [
+    {
+      "segment": "00000046--1da68dd16e--5",
+      "installed_dom_commit": "d9b60fddc18fb5970e89a128bf642728cb9ea0bd",
+      "road_frames": 1200,
+      "wide_frames": 1200,
+      "matched_frame_ids": 1200,
+      "maximum_camera_timestamp_difference_ms": 0.03775400000449736,
+      "valid_pose_fraction": 1.0,
+      "speed_min_max_kph": [
+        44.82648468017578,
+        93.05632781982422
+      ],
+      "lateral_assistance_active_fraction": 1.0,
+      "longitudinal_assistance_active_fraction": 1.0
+    },
+    {
+      "segment": "00000047--75e099f3f9--3",
+      "installed_dom_commit": "d9b60fddc18fb5970e89a128bf642728cb9ea0bd",
+      "road_frames": 1200,
+      "wide_frames": 1200,
+      "matched_frame_ids": 1200,
+      "maximum_camera_timestamp_difference_ms": 0.019061999410041608,
+      "valid_pose_fraction": 1.0,
+      "speed_min_max_kph": [
+        -0.22276573330163957,
+        59.25111465454102
+      ],
+      "lateral_assistance_active_fraction": 1.0,
+      "longitudinal_assistance_active_fraction": 1.0
+    }
+  ],
+  "export": {
+    "onnx_checker": "passed",
+    "tinygrad_roundtrip": "passed",
+    "maximum_absolute_error_m": 2.384185791015625e-07,
+    "modeld_compatible": false
+  },
+  "finding": "Full-view model beats matched nominal-crop model in mean displacement error, but not constant velocity. No driving improvement established.",
+  "scope": "Offline XY trajectory prediction; no modeld integration or vehicle deployment."
+}

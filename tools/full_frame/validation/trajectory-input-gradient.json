@@ -1,0 +1,7 @@
+{
+  "gradient_from": "trajectory loss",
+  "to": "full camera input outside a central reference crop",
+  "finite": true,
+  "outside_crop_nonzero_elements": 9024,
+  "outside_crop_absolute_sum": 0.02780589833855629
+}
