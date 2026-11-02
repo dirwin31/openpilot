@@ -274,3 +274,47 @@ Human review must establish the relevant sign/stop line and intended clearance.
 First acquire one or two suitable full routes and audit their signal coverage
 before requesting a larger corpus. Maintain whole-route training/evaluation
 separation. Additional footage alone is not proof of improved driving.
+
+## Training preparation while collecting manual routes
+
+`mdv3_sequence.py` builds both camera inputs from unsigned-byte YUV planes and
+explicit caller-supplied baseline transforms. The full_img reference retains
+both complete fields of view with an aspect-preserving 512x256 fit. This is not
+production-warp parity; exact transform provenance/custom offsets remain a
+separate requirement. Input order is road, then wide, for both tensors.
+
+The actual model must consume contiguous 20 Hz frames. The former small-driver
+5 Hz examples cannot be fed to the internal five-image/128-feature/132-desire
+queues as if they had the same timing. SequenceGuard resets history at route
+changes, missing frames, restarts and timing gaps; by default losses start only
+after 132 contiguous frames. Sparse loss sampling may later be used only while
+still replaying every intermediate frame. Desire pulses match the runtime's
+rising-edge behavior, with slot zero suppressed. The actual RHD flag selects
+traffic_convention[is_rhd]; right-hand traffic/left-hand-drive is [1,0]. Earlier
+synthetic parity smoke inputs used [0,1] for both models and therefore remain
+parity tests, not geographically accurate route replays.
+
+`action_targets.py` rotates complete velocity/angular-velocity/acceleration
+vectors by device_from_calib.T, and rejects nonfinite or malformed inputs.
+Delayed interpolation rejects invalid/gapped data and eligibility transitions;
+lateral and longitudinal horizons must be supplied separately. The kinematic
+proxy computes future measured curvature yaw_rate/forward_speed, encoded with
+the anchor speed squared to match v16's runtime curvature decoding. This avoids
+mistaking future-speed lateral acceleration for current-speed encoded curvature
+when braking. It is an explicit imitation proxy, not comma's original loss or
+certified expert target. Low-speed lateral targets are masked while stationary
+longitudinal labels remain possible. Gear, stock cruise, calibration and human
+scenario quality still require checks by the route assembler.
+
+`mdv3_training.py` provides one-frame truncated action supervision, not a complete
+route trainer. The optimizer must contain exactly the eight 58,160-parameter
+full-view branch tensors; frozen model parameters are rejected. It computes
+masked robust action loss and, by default, requires baseline auxiliary-head
+references for regularization of the pose/transform outputs that the branch can
+affect. Loss/gradients and pre-update states are realized before optimizer
+mutation; recurrent state is detached before the next step. A small synthetic
+fixture verifies projection-first learning, encoder learning after projection
+changes, preservation of frozen model weights, and rejection of an optimizer
+containing frozen parameters. No actual Mountain Dew training run has occurred.
+Auxiliary loss alone does not qualify the resulting auxiliary heads or vehicle
+behavior; they must be evaluated on held-out replay.
