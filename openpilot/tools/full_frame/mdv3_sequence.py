@@ -57,7 +57,7 @@ class SequenceStep:
 
 class SequenceGuard:
   """Keep real 20 Hz history. A gap, restart or route change resets all states."""
-  def __init__(self,warmup_frames=132):
+  def __init__(self,warmup_frames=133):
     if type(warmup_frames) is not int or warmup_frames<5:
       raise ValueError('Warm-up must cover at least the image queue')
     self.warmup = warmup_frames

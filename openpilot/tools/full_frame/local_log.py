@@ -11,7 +11,7 @@ def log_schema(schema_root=None):
   schema_root = Path(schema_root).resolve()
   # Load historical schemas explicitly: current Dom renamed wire-compatible
   # events and changed their fields. Never reinterpret old poses as new ones.
-  return capnp.load(str(schema_root / 'log.capnp'))
+  return capnp.load(str(schema_root / 'log.capnp'), imports=[str(schema_root)])
 
 
 def read_events(path, schema_root=None):

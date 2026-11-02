@@ -22,9 +22,9 @@ class TestMountainDewSequence(unittest.TestCase):
 
   def test_real_20hz_history_reaches_warmup_and_route_change_resets(self):
     guard = SequenceGuard()
-    for i in range(132):
+    for i in range(133):
       step = guard.update('route-a',i,100+i*.05)
-      self.assertEqual(step.ready,i==131)
+      self.assertEqual(step.ready,i==132)
     step = guard.update('route-b',0,200.)
     self.assertTrue(step.reset)
     self.assertFalse(step.ready)

@@ -287,7 +287,7 @@ The actual model must consume contiguous 20 Hz frames. The former small-driver
 5 Hz examples cannot be fed to the internal five-image/128-feature/132-desire
 queues as if they had the same timing. SequenceGuard resets history at route
 changes, missing frames, restarts and timing gaps; by default losses start only
-after 132 contiguous frames. Sparse loss sampling may later be used only while
+after 133 contiguous frames (including raw-image context for the oldest feature). Sparse loss sampling may later be used only while
 still replaying every intermediate frame. Desire pulses match the runtime's
 rising-edge behavior, with slot zero suppressed. The actual RHD flag selects
 traffic_convention[is_rhd]; right-hand traffic/left-hand-drive is [1,0]. Earlier
@@ -327,7 +327,7 @@ The logs identify Dom source `cbd6e1eb52e8a46f9837a750d675b877d5ac8762`, so the
 current schema applies, including renamed narrow-camera/calibration events and
 `deviceMotion.timestamp`. No openpilot assistance or stock-cruise activation was
 observed in the matched candidate frames. This is a promising demonstration
-route; visual corner/clearance/sign correctness has not been reviewed yet.
+route; the subsequent visual review is described below.
 
 There are 6,464 matched road/wide frame indexes over 323.14 seconds, with no
 20 Hz timing gaps in the measured camera intervals. Worst inter-camera skew is
@@ -347,7 +347,23 @@ on real current rlogs from segments 1 and 2 passed with eight paired frame
 indexes and 2,400 monotonically ordered motion rows; image decoding was stubbed,
 so this is not a real-video or model inference check.
 
-The cameras for all six segments are needed next, preserving both views and
-history across the minute boundaries. A kinematic stationary interval near
-61–62 seconds is only an unreviewed event candidate; logs alone cannot label it
-as a stop sign, traffic signal, parking maneuver or verified correct stop line.
+All six camera segments were received and checksum-verified in the original
+workspace. The handoff records 660 contiguous decoded frames from 45–78 seconds,
+including 528 after warmup, with history preserved across the minute boundary.
+Visual review identified a stop-sign approach, a pause around 61–62 seconds,
+a turn and parked cars. This does not establish legal-stop or clearance quality.
+The recordings and private review images are excluded from Git.
+
+`mdv3_data.py` assembles current-schema calibrated action proxies and streams
+logged camera indexes. `mdv3_fit.py` replays at 20 Hz and updates the eight adapter
+tensors at 5 Hz within 57–63 seconds, defaulting to 20 updates. It verifies
+zero-branch parity and frozen tensors, then saves an adapter checkpoint and a
+report. The integration test uses a synthetic model; actual MDv3 training has
+not run in cloud. This is a one-route mechanics/overfit experiment, not held-out
+evidence of improved driving, and it does not export an installable model.
+
+On the Mac with the existing verified model, environment and recording archives,
+run `setup_mdv3_training.py`. It prepares local inputs and writes
+`~/Downloads/mdv3-manual-training-report.json` after model execution. Review that
+report before further experiments. Runtime integration, independent evaluation,
+trained export parity and hardware qualification remain outstanding.
