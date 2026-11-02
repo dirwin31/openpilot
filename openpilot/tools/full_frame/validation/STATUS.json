@@ -38,5 +38,8 @@
   "mountain_dew_v3_mac_download_audit_prepared": true,
   "mountain_dew_v3_action_and_memory_feature_path_traced": true,
   "mountain_dew_v3_full_view_adapter_fixture_passed": true,
-  "mountain_dew_v3_actual_weights_native_parity_verified": false
+  "mountain_dew_v3_actual_weights_native_parity_verified": false,
+  "mountain_dew_v3_research_graph_created_on_mac": true,
+  "mountain_dew_v3_native_comparison_executed": false,
+  "mountain_dew_v3_native_attempt_error": "ModuleNotFoundError: No module named 'tinygrad'"
 }

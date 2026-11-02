@@ -139,6 +139,7 @@ def verify_native(source_path, adapted_path, device, frames=3):
       differences[name] = max(differences.get(name,0),diff)
       passed = passed and bool(np.allclose(value,full[name],atol=1e-4,rtol=1e-4))
   return {'device':device,'frames':frames,'all_outputs_and_states_match':passed,
+          'comparison_executed':True,
           'atol':1e-4,'rtol':1e-4,'max_abs_difference':differences,
           'scope':'Synthetic native zero-branch replay parity only; no training, real-camera replay or driving qualification',
           'modeld_ready':False}
@@ -149,25 +150,37 @@ def main():
   parser.add_argument('source',type=Path)
   parser.add_argument('--output',type=Path,required=True)
   parser.add_argument('--verify-device',help='Optional native synthetic replay parity on e.g. METAL or CPU; requires pinned tinygrad')
+  parser.add_argument('--verify-only',action='store_true',help='Retry native comparison using an existing research graph and contract')
   args = parser.parse_args()
-  if args.output.exists() or args.output.resolve() == args.source.resolve():
+  if args.output.resolve() == args.source.resolve():
     parser.error('Choose a new output file; original source is preserved')
+  if args.verify_only:
+    if not args.verify_device or not args.output.is_file() or not args.output.with_suffix('.contract.json').is_file():
+      parser.error('--verify-only requires --verify-device and an existing research graph and contract')
+  elif args.output.exists():
+    parser.error('Choose a new output file, or use --verify-only to retry the existing graph')
   print('Verifying original Mountain Dew v3 source...',flush=True)
   digest = hashlib.sha256()
   with args.source.open('rb') as stream:
     for block in iter(lambda:stream.read(4*1024*1024),b''):digest.update(block)
   if digest.hexdigest() != SOURCE_SHA256:
     parser.error('Source SHA-256 is not the audited Mountain Dew v3')
-  import onnx
-  print('Source hash verified. Building full-view research graph...',flush=True)
-  source = onnx.load(args.source,load_external_data=False)
-  if any(t.data_location==onnx.TensorProto.EXTERNAL for t in source.graph.initializer):
-    parser.error('External tensor sources are not supported')
-  model, contract = add_full_view_branch(source)
-  print('Graph checked. Writing a separate research ONNX (about 793 MB)...',flush=True)
-  onnx.save(model,args.output)
-  args.output.with_suffix('.contract.json').write_text(json.dumps(contract,indent=2)+'\n')
-  del source, model
+  if args.verify_only:
+    contract = json.loads(args.output.with_suffix('.contract.json').read_text())
+    if contract.get('original_source_sha256') != SOURCE_SHA256 or contract.get('modeld_ready') is not False:
+      parser.error('Existing contract does not identify this untrained Mountain Dew research graph')
+    print('Source hash verified. Reusing existing research graph.',flush=True)
+  else:
+    import onnx
+    print('Source hash verified. Building full-view research graph...',flush=True)
+    source = onnx.load(args.source,load_external_data=False)
+    if any(t.data_location==onnx.TensorProto.EXTERNAL for t in source.graph.initializer):
+      parser.error('External tensor sources are not supported')
+    model, contract = add_full_view_branch(source)
+    print('Graph checked. Writing a separate research ONNX (about 793 MB)...',flush=True)
+    onnx.save(model,args.output)
+    args.output.with_suffix('.contract.json').write_text(json.dumps(contract,indent=2)+'\n')
+    del source, model
   if args.verify_device:
     import gc
     gc.collect()
@@ -175,7 +188,7 @@ def main():
       verification = verify_native(args.source,args.output,args.verify_device)
     except Exception as exc:
       verification = {'all_outputs_and_states_match':False,'error':f'{type(exc).__name__}: {exc}',
-                      'requested_device':args.verify_device,'modeld_ready':False}
+                      'comparison_executed':False,'requested_device':args.verify_device,'modeld_ready':False}
     args.output.with_suffix('.parity.json').write_text(json.dumps(verification,indent=2)+'\n')
     contract['native_output_parity_verified'] = verification['all_outputs_and_states_match']
   args.output.with_suffix('.contract.json').write_text(json.dumps(contract,indent=2)+'\n')

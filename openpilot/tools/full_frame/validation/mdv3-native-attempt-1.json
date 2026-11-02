@@ -1,0 +1,35 @@
+{
+  "uploaded_parity": {
+    "all_outputs_and_states_match": false,
+    "error": "ModuleNotFoundError: No module named 'tinygrad'",
+    "requested_device": "AUTO",
+    "modeld_ready": false
+  },
+  "uploaded_contract": {
+    "original_source_sha256": "1cfd2c45353d876b5b257b24d77537de58ab90a44ae595f15b1f64b6ea3fd770",
+    "full_camera_canvas": [
+      512,
+      256
+    ],
+    "input": "full_img: two complete road/wide views, aspect-preserving YUV420 letterbox",
+    "feature_tap": "view_39",
+    "residual_shape": [
+      1,
+      32,
+      512
+    ],
+    "trainable_branch_parameters": 58160,
+    "original_image_path_retained": true,
+    "zero_projection_initialized": true,
+    "action_loss_required": true,
+    "all_original_outputs_and_state_pairs_retained": true,
+    "trained": false,
+    "native_output_parity_verified": false,
+    "modeld_ready": false
+  },
+  "comparison_executed": false,
+  "interpretation": "Graph construction was reported complete on Mac; native comparison failed at tinygrad import before inference. No numerical mismatch was established.",
+  "required_tinygrad_revision": "9d0446a4ba8a532c8b674fb6ad795af015cd9dcf",
+  "required_python_minimum": "3.11",
+  "python_version_on_mac": "not yet reported"
+}

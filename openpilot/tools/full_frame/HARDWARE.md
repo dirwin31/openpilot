@@ -157,3 +157,23 @@ real-camera replay, training run, hardware timing check or driving validation.
 It writes `.contract.json` and `.parity.json` beside the untrained ONNX. Keep
 the original source; allow another approximately 793 MB for the research graph.
 Never select this graph in modeld. It remains explicitly `modeld_ready=false`.
+
+
+### First Mac native attempt: dependency failure
+
+The uploaded contract reports graph construction completed with the original
+source hash and 58,160 new branch parameters. The uploaded parity report says
+`ModuleNotFoundError: No module named 'tinygrad'`. No native inference or output
+comparison ran. It is not evidence of a numerical mismatch.
+
+The pinned upstream tinygrad revision requires Python >=3.11. The failed Mac
+attempt did not report its Python version, so an older interpreter is a possible
+cause, not an established diagnosis. `setup_mdv3_mac.py` checks for a supported
+interpreter, creates a separate `Downloads/comma-mdv3-env`, installs ONNX and the
+pinned tinygrad, and verifies the ONNX runner source hash before retrying. If
+no Python >=3.11 is installed, it uses Homebrew to install Python 3.12. It prints
+installation failures directly. It downloads the updated adapter script and runs
+`--verify-only` on the existing research graph. No weights are downloaded, no
+graph is rebuilt, and no SSH/device services are accessed. The user can upload
+the refreshed parity report. An explicit comparison_executed field now separates
+startup failures from completed comparisons that fail numerical tolerances.
