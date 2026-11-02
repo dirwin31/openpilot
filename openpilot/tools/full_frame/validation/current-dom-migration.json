@@ -1,0 +1,23 @@
+{
+  "upstream": "StarPilotHQ/StarPilot",
+  "branch": "Dom",
+  "upstream_commit": "cbd6e1eb52e8a46f9837a750d675b877d5ac8762",
+  "research_branch": "research/full-frame-dom-current",
+  "backup_branch": "backup/full-frame-before-dom-update",
+  "saved_experiment_commit": "4acdfee05cfbc58b8cc95defc61afea398d6bafd",
+  "migration": "New worktree based on upstream; cherry-picked experiment because histories have no merge base. Other old fork customizations were not ported.",
+  "checkpoint_replay": {
+    "held_out_examples": 429,
+    "prediction_max_abs_difference_m": 0.0,
+    "average_displacement_m": 9.860977172851562,
+    "constant_velocity_average_displacement_m": 7.363748445318206
+  },
+  "log_check": {
+    "schema": "historical preserved checkout cereal",
+    "livePose": 1200,
+    "roadEncodeIdx": 1200,
+    "wideRoadEncodeIdx": 1200
+  },
+  "model": "Historical bundled split ONNX; not Mountain Dew v3",
+  "deployment": false
+}
