@@ -1,0 +1,272 @@
+{
+  "segments": [
+    {
+      "segment": "00000048--381f867805--0",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1137,
+      "matched_valid_control_state": 1135,
+      "moving_frames_speed_over_2mps": 740,
+      "moving_both_axes_unassisted": 697,
+      "moving_at_least_one_axis_assisted": 43,
+      "matched_valid_pose_yaw_rate": 133,
+      "matched_valid_pose_acceleration": 133,
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.0298167634755373,
+        0.15503546595573425
+      ],
+      "can_acceleration_range_mps2": [
+        -1.935259222984314,
+        3.011051893234253
+      ],
+      "first_valid_pose_seconds_after_first_camera": 53.34002243099894,
+      "candidate_moving_unassisted_with_pose": 90
+    },
+    {
+      "segment": "00000048--381f867805--1",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1198,
+      "matched_valid_control_state": 1198,
+      "moving_frames_speed_over_2mps": 502,
+      "moving_both_axes_unassisted": 15,
+      "moving_at_least_one_axis_assisted": 487,
+      "matched_valid_pose_yaw_rate": 1197,
+      "matched_valid_pose_acceleration": 1197,
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.3683052957057953,
+        0.02733621746301651
+      ],
+      "can_acceleration_range_mps2": [
+        -1.9265755414962769,
+        2.7751033306121826
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.14875751399995352,
+      "candidate_moving_unassisted_with_pose": 15
+    },
+    {
+      "segment": "00000048--381f867805--2",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1198,
+      "matched_valid_control_state": 1198,
+      "moving_frames_speed_over_2mps": 1198,
+      "moving_both_axes_unassisted": 0,
+      "moving_at_least_one_axis_assisted": 1198,
+      "matched_valid_pose_yaw_rate": 1198,
+      "matched_valid_pose_acceleration": 1198,
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.03791673481464386,
+        0.01595575548708439
+      ],
+      "can_acceleration_range_mps2": [
+        -1.2174930572509766,
+        0.3116598427295685
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.09507324900005187,
+      "candidate_moving_unassisted_with_pose": 0
+    },
+    {
+      "segment": "00000048--381f867805--3",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1198,
+      "matched_valid_control_state": 1198,
+      "moving_frames_speed_over_2mps": 1198,
+      "moving_both_axes_unassisted": 0,
+      "moving_at_least_one_axis_assisted": 1198,
+      "matched_valid_pose_yaw_rate": 1198,
+      "matched_valid_pose_acceleration": 1198,
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.013446240685880184,
+        0.014413759112358093
+      ],
+      "can_acceleration_range_mps2": [
+        -1.2015211582183838,
+        2.0555596351623535
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.09470076999969024,
+      "candidate_moving_unassisted_with_pose": 0
+    },
+    {
+      "segment": "00000048--381f867805--4",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1198,
+      "matched_valid_control_state": 1198,
+      "moving_frames_speed_over_2mps": 1198,
+      "moving_both_axes_unassisted": 0,
+      "moving_at_least_one_axis_assisted": 1198,
+      "matched_valid_pose_yaw_rate": 1197,
+      "matched_valid_pose_acceleration": 1197,
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.036103375256061554,
+        0.5167989134788513
+      ],
+      "can_acceleration_range_mps2": [
+        -2.505728244781494,
+        1.2432544231414795
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.1472168150012294,
+      "candidate_moving_unassisted_with_pose": 0
+    },
+    {
+      "segment": "00000048--381f867805--5",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1198,
+      "matched_valid_control_state": 1198,
+      "moving_frames_speed_over_2mps": 1198,
+      "moving_both_axes_unassisted": 0,
+      "moving_at_least_one_axis_assisted": 1198,
+      "matched_valid_pose_yaw_rate": 1197,
+      "matched_valid_pose_acceleration": 1197,
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.09963735938072205,
+        0.4202883839607239
+      ],
+      "can_acceleration_range_mps2": [
+        -0.6134520769119263,
+        1.967933177947998
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.14705510499879892,
+      "candidate_moving_unassisted_with_pose": 0
+    },
+    {
+      "segment": "00000048--381f867805--6",
+      "camera_frames": 1109,
+      "matched_valid_car_state": 1107,
+      "matched_valid_control_state": 1107,
+      "moving_frames_speed_over_2mps": 841,
+      "moving_both_axes_unassisted": 121,
+      "moving_at_least_one_axis_assisted": 720,
+      "matched_valid_pose_yaw_rate": 1107,
+      "matched_valid_pose_acceleration": 1107,
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.5777317881584167,
+        0.5071826577186584
+      ],
+      "can_acceleration_range_mps2": [
+        -2.4318654537200928,
+        3.801516056060791
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.09589117399991665,
+      "candidate_moving_unassisted_with_pose": 121
+    },
+    {
+      "segment": "00000049--acbe342311--0",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1133,
+      "matched_valid_control_state": 1133,
+      "moving_frames_speed_over_2mps": 979,
+      "moving_both_axes_unassisted": 951,
+      "moving_at_least_one_axis_assisted": 28,
+      "matched_valid_pose_yaw_rate": 61,
+      "matched_valid_pose_acceleration": 61,
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        0.025217924267053604,
+        0.10374756157398224
+      ],
+      "can_acceleration_range_mps2": [
+        -1.8642441034317017,
+        2.295836925506592
+      ],
+      "first_valid_pose_seconds_after_first_camera": 56.94944618099544,
+      "candidate_moving_unassisted_with_pose": 33
+    },
+    {
+      "segment": "00000049--acbe342311--1",
+      "camera_frames": 1200,
+      "matched_valid_car_state": 1198,
+      "matched_valid_control_state": 1198,
+      "moving_frames_speed_over_2mps": 1198,
+      "moving_both_axes_unassisted": 0,
+      "moving_at_least_one_axis_assisted": 1198,
+      "matched_valid_pose_yaw_rate": 1198,
+      "matched_valid_pose_acceleration": 1198,
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.3774532377719879,
+        0.09154995530843735
+      ],
+      "can_acceleration_range_mps2": [
+        -1.3335539102554321,
+        0.2594311535358429
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.09893731500051217,
+      "candidate_moving_unassisted_with_pose": 0
+    },
+    {
+      "segment": "00000049--acbe342311--2",
+      "camera_frames": 727,
+      "matched_valid_car_state": 725,
+      "matched_valid_control_state": 725,
+      "moving_frames_speed_over_2mps": 667,
+      "moving_both_axes_unassisted": 0,
+      "moving_at_least_one_axis_assisted": 667,
+      "matched_valid_pose_yaw_rate": 725,
+      "matched_valid_pose_acceleration": 725,
+      "can_yaw_rate_range_radps": [
+        0.0,
+        0.0
+      ],
+      "pose_yaw_rate_range_radps": [
+        -0.39505699276924133,
+        0.5299880504608154
+      ],
+      "can_acceleration_range_mps2": [
+        -2.7309212684631348,
+        1.3829410076141357
+      ],
+      "first_valid_pose_seconds_after_first_camera": 0.09702399900561431,
+      "candidate_moving_unassisted_with_pose": 0
+    }
+  ],
+  "scope": "Signal availability audit only, not expert driving labels or a training benchmark",
+  "lateral_units": "Raw CAN/pose yaw rates are inspected, not silently converted to calibrated action targets",
+  "assistance": "Both axes unassisted is a candidate demonstration interval, not a quality label",
+  "stop_sign_example": "The previously inspected route49 segment0 approach is not a correct-stop demonstration",
+  "totals": {
+    "camera_frames": 11436,
+    "moving_frames_speed_over_2mps": 9719,
+    "moving_both_axes_unassisted": 1784,
+    "moving_at_least_one_axis_assisted": 7935,
+    "candidate_moving_unassisted_with_pose": 259
+  },
+  "candidate_seconds_at_20hz": 12.95,
+  "findings": [
+    "CAN yawRate is identically zero in all moving samples across these segments; it is not a usable lateral target here.",
+    "Valid livePose angular velocity is available after initialization, with device-to-calibrated rotation still required for targets.",
+    "The candidate count is before future-delay, gear, calibration and human quality checks. Unassisted flags do not prove expert driving or rule out stock ACC.",
+    "Assisted footage may be useful for warm-up and evaluation; copying it alone does not teach corrections to its own errors."
+  ]
+}

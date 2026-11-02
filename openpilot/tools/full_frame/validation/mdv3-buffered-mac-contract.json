@@ -1,0 +1,30 @@
+{
+  "uploaded_contract_sha256": "b3faf4a8b0b4ff06e66f0e0fa54613a68fc6af9520f729be31c85d5a9052e506",
+  "contract": {
+    "original_source_sha256": "1cfd2c45353d876b5b257b24d77537de58ab90a44ae595f15b1f64b6ea3fd770",
+    "full_camera_canvas": [
+      512,
+      256
+    ],
+    "input": "full_img: two complete road/wide views, aspect-preserving YUV420 letterbox",
+    "feature_tap": "view_39",
+    "residual_shape": [
+      1,
+      32,
+      512
+    ],
+    "trainable_branch_parameters": 58160,
+    "original_image_path_retained": true,
+    "zero_projection_initialized": true,
+    "action_loss_required": true,
+    "all_original_outputs_and_state_pairs_retained": true,
+    "trained": false,
+    "native_output_parity_verified": true,
+    "modeld_ready": false,
+    "feature_fusion_revision": 2,
+    "feature_fusion": "three explicit tinygrad Contiguous buffers around FP16 addition"
+  },
+  "evidence": "Uploaded Mac contract records a successful native gate for saved buffered graph; detailed updated parity report has not been inspected",
+  "remaining": "Action/auxiliary training, held-out scenario evaluation, full_img production warp/loader integration, and comma/Chestnut replay",
+  "modeld_ready": false
+}

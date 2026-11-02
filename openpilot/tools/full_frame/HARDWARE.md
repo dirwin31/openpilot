@@ -233,3 +233,44 @@ and removes the temporary candidate. The original source remains unchanged.
 The old parity report is backed up before the familiar parity JSON is updated.
 CPU tests cover both candidate publication paths and the graph-buffer gradient.
 The actual saved-graph repair result on Metal remains pending.
+
+### Saved buffered export: Mac contract records successful native parity
+
+The uploaded updated contract records feature-fusion revision 2 and
+`native_output_parity_verified=true`. The repair script writes this sidecar only
+after a successful saved-candidate replay and publication. The detailed updated
+parity report is still uninspected; no exact maximum difference is claimed for
+this saved export. The model remains untrained and `modeld_ready=false`.
+
+The action-signal audit now covers all ten segments from routes 48 and 49.
+Across 11,436 road-camera frames, 9,719 are moving above 2 m/s; 1,784 moving
+frames have neither openpilot axis active, and only 259 of those have matched
+valid pose angular-velocity and acceleration signals (12.95 seconds at 20 Hz).
+This is a candidate count before calibration, future-delay, gear and human
+quality checks. It is not a count of verified expert labels, and openpilot
+inactivity does not rule out the vehicle's stock cruise controller.
+
+CAN yawRate is exactly zero in all audited moving samples, including turns.
+Do not build lateral-action targets from that field. Valid pose yaw-rate
+estimates exist after initialization; rotate their full vectors using the
+logged calibration before any action-target construction. Most manually driven
+startup footage precedes valid poses. The visual stop-sign approach still lacks
+a valid pose at that time and is not a verified complete-stop demonstration.
+Assisted footage can supply context or warm-up, but imitating its existing
+errors is not evidence of learning the requested corrections. More curated
+manual demonstrations are needed for a useful training/evaluation set.
+
+### Selecting the next existing recordings
+
+Prioritize complete routes with openpilot disengaged and the driver performing
+the desired behavior: full stops at relevant stop signs/lines, the preferred
+corner path, and comfortable parked-car clearance. Keep all consecutive segments
+with matching road/wide HEVC and rlog, including the initial context. Several
+minutes per route allow pose initialization and later examples; short startup
+clips can be visually useful while having no valid lateral-motion target.
+Confirm assistance flags, calibration, gear, valid poses and stock-cruise status
+from logs instead of assuming a remembered manual drive proves every label.
+Human review must establish the relevant sign/stop line and intended clearance.
+First acquire one or two suitable full routes and audit their signal coverage
+before requesting a larger corpus. Maintain whole-route training/evaluation
+separation. Additional footage alone is not proof of improved driving.

@@ -38,13 +38,19 @@
   "mountain_dew_v3_mac_download_audit_prepared": true,
   "mountain_dew_v3_action_and_memory_feature_path_traced": true,
   "mountain_dew_v3_full_view_adapter_fixture_passed": true,
-  "mountain_dew_v3_actual_weights_native_parity_verified": false,
+  "mountain_dew_v3_actual_weights_native_parity_verified": true,
   "mountain_dew_v3_research_graph_created_on_mac": true,
   "mountain_dew_v3_native_comparison_executed": true,
   "mountain_dew_v3_native_attempt_error": null,
   "mountain_dew_v3_native_comparison_device": "METAL",
-  "mountain_dew_v3_native_max_output_difference": 0.1875,
+  "mountain_dew_v3_native_max_output_difference": null,
   "mountain_dew_v3_metal_buffered_runtime_control_exact_match": true,
   "mountain_dew_v3_original_initializer_count_verified": 653,
-  "mountain_dew_v3_exported_buffer_repair_native_verified": false
+  "mountain_dew_v3_exported_buffer_repair_native_verified": true,
+  "mountain_dew_v3_buffered_export_pass_reported_by_mac_contract": true,
+  "mountain_dew_v3_latest_detailed_parity_report_inspected": false,
+  "mountain_dew_v3_unbuffered_max_output_difference": 0.1875,
+  "action_signal_audit_latest_routes_complete": true,
+  "can_yaw_rate_identically_zero_in_audited_routes": true,
+  "candidate_unassisted_moving_with_valid_pose_seconds": 12.95
 }
