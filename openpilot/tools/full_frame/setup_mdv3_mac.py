@@ -55,6 +55,7 @@ def main():
   parser.add_argument('--source',type=Path,default=downloads/'mountaindewv3_driving_supercombo.onnx')
   parser.add_argument('--graph',type=Path,default=downloads/'mdv3-full-view-research.onnx')
   parser.add_argument('--device',default='AUTO')
+  parser.add_argument('--diagnose',action='store_true',help='Run parity isolation controls instead of the basic comparison')
   args = parser.parse_args()
   for path in (args.source,args.graph,args.graph.with_suffix('.contract.json')):
     if not path.is_file():
@@ -82,9 +83,17 @@ def main():
   with urlopen(SCRIPT_URL,timeout=40) as response:
     code = response.read()
   adapter.write_bytes(code)
-  print('Retrying native comparison on the existing graph...',flush=True)
-  subprocess.check_call([str(python),str(adapter),str(args.source),'--output',str(args.graph),
-                          '--verify-only','--verify-device',args.device])
+  if args.diagnose:
+    diagnostic = downloads/'diagnose_mdv3.py'
+    with urlopen(SCRIPT_URL.rsplit('/',1)[0]+'/diagnose_mdv3.py',timeout=40) as response:
+      diagnostic.write_bytes(response.read())
+    print('Running diagnostic controls on the existing graph...',flush=True)
+    subprocess.check_call([str(python),str(diagnostic),'--source',str(args.source),'--graph',str(args.graph),
+                            '--device',args.device])
+  else:
+    print('Retrying native comparison on the existing graph...',flush=True)
+    subprocess.check_call([str(python),str(adapter),str(args.source),'--output',str(args.graph),
+                            '--verify-only','--verify-device',args.device])
   print(f'Upload {args.graph.with_suffix(".parity.json")}',flush=True)
 
 

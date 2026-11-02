@@ -1,0 +1,20 @@
+{
+  "uploaded_parity": {
+    "device": "METAL",
+    "frames": 3,
+    "all_outputs_and_states_match": false,
+    "comparison_executed": true,
+    "atol": 0.0001,
+    "rtol": 0.0001,
+    "max_abs_difference": {
+      "outputs": 0.1875,
+      "next_state_img_q": 0,
+      "next_state_desire_q": 0,
+      "next_state_feat_q": 0.0078125
+    },
+    "scope": "Synthetic native zero-branch replay parity only; no training, real-camera replay or driving qualification",
+    "modeld_ready": false
+  },
+  "interpretation": "Native METAL inference ran but failed unchanged 1e-4 relative/absolute tolerance. Action-specific differences and original repeatability are not yet reported. Root cause is not established.",
+  "status": "failed numerical parity; not modeld ready"
+}

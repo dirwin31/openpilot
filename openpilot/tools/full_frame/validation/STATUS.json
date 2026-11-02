@@ -16,7 +16,7 @@
   "stock_chestnut_benchmarked": false,
   "dom_runtime_integration_complete": false,
   "vehicle_deployed": false,
-  "targeted_tests_passed": 52,
+  "targeted_tests_passed": 53,
   "real_training_completed": true,
   "real_model_export_parity_passed": true,
   "smooth_acceleration_head_implemented": true,
@@ -40,6 +40,8 @@
   "mountain_dew_v3_full_view_adapter_fixture_passed": true,
   "mountain_dew_v3_actual_weights_native_parity_verified": false,
   "mountain_dew_v3_research_graph_created_on_mac": true,
-  "mountain_dew_v3_native_comparison_executed": false,
-  "mountain_dew_v3_native_attempt_error": "ModuleNotFoundError: No module named 'tinygrad'"
+  "mountain_dew_v3_native_comparison_executed": true,
+  "mountain_dew_v3_native_attempt_error": null,
+  "mountain_dew_v3_native_comparison_device": "METAL",
+  "mountain_dew_v3_native_max_output_difference": 0.1875
 }

@@ -177,3 +177,30 @@ installation failures directly. It downloads the updated adapter script and runs
 graph is rebuilt, and no SSH/device services are accessed. The user can upload
 the refreshed parity report. An explicit comparison_executed field now separates
 startup failures from completed comparisons that fail numerical tolerances.
+
+
+### Second native attempt: Metal numerical mismatch
+
+The uploaded result confirms three-frame native METAL inference completed.
+The original tolerance (`atol=rtol=1e-4`) failed: max absolute output difference
+0.1875 and feature-state difference 0.0078125; image/desire states matched.
+No conclusion about the action means follows from an aggregate output maximum.
+No cause has been established and no tolerance has been loosened.
+
+`setup_mdv3_mac.py --diagnose` runs `diagnose_mdv3.py` on the existing files and
+refreshes the same parity JSON with frozen-initializer comparisons, original
+repeatability, per-frame/per-output-section errors, and observed feature tensors.
+All output buffers are captured before inspecting intermediate tensors. The
+report explicitly notes this observation order; taps cannot be assumed to expose
+exactly the same internal materialization as an already fused output kernel.
+
+The runtime controls compare the original added branch, an identity bypass,
+an explicitly buffered addition, and an FP32 addition cast back to FP16. They
+change no files or weights. A bypass passing does not qualify a full-view model:
+the report's top-level pass remains tied to the original residual branch,
+original repeatability and preserved original initializers. The buffering and
+precision controls are not exported models. They help separate a nonzero branch,
+changed frozen constants, unstable native execution and fusion/rounding effects.
+The small CPU fixture verifies that a deliberately nonzero branch fails while
+its identity control passes, without incorrectly marking the model as qualified.
+Native diagnostic results on the actual Mac weights remain pending.
