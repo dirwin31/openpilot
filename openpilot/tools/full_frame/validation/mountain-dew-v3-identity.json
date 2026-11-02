@@ -22,6 +22,13 @@
   "source_graph_inspected": false,
   "artifact_is_not_source": true,
   "gitlab_lfs_lookup": "object missing or permission unavailable",
-  "source_archive_location": "StarPilot rebuild scripts use onnx/<source_id>/ within StarPilot-Driving/StarPilot-Resources Hugging Face bucket; v3 source path not yet confirmed",
-  "full_view_adapted": false
+  "source_archive_location": "Confirmed in uploaded complete three-page source index; source bytes not obtained in cloud",
+  "full_view_adapted": false,
+  "source_archive_object": {
+    "path": "onnx/mountaindewv3/mountaindewv3_driving_supercombo.onnx",
+    "bytes": 792542056,
+    "xetHash": "72d7adc218c783a82a46904b0b6301db2bf1983662a493ef86c36a3feb83221f",
+    "xetHash_is_not_onnx_sha256": true
+  },
+  "source_archive_index_sha256": "4ce8b6a942dd394d757fb9d252c7015b032e3e37146aa3102a8a9e76c6853041"
 }

@@ -1,9 +1,11 @@
 import hashlib
+from io import BytesIO
+from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import unittest
 
-from openpilot.tools.full_frame.inspect_source import inspect
+from openpilot.tools.full_frame.inspect_source import inspect, download_source
 
 
 class TestSourceInspection(unittest.TestCase):
@@ -30,3 +32,22 @@ class TestSourceInspection(unittest.TestCase):
       self.assertEqual(result['inputs'][0]['shape'], ['batch', 512])
       self.assertIsNone(result['metadata']['output_slices']['value'])
       self.assertFalse(result['production_ready'])
+
+
+class TestSourceDownload(unittest.TestCase):
+  def test_bad_download_never_publishes_source(self):
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / 'model.onnx'
+      with patch('openpilot.tools.full_frame.inspect_source.urlopen', return_value=BytesIO(b'wrong')):
+        with self.assertRaisesRegex(ValueError, 'size or SHA-256'):
+          download_source(path)
+      self.assertFalse(path.exists())
+
+  def test_existing_source_is_preserved_for_verification(self):
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / 'model.onnx'
+      path.write_bytes(b'existing')
+      with patch('openpilot.tools.full_frame.inspect_source.urlopen') as network:
+        download_source(path)
+      network.assert_not_called()
+      self.assertEqual(path.read_bytes(), b'existing')

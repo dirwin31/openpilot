@@ -44,8 +44,25 @@ weights but do not reveal input shapes or establish trainability.
 The GitLab LFS endpoint did not return this source object. The cloud network
 cannot reach the Hugging Face source archive. `source_index.py` runs with only
 Python's standard library on a Mac and collects every paginated ONNX object
-entry from the archive without downloading weights. Upload its JSON report to
-locate the actual archived source path; no assumed URL should count as verified.
+entry from the archive without downloading weights. The uploaded complete three-page index now confirms the source at
+`onnx/mountaindewv3/mountaindewv3_driving_supercombo.onnx`, 792,542,056 bytes.
+Its Xet hash is a storage identity, not the ONNX SHA-256; verify the latter.
+
+On a Mac with a Python environment containing ONNX, the standalone
+`inspect_source.py` supports:
+
+```sh
+python inspect_source.py /path/to/mountaindewv3_driving_supercombo.onnx \
+  --download --output /path/to/mountain-dew-v3-report.json
+```
+
+It pins the identity verified from Nathan's catalog when `--catalog` is omitted.
+`--download` fetches the identified public source (792.5 MB), prints progress,
+and verifies size and SHA-256 before publishing the file. Existing sources are
+preserved and must pass the same digest check. The report includes tensor
+contracts, initializer shapes and graph connectivity, with no learned weights.
+This lets the Mac send a small report for investigation rather than upload the
+entire model. Raw metadata is reported as encoded text; it is not unpickled.
 
 After obtaining the source, `inspect_source` accepts `--catalog`, `--model` and
 `--output`, verifies the source hash before parsing the graph, and records graph
