@@ -1,7 +1,7 @@
 {
-  "data_used": "synthetic validation plus two uploaded real assisted-driving segments",
+  "data_used": "Uploaded historical routes 46, 47, 48 and 49; recorded-motion training and held-out evaluation",
   "backend_tested": "tinygrad CPU",
-  "base": "Dom 934dadbcdbaaaac78dd6badd09a1ebadd298bae8",
+  "base": "Current upstream Dom cbd6e1eb52e8a46f9837a750d675b877d5ac8762; historical model audit remains separately pinned",
   "geometry_and_motion_tests_passed": 17,
   "full_view_trajectory_gradient_test_passed": true,
   "teacher_forward_passed": true,
@@ -16,7 +16,7 @@
   "stock_chestnut_benchmarked": false,
   "dom_runtime_integration_complete": false,
   "vehicle_deployed": false,
-  "targeted_tests_passed": 38,
+  "targeted_tests_passed": 41,
   "real_training_completed": true,
   "real_model_export_parity_passed": true,
   "smooth_acceleration_head_implemented": true,
@@ -28,5 +28,7 @@
   "pretrained_policy_driving_loss_gradient_verified": true,
   "pretrained_policy_single_example_overfit_only": true,
   "full_frame_correct_driving_responses_validated": false,
-  "mountain_dew_v3_adapted": false
+  "mountain_dew_v3_adapted": false,
+  "read_only_adb_inventory_implemented": true,
+  "research_compute_benchmark_cpu_smoke_passed": true
 }

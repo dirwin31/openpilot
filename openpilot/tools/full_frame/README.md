@@ -9,6 +9,9 @@ Uploaded recordings have been used for offline training and evaluation. There
 are no demonstrated driving gains and no vehicle deployment. See the real-data
 results below; the trained models have not beaten the constant-speed baseline.
 
+For device access, model identification and the prepared compute benchmark,
+see [HARDWARE.md](HARDWARE.md).
+
 ## Current Dom base and reproducibility
 
 The current research branch is `research/full-frame-dom-current`, based on
