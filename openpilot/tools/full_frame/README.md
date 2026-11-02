@@ -5,8 +5,47 @@ both road cameras. The primary experiment here trains full-view images directly
 against recorded future motion. Teacher feature distillation is optional warm-up.
 
 This is an offline research implementation, not a model ready to select in Dom.
-There are no recorded drives in this workspace, no demonstrated driving gains,
-and no vehicle deployment. Synthetic checkpoints only verify the machinery.
+Uploaded recordings have been used for offline training and evaluation. There
+are no demonstrated driving gains and no vehicle deployment. See the real-data
+results below; the trained models have not beaten the constant-speed baseline.
+
+## Current Dom base and reproducibility
+
+The current research branch is `research/full-frame-dom-current`, based on
+StarPilotHQ/StarPilot `Dom` commit `cbd6e1eb52e8a46f9837a750d675b877d5ac8762`
+(fetched November 2, 2026). The original experiment and its backup remain on
+`research/full-frame-offline` and `backup/full-frame-before-dom-update`.
+The histories had no shared ancestor; the experiment was cherry-picked onto
+upstream rather than merging unrelated trees. Only research tools were added.
+The old fork's other custom changes were not ported onto this new branch.
+
+Python tools now live under `openpilot/tools/full_frame`. The historical split
+ONNX weights are not shipped by current Dom. Audit/label commands require
+explicit trusted `--vision` / `--policy` paths; `pretrained_bridge` requires
+`--reference-models`. These are the earlier bundled small model, **not Mountain
+Dew v3**. Its saved model ID is `mountaindewv3`; no v3 artifact was adapted yet.
+
+Use the included historical tinygrad runtime for reproducible research:
+
+```sh
+export PYTHONPATH="$PWD/tinygrad_model_runtime/legacy9d/tinygrad_repo:$PWD/opendbc_repo${PYTHONPATH:+:$PYTHONPATH}"
+DEV=CPU python -m unittest discover -s openpilot/tools/full_frame -p 'test_*.py'
+```
+
+Install the research dependencies NumPy, tinygrad's CPU compiler prerequisites,
+pycapnp, zstandard, ONNX, Pillow, OpenCV, matplotlib, and ffmpeg as needed.
+The log reader defaults to current Dom schemas. For these uploaded historical
+recordings, `capture --schema-root /path/to/old-checkout/cereal` is required:
+current Dom renamed livePose, calibration and camera events. Capture rejects
+current deviceMotion schemas until their own label adapter is implemented.
+A historical schema directory must be complete, including its imported car
+schema. Keep it separate from current Dom; never overwrite current schemas.
+
+The preserved workspace checkout is `/workspace/StarPilotBT`; the updated one
+is `/workspace/StarPilotBT-current-dom`. Recordings, prepared datasets and model
+checkpoints remain outside both at `/workspace/full-frame-data`. The research
+schema option and explicit ONNX paths allow using those artifacts without
+altering the current Dom runtime or its device model selection.
 
 ## What is implemented
 
@@ -38,7 +77,7 @@ behaviour; that requires real training and evaluation.
 
 ## Verified base and model details
 
-Branch: `research/full-frame-offline`, based on Dom commit
+The historical model audit used `research/full-frame-offline`, based on Dom commit
 `934dadbcdbaaaac78dd6badd09a1ebadd298bae8` (fetched from the user's fork).
 
 The bundled `driving_vision.onnx` takes `img` and `big_img`, each
@@ -72,6 +111,7 @@ Use matching files from ONE segment, and a stable route ID for the WHOLE drive:
 
 ```sh
 python -m openpilot.tools.full_frame.capture \
+  --schema-root /path/to/old-checkout/cereal \
   --rlog /data/train-drive/0/rlog \
   --road /data/train-drive/0/fcamera.hevc \
   --wide /data/train-drive/0/ecamera.hevc \
@@ -165,9 +205,9 @@ deployable Dom model. Deployment work should follow evidence from real training.
 ## Optional teacher warm-up and audit
 
 ```sh
-DEV=NPY python -m openpilot.tools.full_frame.lab audit --output /tmp/model-audit.json
-DEV=CPU python -m openpilot.tools.full_frame.lab label /tmp/train-full-view
-DEV=CPU python -m openpilot.tools.full_frame.lab label /tmp/validation-full-view
+DEV=NPY python -m openpilot.tools.full_frame.lab audit --vision /trusted/driving_vision.onnx --policy /trusted/driving_policy.onnx --output /tmp/model-audit.json
+DEV=CPU python -m openpilot.tools.full_frame.lab label /tmp/train-full-view --vision /trusted/driving_vision.onnx
+DEV=CPU python -m openpilot.tools.full_frame.lab label /tmp/validation-full-view --vision /trusted/driving_vision.onnx
 DEV=CPU python -m openpilot.tools.full_frame.lab train \
   --train /tmp/train-full-view --validation /tmp/validation-full-view \
   --output /tmp/warmup-encoder --steps 1000
@@ -194,7 +234,7 @@ and camera pixels outside a central reference crop, with the path anchored at ze
 verify execution only and are explicitly not driving performance measurements.
 The capture-support tests add four checks for camera references and local raw,
 bz2, and zstd event reading. Run all tests with a working tinygrad backend and
-pycapnp installed: `python -m unittest discover -s tools/full_frame -p 'test_*.py'`.
+pycapnp installed: `python -m unittest discover -s openpilot/tools/full_frame -p 'test_*.py'`.
 
 ## First real-data run
 

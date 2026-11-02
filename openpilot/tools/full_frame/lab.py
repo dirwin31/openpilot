@@ -25,7 +25,7 @@ def write_json(path, value):
 
 def audit(args):
   from tinygrad.nn.onnx import OnnxPBParser
-  from openpilot.selfdrive.modeld.get_model_metadata import make_metadata_dict
+  from openpilot.tools.full_frame.reference_metadata import make_metadata_dict
   result = {'dom_reference': DOM_SHA, 'models': {}}
   for path in (args.vision, args.policy):
     graph = OnnxPBParser(path).parse()['graph']
@@ -118,7 +118,7 @@ def prepare(args):
 def label(args):
   from tinygrad import Tensor
   from tinygrad.nn.onnx import OnnxRunner
-  from openpilot.selfdrive.modeld.get_model_metadata import make_metadata_dict
+  from openpilot.tools.full_frame.reference_metadata import make_metadata_dict
   metadata = make_metadata_dict(args.vision)
   feature_slice = metadata['output_slices'].get('hidden_state')
   if feature_slice is None:
@@ -267,8 +267,8 @@ def main():
   parser = argparse.ArgumentParser(description=__doc__)
   commands = parser.add_subparsers(dest='command', required=True)
   p = commands.add_parser('audit')
-  p.add_argument('--vision', type=Path, default=ROOT / 'selfdrive/modeld/models/driving_vision.onnx')
-  p.add_argument('--policy', type=Path, default=ROOT / 'selfdrive/modeld/models/driving_policy.onnx')
+  p.add_argument('--vision', type=Path, required=True, help='Trusted historical split driving vision ONNX')
+  p.add_argument('--policy', type=Path, required=True, help='Trusted historical split driving policy ONNX')
   p.add_argument('--output', type=Path, required=True)
   p.set_defaults(func=audit)
   p = commands.add_parser('prepare')
@@ -282,7 +282,7 @@ def main():
   p.set_defaults(func=prepare)
   p = commands.add_parser('label')
   p.add_argument('dataset', type=Path)
-  p.add_argument('--vision', type=Path, default=ROOT / 'selfdrive/modeld/models/driving_vision.onnx')
+  p.add_argument('--vision', type=Path, required=True, help='Trusted historical split driving vision ONNX')
   p.set_defaults(func=label)
   p = commands.add_parser('train')
   p.add_argument('--train', type=Path, required=True)

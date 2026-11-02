@@ -38,6 +38,7 @@ def decode(path, indices):
 
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument('--schema-root', type=Path, help='Historical cereal schema directory matching the recorded software')
   parser.add_argument('--rlog', type=Path, required=True)
   parser.add_argument('--future-rlog', type=Path, help='Next segment of the same route, supplying future motion across the boundary')
   parser.add_argument('--road', type=Path, required=True)
@@ -49,13 +50,15 @@ def main():
   args = parser.parse_args()
   if args.max_frames < 5 or args.frame_step < 1 or args.output.exists():
     raise ValueError('Need at least five frames and a new output path')
-  from openpilot.tools.full_frame.local_log import read_events
+  from openpilot.tools.full_frame.local_log import read_events, log_schema
+  if 'livePose' not in log_schema(args.schema_root).Event.schema.fields:
+    raise ValueError('Capture currently supports historical livePose recordings only; pass --schema-root matching that recording. Current deviceMotion labels require a separate adapter.')
   from openpilot.tools.full_frame.calibration import nominal_warp
   calibration, device, sensor = None, None, None
   streams = {'roadEncodeIdx': [], 'wideRoadEncodeIdx': []}
   segments = set()
   poses = []
-  for msg in sorted(read_events(args.rlog), key=lambda m: m.logMonoTime):
+  for msg in sorted(read_events(args.rlog, args.schema_root), key=lambda m: m.logMonoTime):
     kind = msg.which()
     if (kind == 'liveCalibration' and msg.valid and len(msg.liveCalibration.rpyCalib) == 3 and
         str(msg.liveCalibration.calStatus) == 'calibrated'):
@@ -83,7 +86,7 @@ def main():
   if args.future_rlog:
     if args.future_rlog.parent.name.rsplit('--', 1)[0] != args.rlog.parent.name.rsplit('--', 1)[0]:
       raise ValueError('Future-motion log must belong to the same route')
-    for msg in read_events(args.future_rlog):
+    for msg in read_events(args.future_rlog, args.schema_root):
       if msg.which() != 'livePose':
         continue
       pose = msg.livePose

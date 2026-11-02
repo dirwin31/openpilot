@@ -65,7 +65,7 @@ def proposals(raw, transform, width, height, confidence=.25):
 
 def load_detector(weights):
   from tinygrad.nn.state import load_state_dict, safe_load
-  root = Path(__file__).resolve().parents[2]
+  root = Path(__file__).resolve().parents[3]
   spec = importlib.util.spec_from_file_location('full_frame_yolo_example', root/'tinygrad_repo/examples/yolov8.py')
   module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
   depth, width, ratio = module.get_variant_multiples('n')

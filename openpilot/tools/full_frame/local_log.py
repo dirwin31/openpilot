@@ -3,8 +3,19 @@ import bz2
 from pathlib import Path
 
 
-def read_events(path):
-  from cereal import log
+def log_schema(schema_root=None):
+  if schema_root is None:
+    from openpilot.cereal import log
+    return log
+  import capnp
+  schema_root = Path(schema_root).resolve()
+  # Load historical schemas explicitly: current Dom renamed wire-compatible
+  # events and changed their fields. Never reinterpret old poses as new ones.
+  return capnp.load(str(schema_root / 'log.capnp'))
+
+
+def read_events(path, schema_root=None):
+  log = log_schema(schema_root)
   path = Path(path)
   data = path.read_bytes()
   if path.suffix == '.zst':

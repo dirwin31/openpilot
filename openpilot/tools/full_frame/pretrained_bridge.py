@@ -26,18 +26,18 @@ def main():
   from tinygrad.nn.optim import Adam
   from tinygrad.nn.state import safe_save
   from openpilot.tools.full_frame.geometry import full_view
-  from openpilot.selfdrive.modeld.get_model_metadata import make_metadata_dict
+  from openpilot.tools.full_frame.reference_metadata import make_metadata_dict
   parser=argparse.ArgumentParser(description=__doc__)
   parser.add_argument('segment',type=Path)
   parser.add_argument('--end-sample',type=int,default=210)
+  parser.add_argument('--reference-models',type=Path,required=True,help='Directory of trusted historical driving_vision.onnx and driving_policy.onnx; not Mountain Dew v3')
   parser.add_argument('--steps',type=int,default=20)
   parser.add_argument('--reuse-trunk',type=Path,help='Verified trunk cache from a previous run on the same window')
   parser.add_argument('--output',type=Path,required=True)
   args=parser.parse_args()
   args.output.mkdir(parents=True,exist_ok=False)
-  root=Path(__file__).resolve().parents[2]
-  vision_path=root/'selfdrive/modeld/models/driving_vision.onnx'
-  policy_path=root/'selfdrive/modeld/models/driving_policy.onnx'
+  vision_path=args.reference_models/'driving_vision.onnx'
+  policy_path=args.reference_models/'driving_policy.onnx'
   vm=make_metadata_dict(vision_path);pm=make_metadata_dict(policy_path)
   vision=OnnxRunner(vision_path);policy=OnnxRunner(policy_path)
   if vm['input_shapes']!={'img':(1,12,128,256),'big_img':(1,12,128,256)}:
