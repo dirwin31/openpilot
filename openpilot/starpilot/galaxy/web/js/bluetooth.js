@@ -1,3 +1,4 @@
+import { UnidenPanel } from './uniden.js'
 import { GxState } from "./state.js"
 import { GxNotice } from "./notice.js"
 import { reportSave } from "./save-feedback.js"
@@ -166,7 +167,7 @@ export class BluetoothFeed {
 }
 
 export const BluetoothPage = {
-  components: { GxState, GxNotice, ControllersPage, GxDialog },
+  components: { UnidenPanel, GxState, GxNotice, ControllersPage, GxDialog },
   props: { mode: { type: String, required: true }, unauthorized: { type: Function, required: true } },
   data: () => ({ status: null, busy: false, error: "", pairValue: "", now: Date.now(), claimAt: Date.now(), forgetting: null }),
   mounted() {
@@ -264,6 +265,7 @@ export const BluetoothPage = {
               <button class="gx-btn" :disabled="!status.powered || status.pairing?.state === 'pairing'" @click="action('pair', {address:device.address})">Pair</button></div></section>
         </template>
       </template>
+      <UnidenPanel v-if="mode === 'local' && status" :devices="status.devices" :parked="status.parked" :unauthorized="unauthorized" />
       <ControllersPage :mode="mode" :unauthorized="unauthorized" />
       <GxDialog v-if="forgetting" labelledby="gx-bt-forget-title" describedby="gx-bt-forget-body" alert @close="closeForget">
         <template v-if="forgetting.state === 'done'">
