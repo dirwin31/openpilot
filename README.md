@@ -5,6 +5,8 @@
 [![Discord](https://img.shields.io/discord/1387432184121393333?label=Discord)](https://firestar.link/discord)
 [![Last Updated](https://img.shields.io/github/last-commit/StarPilotHQ/StarPilot/StarPilot)](https://github.com/StarPilotHQ/StarPilot)
 [![Wiki](https://img.shields.io/badge/Wiki-StarPilot-blue?logo=wiki)](https://wiki.firestar.link)
+[![iOS App Store](https://img.shields.io/badge/iOS-App_Store-black?logo=apple&logoColor=white)](https://apps.apple.com/ca/app/starpilot-bt/id6821039119)
+[![Android Beta](https://img.shields.io/badge/Android-Join_Beta-green?logo=android&logoColor=white)](https://groups.google.com/g/galaxy-starpilot-android-beta)
 
 **StarPilot** is a custom fork of [comma.ai's openpilot](https://comma.ai/openpilot),
 an open source driver assistance system.
