@@ -15,7 +15,7 @@ from openpilot.starpilot.navigation.road_tiles import (
   DATA_ZOOM, EXTENT, MAJOR, MINOR, MOTORWAY, STREET, TileKey, decode_road_tile, encode_road_tile, lat_lon, world_xy,
 )
 from openpilot.starpilot.ui.onroad_map import (
-  CAR_ANCHOR, ZOOM_FAST_M_PER_PX, ZOOM_SLOW_M_PER_PX, CanvasRequest, MapFix, MapInput, MapOverlay, TileReader,
+  CAR_ANCHOR, HEADING_DEADBAND_DEG, MAX_TURN_DEG_S, ZOOM_FAST_M_PER_PX, ZOOM_SLOW_M_PER_PX, CanvasRequest, MapFix, MapInput, MapOverlay, TileReader,
   build_canvas, line_strip, route_guidance, split_route, zoom_for_speed, zoom_target,
 )
 from openpilot.starpilot.system.starport.tests import test_gpu_nv12
@@ -747,6 +747,31 @@ def test_overview_starts_after_standing_still_and_drops_when_moving(tmp_path):
     overlay.close()
 
 
+def test_map_rotation_ignores_heading_wobble_and_turns_gently(tmp_path):
+  overlay = MapOverlay(tmp_path)
+  try:
+    clock = 100.
+    def step(bearing, speed=15.):
+      nonlocal clock
+      clock += .05
+      overlay._advance(MapInput(MapFix(*CENTER, bearing, speed, clock)), clock)
+    step(90.)
+    assert overlay._bearing == 90.
+    for i in range(40):
+      step(90. + (2.5 if i % 2 else -2.5))
+    assert overlay._bearing == 90., "GPS heading wobble leaves the map still"
+    for _ in range(20):
+      step(180., speed=2.)
+    assert overlay._bearing == 90., "creeping along, the map holds its rotation"
+    step(180.)
+    assert 0 < overlay._bearing - 90. <= MAX_TURN_DEG_S * .05 + 1e-9, "a real turn rotates the map, but gently"
+    for _ in range(80):
+      step(180.)
+    assert abs(overlay._bearing - 180.) < HEADING_DEADBAND_DEG + 1e-9
+  finally:
+    overlay.close()
+
+
 def test_road_name_waits_before_replacing_and_clears_when_empty(tmp_path):
   overlay = MapOverlay(tmp_path)
   try:
@@ -777,13 +802,18 @@ def test_map_feed_reports_maneuver_distance_and_road_name(monkeypatch):
   feed = MapFeed(sm, acquisition=acquisition)
   sm.put_route(1, [(36.0, -115.0), (36.1, -115.1)])
   sm.messages["starpilotNavigation"].navigation.instruction = NS(distanceMeters=240.)
-  sm.alive = {"mapdOut": True}
+  sm.updated = {"mapdOut": True}
   sm.valid["mapdOut"] = True
   sm.messages["mapdOut"] = NS(roadName="", wayName="Main Street")
   data = feed.read(sm)
   assert (data.maneuver_distance_m, data.road_name) == (240., "Main Street")
   clock[0] += 3.1
+  sm.updated["mapdOut"] = False
   data = feed.read(sm)
   assert data.maneuver_distance_m is None, "no stale distance once the route lease lapses"
-  sm.alive["mapdOut"] = False
-  assert feed.read(sm).road_name == ""
+  assert data.road_name == "Main Street", "a gap in mapd does not blink the name away"
+  sm.updated["mapdOut"] = True
+  sm.messages["mapdOut"] = NS(roadName="", wayName="")
+  assert feed.read(sm).road_name == "Main Street", "nor does a briefly unnamed way"
+  clock[0] += 8.1
+  assert feed.read(sm).road_name == "", "a name nobody has reported for a while goes away"

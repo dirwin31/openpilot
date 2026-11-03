@@ -132,15 +132,16 @@ class NavigationCard:
     rl.draw_rectangle_rounded_lines_ex(rect, .2, 8, 2, rl.Color(160, 126, 220, 190))
     icon = self._icon(icon_name('arrive' if nav.arrived else nav.maneuver_type, nav.modifier))
     if self.collapsed:
-      size, padding = (52 if compact else 80), 10
+      size = 64 if compact else 100
       rl.draw_texture_pro(icon, rl.Rectangle(0, 0, icon.width, icon.height),
-                          rl.Rectangle(rect.x + padding, rect.y + (rect.height - size) / 2, size, size), rl.Vector2(0, 0), 0, rl.WHITE)
+                          rl.Rectangle(rect.x + (rect.width - size) / 2, rect.y + (rect.height - size) / 2, size, size),
+                          rl.Vector2(0, 0), 0, rl.WHITE)
       return
     self._total = max(self._total, nav.remaining_distance_m)
     padding = 18 if compact else 24
     lanes = () if nav.arrived or nav.distance_m > LANES_SHOW_M else nav.lanes
     header = rect.height * ((.52 if lanes else .64) if compact else (.55 if lanes else .66))
-    size = 64 if compact else 96
+    size = min(84 if compact else 122, header - 6)
     if not lanes:
       rl.draw_texture_pro(icon, rl.Rectangle(0, 0, icon.width, icon.height),
                           rl.Rectangle(rect.x + padding, rect.y + (header - size) / 2, size, size), rl.Vector2(0, 0), 0, rl.WHITE)
@@ -162,11 +163,11 @@ class NavigationCard:
     eta = f'ETA {arrival_time(nav.remaining_seconds, now)}' if now is not None else ''
     right = rect.x + rect.width - padding
     bar_center = rect.y + rect.height - (11 if compact else 21)
-    eta_size = 16 if compact else 22
+    eta_size = 19 if compact else 28
     bar_right = right
     if eta:
       eta_width = self.fonts.measure(eta, FontRole.SEMI_BOLD, eta_size).width
-      self.fonts.draw(eta, FontRole.SEMI_BOLD, eta_size, right - eta_width, bar_center - eta_size * (.55 if compact else .64), rl.Color(235, 225, 255, 255))
+      self.fonts.draw(eta, FontRole.SEMI_BOLD, eta_size, right - eta_width, bar_center - eta_size * (.55 if compact else .6), rl.Color(235, 225, 255, 255))
       bar_right -= eta_width + (12 if compact else 18)
     if lanes:
       lane_top = top + (6 if compact else 9)
@@ -176,8 +177,9 @@ class NavigationCard:
       self._then(nav, rect.x + padding, top + (7 if compact else 7), chip, state.metric)
       if not compact:
         trip = f'{distance_text(nav.remaining_distance_m, state.metric)} | {max(1, round(nav.remaining_seconds / 60))} min'
-        trip_width = self.fonts.measure(trip, FontRole.NORMAL, chip - 2).width
-        self.fonts.draw(trip, FontRole.NORMAL, chip - 2, right - trip_width, top + 3, rl.Color(190, 187, 197, 255))
+        trip_size = 27
+        trip_width = self.fonts.measure(trip, FontRole.MEDIUM, trip_size).width
+        self.fonts.draw(trip, FontRole.MEDIUM, trip_size, right - trip_width, top, rl.Color(214, 210, 226, 255))
     if self._total > 0:
       thick = 5 if compact else 6
       bar = rl.Rectangle(rect.x + padding, bar_center - thick / 2, bar_right - (rect.x + padding), thick)

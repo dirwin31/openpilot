@@ -276,7 +276,7 @@ def test_progress_bar_tracks_the_longest_remaining_distance_per_trip():
     card.render(observed)
     card.render(replace(observed, navigation=replace(observed.navigation, remaining_distance_m=2150.)))
   track, fill = (call.args[0] for call in rounded.call_args_list[-2:])
-  eta_width = len('ETA 3:50 PM') * 22 * .48
+  eta_width = len('ETA 3:50 PM') * 28 * .48
   assert track.width == pytest.approx(560 - 48 - eta_width - 18), 'the bar stops short of the ETA beside it'
   assert fill.width == pytest.approx(track.width * .5)
   card.bounds(replace(observed, navigation=replace(observed.navigation, key=('other', 1))))

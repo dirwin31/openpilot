@@ -49,12 +49,17 @@ CAR_ANCHOR = 0.68            # the car sits below center so more road ahead is v
 ZOOM_SLOW_M_PER_PX = 0.9     # parking-lot and city detail
 ZOOM_FAST_M_PER_PX = 3.4     # highway overview
 MIN_HEADING_SPEED = 1.5      # m/s; GPS heading is noise below this
+ROTATE_MIN_SPEED = 3.0       # m/s; below this the map holds its rotation instead of chasing GPS heading wobble
+HEADING_DEADBAND_DEG = 3.0   # heading changes smaller than this leave the map still
+HEADING_RATE = 1.5           # 1/s: how quickly the map eases toward the heading
+MAX_TURN_DEG_S = 45.0        # the map never spins faster than this
 JUNCTION_LOOKAHEAD_S = 14.0  # zoom in on the next maneuver this many seconds before reaching it
 JUNCTION_MIN_M, JUNCTION_MAX_M = 80.0, 300.0
 STOPPED_SPEED = 0.5          # m/s
 OVERVIEW_AFTER_S = 30.0      # stopped this long: pull back to an overview of the surroundings
 OVERVIEW_MIN_MANEUVER_M = 50.0  # ...unless a maneuver is about to happen
 NAME_HOLD_S = 1.5            # a new road name must stay this long before it replaces the old one
+NAME_KEEP_S = 8.0            # the last road name rides out mapd gaps and unnamed stretches this long
 GUIDANCE_SLACK_PX = 4.0      # screen pixels of driven route left under the puck before guidance is trimmed again
 
 
@@ -486,8 +491,11 @@ class MapOverlay:
       heading = math.radians(fix.bearing)
       target_world = (target_world[0] + math.sin(heading) * units, target_world[1] - math.cos(heading) * units)
       delta = (fix.bearing - self._bearing + 540.0) % 360.0 - 180.0
-      self._bearing = (self._bearing + delta * (min(1.0, dt * 6.0) if self._has_heading else 1.0)) % 360.0
-      self._has_heading = True
+      if not self._has_heading:
+        self._bearing, self._has_heading = fix.bearing % 360.0, True
+      elif fix.speed > ROTATE_MIN_SPEED and abs(delta) > HEADING_DEADBAND_DEG:
+        limit = MAX_TURN_DEG_S * dt
+        self._bearing = (self._bearing + max(-limit, min(limit, delta * min(1.0, dt * HEADING_RATE)))) % 360.0
     if self._world is None or math.hypot(target_world[0] - self._world[0], target_world[1] - self._world[1]) > 0.5:
       self._world = target_world                               # first fix or a jump: no slow glide across town
     else:
@@ -773,15 +781,15 @@ class MapOverlay:
       return
     text = "" if self.has_roads or self._canvas_request is None else "No map data here yet"
     if not text and self._name and self.fonts is not None:
-      self._draw_road_name(rect, opacity)
+      self._draw_road_name(rect)
     if text and self.fonts is not None:
       from openpilot.starpilot.ui.presentation import FontRole
       measured = self.fonts.measure(text, FontRole.MEDIUM, 26)
       self.fonts.draw(text, FontRole.MEDIUM, 26, rect.x + (rect.width - measured.width) / 2,
                       rect.y + rect.height * CAR_ANCHOR + 40, rl.Color(225, 228, 238, round(200 * opacity)))
 
-  def _draw_road_name(self, rect: rl.Rectangle, opacity: float) -> None:
-    """The road under the car, in a pill just below it."""
+  def _draw_road_name(self, rect: rl.Rectangle) -> None:
+    """The road under the car, in a pill just below it; solid whatever the map's opacity so it always reads."""
     from openpilot.starpilot.ui.presentation import FontRole
     size = max(18, round(min(rect.width, rect.height) * 0.075))
     limit = rect.width * 0.8 - size
@@ -795,8 +803,9 @@ class MapOverlay:
     pad = size * 0.55
     pill = rl.Rectangle(rect.x + (rect.width - text_width) / 2 - pad, rect.y + rect.height * CAR_ANCHOR + 38,
                         text_width + pad * 2, size * 1.55)
-    rl.draw_rectangle_rounded(pill, 0.5, 8, rl.Color(8, 12, 20, round(190 * opacity)))
-    self.fonts.draw(text, FontRole.MEDIUM, size, pill.x + pad, pill.y + size * 0.27, rl.Color(236, 238, 246, round(255 * opacity)))
+    rl.draw_rectangle_rounded(pill, 0.5, 8, rl.Color(15, 13, 23, 255))
+    rl.draw_rectangle_rounded_lines_ex(pill, 0.5, 8, 1.5, rl.Color(150, 140, 200, 255))
+    self.fonts.draw(text, FontRole.MEDIUM, size, pill.x + pad, pill.y + size * 0.27, rl.Color(240, 242, 250, 255))
 
   def _draw_source_chip(self, rect: rl.Rectangle) -> None:
     """Where the fix comes from, left of the compass; solid whatever the map's opacity so it always reads."""
@@ -911,6 +920,8 @@ class MapFeed:
     self._navigation_active = False
     self._destination = ''
     self._maneuver_m: float | None = None
+    self._road = ''
+    self._road_seen = -math.inf
     self._acquisition = acquisition if acquisition is not None else GpsAcquisition()
     self._acquisition_polled = -math.inf
 
@@ -977,7 +988,7 @@ class MapFeed:
     return MapInput(self._fix, route, active if navigation_requested is None else navigation_requested,
                     None if fresh else self._acquisition.satellites(now),
                     acquisition_elapsed, self._destination if destination is None else destination,
-                    self._source if self._fix is not None else '', self._maneuver_m if route else None, self._road_name())
+                    self._source if self._fix is not None else '', self._maneuver_m if route else None, self._road_name(now))
 
   @staticmethod
   def _maneuver(nav) -> float | None:
@@ -987,14 +998,19 @@ class MapFeed:
       return None
     return meters if nav.status == "guiding" and math.isfinite(meters) and meters >= 0 else None
 
-  def _road_name(self) -> str:
+  def _road_name(self, now: float) -> str:
+    """mapd's road name, held through dropped frames and briefly unnamed ways so the label doesn't blink."""
     try:
-      if self.sm.alive["mapdOut"] and self.sm.valid["mapdOut"]:
+      if self.sm.updated["mapdOut"] and self.sm.valid["mapdOut"]:
         out = self.sm["mapdOut"]
-        return out.roadName or out.wayName
+        name = out.roadName or out.wayName
+        if name:
+          self._road, self._road_seen = name, now
     except Exception:
       pass
-    return ''
+    if now - self._road_seen > NAME_KEEP_S:
+      self._road = ''
+    return self._road
 
 
 
