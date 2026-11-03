@@ -8,8 +8,7 @@ The app source is not in this repository:
 - Android: [dirwin31/StarPilotAndroid](https://github.com/dirwin31/StarPilotAndroid).
   Join the [Android beta on Google Groups](https://groups.google.com/g/galaxy-starpilot-android-beta) to install it;
   updates come from Google Play.
-- iPhone: [StarPilotHQ/StarPilot](https://github.com/StarPilotHQ/StarPilot) (`Dom` branch,
-  `openpilot/starpilot/companion/ios`). Download [StarPilot BT on the App Store](https://apps.apple.com/ca/app/starpilot-bt/id6821039119).
+- iPhone: [natehuby76/ios-clone](https://github.com/natehuby76/ios-clone). Download [StarPilot BT on the App Store](https://apps.apple.com/ca/app/starpilot-bt/id6821039119).
 
 
 The comma side lives elsewhere:

@@ -119,8 +119,8 @@ file pins the downloaded artifact.
 
 The Galaxy Bluetooth phone bridge from https://github.com/StarPilotHQ/StarPilot
 (natehuby76, PRs #224/#225) is included under `openpilot/starpilot/galaxy_bluetooth/`,
-with its license file (`UPSTREAM-LICENSE`). The iOS app is not included; its source is in that
-repository (`Dom` branch, `openpilot/starpilot/companion/ios/`), and the Android app is at
+with its license file (`UPSTREAM-LICENSE`). The iOS app is not included; its source is at
+https://github.com/natehuby76/ios-clone, and the Android app is at
 https://github.com/dirwin31/StarPilotAndroid.
 The bridge runs on openpilot's Python with PyCryptodome 3.23.0 (BSD/public-domain
 components, from opendbc). Its other dependencies are vendored unmodified, as
