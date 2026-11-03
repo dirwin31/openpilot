@@ -59,7 +59,6 @@ STOPPED_SPEED = 0.5          # m/s
 OVERVIEW_AFTER_S = 30.0      # stopped this long: pull back to an overview of the surroundings
 OVERVIEW_MIN_MANEUVER_M = 50.0  # ...unless a maneuver is about to happen
 NAME_HOLD_S = 1.5            # a new road name must stay this long before it replaces the old one
-NAME_KEEP_S = 8.0            # the last road name rides out mapd gaps and unnamed stretches this long
 GUIDANCE_SLACK_PX = 4.0      # screen pixels of driven route left under the puck before guidance is trimmed again
 
 
@@ -921,7 +920,6 @@ class MapFeed:
     self._destination = ''
     self._maneuver_m: float | None = None
     self._road = ''
-    self._road_seen = -math.inf
     self._acquisition = acquisition if acquisition is not None else GpsAcquisition()
     self._acquisition_polled = -math.inf
 
@@ -988,7 +986,7 @@ class MapFeed:
     return MapInput(self._fix, route, active if navigation_requested is None else navigation_requested,
                     None if fresh else self._acquisition.satellites(now),
                     acquisition_elapsed, self._destination if destination is None else destination,
-                    self._source if self._fix is not None else '', self._maneuver_m if route else None, self._road_name(now))
+                    self._source if self._fix is not None else '', self._maneuver_m if route else None, self._road_name())
 
   @staticmethod
   def _maneuver(nav) -> float | None:
@@ -998,18 +996,16 @@ class MapFeed:
       return None
     return meters if nav.status == "guiding" and math.isfinite(meters) and meters >= 0 else None
 
-  def _road_name(self, now: float) -> str:
-    """mapd's road name, held through dropped frames and briefly unnamed ways so the label doesn't blink."""
+  def _road_name(self) -> str:
+    """mapd's road name, held until mapd names a different road so gaps and unnamed ways don't blink it away."""
     try:
       if self.sm.updated["mapdOut"] and self.sm.valid["mapdOut"]:
         out = self.sm["mapdOut"]
         name = out.roadName or out.wayName
         if name:
-          self._road, self._road_seen = name, now
+          self._road = name
     except Exception:
       pass
-    if now - self._road_seen > NAME_KEEP_S:
-      self._road = ''
     return self._road
 
 

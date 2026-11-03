@@ -815,5 +815,7 @@ def test_map_feed_reports_maneuver_distance_and_road_name(monkeypatch):
   sm.updated["mapdOut"] = True
   sm.messages["mapdOut"] = NS(roadName="", wayName="")
   assert feed.read(sm).road_name == "Main Street", "nor does a briefly unnamed way"
-  clock[0] += 8.1
-  assert feed.read(sm).road_name == "", "a name nobody has reported for a while goes away"
+  clock[0] += 60.
+  assert feed.read(sm).road_name == "Main Street", "it stays until a new name arrives"
+  sm.messages["mapdOut"] = NS(roadName="Desert Inn Road", wayName="")
+  assert feed.read(sm).road_name == "Desert Inn Road"
