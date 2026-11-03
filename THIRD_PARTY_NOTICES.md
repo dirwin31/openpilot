@@ -119,9 +119,9 @@ UI framework is bundled.
 
 ## Galaxy Bluetooth companion source snapshot
 
-The Galaxy Bluetooth phone bridge and iOS app from https://github.com/StarPilotHQ/StarPilot
-(natehuby76, PRs #224/#225) are included under `openpilot/starpilot/galaxy_bluetooth/`
-and `openpilot/starpilot/companion/ios/`, with their license files (`UPSTREAM-LICENSE`, `openpilot/starpilot/companion/ios/UPSTREAM-GALAXY-LICENSE`).
+The Galaxy Bluetooth phone bridge from https://github.com/StarPilotHQ/StarPilot
+(natehuby76, PRs #224/#225) is included under `openpilot/starpilot/galaxy_bluetooth/`,
+with its license file (`UPSTREAM-LICENSE`).
 The bridge runs on openpilot's Python with PyCryptodome 3.23.0 (BSD/public-domain
 components, from opendbc). Its other dependencies are vendored unmodified, as
 pure-Python sources, in `openpilot/starpilot/galaxy_bluetooth/vendor/`:

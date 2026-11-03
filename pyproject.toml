@@ -155,8 +155,6 @@ extend-exclude = ["openpilot/starpilot/galaxy_bluetooth/vendor"]  # unmodified t
 [tool.ruff.lint.per-file-ignores]
 # dbus-next declares D-Bus signatures as string annotations ('s', 'ay', 'a{sv}').
 "openpilot/starpilot/galaxy_bluetooth/bridge/server.py" = ["F722", "F821"]
-# These scripts embed Swift test sources verbatim.
-"openpilot/starpilot/companion/ios/tests/*.py" = ["E501"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "time.time".msg = "Use time.monotonic. time.time can skip due to its reference clock, you probably want a monotonic clock"

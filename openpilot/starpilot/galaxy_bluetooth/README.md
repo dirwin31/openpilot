@@ -1,6 +1,6 @@
 # Galaxy phone bridge
 
-Comma side of the Android and iPhone companion apps (`openpilot/starpilot/companion/`).
+Comma side of the phone companion apps.
 
 - `bootstrap.py` — the `galaxy_phone` process. Once a phone has been paired (or
   Retry is tapped), it starts the Bluetooth bridge and LAN discovery as systemd

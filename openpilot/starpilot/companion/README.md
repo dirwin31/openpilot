@@ -1,13 +1,7 @@
 # StarPilot companion apps
 
-The iPhone app and comma-side integration for Galaxy. Phone apps talk to the comma over Wi-Fi/LAN or Bluetooth and
-share one pairing key.
-
-```
-companion/
-├── ios/       iPhone app (Xcode project, CarPlay, tests) — see ios/README.md
-└── run_host_tests.py
-```
+Comma-side integration for Galaxy. Phone apps talk to the comma over Wi-Fi/LAN or Bluetooth and
+share one pairing key. This repository does not include any phone app source.
 
 The comma side lives elsewhere:
 
@@ -25,7 +19,7 @@ One step pairs the app and phone music. On comma open Settings → Bluetooth →
 
 Before pairing over Wi-Fi/LAN the app asks comma `GET /api/companion/bluetooth-ready` and waits out a boot or a
 Bluetooth bridge restart; it stops with the reason (not parked, Bluetooth off or unavailable) instead of scanning.
-If the app already reaches comma over Wi-Fi/LAN, **Add Bluetooth Phone Pairing** (Android) or **Pair with comma** (iPhone) opens that window itself (the call
+If the app already reaches comma over Wi-Fi/LAN, **Add Bluetooth Phone Pairing** opens that window itself (the call
 Galaxy's Bluetooth page makes), so nothing needs touching on comma. Without a Wi-Fi/LAN session it waits for
 the window as above.
 
@@ -34,8 +28,6 @@ the window as above.
   The first time Galaxy opens over Wi-Fi/LAN on a phone with no comma key (or an expired one), the app offers
   **Add pairing**. It opens comma's pairing window itself, shows each step, and asks for the Nearby devices permission if
   needed. **Not now** asks again next launch; **Don't ask again** leaves it to **Add Bluetooth Phone Pairing** in the menu.
-- iPhone: tap **Pair with comma** in the app, then tap comma once in
-  Settings → Bluetooth (iOS cannot start a Bluetooth bond from an app).
 - No app: tap comma in the phone's Bluetooth settings to pair music only.
 
 Forgetting a Bluetooth device in comma Settings also removes its app key. On Android, forgetting comma in the phone's
@@ -98,4 +90,4 @@ uv run --extra testing --with pycryptodome==3.23.0 --with dbus-next==0.2.3 --wit
 ```
 
 `run_host_tests.py` stubs native modules so it runs on a laptop; it also takes
-explicit test paths. iPhone tests are in `ios/README.md`.
+explicit test paths.
