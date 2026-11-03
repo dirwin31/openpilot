@@ -25,21 +25,18 @@ focus. The comma's warning speaker and global ALSA default are not changed.
 
 ## Companion apps
 
-Pairing a phone in the Android or iPhone companion app also sets it up for phone
+Pairing a phone in a companion app also sets it up for phone
 audio. The app asks the comma to open a short pairing window (Galaxy's **Let a
 phone pair** button does the same). Only one phone can claim it, only phones
 (Bluetooth device class) are accepted, and a confirmation code must be approved.
-Afterward the phone appears as the music source if none was chosen yet. Android
-bonds from the app; on iPhone the app asks you to tap the comma in
-Settings → Bluetooth. The window refuses to open while Android Auto, another
+Afterward the phone appears as the music source if none was chosen yet. The window refuses to open while Android Auto, another
 pairing, or a search holds the adapter, and adapter visibility returns to what it
 was before. The companion's own key pairing never creates a Bluetooth bond.
 
 Installing Soloist is only allowed from the local network, the Galaxy hotspot or
 the tunnel. Over the companion's Bluetooth link the page says so and sends nothing.
-Phone audio itself needs no install and works over Bluetooth. The Android app and
-the iPhone app each carry their own copy of the Galaxy pages, so they show this
-page only after they are updated.
+Phone audio itself needs no install and works over Bluetooth. Companion apps keep
+their own copy of the Galaxy pages, so they show this page only after they are updated.
 
 ## Runtime behavior
 

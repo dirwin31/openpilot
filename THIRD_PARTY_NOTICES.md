@@ -107,15 +107,13 @@ SOFTWARE.
 
 `openpilot/starpilot/soloist/pulseaudio/` contains unmodified AArch64 binaries from Ubuntu 24.04 packages: PulseAudio 16.1 (LGPL-2.1-or-later), libltdl (LGPL-2.1-or-later), libtdb (LGPL-3.0-or-later), libsoxr (LGPL-2.1-or-later), liborc and speexdsp (BSD-style). The complete copyright and license notices are in that directory's `licenses/`, package hashes in `PACKAGES.sha512`, and the corresponding source is available from Ubuntu's archive for the exact versions listed in its README. The libraries are dynamically linked and may be replaced with `update.sh`.
 
-## Galaxy Android companion tunnel
+## Galaxy phone tunnel
 
 `openpilot/starpilot/galaxy/bin/hev-socks5-tunnel_linux_arm64` is the upstream
 [hev-socks5-tunnel 2.18.0](https://github.com/heiher/hev-socks5-tunnel/releases/tag/2.18.0)
 static Linux ARM64 release, under the MIT license. Its notice is retained in
 `openpilot/starpilot/galaxy/bin/LICENSE.hev-socks5-tunnel`; the adjacent SHA-256
-file pins the downloaded artifact. The Android companion uses the Kotlin
-standard library (Apache-2.0) and the Gradle wrapper (Apache-2.0); no third-party
-UI framework is bundled.
+file pins the downloaded artifact.
 
 ## Galaxy Bluetooth companion source snapshot
 
