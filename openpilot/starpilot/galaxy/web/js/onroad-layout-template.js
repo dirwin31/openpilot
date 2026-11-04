@@ -242,6 +242,10 @@ export const ONROAD_LAYOUT_TEMPLATE = `
                 <input v-if="selectedWidget.resizable" class="gx-slider" type="range" step="1" aria-label="Size" :min="selectedWidget.resizable.min" :max="selectedWidget.resizable.max"
                   :value="selectedPosition.size" :disabled="!editAvailable || !!state.drag || !!state.layerDrag" @input="sizeSlider($event)" @change="finishColorEdit" @blur="finishColorEdit">
                 <template v-if="selectedWidget.kind === 'uniden_alerts'">
+                  <label for="layout-uniden-scale">Size · {{ selectedPosition.scale }}%</label>
+                  <input id="layout-uniden-scale" class="gx-slider" type="range" min="50" max="150" step="5"
+                    :value="selectedPosition.scale" :disabled="!editAvailable"
+                    @input="setUnidenDisplay('scale', Number($event.target.value))" @change="finishColorEdit" @blur="finishColorEdit" />
                   <label for="layout-uniden-transparency">Background transparency · {{ selectedPosition.transparency }}%</label>
                   <input id="layout-uniden-transparency" class="gx-slider" type="range" min="0" max="100" step="1"
                     :value="selectedPosition.transparency" :disabled="!editAvailable"
@@ -250,6 +254,11 @@ export const ONROAD_LAYOUT_TEMPLATE = `
                   <GalaxySettingRow feedback="draft" :row="switchRow('Hide when no alert', selectedPosition.hide_when_no_alert === true)" :index="0"
                     :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setUnidenDisplay('hide_when_no_alert', value === 'On')" />
                   <p class="gx-note">Hide quiet and disconnected cards. Turn off to show detector readiness and connection status.</p>
+                  <GalaxySettingRow feedback="draft" :row="switchRow('Hide Quiet Ride alerts', selectedPosition.hide_quiet_ride === true)" :index="0"
+                    :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setUnidenDisplay('hide_quiet_ride', value === 'On')" />
+                  <GalaxySettingRow feedback="draft" :row="switchRow('Hide mute memory alerts', selectedPosition.hide_mute_memory === true)" :index="0"
+                    :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setUnidenDisplay('hide_mute_memory', value === 'On')" />
+                  <p class="gx-note">Leave off alerts the detector is already silencing for Quiet Ride, or for a saved or learned mute location.</p>
                 </template>
                 <template v-if="selectedWidget.opacity">
                   <label for="layout-widget-opacity">{{ selectedWidget.box ? 'Map opacity' : ['cruise_limits', 'jetlink_status'].includes(selectedWidget.kind) ? 'Background opacity' : 'Opacity' }} · {{ selectedPosition.opacity }}%</label>
