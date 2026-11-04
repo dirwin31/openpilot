@@ -10,7 +10,15 @@ from openpilot.starpilot.uniden.protocol import parse_alerts
 
 @pytest.fixture(autouse=True)
 def outline_guard(monkeypatch):
-  monkeypatch.setattr('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded_lines_ex', Mock())
+  outline = Mock()
+  monkeypatch.setattr('openpilot.starpilot.ui.onroad_uniden.outline', outline)
+  return outline
+
+
+def fonts_mock():
+  fonts = Mock()
+  fonts.measure.side_effect = lambda text, role, size: NS(width=len(text) * size * .55, height=size * 1.2)
+  return fonts
 
 
 def test_touch_requires_visible_fresh_card_and_cancels_drag_or_changed_alert():
@@ -41,7 +49,7 @@ def test_touch_requires_visible_fresh_card_and_cancels_drag_or_changed_alert():
 
 
 def test_preview_does_not_start_detector_io_and_r4_has_no_arrows():
-  feed, fonts = Mock(), Mock()
+  feed, fonts = Mock(), fonts_mock()
   feed.snapshot.return_value = {'config': {'enabled': True}, 'connected': True, 'model': 'R4',
                                 'alerts': parse_alerts(b'1,00,K,3,0,24.150,F,1', 'R4')}
   widget = UnidenWidget(fonts, feed)
@@ -59,7 +67,7 @@ def test_preview_does_not_start_detector_io_and_r4_has_no_arrows():
 
 
 def test_transparency_only_changes_background_and_quiet_toggle_controls_visibility():
-  feed, fonts = Mock(), Mock()
+  feed, fonts = Mock(), fonts_mock()
   widget = UnidenWidget(fonts, feed)
   data = {'config': {'enabled': True, 'transparency': 100, 'hide_when_no_alert': True}, 'connected': True, 'model': 'R8',
           'alerts': parse_alerts(b'1,00,KA,3,0,33.785,R,1'), 'can_mute': True}
@@ -94,38 +102,61 @@ def test_transparency_only_changes_background_and_quiet_toggle_controls_visibili
     feed.mute.assert_not_called()
 
 
-def test_multi_threat_rows_overflow_arrows_and_expanded_touch_bounds():
+def test_one_row_per_threat_overflow_arrows_and_touch_bounds():
   from openpilot.starpilot.ui.onroad_uniden import card_size
-  feed, fonts = Mock(), Mock()
+  feed, fonts = Mock(), fonts_mock()
   alerts = parse_alerts(b'1,00,KA,6,0,35.500,R,1&1,00,K,3,0,24.150,F,2')
   data = {'config': {'enabled': True}, 'connected': True, 'can_mute': True, 'model': 'R8', 'alerts': alerts}
   feed.snapshot.return_value = data
   widget = UnidenWidget(fonts, feed)
   state = NS(alert=NS(size='none'), customization={'layouts': {'large': {'uniden_alerts': {'enabled': True, 'x': 30, 'y': 50}}}})
+  assert card_size(alerts[:1]) == (460, 76), 'a single threat is one slim row'
   with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded'), \
        patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle'), \
        patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_triangle') as arrows:
     widget.render(state)
-    labels = [call.args[0] for call in fonts.draw.call_args_list]
-    assert 'UNIDEN R8  •  2 THREATS' in labels
-    assert '35.500 GHz' in labels and '24.150 GHz' in labels
-    assert 'Live' not in labels and 'Muted' in labels
+    draws = {call.args[0]: call.args for call in fonts.draw.call_args_list}
+    assert '35.500 GHz' in draws and '24.150 GHz' in draws
+    assert '1 muted' in draws and not any('THREATS' in text or 'Tap' in text for text in draws)
+    assert draws['1 muted'][4] < 50 + 2, 'the mute note sits in the top edge of the card'
+    band, frequency = draws['KA'], draws['35.500 GHz']
+    assert abs((band[4] + 36 * .6) - (frequency[4] + 28 * .6)) < 1, 'band and frequency share one centre line'
     assert arrows.call_count == 2
-    assert widget.touch('down', 620, 210, state)
-    assert widget.touch('up', 620, 210, state)
+    assert widget.touch('down', 480, 170, state)
+    assert widget.touch('up', 480, 170, state)
     feed.mute.assert_called_once_with(data)
-    assert not widget.touch('down', 620, 230, state)
+    assert not widget.touch('down', 480, 190, state)
     data['alerts'] = alerts * 3
     fonts.reset_mock()
     widget.render(state)
     labels = [call.args[0] for call in fonts.draw.call_args_list]
-    assert '+2 more' in labels
+    assert '3 muted  •  +2 more' in labels
     assert labels.count('35.500 GHz') == 2
-    assert card_size(data['alerts']) == (620, 260)
+    assert card_size(data['alerts']) == (460, 256)
     data['model'] = 'R4'
     arrows.reset_mock()
     widget.render(state)
     arrows.assert_not_called()
+
+
+def test_all_muted_says_so_in_the_outline(outline_guard):
+  feed, fonts = Mock(), fonts_mock()
+  data = {'config': {'enabled': True}, 'connected': True, 'model': 'R8', 'alerts': parse_alerts(b'1,00,KA,3,0,33.785,R,2')}
+  feed.snapshot.return_value = data
+  widget = UnidenWidget(fonts, feed)
+  state = NS(alert=NS(size='none'), customization={'layouts': {'large': {'uniden_alerts': {'enabled': True, 'x': 30, 'y': 50}}}})
+  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded'), \
+       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle'), \
+       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_triangle'):
+    widget.render(state)
+    assert 'Muted' in [call.args[0] for call in fonts.draw.call_args_list]
+    gap = outline_guard.call_args.args[5]
+    assert gap[0] < 30 + 24 < gap[1], 'the outline opens around the note'
+    data['alerts'] = parse_alerts(b'1,00,KA,3,0,33.785,R,1')
+    fonts.reset_mock()
+    widget.render(state)
+    assert 'Muted' not in [call.args[0] for call in fonts.draw.call_args_list]
+    assert outline_guard.call_args.args[5:] == (None,)
 
 
 def test_theme_display_settings_override_legacy_bluetooth_settings():
