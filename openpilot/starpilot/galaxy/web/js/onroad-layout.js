@@ -225,13 +225,12 @@ export const LayoutWidgetPreview = {
         <rect :x="widget.height + 4" :y="widget.height - 16" :width="(widget.width - widget.height * 1.5 - 4) * .38" height="4" rx="2" fill="#c7aef7" />
       </g>
       <g v-else-if="widget.kind === 'uniden_alerts'">
-        <rect :width="widget.width" height="150" rx="14" :stroke="palette.cardBorder || '#9d72ff'" stroke-width="2" :fill="palette.cardFill || '#10191f'" :fill-opacity="(100 - (widget.transparency ?? 8)) / 100" />
-        <text x="24" y="54" font-size="42" font-weight="600" fill="#ff5b65">KA</text>
-        <text x="24" y="90" font-size="25" font-weight="600" :fill="palette.text || '#ffffff'">35.500 GHz</text>
-        <rect v-for="i in 8" :key="i" :x="228 + (i - 1) * 12" :y="93 - (8 + (i - 1) * 3)" width="8" :height="8 + (i - 1) * 3"
+        <rect x="1" y="1" width="458" height="74" rx="14" :stroke="palette.cardBorder || '#9d72ff'" stroke-width="2" :fill="palette.cardFill || '#10191f'" :fill-opacity="(100 - (widget.transparency ?? 8)) / 100" />
+        <text x="24" y="51" font-size="36" font-weight="600" fill="#ff5b65">KA</text>
+        <text x="97" y="48" font-size="28" font-weight="600" :fill="palette.text || '#ffffff'">35.500 GHz</text>
+        <rect v-for="i in 8" :key="i" :x="283 + (i - 1) * 11" :y="53 - (8 + (i - 1) * 3)" width="8" :height="8 + (i - 1) * 3"
           :fill="i > 6 ? '#35434d' : unidenSignal(6, i - 1)" />
-        <path d="M394 44 L422 92 L366 92 Z" fill="#ff5b65" />
-        <text x="24" y="134" font-size="19" :fill="palette.text || '#ffffff'" fill-opacity=".7">Tap anywhere to mute</text>
+        <path d="M411 25 L426 51 L396 51 Z" fill="#ff5b65" />
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
@@ -284,13 +283,12 @@ export const LayoutWidgetPreview = {
         </g>
       </g>
       <g v-else-if="widget.kind === 'uniden_alerts'">
-        <rect :width="widget.width" height="150" rx="14" :stroke="palette.cardBorder || '#9d72ff'" stroke-width="2" :fill="palette.cardFill || '#10191f'" :fill-opacity="(100 - (widget.transparency ?? 8)) / 100" />
-        <text x="24" y="54" font-size="42" font-weight="600" fill="#ff5b65">KA</text>
-        <text x="24" y="90" font-size="25" font-weight="600" :fill="palette.text || '#ffffff'">35.500 GHz</text>
-        <rect v-for="i in 8" :key="i" :x="228 + (i - 1) * 12" :y="93 - (8 + (i - 1) * 3)" width="8" :height="8 + (i - 1) * 3"
+        <rect x="1" y="1" width="458" height="74" rx="14" :stroke="palette.cardBorder || '#9d72ff'" stroke-width="2" :fill="palette.cardFill || '#10191f'" :fill-opacity="(100 - (widget.transparency ?? 8)) / 100" />
+        <text x="24" y="51" font-size="36" font-weight="600" fill="#ff5b65">KA</text>
+        <text x="97" y="48" font-size="28" font-weight="600" :fill="palette.text || '#ffffff'">35.500 GHz</text>
+        <rect v-for="i in 8" :key="i" :x="283 + (i - 1) * 11" :y="53 - (8 + (i - 1) * 3)" width="8" :height="8 + (i - 1) * 3"
           :fill="i > 6 ? '#35434d' : unidenSignal(6, i - 1)" />
-        <path d="M394 44 L422 92 L366 92 Z" fill="#ff5b65" />
-        <text x="24" y="134" font-size="19" :fill="palette.text || '#ffffff'" fill-opacity=".7">Tap anywhere to mute</text>
+        <path d="M411 25 L426 51 L396 51 Z" fill="#ff5b65" />
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
