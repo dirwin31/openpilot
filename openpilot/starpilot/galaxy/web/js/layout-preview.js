@@ -208,7 +208,7 @@ export class LayoutPreviewFeed {
         const blob = await response.blob()
         if (!this.active || item.version !== this.version || request.signal.aborted) return
         if (!blob.size || blob.size > 4 * 1024 * 1024) throw new Error("Preview is unavailable. Reconnecting automatically…")
-        const sprites = this.art ? await widgetArtMetadata(blob) : null
+        const sprites = this.art ? await widgetArtMetadata(blob, response.headers.get("X-Widget-Art")) : null
         if (!this.active || item.version !== this.version || request.signal.aborted) return
         const cacheKey = item.profile + "\n" + item.scene
         const previousUrl = this.art ? this.artCache.get(cacheKey)?.url : this.currentUrl
