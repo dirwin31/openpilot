@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compile } from '../web/vendor/vue/vue.esm-browser.js'
-import { UnidenPanel } from '../web/js/uniden.js'
+import { UnidenPanel, STYLES, STYLE_HELP, SWATCHES } from '../web/js/uniden.js'
 
 test('detector panel compiles and only offers bonded R4/R8 names', () => {
   assert.equal(typeof compile(UnidenPanel.template, { decodeEntities: value => value }), 'function')
@@ -77,4 +77,16 @@ test('reconnecting status stays stable and does not display transport errors', a
 test('rule summary explains exact matching and MHz tolerance in GHz', () => {
   assert.equal(UnidenPanel.methods.ruleRange({ frequency: 34.313, tolerance_mhz: 0 }), 'Matches 34.313 GHz exactly')
   assert.equal(UnidenPanel.methods.ruleRange({ frequency: 34.313, tolerance_mhz: 2 }), 'Matches 34.3110–34.3150 GHz')
+})
+
+test('every frame style has a preview, a description and a toggle that keeps bands in a list', () => {
+  const preview = UnidenPanel.components.StylePreview
+  assert.equal(typeof compile(preview.template, { decodeEntities: value => value }), 'function')
+  assert.deepEqual(Object.keys(STYLE_HELP), Object.keys(STYLES))
+  for (const kind of Object.keys(STYLES)) assert.ok(preview.template.includes(`'${kind}'`), kind)
+  assert.deepEqual(Object.keys(SWATCHES), ['purple', 'violet', 'yellow', 'white'])
+  const state = { config: { border_bands: ['KA', 'LASER'] } }
+  UnidenPanel.methods.toggleBand.call(state, 'border_bands', 'K')
+  UnidenPanel.methods.toggleBand.call(state, 'border_bands', 'KA')
+  assert.deepEqual(state.config.border_bands, ['LASER', 'K'])
 })
