@@ -9,7 +9,8 @@ from openpilot.starpilot.uniden.service import DetectorService
 from openpilot.starpilot.uniden.protocol import alert_key, parse_alerts
 
 ADDRESS = 'AA:BB:CC:DD:EE:FF'
-CONFIG = {'enabled': True, 'address': ADDRESS, 'model': 'R8', 'transparency': 8, 'hide_when_no_alert': True}
+CONFIG = {'enabled': True, 'address': ADDRESS, 'model': 'R8', 'transparency': 8, 'hide_when_no_alert': True,
+          'auto_mute': False, 'hide_filtered': False, 'frequency_rules': []}
 
 
 class UnidenHttpTest(unittest.TestCase):
@@ -62,6 +63,8 @@ class UnidenHttpTest(unittest.TestCase):
       assert status == 200 and result['connected']
       assert self.aa.call.call_args.args == ('uniden',)
       assert self.aa.call.call_args.kwargs['address'] == ADDRESS
+      assert self.aa.call.call_args.kwargs['auto_mute'] is False
+      assert self.aa.call.call_args.kwargs['frequency_rules'] == []
       self.aa.call.side_effect = TimeoutError('Uncertain delivery')
       mute = {'operation': 'mute', 'address': ADDRESS, 'observed_at': time.monotonic(), 'alerts': []}
       assert self.request('/api/bluetooth/uniden', mute, cookie)[0] == 503
