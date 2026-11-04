@@ -12,6 +12,8 @@ FREQUENCY_BANDS = {'X', 'K', 'KA', 'K POP', 'KA POP'}
 BANDS = {'X', 'K', 'KA', 'LASER', 'MRCD', 'MRCT', 'RT3', 'RT4', 'K POP', 'KA POP'}
 DEFAULT_CONFIG = {'enabled': False, 'address': '', 'model': 'R8', 'transparency': 8, 'hide_when_no_alert': True}
 DISPLAY_KEYS = {'transparency', 'hide_when_no_alert'}
+# Field 7 per PROTOCOL.md; only 1 and 2 are confirmed on hardware, the rest are documented but untested.
+MUTE_MODES = {'1': '', '2': 'manual', '3': 'memory', '4': 'auto_memory', '5': 'blocked', '6': 'quiet_ride'}
 
 
 def model_for_name(name):
@@ -59,7 +61,7 @@ def parse_alerts(payload, model='R8'):
         raise ValueError('Invalid frequency')
     alerts.append({'band': band, 'strength': strength, 'frequency': frequency,
                    'direction': {'F': 'front', 'S': 'side', 'R': 'rear'}.get(f[6], '') if model == 'R8' else '',
-                   'muted': f[7] in ('2', '3', '4', '5', '6')})
+                   'muted': f[7] in ('2', '3', '4', '5', '6'), 'mute_mode': MUTE_MODES.get(f[7], '')})
   return sorted(alerts, key=lambda a: (a['band'] != 'LASER', -a['strength']))
 
 

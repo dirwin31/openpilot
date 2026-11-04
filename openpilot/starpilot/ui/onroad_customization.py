@@ -44,6 +44,9 @@ class WidgetPlacement(TypedDict):
   height: NotRequired[int]
   transparency: NotRequired[int]
   hide_when_no_alert: NotRequired[bool]
+  hide_quiet_ride: NotRequired[bool]
+  hide_mute_memory: NotRequired[bool]
+  scale: NotRequired[int]
   opacity: NotRequired[int]
 
 
@@ -206,8 +209,15 @@ _nav_map["note"] = ("Road lines and your route over the camera. Drag the corner 
 PROFILES["large"]["widgets"][NAV_MAP_WIDGET] = _nav_map
 
 UNIDEN_WIDGET = "uniden_alerts"
+UNIDEN_DISPLAY_FIELDS = {"transparency", "hide_when_no_alert", "hide_quiet_ride", "hide_mute_memory", "scale"}
+
+
+def valid_uniden_display(placement: dict) -> bool:
+  return (type(placement.get("transparency")) is int and 0 <= placement["transparency"] <= 100 and
+          all(type(placement.get(key)) is bool for key in ("hide_when_no_alert", "hide_quiet_ride", "hide_mute_memory")) and
+          type(placement.get("scale")) is int and 50 <= placement["scale"] <= 150)
 _uniden = _widget("Uniden alerts", UNIDEN_WIDGET, 620, 260, 700, 780)
-_uniden["default"].update(transparency=8, hide_when_no_alert=True)
+_uniden["default"].update(transparency=8, hide_when_no_alert=True, hide_quiet_ride=False, hide_mute_memory=False, scale=100)
 _uniden["note"] = "R4/R8 detector alerts. Pair and select the detector in Galaxy Bluetooth. Tap an alert to mute."
 PROFILES["large"]["widgets"][UNIDEN_WIDGET] = _uniden
 
@@ -645,6 +655,9 @@ def validate_document(value):
         placement = dict(placement)
         placement.setdefault('transparency', 8)
         placement.setdefault('hide_when_no_alert', True)
+        placement.setdefault('hide_quiet_ride', False)
+        placement.setdefault('hide_mute_memory', False)
+        placement.setdefault('scale', 100)
         layout[key] = placement
       bounds = widget_bounds(profile, key)
       if value['version'] < 8 and key in SPEED_LAYOUT_V7[profile]:
@@ -656,9 +669,8 @@ def validate_document(value):
       elif widget.get("opacity"):
         expected.add("opacity")
       if key == UNIDEN_WIDGET:
-        expected |= {'transparency', 'hide_when_no_alert'}
-        if (type(placement) is not dict or type(placement.get('transparency')) is not int or
-            not 0 <= placement['transparency'] <= 100 or type(placement.get('hide_when_no_alert')) is not bool):
+        expected |= UNIDEN_DISPLAY_FIELDS
+        if type(placement) is not dict or not valid_uniden_display(placement):
           raise ValueError("Invalid Uniden display settings")
       if type(placement) is not dict or set(placement) != expected or type(placement["enabled"]) is not bool:
         raise ValueError("Invalid widget placement")
