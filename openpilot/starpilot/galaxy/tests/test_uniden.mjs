@@ -20,7 +20,7 @@ test('theme maker edits Uniden display settings through draft history', async ()
   const { OnroadLayoutPage } = await import('../web/js/onroad-layout.js')
   const { ONROAD_LAYOUT_TEMPLATE } = await import('../web/js/onroad-layout-template.js')
   assert.equal(typeof compile(ONROAD_LAYOUT_TEMPLATE, { decodeEntities: value => value }), 'function')
-  const position = { transparency: 8, hide_when_no_alert: true }
+  const position = { transparency: 8, hide_when_no_alert: true, hide_quiet_ride: false, hide_mute_memory: false, scale: 100 }
   const history = []
   const context = { editable: true, selectedWidget: { kind: 'uniden_alerts' }, selectedPosition: position,
     state: { profile: 'large', selected: 'uniden_alerts', draft: { position } },
@@ -28,13 +28,21 @@ test('theme maker edits Uniden display settings through draft history', async ()
   const edit = (field, value) => OnroadLayoutPage.methods.setUnidenDisplay.call(context, field, value)
   edit('transparency', 65)
   edit('hide_when_no_alert', false)
-  assert.deepEqual(position, { transparency: 65, hide_when_no_alert: false })
+  edit('hide_quiet_ride', true)
+  edit('hide_mute_memory', true)
+  edit('scale', 130)
+  assert.deepEqual(position, { transparency: 65, hide_when_no_alert: false, hide_quiet_ride: true, hide_mute_memory: true, scale: 130 })
   assert.equal(history[0].position.transparency, 8)
   assert.equal(history[1].position.hide_when_no_alert, true)
   edit('transparency', 101)
+  edit('scale', 151)
+  edit('scale', 49)
+  edit('hide_quiet_ride', 1)
   context.editable = false
   edit('hide_when_no_alert', true)
-  assert.equal(history.length, 2)
+  assert.equal(history.length, 5)
   assert.ok(!UnidenPanel.template.includes('uniden-transparency'))
-  assert.ok(ONROAD_LAYOUT_TEMPLATE.includes(":save-value=\"(index, value) => setUnidenDisplay('hide_when_no_alert'"))
+  for (const field of ['hide_when_no_alert', 'hide_quiet_ride', 'hide_mute_memory'])
+    assert.ok(ONROAD_LAYOUT_TEMPLATE.includes(`:save-value="(index, value) => setUnidenDisplay('${field}'`))
+  assert.ok(ONROAD_LAYOUT_TEMPLATE.includes("setUnidenDisplay('scale'"))
 })
