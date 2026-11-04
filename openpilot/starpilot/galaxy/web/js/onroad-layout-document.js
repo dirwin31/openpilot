@@ -43,6 +43,7 @@ export const withAlpha = (color, factor) => color.slice(0, 7) + Math.floor(parse
 export function widgetSize(widget, position) {
   if (widget.iconSize && position?.display === "icons") return [widget.iconSize, widget.iconSize]
   if (widget.sizes && Array.isArray(widget.sizes[position?.size])) return [...widget.sizes[position.size]]
+  if (widget.kind === "uniden_alerts" && Number.isInteger(position?.scale)) return [Math.round(widget.width * position.scale / 100), Math.round(widget.height * position.scale / 100)]
   if (widget.box) return [position?.width ?? widget.width, position?.height ?? widget.height]
   if (widget.resizable) return [position?.size ?? widget.width, position?.size ?? widget.height]
   return [widget.width, widget.height]
