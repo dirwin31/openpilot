@@ -6,11 +6,10 @@ from unittest.mock import Mock, patch
 
 from openpilot.starpilot.galaxy.tests import test_bluetooth_http as bluetooth_http
 from openpilot.starpilot.uniden.service import DetectorService
-from openpilot.starpilot.uniden.protocol import alert_key, parse_alerts
+from openpilot.starpilot.uniden.protocol import DEFAULT_CONFIG, alert_key, parse_alerts
 
 ADDRESS = 'AA:BB:CC:DD:EE:FF'
-CONFIG = {'enabled': True, 'address': ADDRESS, 'model': 'R8', 'transparency': 8, 'hide_when_no_alert': True,
-          'auto_mute': False, 'hide_filtered': False, 'frequency_rules': []}
+CONFIG = {**DEFAULT_CONFIG, 'enabled': True, 'address': ADDRESS, 'model': 'R8'}
 
 
 class UnidenHttpTest(unittest.TestCase):

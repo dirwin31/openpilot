@@ -2688,14 +2688,15 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
         if identity is None:
           self.json(401, {'error': 'Sign in to Galaxy'})
           return
-        def detector_exchange(config, mute):
+        def detector_exchange(config, mute, situation=None):
           from openpilot.starpilot.uniden.transport import exchange
           if self.settings_session() != identity:
             raise BluetoothRejected('Session expired', code='session_expired')
           if starport_setup_owner().enabled():
             try:
               delegated = self.starport_command(identity, 'uniden', address=config['address'], model=config['model'], mute=mute,
-                                                auto_mute=config['auto_mute'], frequency_rules=config['frequency_rules'])
+                                                auto_mute=config['auto_mute'], frequency_rules=config['frequency_rules'],
+                                                situation=situation)
             except (OSError, RuntimeError):
               if mute is not None:
                 raise BluetoothUnavailable('Mute delivery was not confirmed; check the detector') from None
@@ -2705,7 +2706,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
                 raise BluetoothRejected(delegated.get('message', 'Bluetooth is busy'), code=delegated['error_code'])
               return delegated['detector']
           return exchange(bluetooth_owner(), config['address'], config['model'], identity, mute=mute,
-                          auto_mute=config['auto_mute'], frequency_rules=config['frequency_rules'])
+                          auto_mute=config['auto_mute'], frequency_rules=config['frequency_rules'], situation=situation)
         try:
           result = uniden_owner().request(payload, detector_exchange, valid=lambda: self.settings_session() == identity)
         except ValueError as error:

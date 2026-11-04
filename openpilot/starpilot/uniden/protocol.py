@@ -10,9 +10,22 @@ WRITE_UUID = '2c86686a-53dc-25b3-0c4a-f0e10c8dee20'
 GATT = 'org.bluez.GattCharacteristic1'
 FREQUENCY_BANDS = {'X', 'K', 'KA', 'K POP', 'KA POP'}
 BANDS = {'X', 'K', 'KA', 'LASER', 'MRCD', 'MRCT', 'RT3', 'RT4', 'K POP', 'KA POP'}
+LOCK_BANDS = ('X', 'K', 'KA', 'LASER')
+BORDER_BANDS = ('K', 'KA', 'LASER')
+TIMED_BANDS = ('X', 'K', 'KA')
+# openpilot already uses green, blue, cyan, pink, orange, red and grey.
+BORDER_STYLES = ('solid', 'pulse', 'chase', 'corners', 'direction')
+BORDER_SWATCHES = {'purple': '#B026FF', 'violet': '#8F7BFF', 'yellow': '#E3FF00', 'white': '#FFFFFF'}
+RULE_BOUNDS = {'X': (10.0, 11.0), 'K': (23.0, 25.0), 'KA': (33.0, 36.0)}
 DEFAULT_CONFIG = {'enabled': False, 'address': '', 'model': 'R8', 'transparency': 8, 'hide_when_no_alert': True,
-                  'auto_mute': False, 'hide_filtered': False, 'frequency_rules': []}
-OPTIONAL_KEYS = {'transparency', 'hide_when_no_alert', 'auto_mute', 'hide_filtered', 'frequency_rules'}
+                  'auto_mute': False, 'hide_filtered': False, 'frequency_rules': [],
+                  'quiet_ride': False, 'quiet_margin': 0, 'quiet_bands': ['X', 'K'],
+                  'auto_learn': False, 'learn_bands': ['X', 'K'], 'border_bands': ['KA', 'LASER'],
+                  'border_colors': {'KA': 'purple', 'K': 'yellow', 'LASER': 'white'},
+                  'border_styles': {'KA': 'chase', 'K': 'corners', 'LASER': 'pulse'},
+                  'timed_mute': False, 'timed_mute_seconds': 5, 'timed_mute_strength': 6, 'timed_mute_bands': ['X', 'K', 'KA'],
+                  'unmute_on_breakthrough': False}
+OPTIONAL_KEYS = set(DEFAULT_CONFIG) - {'enabled', 'address', 'model'}
 # Field 7 per PROTOCOL.md; only 1 and 2 are confirmed on hardware, the rest are documented but untested.
 MUTE_MODES = {'1': '', '2': 'manual', '3': 'memory', '4': 'auto_memory', '5': 'blocked', '6': 'quiet_ride'}
 
@@ -40,8 +53,34 @@ def normalize_config(value):
     if type(config[key]) is not bool:
       raise ValueError('Filter toggles must be boolean')
   config['frequency_rules'] = normalize_rules(config['frequency_rules'])
+  for key in ('quiet_ride', 'auto_learn'):
+    if type(config[key]) is not bool:
+      raise ValueError('Quiet Ride and learning toggles must be boolean')
+  if type(config['quiet_margin']) is not int or not 0 <= config['quiet_margin'] <= 15:
+    raise ValueError('Quiet Ride margin must be 0–15')
+  for key in ('timed_mute', 'unmute_on_breakthrough'):
+    if type(config[key]) is not bool:
+      raise ValueError('Timed mute toggles must be boolean')
+  for key, low, high, message in (('timed_mute_seconds', 1, 60, 'Mute delay must be 1–60 seconds'),
+                                  ('timed_mute_strength', 2, 8, 'Mute strength must be 2–8')):
+    if type(config[key]) is not int or not low <= config[key] <= high:
+      raise ValueError(message)
+  for key, allowed in (('quiet_bands', LOCK_BANDS), ('learn_bands', LOCK_BANDS), ('border_bands', BORDER_BANDS),
+                       ('timed_mute_bands', TIMED_BANDS)):
+    config[key] = normalize_bands(config[key], allowed)
+  for key, choices, message in (('border_colors', BORDER_SWATCHES, 'Choose a border color from the list'),
+                                ('border_styles', BORDER_STYLES, 'Choose a border style from the list')):
+    chosen = config[key]
+    if type(chosen) is not dict or set(chosen) != set(BORDER_BANDS) or any(type(v) is not str or v not in choices for v in chosen.values()):
+      raise ValueError(message)
   config['address'] = config['address'].upper()
   return config
+
+
+def normalize_bands(bands, allowed):
+  if type(bands) is not list or any(type(band) is not str or band not in allowed for band in bands):
+    raise ValueError('Choose from ' + ', '.join(allowed))
+  return [band for band in allowed if band in bands]
 
 
 def parse_alerts(payload, model='R8'):
@@ -84,7 +123,7 @@ def normalize_rules(rules):
       raise ValueError('Invalid frequency rule')
     if type(rule['enabled']) is not bool or type(rule['label']) is not str or len(rule['label']) > 60:
       raise ValueError('Use a label of at most 60 characters')
-    bounds = {'X': (10.0, 11.0), 'K': (23.0, 25.0), 'KA': (33.0, 36.0)}
+    bounds = RULE_BOUNDS
     band = rule['band']
     if type(band) is not str or band not in bounds:
       raise ValueError('Choose X, K or KA band')

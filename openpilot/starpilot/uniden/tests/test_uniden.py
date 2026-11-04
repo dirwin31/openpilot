@@ -174,7 +174,7 @@ def test_service_defaults_configure_authority_and_selected_device():
     service.request({'operation': 'mute', 'address': 'old', 'alerts': [], 'observed_at': 0}, transport)
   transport.side_effect = BluetoothRejected('Pairing busy')
   result = service.request({'operation': 'status'}, transport)
-  assert result['config'] == CONFIG and not result['connected'] and result['alerts'] == []
+  assert result['config'] == {**DEFAULT_CONFIG, **CONFIG} and not result['connected'] and result['alerts'] == []
 
 
 def test_feed_stale_and_hidden_and_failed_mute_not_replayed():
@@ -227,7 +227,7 @@ def test_expired_session_cannot_save_detector_configuration():
 def test_older_detector_configuration_gains_display_defaults():
   from openpilot.starpilot.uniden.protocol import normalize_config
   old = {'enabled': True, 'address': ADDRESS, 'model': 'R8'}
-  assert normalize_config(old) == CONFIG
+  assert normalize_config(old) == {**DEFAULT_CONFIG, **CONFIG}
   assert normalize_config({**CONFIG, 'transparency': 100, 'hide_when_no_alert': False})['transparency'] == 100
 
 
@@ -310,7 +310,7 @@ def test_failed_connect_and_retry_delay_have_same_status(setup):
   params = Mock()
   params.get.return_value = CONFIG
   service = DetectorService(params, lambda: True)
-  results = [service.request({'operation': 'status'}, lambda config, mute: exchange(owner, ADDRESS, 'R8', ('live',))) for _ in range(2)]
+  results = [service.request({'operation': 'status'}, lambda config, mute, situation=None: exchange(owner, ADDRESS, 'R8', ('live',))) for _ in range(2)]
   assert all(result['connection_state'] == 'reconnecting' for result in results)
   assert results[0]['error'] == results[1]['error'] == 'Reconnecting to detector'
   assert not any(result['connected'] or result['alerts'] for result in results)
