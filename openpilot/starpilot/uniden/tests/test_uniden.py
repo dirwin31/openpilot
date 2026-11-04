@@ -301,3 +301,33 @@ def test_legacy_config_gains_independent_rule_lists():
   first, second = normalize_config(legacy), normalize_config(legacy)
   first['frequency_rules'].append(RULE)
   assert second['frequency_rules'] == [] and not second['auto_mute']
+
+
+def test_failed_connect_and_retry_delay_have_same_status(setup):
+  owner, client, objects = setup
+  objects[PATH][DEVICE]['Connected'] = False
+  client._call.side_effect = BluetoothRejected('org.bluez.Error.Failed')
+  params = Mock()
+  params.get.return_value = CONFIG
+  service = DetectorService(params, lambda: True)
+  results = [service.request({'operation': 'status'}, lambda config, mute: exchange(owner, ADDRESS, 'R8', ('live',))) for _ in range(2)]
+  assert all(result['connection_state'] == 'reconnecting' for result in results)
+  assert results[0]['error'] == results[1]['error'] == 'Reconnecting to detector'
+  assert not any(result['connected'] or result['alerts'] for result in results)
+  assert sum(call.args[2] == 'Connect' for call in client._call.call_args_list) == 1
+
+
+@pytest.mark.parametrize('error,expected', [
+  (BluetoothRejected('org.bluez.Error.Failed'), 'reconnecting'),
+  (BluetoothRejected('org.bluez.Error.NotAuthorized'), 'detector_pairing_required'),
+  (BluetoothRejected('off', code='radio_off'), 'radio_off'),
+  (BluetoothRejected('pairing', code='busy'), 'busy'),
+  (ValueError('Unsupported alert packet'), 'unavailable'),
+])
+def test_connection_errors_are_friendly_and_keep_alerts_unavailable(error, expected):
+  params = Mock()
+  params.get.return_value = CONFIG
+  result = DetectorService(params, lambda: True).request({'operation': 'status'}, Mock(side_effect=error))
+  assert result['connection_state'] == expected
+  assert 'org.bluez' not in result['error']
+  assert not result['connected'] and result['alerts'] == []

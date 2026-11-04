@@ -5,6 +5,7 @@ const assert = require('node:assert/strict')
 const web = path.resolve(__dirname, '../../web')
 let config = { enabled: false, address: '', model: 'R8', transparency: 8, hide_when_no_alert: true,
   auto_mute: false, hide_filtered: false, frequency_rules: [] }
+let connection = null
 ;(async () => {
   const browser = await chromium.launch({ headless: true,
     ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {}) })
@@ -17,7 +18,7 @@ let config = { enabled: false, address: '', model: 'R8', transparency: 8, hide_w
       if (pathname === '/api/bluetooth/uniden') {
         const body = route.request().postDataJSON()
         if (body.operation === 'configure') config = body.config
-        return route.fulfill({ json: { config, connected: !!config.enabled, alerts: [] } })
+        return route.fulfill({ json: { config, connected: !!config.enabled, alerts: [], ...(connection || {}) } })
       }
       if (pathname === '/') return route.fulfill({ contentType: 'text/html', body: `<meta name="viewport" content="width=device-width,initial-scale=1">
         <link rel="stylesheet" href="/css/galaxy.css"><link rel="stylesheet" href="/css/settings.css">
@@ -57,6 +58,16 @@ let config = { enabled: false, address: '', model: 'R8', transparency: 8, hide_w
       }
     }
     await page.getByLabel('Frequency (GHz)').fill('34.315')
+    for (const error of ['org.bluez.Error.Failed', 'Waiting to reconnect detector']) {
+      connection = { connected: false, connection_state: 'reconnecting', error }
+      await page.evaluate(() => window.panel.$refs.panel.refresh())
+      await page.getByText('Reconnecting', { exact: true }).waitFor()
+      assert.equal(await page.getByText(error, { exact: true }).count(), 0)
+      assert.equal(await page.getByLabel('Frequency (GHz)').inputValue(), '34.315')
+    }
+    connection = null
+    await page.evaluate(() => window.panel.$refs.panel.refresh())
+    await page.getByText('Connected', { exact: true }).waitFor()
     await page.getByRole('button', { name: 'Discard changes' }).click()
     assert.equal(await page.getByLabel('Frequency (GHz)').inputValue(), '34.313')
     await page.evaluate(() => window.panel.parked = false)
