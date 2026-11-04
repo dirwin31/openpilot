@@ -117,8 +117,8 @@ def test_one_row_per_threat_overflow_arrows_and_touch_bounds():
     widget.render(state)
     draws = {call.args[0]: call.args for call in fonts.draw.call_args_list}
     assert '35.500 GHz' in draws and '24.150 GHz' in draws
-    assert '1 muted' in draws and not any('THREATS' in text or 'Tap' in text for text in draws)
-    assert draws['1 muted'][4] < 50 + 2, 'the mute note sits in the top edge of the card'
+    assert '1 Muted' in draws and not any('THREATS' in text or 'Tap' in text for text in draws)
+    assert draws['1 Muted'][4] < 50 + 2, 'the mute note sits in the top edge of the card'
     band, frequency = draws['KA'], draws['35.500 GHz']
     assert abs((band[4] + 36 * .6) - (frequency[4] + 28 * .6)) < 1, 'band and frequency share one centre line'
     assert arrows.call_count == 2
@@ -130,7 +130,7 @@ def test_one_row_per_threat_overflow_arrows_and_touch_bounds():
     fonts.reset_mock()
     widget.render(state)
     labels = [call.args[0] for call in fonts.draw.call_args_list]
-    assert '3 muted  •  +2 more' in labels
+    assert '3 Muted  •  +2 more' in labels
     assert labels.count('35.500 GHz') == 2
     assert card_size(data['alerts']) == (460, 256)
     data['model'] = 'R4'
@@ -261,3 +261,14 @@ def test_scale_grows_the_card_and_its_touch_area():
   widget.touch('cancel', 0, 0, state)
   placement['scale'] = 100
   assert not widget.touch('down', 30 + 460 * 1.5 - 5, 50 + 76 * 1.5 - 5, state)
+
+
+def test_mute_note_names_quiet_ride_and_mute_memory():
+  from openpilot.starpilot.ui.onroad_uniden import mute_note
+  assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,6')) == 'Q-Ride'
+  assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,3')) == 'Mute Memory'
+  assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,3&1,00,X,2,0,10.525,S,4')) == 'Mute Memory', 'learned and saved are both mute memory'
+  assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,2')) == 'Muted'
+  assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,6&1,00,X,2,0,10.525,S,3')) == 'Muted', 'mixed reasons read as plain muted'
+  assert mute_note(parse_alerts(b'1,00,KA,6,0,35.500,F,1&1,00,K,3,0,24.150,F,6')) == '1 Q-Ride'
+  assert mute_note(parse_alerts(b'1,00,KA,6,0,35.500,F,1')) == ''
