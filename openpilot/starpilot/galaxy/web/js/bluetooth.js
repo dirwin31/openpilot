@@ -58,8 +58,8 @@ export function validBluetoothStatus(value) {
 }
 
 export class BluetoothFeed {
-  constructor({ publish, unauthorized = () => {}, fetcher = (...args) => fetch(...args),
-                later = (fn, ms) => setTimeout(fn, ms), cancelTimer = (id) => clearTimeout(id) }) {
+  constructor({ publish, unauthorized = () => { }, fetcher = (...args) => fetch(...args),
+    later = (fn, ms) => setTimeout(fn, ms), cancelTimer = (id) => clearTimeout(id) }) {
     Object.assign(this, { publish, unauthorized, fetcher, later, cancelTimer })
     this.active = false
     this.generation = 0
@@ -76,8 +76,10 @@ export class BluetoothFeed {
   stop(cancelPair = false) {
     // A phone window has to survive the page being hidden: the phone is opened to tap the comma.
     if (cancelPair && this.active && this.status?.pairing?.state === "pairing" && !this.status.pairing.incoming) {
-      this.fetcher("./api/bluetooth/action", { method: "POST", credentials: "same-origin", keepalive: true,
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operation: "cancel_pair" }) }).catch(() => {})
+      this.fetcher("./api/bluetooth/action", {
+        method: "POST", credentials: "same-origin", keepalive: true,
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operation: "cancel_pair" })
+      }).catch(() => { })
     }
     this.active = false
     this.generation++
@@ -211,7 +213,7 @@ export const BluetoothPage = {
       const accepted = await this.feed.action(operation, fields)
       if (accepted && ['pair', 'accept_pair'].includes(operation)) {
         await this.$nextTick()
-        ;(this.$refs.phonePairing || this.$refs.devicePairing)?.scrollIntoView({ block: 'nearest' })
+          ; (this.$refs.phonePairing || this.$refs.devicePairing)?.scrollIntoView({ block: 'nearest' })
       }
       return accepted
     },
@@ -240,7 +242,7 @@ export const BluetoothPage = {
         <GxState v-if="!status && !error" loading>Checking Bluetooth…</GxState>
         <template v-else-if="status && !unidenSettings">
           <section class="gx-card"><div class="gx-section__header"><i class="bi bi-bluetooth" aria-hidden="true"></i><span class="gx-section__title">Bluetooth radio</span></div>
-            <div class="gx-panel gx-stack">
+            <div class="gx-panel gx-stack gx-bluetooth__radio">
               <GxNotice v-if="status.errorCode" tone="danger">{{ bluetoothError(status.errorCode) }}</GxNotice>
               <GxNotice v-else-if="!status.parked" tone="warn">Park to pair devices or change Bluetooth connections.</GxNotice>
               <div class="gx-row gx-row--borderless"><div class="gx-row__info"><span class="gx-row__label">{{ status.powered ? 'Bluetooth on' : 'Bluetooth off' }}</span><span class="gx-row__desc">Connected devices · {{ saved.filter(device => device.connected).length }}</span></div>
@@ -291,7 +293,7 @@ export const BluetoothPage = {
               <div class="gx-row"><div class="gx-row__info"><span class="gx-row__label">Detector, controller or audio device</span><span class="gx-row__desc">Put the device in pairing mode, then search.</span></div>
                 <button class="gx-btn gx-btn--tonal" :disabled="!status.powered || !status.parked || status.pairing?.state === 'pairing'" @click="action(status.discovering ? 'stop_scan' : 'scan')">{{ status.discovering ? 'Stop search' : 'Search' }}</button></div>
               <details><summary class="gx-link">Pairing a Uniden detector?</summary><p class="gx-note">Enable Bluetooth and open BT Pairing on the detector. Close other apps connected to it. After pairing, open the Uniden tab to select it.</p></details>
-              <p class="gx-note">Android Auto pairing stays on the <a class="gx-link" href="#/starport">StarPort page</a>.</p>
+              <p class="gx-note">Android Auto pairing is found on the <a class="gx-link" href="#/starport">StarPort page</a>.</p>
             </div>
             <div v-if="status.discovering || nearby.length" class="gx-section__header"><span class="gx-section__title">Nearby devices</span></div>
             <p v-if="status.discovering && !nearby.length" class="gx-note gx-inset" role="status">Searching for devices…</p>
