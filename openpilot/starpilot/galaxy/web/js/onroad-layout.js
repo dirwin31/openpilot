@@ -225,12 +225,14 @@ export const LayoutWidgetPreview = {
         <rect :x="widget.height + 4" :y="widget.height - 16" :width="(widget.width - widget.height * 1.5 - 4) * .38" height="4" rx="2" fill="#c7aef7" />
       </g>
       <g v-else-if="widget.kind === 'uniden_alerts'">
+        <g :transform="'scale(' + (widget.scale ?? 100) / 100 + ')'">
         <rect x="1" y="1" width="458" height="74" rx="14" :stroke="palette.cardBorder || '#9d72ff'" stroke-width="2" :fill="palette.cardFill || '#10191f'" :fill-opacity="(100 - (widget.transparency ?? 8)) / 100" />
         <text x="24" y="51" font-size="36" font-weight="600" fill="#ff5b65">KA</text>
         <text x="97" y="48" font-size="28" font-weight="600" :fill="palette.text || '#ffffff'">35.500 GHz</text>
         <rect v-for="i in 8" :key="i" :x="283 + (i - 1) * 11" :y="53 - (8 + (i - 1) * 3)" width="8" :height="8 + (i - 1) * 3"
           :fill="i > 6 ? '#35434d' : unidenSignal(6, i - 1)" />
         <path d="M411 25 L426 51 L396 51 Z" fill="#ff5b65" />
+        </g>
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
@@ -283,12 +285,14 @@ export const LayoutWidgetPreview = {
         </g>
       </g>
       <g v-else-if="widget.kind === 'uniden_alerts'">
+        <g :transform="'scale(' + (widget.scale ?? 100) / 100 + ')'">
         <rect x="1" y="1" width="458" height="74" rx="14" :stroke="palette.cardBorder || '#9d72ff'" stroke-width="2" :fill="palette.cardFill || '#10191f'" :fill-opacity="(100 - (widget.transparency ?? 8)) / 100" />
         <text x="24" y="51" font-size="36" font-weight="600" fill="#ff5b65">KA</text>
         <text x="97" y="48" font-size="28" font-weight="600" :fill="palette.text || '#ffffff'">35.500 GHz</text>
         <rect v-for="i in 8" :key="i" :x="283 + (i - 1) * 11" :y="53 - (8 + (i - 1) * 3)" width="8" :height="8 + (i - 1) * 3"
           :fill="i > 6 ? '#35434d' : unidenSignal(6, i - 1)" />
         <path d="M411 25 L426 51 L396 51 Z" fill="#ff5b65" />
+        </g>
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
@@ -529,7 +533,7 @@ export const OnroadLayoutPage = {
         const [width, height] = widgetSize(widget, this.layout[widget.id])
         return {
           ...widget, width, height, ...(widget.iconSize ? { display: this.layout[widget.id].display } : {}),
-          ...(widget.kind === "uniden_alerts" ? { transparency: this.layout[widget.id].transparency } : {}),
+          ...(widget.kind === "uniden_alerts" ? { transparency: this.layout[widget.id].transparency, scale: this.layout[widget.id].scale } : {}),
           ...(widget.opacity ? { opacity: this.layout[widget.id].opacity } : {}),
           ...(widget.backgroundToggle ? { background: this.layout[widget.id].background } : {}),
           ...(widget.collapseToggle ? { collapse: this.layout[widget.id].collapse } : {})
@@ -1149,8 +1153,9 @@ export const OnroadLayoutPage = {
     },
     setUnidenDisplay(field, value) {
       if (!this.editable || this.state.drag || this.state.layerDrag || this.selectedWidget?.kind !== 'uniden_alerts') return
-      if (field === 'transparency' ? !Number.isInteger(value) || value < 0 || value > 100 :
-          field !== 'hide_when_no_alert' || typeof value !== 'boolean') return
+      const range = { transparency: [0, 100], scale: [50, 150] }[field]
+      if (range ? !Number.isInteger(value) || value < range[0] || value > range[1] :
+          !['hide_when_no_alert', 'hide_quiet_ride', 'hide_mute_memory'].includes(field) || typeof value !== 'boolean') return
       this.finishColorEdit()
       const before = clone(this.state.draft)
       this.selectedPosition[field] = value
