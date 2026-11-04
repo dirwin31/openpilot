@@ -755,3 +755,31 @@ html.gx-maker-open, html.gx-maker-open body { touch-action: manipulation; }
 @media (max-width: 600px) {
   .gx-bluetooth .gx-row { flex-wrap: wrap; }
 }
+
+.gx-uniden { display: grid; gap: var(--sp-4); min-width: 0; }
+.gx-uniden > .gx-card { margin: 0; }
+.gx-uniden__fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.gx-uniden__heading, .gx-uniden__rule-footer, .gx-uniden__savebar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); }
+.gx-uniden__heading h3, .gx-uniden__heading h4, .gx-uniden__rule-footer p, .gx-uniden__empty p { margin: 0; }
+.gx-uniden__heading h3, .gx-uniden__heading h4 { overflow-wrap: anywhere; }
+.gx-uniden__eyebrow { display: block; font-size: var(--fs-xs); color: var(--text-muted); margin-bottom: var(--sp-2); }
+.gx-uniden__status { flex-shrink: 0; font-size: var(--fs-xs); border-radius: 999px; padding: var(--sp-2) var(--sp-3); background: var(--surface-container); color: var(--text-muted); }
+.gx-uniden__status--connected { color: var(--secondary); }
+.gx-uniden__preference .gx-row__info { min-width: 0; }
+.gx-uniden__preference .gx-switch { flex-shrink: 0; }
+.gx-uniden__rule { display: grid; gap: var(--sp-4); padding: var(--sp-4); border: 1px solid var(--glass-border); border-radius: var(--radius-lg); }
+.gx-uniden__enable { display: flex; align-items: center; gap: var(--sp-2); color: var(--text-muted); font-size: var(--fs-xs); flex-shrink: 0; }
+.gx-uniden__fields { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(80px, .6fr) repeat(2, minmax(0, 1fr)); gap: var(--sp-3); }
+.gx-uniden__field { display: grid; gap: var(--sp-2); min-width: 0; align-content: start; font-size: var(--fs-sm); }
+.gx-uniden__field .gx-field { width: 100%; min-width: 0; box-sizing: border-box; }
+.gx-uniden__rule-footer { align-items: flex-end; }
+.gx-uniden__rule-footer > div { display: grid; gap: var(--sp-2); }
+.gx-uniden__empty { display: grid; gap: var(--sp-2); padding: var(--sp-4) 0; }
+.gx-uniden__savebar { flex-wrap: wrap; }
+.gx-uniden__error { color: var(--error); }
+@media (max-width: 800px) {
+  .gx-uniden__fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gx-uniden__name { grid-column: 1 / -1; }
+  .gx-uniden__field:last-child { grid-column: 1 / -1; }
+  .gx-uniden__heading, .gx-uniden__rule-footer { flex-wrap: wrap; }
+}
