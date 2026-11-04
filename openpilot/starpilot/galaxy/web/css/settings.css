@@ -749,3 +749,9 @@ html.gx-maker-open, html.gx-maker-open body { touch-action: manipulation; }
 .gx-sentry-status .gx-status-dot { flex: none; background: currentColor; }
 .gx-sentry-status--armed .gx-status-dot { background: var(--success); }
 .gx-sentry-status--warning .gx-status-dot { background: var(--warning); }
+/* Simple Bluetooth device name and connection-status rows. */
+.gx-bluetooth__device + .gx-bluetooth__device { border-top: 1px solid var(--glass-border); }
+.gx-bluetooth__device .gx-row__info { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .gx-bluetooth .gx-row { flex-wrap: wrap; }
+}

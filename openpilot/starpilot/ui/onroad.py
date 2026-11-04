@@ -170,6 +170,8 @@ class OnroadView:
       self._fade = _load_fade(self._fade_path)
 
   def render(self, state: OnroadState) -> None:
+    if uniden := getattr(self, "uniden", None):
+      uniden.feed.set_enabled(uniden.runtime_active)
     if state.camera_available and self.camera_layer is None:
       raise ValueError("Camera observation requires a camera renderer")
     if self.fonts.profile == Profile.LARGE:
