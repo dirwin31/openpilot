@@ -4,7 +4,7 @@ import { compile } from '../web/vendor/vue/vue.esm-browser.js'
 import { UnidenPanel } from '../web/js/uniden.js'
 
 test('detector panel compiles and only offers bonded R4/R8 names', () => {
-  assert.equal(typeof compile(UnidenPanel.template), 'function')
+  assert.equal(typeof compile(UnidenPanel.template, { decodeEntities: value => value }), 'function')
   const devices = [{ name: 'R8W@12', paired: true }, { name: 'Uniden R4', paired: true },
     { name: 'R8', paired: false }, { name: 'Phone', paired: true }, { name: 'R7', paired: true }]
   assert.deepEqual(UnidenPanel.computed.detectors.call({ devices }), devices.slice(0, 2))
@@ -45,4 +45,20 @@ test('theme maker edits Uniden display settings through draft history', async ()
   for (const field of ['hide_when_no_alert', 'hide_quiet_ride', 'hide_mute_memory'])
     assert.ok(ONROAD_LAYOUT_TEMPLATE.includes(`:save-value="(index, value) => setUnidenDisplay('${field}'`))
   assert.ok(ONROAD_LAYOUT_TEMPLATE.includes("setUnidenDisplay('scale'"))
+})
+
+test('saved setup only offers settings while matching a paired detector', () => {
+  const devices = [{ name: 'R8', address: 'AA:BB:CC:DD:EE:FF', paired: true }]
+  const state = { saved: { address: devices[0].address }, detectors: devices }
+  assert.equal(UnidenPanel.computed.ready.call(state), true)
+  state.detectors = []
+  assert.equal(UnidenPanel.computed.ready.call(state), false)
+  assert.equal(UnidenPanel.computed.dirty.call({ saved: { enabled: true }, config: { enabled: true } }), false)
+  assert.equal(UnidenPanel.computed.dirty.call({ saved: { enabled: true }, config: { enabled: false } }), true)
+})
+
+test('selecting a paired detector infers model and enables integration', () => {
+  const state = { selected: { name: 'Uniden R4W' }, config: { enabled: false, model: 'R8' } }
+  UnidenPanel.methods.selectDetector.call(state)
+  assert.deepEqual(state.config, { enabled: true, model: 'R4' })
 })

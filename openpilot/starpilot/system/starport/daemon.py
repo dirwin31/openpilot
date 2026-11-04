@@ -67,10 +67,11 @@ def handle(supervisor: Supervisor, request: dict[str, Any], verifier: StarPortSo
     raise RuntimeError("Disengage and shift into Park before pairing")
   if command == 'uniden':
     from openpilot.starpilot.bluetooth.owner import BluetoothRejected, BluetoothUnavailable
-    if set(request) != {'command', 'source', 'address', 'model', 'mute'}:
+    if set(request) - {'command', 'source', 'address', 'model', 'mute', 'auto_mute', 'frequency_rules'} or not {'command', 'source', 'address', 'model', 'mute'} <= set(request):
       raise ValueError('Invalid detector request')
     try:
-      result = supervisor.uniden_exchange(request['address'], request['model'], ('galaxy', request['source']), mute=request['mute'])
+      result = supervisor.uniden_exchange(request['address'], request['model'], ('galaxy', request['source']), mute=request['mute'],
+                                          auto_mute=request.get('auto_mute', False), frequency_rules=request.get('frequency_rules', []))
     except (BluetoothRejected, BluetoothUnavailable) as error:
       return {'handled': True, 'error_code': error.code, 'message': str(error)[:160]}
     return {'handled': result is not None, 'detector': result}
