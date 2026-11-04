@@ -10,11 +10,19 @@ export function detectorStatus(state) {
 }
 
 const defaults = () => ({ enabled: false, address: '', model: 'R8', transparency: 8, hide_when_no_alert: true,
-  auto_mute: false, hide_filtered: false, frequency_rules: [] })
+  auto_mute: false, hide_filtered: false, frequency_rules: [], quiet_ride: false, quiet_margin: 0, quiet_bands: ['X', 'K'],
+  auto_learn: false, learn_bands: ['X', 'K'], border_bands: ['KA', 'LASER'], border_colors: { KA: 'purple', K: 'yellow', LASER: 'white' },
+  border_styles: { KA: 'chase', K: 'corners', LASER: 'pulse' },
+  timed_mute: false, timed_mute_seconds: 5, timed_mute_strength: 6, timed_mute_bands: ['X', 'K', 'KA'], unmute_on_breakthrough: false })
+// openpilot already uses green, blue, cyan, pink, orange, red and grey.
+export const SWATCHES = { purple: '#B026FF', violet: '#8F7BFF', yellow: '#E3FF00', white: '#FFFFFF' }
+export const STYLES = { solid: 'Solid', pulse: 'Pulse', chase: 'Chase', corners: 'Corners', direction: 'Direction' }
+const BANDS = { X: 'X', K: 'K', KA: 'Ka', LASER: 'Laser' }
 const copy = value => JSON.parse(JSON.stringify(value))
 export const UnidenPanel = {
   props: { devices: { type: Array, default: () => [] }, parked: Boolean, unauthorized: Function, settings: Boolean },
-  data: () => ({ config: defaults(), saved: null, loaded: false, busy: false, error: '', state: null, editing: false }),
+  data: () => ({ config: defaults(), saved: null, loaded: false, busy: false, error: '', state: null, editing: false,
+    locks: [], candidates: 0, metric: false, swatches: SWATCHES, styles: STYLES, bands: BANDS }),
   computed: {
     detectors() { return this.devices.filter(d => d.paired && /(?:^|[^a-z0-9])r[48]w?(?=$|[^a-z0-9])/i.test(d.name)) },
     selected() { return this.detectors.find(d => d.address.toUpperCase() === this.config.address.toUpperCase()) },
@@ -30,7 +38,7 @@ export const UnidenPanel = {
   },
   mounted() {
     this.alive = true; this.epoch = 0
-    this.visibility = () => { clearTimeout(this.timer); if (!document.hidden) this.refresh() }
+    this.visibility = () => { clearTimeout(this.timer); this.locksLoaded = false; if (!document.hidden) this.refresh() }
     document.addEventListener('visibilitychange', this.visibility)
     if (!document.hidden) this.refresh()
   },
@@ -51,6 +59,7 @@ export const UnidenPanel = {
         const value = await this.request({ operation: 'status' })
         if (!this.alive || this.epoch !== epoch) return
         this.state = value
+        if (!this.locksLoaded) { this.locksLoaded = true; this.loadLocks() }
         if (!this.loaded || !this.dirty && !this.editing) {
           this.config = copy({ ...defaults(), ...value.config }); this.saved = copy(this.config)
           if (!this.loaded) this.error = ''
@@ -63,6 +72,17 @@ export const UnidenPanel = {
         }
       }
       finally { if (this.alive && this.epoch === epoch && !document.hidden) this.timer = setTimeout(() => this.refresh(), 2000) }
+    },
+    async unlock(id) { await this.loadLocks({ operation: 'unlock', id }) },
+    async loadLocks(payload = { operation: 'locks' }) {
+      try {
+        const value = await this.request(payload)
+        if (this.alive) { this.locks = value.locks; this.candidates = value.candidates; this.metric = value.metric }
+      } catch (error) { if (this.alive && payload.operation === 'unlock') this.error = error.message }
+    },
+    lockLabel(lock) { return BANDS[lock.band] + (lock.frequency ? ` ${lock.frequency.toFixed(3)} GHz` : '') },
+    lockDetail(lock) {
+      return `${lock.source === 'auto' ? 'Learned' : 'Held on screen'} · ${lock.count} ${lock.count === 1 ? 'pass' : 'passes'} · ${lock.lat.toFixed(4)}, ${lock.lon.toFixed(4)} · ${lock.radius_m} m`
     },
     selectDetector() {
       const match = this.selected?.name.match(/(?:^|[^a-z0-9])(r[48])w?(?=$|[^a-z0-9])/i)
@@ -131,7 +151,53 @@ export const UnidenPanel = {
               <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Automatically mute matching frequencies" v-model="config.auto_mute" /><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
             <div class="gx-row gx-uniden__preference"><div class="gx-row__info"><span class="gx-row__label">Hide filtered alerts</span><span class="gx-row__desc">Keep matching signals off the driving-screen widget.</span></div>
               <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Hide matching alerts from the widget" v-model="config.hide_filtered" /><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
+            <div class="gx-row gx-uniden__preference"><div class="gx-row__info"><span class="gx-row__label">Quiet Ride at the posted limit</span><span class="gx-row__desc">Mute the beep, keep the alert on screen, while you are at or under the posted limit plus the margin. Sudden strong signals are never quieted. Needs a known limit and a GPS fix.</span></div>
+              <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Quiet Ride at the posted limit" v-model="config.quiet_ride" /><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
+            <div v-if="config.quiet_ride" class="gx-stack">
+              <label class="gx-uniden__field">Margin over the limit ({{ metric ? 'km/h' : 'mph' }}) <input class="gx-field" type="number" min="0" max="15" step="1" inputmode="numeric" v-model.number="config.quiet_margin" /></label>
+              <div class="gx-actions" role="group" aria-label="Bands Quiet Ride may mute"><span class="gx-note">Mute:</span>
+                <label v-for="(name, band) in bands" :key="band" class="gx-uniden__enable"><input type="checkbox" :value="band" v-model="config.quiet_bands" /> {{ name }}</label></div>
+              <p v-if="config.quiet_bands.includes('LASER')" class="gx-note">Laser is muted too. The detector mutes everything at once, so a new signal that arrives after a mute may stay quiet until the detector re-alerts.</p>
+            </div>
+            <div class="gx-row gx-uniden__preference"><div class="gx-row__info"><span class="gx-row__label">Mute after a few seconds</span><span class="gx-row__desc">Let each new signal beep for a moment, then mute it. The alert stays on screen. If it reaches the chosen strength the card says Strong signal and the frame lights up again. Laser is never muted this way.</span></div>
+              <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Mute after a few seconds" v-model="config.timed_mute" /><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
+            <div v-if="config.timed_mute" class="gx-stack">
+              <div class="gx-uniden__fields">
+                <label class="gx-uniden__field">Mute after (seconds) <input class="gx-field" type="number" min="1" max="60" step="1" inputmode="numeric" v-model.number="config.timed_mute_seconds" /></label>
+                <label class="gx-uniden__field">Warn again at strength <select class="gx-field" v-model.number="config.timed_mute_strength"><option v-for="n in [2, 3, 4, 5, 6, 7, 8]" :key="n" :value="n">{{ n }} of 8</option></select></label>
+              </div>
+              <div class="gx-actions" role="group" aria-label="Bands to mute after a delay"><span class="gx-note">Mute:</span>
+                <label v-for="band in ['X', 'K', 'KA']" :key="band" class="gx-uniden__enable"><input type="checkbox" :value="band" v-model="config.timed_mute_bands" /> {{ bands[band] }}</label></div>
+              <div class="gx-row gx-uniden__preference"><div class="gx-row__info"><span class="gx-row__label">Unmute at that strength</span><span class="gx-row__desc">Also tell the detector to unmute so it beeps again. This command has not been tested on the detector, so try it parked first. It only undoes a mute this feature sent.</span></div>
+                <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Unmute when the signal strengthens" v-model="config.unmute_on_breakthrough" /><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
+            </div>
+            <div class="gx-row gx-uniden__preference"><div class="gx-row__info"><span class="gx-row__label">Learn lockouts automatically</span><span class="gx-row__desc">After the same fixed source is passed on separate trips (three for X and K, five for Ka and Laser), lock it out at that place. A source that repeats at one spot but is missing on many drive-bys, like a patrol spot, is not learned. A signal stronger than ever seen there still alerts.</span></div>
+              <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Learn lockouts automatically" v-model="config.auto_learn" /><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
+            <div v-if="config.auto_learn" class="gx-actions" role="group" aria-label="Bands to learn"><span class="gx-note">Learn:</span>
+              <label v-for="(name, band) in bands" :key="band" class="gx-uniden__enable"><input type="checkbox" :value="band" v-model="config.learn_bands" /> {{ name }}</label></div>
+            <div class="gx-stack">
+              <span class="gx-row__label">Full-screen warning</span>
+              <span class="gx-row__desc">A colored frame over the engagement border for a live alert, drawn above any openpilot alert. Choose solid, pulsing, a chase that runs faster and longer as the signal strengthens, corners only, or direction (R8: lights the edge the signal is coming from). Colors avoid the green, blue, cyan, pink, orange, red and grey openpilot already uses.</span>
+              <div v-for="band in ['KA', 'K', 'LASER']" :key="band" class="gx-actions">
+                <label class="gx-uniden__enable"><input type="checkbox" :value="band" v-model="config.border_bands" :aria-label="bands[band] + ' warning frame'" /> {{ bands[band] }}</label>
+                <select class="gx-field" v-model="config.border_colors[band]" :aria-label="bands[band] + ' frame color'" :style="{ borderColor: swatches[config.border_colors[band]] }">
+                  <option v-for="(hex, name) in swatches" :key="name" :value="name">{{ name }}</option></select>
+                <select class="gx-field" v-model="config.border_styles[band]" :aria-label="bands[band] + ' frame style'">
+                  <option v-for="(label, name) in styles" :key="name" :value="name">{{ label }}</option></select>
+              </div>
+            </div>
           </fieldset>
+        </section>
+        <section class="gx-card" aria-label="Saved lockouts">
+          <div class="gx-section__header"><span class="gx-section__title">Saved lockouts</span></div>
+          <div class="gx-panel gx-stack">
+            <p class="gx-note">Hold an alert on the driving screen to lock it out where you are. Lockouts only apply near that place. Learning has seen {{ candidates }} other {{ candidates === 1 ? 'source' : 'sources' }} so far.</p>
+            <div v-if="!locks.length" class="gx-uniden__empty"><strong>No saved lockouts</strong></div>
+            <div v-for="lock in locks" :key="lock.id" class="gx-uniden__rule-footer">
+              <div><h4>{{ lockLabel(lock) }}</h4><p class="gx-note">{{ lockDetail(lock) }}</p></div>
+              <button class="gx-btn gx-btn--tonal" @click="unlock(lock.id)" :aria-label="'Remove lockout ' + lockLabel(lock)">Remove</button>
+            </div>
+          </div>
         </section>
         <section class="gx-card" aria-label="Frequency rules">
           <div class="gx-section__header"><span class="gx-section__title">Frequency rules</span>
