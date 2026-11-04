@@ -13,6 +13,18 @@ MAX_ROWS = 4
 ROW, PAD, RADIUS, BORDER = 60, 8, 14, 2
 SCALE_RANGE = (50, 150)       # percent
 MEMORY_MUTES = ('memory', 'auto_memory')
+NOTE_SIZE = 23
+
+
+def mute_note(alerts):
+  """What the detector is doing with the muted alerts, in the card's top edge: Q-Ride, Mute Memory or plain Muted."""
+  muted = [item for item in alerts if item['muted']]
+  if not muted:
+    return ''
+  modes = {'Mute Memory' if item.get('mute_mode') in MEMORY_MUTES else 'Q-Ride' if item.get('mute_mode') == 'quiet_ride' else 'Muted'
+           for item in muted}
+  name = modes.pop() if len(modes) == 1 else 'Muted'
+  return name if len(muted) == len(alerts) else f'{len(muted)} {name}'
 
 
 def shown_alerts(alerts, config):
@@ -134,14 +146,13 @@ class UnidenWidget:
 
     # The mute state rides in the top edge of the card rather than taking a row of its own.
     muted = sum(bool(item['muted']) for item in alerts)
-    notes = ['Mute sent' if data.get('command') and muted < len(alerts) else
-             'Muted' if muted == len(alerts) else f'{muted} muted' if muted else '']
+    notes = ['Mute sent' if data.get('command') and muted < len(alerts) else mute_note(alerts)]
     if len(alerts) > MAX_ROWS:
       notes.append(f'+{len(alerts) - MAX_ROWS} more')
     note = '  •  '.join(n for n in notes if n)
     gap = None
     if note:
-      size = 18
+      size = NOTE_SIZE
       measured = self.fonts.measure(note, FontRole.SEMI_BOLD, size)
       gap = (x + 20, x + 20 + measured.width + 16)
       self.fonts.draw(note, FontRole.SEMI_BOLD, size, gap[0] + 8, y + BORDER / 2 - measured.height / 2, border)
