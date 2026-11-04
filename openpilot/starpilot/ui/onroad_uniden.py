@@ -11,6 +11,19 @@ SIZE = (460, 150)
 MAX_SIZE = (620, 260)
 MAX_ROWS = 4
 ROW, PAD, RADIUS, BORDER = 60, 8, 14, 2
+SCALE_RANGE = (50, 150)       # percent
+MEMORY_MUTES = ('memory', 'auto_memory')
+
+
+def shown_alerts(alerts, config):
+  """Alerts the driver asked to see: Quiet Ride and mute-memory alerts can be left off the card."""
+  hidden = (('quiet_ride',) if config.get('hide_quiet_ride') else ()) + (MEMORY_MUTES if config.get('hide_mute_memory') else ())
+  return [item for item in alerts if item.get('mute_mode', '') not in hidden]
+
+
+def card_scale(config):
+  value = config.get('scale', 100)
+  return min(SCALE_RANGE[1], max(SCALE_RANGE[0], value)) / 100 if type(value) is int else 1.
 
 
 def signal_color(strength, index):
@@ -76,12 +89,24 @@ class UnidenWidget:
     data = self.preview_data or self.feed.snapshot()
     if not p or not data.get('config', {}).get('enabled'):
       return
-    alerts = data.get('alerts', [])
     config = {**data.get('config', {}), **p}
+    alerts = shown_alerts(data.get('alerts', []), config)
     if not alerts and config.get('hide_when_no_alert', True):
       return
     self.visible_until = time.monotonic() + 1
-    x, y = p['x'], p['y']
+    scale = card_scale(config)
+    if scale == 1:
+      self._card(state, data, alerts, config, p['x'], p['y'])
+      return
+    rl.rl_push_matrix()
+    try:
+      rl.rl_translatef(p['x'], p['y'], 0)
+      rl.rl_scalef(scale, scale, 1)
+      self._card(state, data, alerts, config, 0, 0)
+    finally:
+      rl.rl_pop_matrix()
+
+  def _card(self, state, data, alerts, config, x, y):
     width, height = card_size(alerts)
     palette = widget_palette({'palette': PALETTE, **state.customization}, 'large', WIDGET)
     def color(key):
@@ -154,9 +179,12 @@ class UnidenWidget:
   def touch(self, kind, x, y, state):
     import time
     p, data = self.placement(state), self.feed.snapshot()
+    config = {**data.get('config', {}), **(p or {})}
+    shown = shown_alerts(data.get('alerts', []), config)
     valid = (p is not None and time.monotonic() < self.visible_until and data.get('connected') and
-             data.get('can_mute') and bool(data.get('alerts')))
-    width, height = card_size(data.get('alerts', []))
+             data.get('can_mute') and bool(shown))
+    scale = card_scale(config)
+    width, height = (side * scale for side in card_size(shown))
     inside = valid and p['x'] <= x <= p['x'] + width and p['y'] <= y <= p['y'] + height
     key = (data.get('address'), alert_key(data.get('alerts', [])))
     if kind == 'down':
