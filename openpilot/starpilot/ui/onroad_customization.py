@@ -207,7 +207,7 @@ def valid_uniden_display(placement: dict) -> bool:
   return (type(placement.get("transparency")) is int and 0 <= placement["transparency"] <= 100 and
           all(type(placement.get(key)) is bool for key in ("hide_when_no_alert", "hide_quiet_ride", "hide_mute_memory")) and
           type(placement.get("scale")) is int and 50 <= placement["scale"] <= 150)
-_uniden = _widget("Uniden alerts", UNIDEN_WIDGET, 620, 260, 700, 780)
+_uniden = _widget("Uniden alerts", UNIDEN_WIDGET, 460, 260, 700, 780)
 _uniden["default"].update(transparency=8, hide_when_no_alert=True, hide_quiet_ride=False, hide_mute_memory=False, scale=100)
 _uniden["note"] = "R4/R8 detector alerts. Pair and select the detector in Galaxy Bluetooth. Tap an alert to mute."
 PROFILES["large"]["widgets"][UNIDEN_WIDGET] = _uniden
