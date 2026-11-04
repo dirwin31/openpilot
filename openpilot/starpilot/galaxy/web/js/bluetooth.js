@@ -272,6 +272,10 @@ export const BluetoothPage = {
             <div v-for="device in saved" :key="device.address" class="gx-row gx-bluetooth__device">
               <div class="gx-row__info"><span class="gx-row__label">{{ device.name || device.address }}</span>
                 <span class="gx-row__desc">{{ device.connected ? 'Connected' : 'Disconnected' }}</span></div>
+              <div class="gx-actions">
+                <button class="gx-btn gx-btn--tonal" :disabled="!status.powered || !status.parked" @click="action(device.connected ? 'disconnect' : 'connect', {address:device.address})">{{ device.connected ? 'Disconnect' : 'Connect' }}</button>
+                <button class="gx-btn gx-btn--tonal" :disabled="!status.parked" @click="forgetting = { address: device.address, name: device.name, state: 'confirm' }">Forget</button>
+              </div>
             </div></section>
           <section v-if="appLinks.length" class="gx-card"><div class="gx-section__header"><i class="bi bi-phone" aria-hidden="true"></i><span class="gx-section__title">App Pairings</span></div>
             <p class="gx-note gx-inset">Phones connected through the StarPilot app. These are not Bluetooth pairings.</p>
