@@ -44,6 +44,42 @@ repeated alerts after a clear, and an unmatched signal appearing alongside a
 filtered one. StarPilot does not send an unmute command when a new signal
 appears; the detector's handling of that transition needs hardware validation.
 
+## Lockouts, Quiet Ride and warnings
+
+All of this lives on the comma. Nothing is written to route logs, there is no cereal message, and nothing is logged
+through cloudlog. Lockouts and learned sources are kept in `/data/starpilot/uniden/locks.json`.
+
+- **Hold to lock out.** Hold a live alert on the driving screen for about a second. It is locked out where you are, for
+  X, K, Ka or Laser, within 300 m. If the car just passed the source, the lockout is placed at the pass point instead.
+  A tap still mutes. Locked-out alerts follow *Auto-mute saved frequencies* and *Hide filtered alerts*. Remove them under
+  Uniden → Saved lockouts; this works while driving.
+- **Learned lockouts** (off by default). The R8's front → side → rear arrow flip, or an R4's strength peak, marks a fixed
+  source at the position of the pass. The same source passed on separate trips at least 10 minutes apart becomes a lockout
+  (3 passes for X and K, 5 for Ka and Laser). Choose which bands may be learned. A signal more than two levels stronger
+  than any seen at that place is not locked out. Each drive-by of a known place where the signal never appears counts as a
+  miss; a source is learned only if misses are at most half its passes, and a learned lockout whose misses outnumber its
+  passes is removed. A source that really does repeat at one place, such as a regular patrol spot, can still be learned, so
+  review Saved lockouts now and then. Unseen learned lockouts expire after 90 days.
+- **Quiet Ride at the posted limit** (off by default). The comma sends mute while the car is at or under the posted limit plus
+  a margin, for the chosen bands (X and K by default). The beep is muted and the alert stays on screen. It needs a fresh GPS fix
+  and a valid limit; with either missing nothing is quieted. A new signal that appears at a strength of 5 or more is treated
+  as sudden and is never quieted. Mute is sent only when every active alert qualifies.
+- **Timed mute** (off by default). Each new X, K or Ka signal beeps normally for a set number of seconds (5 by default), then
+  the comma sends mute. The alert stays on screen. Laser is never muted this way, and neither is a signal that appeared suddenly
+  strong. If the strength reaches the chosen level (6 of 8 by default) the signal stays loud until it clears: the card says
+  Strong signal and the frame lights up even though the detector is muted. *Unmute at that strength* additionally sends the
+  detector's unmute (`BTreqMUTE:0`, from the Uniden app's constants and untested on hardware). It only undoes a mute the timer
+  sent, never one the driver pressed, and tries at most three times per set of alerts. Try it parked before relying on it.
+- **Full-screen warning.** A colored frame drawn on top of the engagement border (green, blue or grey stays visible around it) and any openpilot alert, for live Ka, K or Laser
+  alerts that are not locked out, quiet or muted (Ka and Laser by default). Each band has its own color and style (solid, pulse, a chase
+  that speeds up with signal strength, or corners). Pulse and chase hold still when reduce motion is on. Colors are limited to purple, violet, yellow and white, since openpilot already uses green, blue, cyan, pink, orange, red and grey.
+- **Offline badge.** If the selected detector is not connected for 10 seconds while driving, a small DETECTOR OFFLINE badge
+  replaces the hidden card. It also shows at the top of the view when the widget is off or an openpilot alert covers it.
+
+Hardware validation still needed: whether `BTreqMUTE:0` actually unmutes an R4 or R8 and how quickly; whether a new signal after a mute (including Laser or a sudden Ka after a quiet mute)
+sounds before the detector's own transition; the R4 strength-peak pinpoint on a real drive; and the R8 arrow flip on a
+real fixed source.
+
 ## Checks
 
 - `./dev pytest openpilot/starpilot/uniden/tests openpilot/starpilot/galaxy/tests/test_uniden_http.py -q`
