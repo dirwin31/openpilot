@@ -2,11 +2,15 @@
 import time
 
 from openpilot.starpilot.bluetooth.owner import DEVICE, BluetoothOwner, BluetoothRejected
-from openpilot.starpilot.uniden.protocol import ALERT_UUID, WRITE_UUID, GATT, alert_key, model_for_name, parse_alerts, normalize_rules, matches_rule
+from openpilot.starpilot.uniden.locks import normalize_lock
+from openpilot.starpilot.uniden.policy import apply
+from openpilot.starpilot.uniden.protocol import ALERT_UUID, WRITE_UUID, GATT, alert_key, model_for_name, parse_alerts, normalize_rules
 
 
-def exchange(owner, address, model, session, *, mute=None, auto_mute=False, frequency_rules=None):
+def exchange(owner, address, model, session, *, mute=None, auto_mute=False, frequency_rules=None, situation=None):
   rules = normalize_rules([] if frequency_rules is None else frequency_rules)
+  situation = {**(situation or {})}
+  situation['locks'] = [normalize_lock(lock) for lock in situation.get('locks', [])]
   if type(auto_mute) is not bool:
     raise ValueError('Invalid automatic mute setting')
   if model not in ('R4', 'R8'):
@@ -80,9 +84,10 @@ def exchange(owner, address, model, session, *, mute=None, auto_mute=False, freq
     current = client._objects().get(path, {}).get(DEVICE, {})
     if current.get('Paired') is not True or current.get('Connected') is not True:
       raise BluetoothRejected('Detector connection changed', code='changed')
-    for alert in alerts:
-      alert['filtered'] = matches_rule(alert, rules)
-    automatic = auto_mute and bool(alerts) and all(a['filtered'] for a in alerts)
+    owner._uniden_seen = apply(alerts, rules, situation, getattr(owner, '_uniden_seen', None), observed_at)
+    automatic = bool(alerts) and all((auto_mute and a['filtered']) or a['quiet'] or a['timed'] for a in alerts)
+    if not alerts:
+      owner._uniden_timed_mute = False
     # Retry an unacknowledged write at most twice per second, across both displays.
     key = (address, alert_key(alerts))
     last_key, last_at = getattr(owner, '_uniden_auto_mute', (None, 0))
@@ -103,8 +108,24 @@ def exchange(owner, address, model, session, *, mute=None, auto_mute=False, freq
                      (b'BTreqMUTE:1', {'type': ('s', 'command')}), timeout=2.0)
         if mute is None:
           owner._uniden_auto_mute = (key, observed_at)
+          if any(a['timed'] for a in alerts):
+            owner._uniden_timed_mute = True
         command = 'sent_unconfirmed'
         # A write without response is not a mute acknowledgment. Only alert packets confirm it.
+    if getattr(owner, '_uniden_unmute', (None,))[0] == key and not any(a['muted'] for a in alerts):
+      owner._uniden_timed_mute = False
+    timed = situation.get('timed')
+    if (timed and timed['unmute'] and mute is None and not command and WRITE_UUID in paths and getattr(owner, '_uniden_timed_mute', False) and
+        any(a['breakthrough'] and a['muted'] and a['mute_mode'] == 'manual' for a in alerts)):
+      # Only undoes a mute this timer sent. The command is untested on hardware, so retries are capped per alert set.
+      last_key, attempts, last_at = getattr(owner, '_uniden_unmute', (None, 0, 0))
+      attempts = attempts if last_key == key else 0
+      if attempts < 3 and (last_key != key or observed_at - last_at >= 1):
+        validate()
+        client._call(paths[WRITE_UUID], GATT, 'WriteValue', 'aya{sv}',
+                     (b'BTreqMUTE:0', {'type': ('s', 'command')}), timeout=2.0)
+        owner._uniden_unmute = (key, attempts + 1, observed_at)
+        command = 'unmute_sent_unconfirmed'
     return {'connected': True, 'address': address, 'model': model, 'alerts': alerts,
             'observed_at': observed_at, 'can_mute': WRITE_UUID in paths, 'command': command}
   finally:

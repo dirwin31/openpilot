@@ -1,10 +1,12 @@
 """Shared R4/R8 alert card and touch target for comma 3X and Android Auto."""
+import time
+
 from openpilot.starpilot.ui.raylib import rl
 
 from openpilot.starpilot.ui.presentation import FontRole
 from openpilot.starpilot.ui.onroad_customization import PALETTE, widget_palette
 from openpilot.starpilot.uniden.feed import DetectorFeed
-from openpilot.starpilot.uniden.protocol import alert_key
+from openpilot.starpilot.uniden.protocol import BORDER_SWATCHES, DEFAULT_CONFIG, alert_key
 
 WIDGET = 'uniden_alerts'
 SIZE = (460, 150)
@@ -14,6 +16,11 @@ ROW, PAD, RADIUS, BORDER = 60, 8, 14, 2
 SCALE_RANGE = (50, 150)       # percent
 MEMORY_MUTES = ('memory', 'auto_memory')
 NOTE_SIZE = 23
+HOLD_S = .8
+BORDER_INSET, BORDER_WIDTH, PULSE_HZ, BADGE_TOP = 11, 8, 3, 42
+CORNER_ARM, DIM_ALPHA = 160, 70
+DIRECTION_SIDES = {'front': ('top',), 'rear': ('bottom',), 'side': ('left', 'right')}
+OFFLINE_SIZE = (330, 56)
 
 
 def mute_note(alerts):
@@ -32,6 +39,57 @@ def shown_alerts(alerts, config):
   hidden = (('quiet_ride',) if config.get('hide_quiet_ride') else ()) + (MEMORY_MUTES if config.get('hide_mute_memory') else ())
   return [item for item in alerts if item.get('mute_mode', '') not in hidden and
           not (config.get('hide_filtered') and item.get('filtered'))]
+
+
+def hex_color(value):
+  return rl.Color(*(int(value[i:i + 2], 16) for i in (1, 3, 5, 7)))
+
+
+def threat(alerts, bands):
+  """The most serious live alert the driver asked to be warned about; locked out and quiet ones do not count."""
+  for band in ('LASER', 'KA', 'K'):
+    if band in bands:
+      for alert in alerts:
+        if alert['band'] == band and not (alert.get('filtered') or alert.get('quiet') or alert.get('timed')) and \
+           (alert.get('breakthrough') or not alert.get('muted')):
+          return alert
+  return None
+
+
+def chase_lap(strength):
+  """Seconds per lap: a stronger signal runs faster."""
+  return 1.8 - .14 * (min(8, max(1, strength)) - 1)
+
+
+def chase_share(strength):
+  """Share of the outline the bright segment covers: a stronger signal lights more of it."""
+  return .15 + .02 * (min(8, max(1, strength)) - 1)
+
+
+def perimeter_spans(width, height, start, length):
+  """Clockwise (side, from, to) pieces of a rectangle's outline, wrapping past the end of the lap."""
+  sides = (('top', width), ('right', height), ('bottom', width), ('left', height))
+  total, start = 2 * (width + height), start % (2 * (width + height))
+  windows = [(start, min(start + length, total))] + ([(0, start + length - total)] if start + length > total else [])
+  spans, offset = [], 0
+  for side, size in sides:
+    for begin, end in windows:
+      low, high = max(begin, offset), min(end, offset + size)
+      if high > low:
+        spans.append((side, low - offset, high - offset))
+    offset += size
+  return spans
+
+
+def side_rect(frame, thickness, side, begin, end):
+  x, y, width, height = frame.x, frame.y, frame.width, frame.height
+  if side == 'top':
+    return rl.Rectangle(x + begin, y, end - begin, thickness)
+  if side == 'right':
+    return rl.Rectangle(x + width - thickness, y + begin, thickness, end - begin)
+  if side == 'bottom':
+    return rl.Rectangle(x + width - end, y + height - thickness, end - begin, thickness)
+  return rl.Rectangle(x, y + height - end, thickness, end - begin)
 
 
 def card_scale(config):
@@ -83,6 +141,8 @@ class UnidenWidget:
     self.fonts = fonts
     self.feed = feed or DetectorFeed()
     self.pressed = None
+    self.held = False
+    self.chase = (0., 0.)
     self.runtime_active = False
     self.preview_data = None
     self.visible_until = 0.
@@ -95,7 +155,6 @@ class UnidenWidget:
     return p if p and p['enabled'] else None
 
   def render(self, state):
-    import time
     p = self.placement(state)
     self.visible_until = 0.
     self.feed.set_enabled(self.runtime_active)
@@ -103,6 +162,12 @@ class UnidenWidget:
     if not p or not data.get('config', {}).get('enabled'):
       return
     config = {**data.get('config', {}), **p}
+    if data.get('offline'):
+      self._offline(state, config, p['x'], p['y'])
+      return
+    if self.pressed and not self.held and time.monotonic() - self.pressed[3] >= HOLD_S:
+      self.held = True
+      self.feed.lock_here(data)
     alerts = shown_alerts(data.get('alerts', []), config)
     if not alerts and config.get('hide_when_no_alert', True):
       return
@@ -118,6 +183,54 @@ class UnidenWidget:
       self._card(state, data, alerts, config, 0, 0)
     finally:
       rl.rl_pop_matrix()
+
+  def _offline(self, state, config, x, y):
+    width, height = OFFLINE_SIZE
+    palette = widget_palette({'palette': PALETTE, **state.customization}, 'large', WIDGET)
+    fill = hex_color(palette['cardFill'])
+    rl.draw_rectangle_rounded(rl.Rectangle(x, y, width, height), .5, 12,
+                              rl.Color(fill.r, fill.g, fill.b, round(fill.a * (100 - config.get('transparency', 8)) / 100)))
+    outline(x, y, width, height, hex_color(palette['cardBorder']))
+    self.fonts.draw('DETECTOR OFFLINE', FontRole.SEMI_BOLD, 26, x + 24, y + 13, rl.Color(255, 186, 78, 255))
+
+  def render_border(self, state, width, height):
+    """Frame the view for a live Ka, K or Laser alert, on top of the engagement border and any openpilot alert."""
+    data = self.feed.snapshot()
+    if data.get('offline') and data.get('config', {}).get('enabled') and self.placement(state) is None:
+      self._offline(state, data['config'], (width - OFFLINE_SIZE[0]) / 2, BADGE_TOP)
+    alert = threat(data.get('alerts', []), data.get('config', {}).get('border_bands', ())) if data.get('connected') else None
+    if alert is None:
+      return
+    colors = {**DEFAULT_CONFIG['border_colors'], **data['config'].get('border_colors', {})}
+    color = hex_color(BORDER_SWATCHES[colors[alert['band']]] + 'FF')
+    styles = {**DEFAULT_CONFIG['border_styles'], **data['config'].get('border_styles', {})}
+    style = styles[alert['band']]
+    still = state.customization.get('reduceMotion')
+    frame = rl.Rectangle(BORDER_INSET, BORDER_INSET, width - 2 * BORDER_INSET, height - 2 * BORDER_INSET)
+    now = time.monotonic()
+    if style == 'pulse' and not still and int(now * PULSE_HZ * 2) % 2:
+      color = rl.Color(color.r, color.g, color.b, 110)
+    if style == 'corners':
+      arm = min(CORNER_ARM, frame.width / 2, frame.height / 2)
+      for side, begin, end in ((s, b, e) for s in ('top', 'bottom') for b, e in ((0, arm), (frame.width - arm, frame.width))):
+        rl.draw_rectangle_rec(side_rect(frame, BORDER_WIDTH, side, begin, end), color)
+      for side, begin, end in ((s, b, e) for s in ('left', 'right') for b, e in ((0, arm), (frame.height - arm, frame.height))):
+        rl.draw_rectangle_rec(side_rect(frame, BORDER_WIDTH, side, begin, end), color)
+    elif style == 'direction' and alert['direction'] in DIRECTION_SIDES:
+      rl.draw_rectangle_lines_ex(frame, BORDER_WIDTH, rl.Color(color.r, color.g, color.b, DIM_ALPHA))
+      for side in DIRECTION_SIDES[alert['direction']]:
+        size = frame.width if side in ('top', 'bottom') else frame.height
+        rl.draw_rectangle_rec(side_rect(frame, BORDER_WIDTH, side, 0, size), color)
+    elif style in ('chase', 'direction') and not still:
+      phase, at = self.chase
+      phase = (phase + min(.2, now - at) / chase_lap(alert['strength'])) % 1 if at else 0.
+      self.chase = (phase, now)
+      total = 2 * (frame.width + frame.height)
+      rl.draw_rectangle_lines_ex(frame, BORDER_WIDTH, rl.Color(color.r, color.g, color.b, DIM_ALPHA))
+      for side, begin, end in perimeter_spans(frame.width, frame.height, phase * total, total * chase_share(alert['strength'])):
+        rl.draw_rectangle_rec(side_rect(frame, BORDER_WIDTH, side, begin, end), color)
+    else:
+      rl.draw_rectangle_lines_ex(frame, BORDER_WIDTH, color)
 
   def _card(self, state, data, alerts, config, x, y):
     width, height = card_size(alerts)
@@ -147,7 +260,11 @@ class UnidenWidget:
 
     # The mute state rides in the top edge of the card rather than taking a row of its own.
     muted = sum(bool(item['muted']) for item in alerts)
-    notes = ['Filtered' if all(a.get('filtered') for a in alerts) else 'Mute sent' if data.get('command') and muted < len(alerts) else mute_note(alerts)]
+    notes = [data.get('notice') or ('Strong signal' if any(a.get('breakthrough') for a in alerts) else
+                                    'Filtered' if all(a.get('filtered') for a in alerts) else
+                                    'Quiet' if all(a.get('quiet') for a in alerts) else
+                                    'Timed mute' if all(a.get('timed') for a in alerts) else
+                                    'Mute sent' if data.get('command') and muted < len(alerts) else mute_note(alerts))]
     if len(alerts) > MAX_ROWS:
       notes.append(f'+{len(alerts) - MAX_ROWS} more')
     note = '  •  '.join(n for n in notes if n)
@@ -189,7 +306,6 @@ class UnidenWidget:
         direction_arrows(x + arrow_x, y + cy, item['direction'], tone, 15)
 
   def touch(self, kind, x, y, state):
-    import time
     p, data = self.placement(state), self.feed.snapshot()
     config = {**data.get('config', {}), **(p or {})}
     shown = shown_alerts(data.get('alerts', []), config)
@@ -200,16 +316,17 @@ class UnidenWidget:
     inside = valid and p['x'] <= x <= p['x'] + width and p['y'] <= y <= p['y'] + height
     key = (data.get('address'), alert_key(data.get('alerts', [])))
     if kind == 'down':
-      self.pressed = (key, x, y) if inside else None
+      self.pressed = (key, x, y, time.monotonic()) if inside else None
+      self.held = False
     claimed = self.pressed is not None
     if kind in ('move', 'up') and self.pressed:
-      old, px, py = self.pressed
+      old, px, py, _ = self.pressed
       if not inside or old != key or (px - x) ** 2 + (py - y) ** 2 > 36 ** 2:
         self.pressed = None
-      elif kind == 'up':
+      elif kind == 'up' and not self.held:
         self.feed.mute(data)
     if kind in ('up', 'cancel'):
-      self.pressed = None
+      self.pressed, self.held = None, False
     return claimed
 
   def close(self):
