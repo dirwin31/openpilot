@@ -48,6 +48,7 @@ export function widgetSize(widget, position) {
     const [width, height] = widget.sizes[position.size]
     return [width, height + (widget.wifiNameHeight && position.wifiName === true ? widget.wifiNameHeight : 0)].map(side => Math.round(side * scale))
   }
+  if (widget.kind === "uniden_alerts" && Number.isInteger(position?.scale)) return [Math.round(widget.width * position.scale / 100), Math.round(widget.height * position.scale / 100)]
   if (widget.box) return [position?.width ?? widget.width, position?.height ?? widget.height]
   if (widget.resizable) return [position?.size ?? widget.width, position?.size ?? widget.height]
   return [widget.width, widget.height]
