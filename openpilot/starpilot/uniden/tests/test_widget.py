@@ -194,18 +194,20 @@ def test_theme_settings_roundtrip_migration_and_projection_isolation():
   assert native['layouts']['large']['uniden_alerts']['transparency'] == 41
   for document, placement, validate in ((native, pos, validate_document),
                                         (projected, other, lambda value: validate_layout_for_viewport(value, viewport))):
-    for field, invalid in (('transparency', True), ('transparency', 101), ('hide_when_no_alert', 1)):
+    for field, invalid in (('transparency', True), ('transparency', 101), ('hide_when_no_alert', 1), ('hide_quiet_ride', 1),
+                           ('hide_mute_memory', None), ('scale', 49), ('scale', 151), ('scale', 1.0)):
       old = placement[field]
       placement[field] = invalid
       with pytest.raises(ValueError):
         validate(document)
       placement[field] = old
-    placement.pop('transparency')
-    placement.pop('hide_when_no_alert')
+    for field in ('transparency', 'hide_when_no_alert', 'hide_quiet_ride', 'hide_mute_memory', 'scale'):
+      placement.pop(field)
     result = validate(document)
     migrated = result['widgets']['uniden_alerts'] if 'widgets' in result else result['layouts']['large']['uniden_alerts']
     assert migrated['transparency'] == 8
     assert migrated['hide_when_no_alert'] is True
+    assert (migrated['hide_quiet_ride'], migrated['hide_mute_memory'], migrated['scale']) == (False, False, 100)
 
 
 @pytest.mark.parametrize(('direction', 'count'), [('front', 1), ('rear', 1), ('side', 2), ('', 0)])
@@ -215,3 +217,47 @@ def test_only_active_direction_arrows_are_drawn(direction, count):
     direction_arrows(100, 100, direction, 'accent', 18)
     assert arrows.call_count == count
     assert all(call.args[-1] == 'accent' for call in arrows.call_args_list)
+
+
+def test_quiet_ride_and_mute_memory_alerts_can_be_left_off_the_card():
+  from openpilot.starpilot.ui.onroad_uniden import shown_alerts
+  alerts = parse_alerts(b'1,00,KA,6,0,35.500,F,1&1,00,K,3,0,24.150,F,6&1,00,K,2,0,24.125,R,3&1,00,X,2,0,10.525,S,4&1,00,K,4,0,24.200,F,2')
+  assert sorted(a['mute_mode'] for a in alerts) == ['', 'auto_memory', 'manual', 'memory', 'quiet_ride']
+  assert shown_alerts(alerts, {}) == alerts
+  assert {a['mute_mode'] for a in shown_alerts(alerts, {'hide_quiet_ride': True})} == {'', 'memory', 'auto_memory', 'manual'}
+  assert {a['mute_mode'] for a in shown_alerts(alerts, {'hide_mute_memory': True})} == {'', 'quiet_ride', 'manual'}
+  feed, fonts = Mock(), fonts_mock()
+  quiet = parse_alerts(b'1,00,K,3,0,24.150,F,6')
+  data = {'config': {'enabled': True}, 'connected': True, 'can_mute': True, 'model': 'R8', 'alerts': quiet}
+  feed.snapshot.return_value = data
+  widget = UnidenWidget(fonts, feed)
+  placement = {'enabled': True, 'x': 30, 'y': 50, 'hide_quiet_ride': True, 'hide_when_no_alert': True}
+  state = NS(alert=NS(size='none'), customization={'layouts': {'large': {'uniden_alerts': placement}}})
+  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded') as rounded:
+    widget.render(state)
+    rounded.assert_not_called()
+    assert widget.visible_until == 0 and not widget.touch('down', 40, 60, state), 'a hidden Quiet Ride alert takes no taps'
+    placement['hide_when_no_alert'] = False
+    widget.render(state)
+    assert 'No active alerts' in [call.args[0] for call in fonts.draw.call_args_list]
+
+
+def test_scale_grows_the_card_and_its_touch_area():
+  from openpilot.starpilot.ui.onroad_uniden import card_scale
+  assert (card_scale({}), card_scale({'scale': 150}), card_scale({'scale': 500}), card_scale({'scale': 'big'})) == (1., 1.5, 1.5, 1.)
+  feed, fonts = Mock(), fonts_mock()
+  data = {'config': {'enabled': True}, 'connected': True, 'can_mute': True, 'model': 'R8',
+          'alerts': parse_alerts(b'1,00,KA,6,0,35.500,F,1')}
+  feed.snapshot.return_value = data
+  widget = UnidenWidget(fonts, feed)
+  placement = {'enabled': True, 'x': 30, 'y': 50, 'scale': 150}
+  state = NS(alert=NS(size='none'), customization={'layouts': {'large': {'uniden_alerts': placement}}})
+  with patch('openpilot.starpilot.ui.onroad_uniden.rl') as rl:
+    widget.render(state)
+    rl.rl_translatef.assert_called_once_with(30, 50, 0)
+    rl.rl_scalef.assert_called_once_with(1.5, 1.5, 1)
+    assert rl.rl_pop_matrix.call_count == 1
+  assert widget.touch('down', 30 + 460 * 1.5 - 5, 50 + 76 * 1.5 - 5, state)
+  widget.touch('cancel', 0, 0, state)
+  placement['scale'] = 100
+  assert not widget.touch('down', 30 + 460 * 1.5 - 5, 50 + 76 * 1.5 - 5, state)
