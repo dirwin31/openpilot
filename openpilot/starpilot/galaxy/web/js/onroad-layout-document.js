@@ -173,9 +173,11 @@ export function validDocument(document, metadata) {
       const widget = profile.widgets[id], limits = placementLimits(profile, id, layout)
       const resizable = widget.resizable, box = widget.box, opacity = widget.opacity
       return keysEqual(position, ["x", "y", "enabled", ...(resizable ? ["size"] : []), ...(box ? ["width", "height"] : []),
-        ...(widget.kind === "uniden_alerts" ? ["transparency", "hide_when_no_alert"] : []), ...(opacity ? ["opacity"] : []), ...(widget.iconSize ? ["display"] : []), ...(widget.backgroundToggle ? ["background"] : []), ...(widget.collapseToggle ? ["collapse"] : [])]) &&
+        ...(widget.kind === "uniden_alerts" ? ["transparency", "hide_when_no_alert", "hide_quiet_ride", "hide_mute_memory", "scale"] : []), ...(opacity ? ["opacity"] : []), ...(widget.iconSize ? ["display"] : []), ...(widget.backgroundToggle ? ["background"] : []), ...(widget.collapseToggle ? ["collapse"] : [])]) &&
         (widget.kind !== "uniden_alerts" || (Number.isInteger(position.transparency) && position.transparency >= 0 &&
-          position.transparency <= 100 && typeof position.hide_when_no_alert === "boolean")) &&
+          position.transparency <= 100 && typeof position.hide_when_no_alert === "boolean" &&
+          typeof position.hide_quiet_ride === "boolean" && typeof position.hide_mute_memory === "boolean" &&
+          Number.isInteger(position.scale) && position.scale >= 50 && position.scale <= 150)) &&
         (!widget.iconSize || ["words", "icons"].includes(position.display)) &&
         (!widget.backgroundToggle || typeof position.background === "boolean") &&
         (!widget.collapseToggle || typeof position.collapse === "boolean") &&

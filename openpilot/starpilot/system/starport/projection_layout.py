@@ -6,9 +6,10 @@ from pathlib import Path
 
 from openpilot.starpilot.system.starport.identity import DATA_DIR
 from openpilot.starpilot.system.starport.display_profile import screen_geometry
-from openpilot.starpilot.ui.onroad_customization import (CEM_GAUGE_WIDGET, CLOCK_WIDGET, JETLINK_WIDGET, MODE_WIDGET, UNIDEN_WIDGET,
+from openpilot.starpilot.ui.onroad_customization import (CEM_GAUGE_WIDGET, CLOCK_WIDGET, JETLINK_WIDGET, MODE_WIDGET, UNIDEN_WIDGET, UNIDEN_DISPLAY_FIELDS,
                                                          STOPPED_TIMER_WIDGET, CEM_GAUGE_FRAME, CEM_GAUGE_INSET, MAP_MIN_SIZE, NAV_CARD_SIZE,
-                                                         SPEED_ALIGNMENTS, customization_metadata, validate_map_box, validate_widget_order)
+                                                         SPEED_ALIGNMENTS, customization_metadata, valid_uniden_display, validate_map_box,
+                                                         validate_widget_order)
 from openpilot.starpilot.ui.onroad_stopped_timer import timer_size
 from openpilot.starpilot.ui.onroad_torque_geometry import maximum_footprint
 from openpilot.starpilot.ui.onroad_customization import (SPEED_LAYOUT_V7, migrate_speed_layout, migrate_large_sign_layout,
@@ -254,6 +255,9 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
     if key == UNIDEN_WIDGET and type(placement) is dict:
       placement.setdefault('transparency', 8)
       placement.setdefault('hide_when_no_alert', True)
+      placement.setdefault('hide_quiet_ride', False)
+      placement.setdefault('hide_mute_memory', False)
+      placement.setdefault('scale', 100)
     if key in DISPLAY_WIDGETS and type(placement) is dict:
       placement.setdefault('display', 'words')
     if key in ACTION_WIDGETS and type(placement) is dict:
@@ -278,12 +282,11 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
               ({'opacity', 'background'} if key in ACTION_WIDGETS else set()) |
               ({'opacity'} if key == 'cruise_limits' or key in CARD_WIDGETS else set()) |
               ({'collapse'} if key == NOW_PLAYING_WIDGET else set()) |
-              ({'transparency', 'hide_when_no_alert'} if key == UNIDEN_WIDGET else set()) |
+              (UNIDEN_DISPLAY_FIELDS if key == UNIDEN_WIDGET else set()) |
               ({'width', 'height', 'opacity'} if key == NAV_MAP else set()))
     if type(placement) is not dict or set(placement) != fields or type(placement['enabled']) is not bool:
       raise ValueError('Invalid projection widget')
-    if key == UNIDEN_WIDGET and (type(placement['transparency']) is not int or
-                                not 0 <= placement['transparency'] <= 100 or type(placement['hide_when_no_alert']) is not bool):
+    if key == UNIDEN_WIDGET and not valid_uniden_display(placement):
       raise ValueError('Invalid Uniden display settings')
     if widget.get('required') is True and placement['enabled'] is not True:
       raise ValueError('Required projection widget is disabled')
