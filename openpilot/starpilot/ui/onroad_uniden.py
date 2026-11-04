@@ -8,7 +8,7 @@ from openpilot.starpilot.uniden.protocol import alert_key
 
 WIDGET = 'uniden_alerts'
 SIZE = (460, 150)
-MAX_SIZE = (620, 260)
+MAX_SIZE = (460, 260)
 MAX_ROWS = 4
 ROW, PAD, RADIUS, BORDER = 60, 8, 14, 2
 SCALE_RANGE = (50, 150)       # percent
