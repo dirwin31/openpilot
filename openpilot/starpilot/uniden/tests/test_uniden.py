@@ -16,7 +16,8 @@ ADDRESS = 'AA:BB:CC:DD:EE:FF'
 ADAPTER_PATH = '/org/bluez/hci0'
 PATH = ADAPTER_PATH + '/dev_AA_BB_CC_DD_EE_FF'
 PACKET = b'1,00,KA,3,33,33.7850,R,1&1,00,K,4,45,24.1500,F,2&0&0'
-CONFIG = {'enabled': True, 'address': ADDRESS, 'model': 'R8', 'transparency': 8, 'hide_when_no_alert': True}
+CONFIG = {'enabled': True, 'address': ADDRESS, 'model': 'R8', 'transparency': 8, 'hide_when_no_alert': True,
+          'auto_mute': False, 'hide_filtered': False, 'frequency_rules': []}
 
 
 @pytest.fixture
@@ -236,3 +237,67 @@ def test_invalid_display_preferences_rejected(field, value):
   from openpilot.starpilot.uniden.protocol import normalize_config
   with pytest.raises(ValueError):
     normalize_config({**CONFIG, field: value})
+
+
+RULE = {'enabled': True, 'label': 'Head unit', 'band': 'KA', 'frequency': 34.313, 'tolerance_mhz': 0}
+
+
+def test_auto_mute_in_first_exchange_and_bounded_retry(setup):
+  owner, client, _ = setup
+  client._call.return_value = (b'1,00,KA,3,0,34.313,F,1',)
+  result = exchange(owner, ADDRESS, 'R8', ('live',), auto_mute=True, frequency_rules=[RULE])
+  assert result['alerts'][0]['filtered'] and not result['alerts'][0]['muted']
+  assert result['command'] == 'sent_unconfirmed'
+  assert [c.args[2] for c in client._call.call_args_list] == ['ReadValue', 'WriteValue']
+  exchange(owner, ADDRESS, 'R8', ('live',), auto_mute=True, frequency_rules=[RULE])
+  assert sum(c.args[2] == 'WriteValue' for c in client._call.call_args_list) == 1
+  owner._uniden_auto_mute = (owner._uniden_auto_mute[0], time.monotonic() - 1)
+  exchange(owner, ADDRESS, 'R8', ('live',), auto_mute=True, frequency_rules=[RULE])
+  assert sum(c.args[2] == 'WriteValue' for c in client._call.call_args_list) == 2
+
+
+@pytest.mark.parametrize('packet', [b'0', b'1,00,KA,3,0,34.314,F,1', b'1,00,KA,3,0,34.313,F,2',
+  b'1,00,KA,3,0,34.313,F,1&1,00,KA,3,0,34.7,R,1',
+  b'1,00,KA,3,0,34.313,F,1&1,00,LASER,8,0,5,F,1'])
+def test_auto_mute_preserves_unmatched_or_already_muted_signals(setup, packet):
+  owner, client, _ = setup
+  client._call.return_value = (packet,)
+  exchange(owner, ADDRESS, 'R8', ('live',), auto_mute=True, frequency_rules=[RULE])
+  assert not any(c.args[2] == 'WriteValue' for c in client._call.call_args_list)
+
+
+def test_matching_does_not_require_auto_mute_and_absent_write_supported(setup):
+  owner, client, objects = setup
+  client._call.return_value = (b'1,00,KA,3,0,34.313,F,1',)
+  result = exchange(owner, ADDRESS, 'R8', ('live',), frequency_rules=[RULE])
+  assert result['alerts'][0]['filtered'] and not result['command']
+  del objects[PATH + '/service/write']
+  result = exchange(owner, ADDRESS, 'R8', ('live',), auto_mute=True, frequency_rules=[RULE])
+  assert not result['can_mute'] and not result['command']
+  assert not any(c.args[2] == 'WriteValue' for c in client._call.call_args_list)
+
+
+def test_rule_tolerance_band_and_enabled():
+  from openpilot.starpilot.uniden.protocol import matches_rule
+  rule = {**RULE, 'tolerance_mhz': 2}
+  assert matches_rule({'band': 'KA', 'frequency': 34.315}, [rule])
+  assert not matches_rule({'band': 'KA', 'frequency': 34.316}, [rule])
+  assert not matches_rule({'band': 'K', 'frequency': 34.313}, [rule])
+  assert not matches_rule({'band': 'KA', 'frequency': 34.313}, [{**rule, 'enabled': False}])
+
+
+@pytest.mark.parametrize('change', [{'frequency': float('nan')}, {'frequency': True}, {'frequency': 24.15},
+  {'tolerance_mhz': -1}, {'tolerance_mhz': 11}, {'tolerance_mhz': float('inf')}, {'band': 'LASER'},
+  {'band': []}, {'enabled': 1}, {'label': 'x' * 61}])
+def test_invalid_frequency_rule_rejected(change):
+  from openpilot.starpilot.uniden.protocol import normalize_config
+  with pytest.raises(ValueError):
+    normalize_config({**CONFIG, 'frequency_rules': [{**RULE, **change}]})
+
+
+def test_legacy_config_gains_independent_rule_lists():
+  from openpilot.starpilot.uniden.protocol import normalize_config
+  legacy = {key: value for key, value in CONFIG.items() if key not in ('auto_mute', 'hide_filtered', 'frequency_rules')}
+  first, second = normalize_config(legacy), normalize_config(legacy)
+  first['frequency_rules'].append(RULE)
+  assert second['frequency_rules'] == [] and not second['auto_mute']

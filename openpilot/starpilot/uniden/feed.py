@@ -64,7 +64,7 @@ class DetectorFeed:
   def run(self):
     while not self.stop.is_set():
       self.poll()
-      self.stop.wait(0.5)
+      self.stop.wait(0.1 if self.state.get('config', {}).get('enabled') else 1.0)
 
   def close(self):
     self.set_enabled(False)
