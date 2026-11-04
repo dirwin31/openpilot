@@ -31,32 +31,41 @@ def exchange(owner, address, model, session, *, mute=None, auto_mute=False, freq
       admitted = True
     client = owner._client()
     adapter, props, sender = client.adapter_identity()
-    if props.get('Powered') is not True or props.get('Discovering') is True:
-      raise BluetoothRejected('Bluetooth is off or discovering', code='busy')
+    if props.get('Powered') is not True:
+      raise BluetoothRejected('Turn on Bluetooth to connect the detector', code='radio_off')
+    if props.get('Discovering') is True:
+      raise BluetoothRejected('Finish Bluetooth discovery before connecting the detector', code='busy')
     if lease is not None and (adapter, sender) != (lease.adapter_path, lease.bluez_sender):
       raise BluetoothRejected('Android Auto adapter changed', code='changed')
     objects = client._objects()
     device = next(((p, i[DEVICE]) for p, i in objects.items() if DEVICE in i and
                    i[DEVICE].get('Address', '').upper() == address and p.startswith(adapter + '/')), None)
     if device is None:
-      raise BluetoothRejected('Pair the selected detector first', code='changed')
+      raise BluetoothRejected('Pair the selected detector first', code='detector_pairing_required')
     path, props = device
     if props.get('Paired') is not True or props.get('Blocked') is True or model_for_name(props.get('Name')) != model:
-      raise BluetoothRejected('Choose a paired detector with the matching model', code='changed')
+      raise BluetoothRejected('Choose a paired detector with the matching model', code='detector_pairing_required')
     if props.get('Connected') is not True:
       if mute is not None:
         raise BluetoothRejected('Detector disconnected; mute was not sent', code='changed')
       retries = getattr(owner, '_uniden_retries', {})
       owner._uniden_retries = retries
       if time.monotonic() < retries.get(address, 0):
-        raise BluetoothRejected('Waiting to reconnect detector', code='busy')
+        raise BluetoothRejected('Reconnecting to detector', code='reconnecting')
       retries[address] = time.monotonic() + 15
       validate()
-      client._call(path, DEVICE, 'Connect', timeout=3.0)
+      try:
+        client._call(path, DEVICE, 'Connect', timeout=3.0)
+      except (BluetoothRejected, OSError) as error:
+        # Failed attempts and the retry delay are one connection state. Do not
+        # alternate a raw BlueZ exception with a countdown on every UI poll.
+        if str(error) in ('org.bluez.Error.NotAuthorized', 'org.bluez.Error.AuthenticationFailed'):
+          raise BluetoothRejected('Pair the detector again in Bluetooth settings', code='detector_pairing_required') from error
+        raise BluetoothRejected('Reconnecting to detector', code='reconnecting') from error
       # Service discovery is asynchronous. Read only after a subsequent ready snapshot.
-      raise BluetoothRejected('Connecting detector', code='busy')
+      raise BluetoothRejected('Reconnecting to detector', code='reconnecting')
     if props.get('ServicesResolved') is not True:
-      raise BluetoothRejected('Waiting for detector services', code='busy')
+      raise BluetoothRejected('Reconnecting to detector', code='reconnecting')
     paths = {p[GATT].get('UUID', '').lower(): name for name, p in objects.items() if name.startswith(path + '/') and GATT in p}
     if ALERT_UUID not in paths:
       raise BluetoothRejected('Detector alert characteristic is unavailable', code='changed')
