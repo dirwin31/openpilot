@@ -24,6 +24,9 @@ const controller = { version: 1, available: true, editable: true, enabled: false
       requests.push(pathname)
       if (pathname === '/api/bluetooth/action') {
         const body = route.request().postDataJSON(); actions.push(body)
+        const device = status.devices.find(device => device.address === body.address)
+        if (device && ['connect', 'disconnect'].includes(body.operation)) device.connected = body.operation === 'connect'
+        if (body.operation === 'forget') status.devices = status.devices.filter(device => device.address !== body.address)
         if (body.operation === 'scan') status.discovering = true
         if (body.operation === 'stop_scan') status.discovering = false
         return route.fulfill({ json: status })
@@ -86,9 +89,31 @@ const controller = { version: 1, available: true, editable: true, enabled: false
     assert.equal(await page.getByRole('button', { name: 'Pair phone' }).count(), 0)
     assert.equal(await page.getByRole('button', { name: 'Search', exact: true }).count(), 0)
     await page.evaluate(() => window.app.go('/bluetooth'))
+    await page.getByRole('button', { name: 'Add a device', exact: true }).waitFor()
+    const detectorRow = page.locator('.gx-bluetooth__device').filter({ hasText: 'Uniden R8' })
+    assert.equal(await detectorRow.locator('summary').count(), 0)
+    await detectorRow.getByRole('button', { name: 'Disconnect', exact: true }).click()
+    await detectorRow.getByRole('button', { name: 'Connect', exact: true }).click()
+    await detectorRow.getByRole('button', { name: 'Disconnect', exact: true }).waitFor()
+    const remoteRow = page.locator('.gx-bluetooth__device').filter({ hasText: 'Steering remote' })
+    await remoteRow.getByRole('button', { name: 'Forget', exact: true }).click()
+    const dialog = page.getByRole('alertdialog')
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    assert.equal(actions.some(action => action.operation === 'forget'), false)
+    await remoteRow.getByRole('button', { name: 'Forget', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Forget', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+    assert.equal(await remoteRow.count(), 0)
+    assert.deepEqual(actions.slice(-3), [
+      { operation: 'disconnect', address: detector.address },
+      { operation: 'connect', address: detector.address },
+      { operation: 'forget', address: '11:22:33:44:55:66' },
+    ])
     status.parked = false
     await page.evaluate(() => window.app.$refs.bluetooth.refresh())
     assert.equal(await page.getByRole('button', { name: 'Add a device', exact: true }).isDisabled(), true)
+    assert.equal(await detectorRow.getByRole('button', { name: 'Disconnect', exact: true }).isDisabled(), true)
+    assert.equal(await detectorRow.getByRole('button', { name: 'Forget', exact: true }).isDisabled(), true)
     assert.deepEqual(errors, [])
     console.log('Bluetooth tabs, shared pairing, device rows, StarPort link, Uniden selection and standalone controllers passed')
   } finally { await browser.close() }
