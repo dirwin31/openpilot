@@ -10,8 +10,9 @@ WRITE_UUID = '2c86686a-53dc-25b3-0c4a-f0e10c8dee20'
 GATT = 'org.bluez.GattCharacteristic1'
 FREQUENCY_BANDS = {'X', 'K', 'KA', 'K POP', 'KA POP'}
 BANDS = {'X', 'K', 'KA', 'LASER', 'MRCD', 'MRCT', 'RT3', 'RT4', 'K POP', 'KA POP'}
-DEFAULT_CONFIG = {'enabled': False, 'address': '', 'model': 'R8', 'transparency': 8, 'hide_when_no_alert': True}
-DISPLAY_KEYS = {'transparency', 'hide_when_no_alert'}
+DEFAULT_CONFIG = {'enabled': False, 'address': '', 'model': 'R8', 'transparency': 8, 'hide_when_no_alert': True,
+                  'auto_mute': False, 'hide_filtered': False, 'frequency_rules': []}
+OPTIONAL_KEYS = {'transparency', 'hide_when_no_alert', 'auto_mute', 'hide_filtered', 'frequency_rules'}
 # Field 7 per PROTOCOL.md; only 1 and 2 are confirmed on hardware, the rest are documented but untested.
 MUTE_MODES = {'1': '', '2': 'manual', '3': 'memory', '4': 'auto_memory', '5': 'blocked', '6': 'quiet_ride'}
 
@@ -22,7 +23,7 @@ def model_for_name(name):
 
 
 def normalize_config(value):
-  if type(value) is not dict or set(value) - set(DEFAULT_CONFIG) or not (set(DEFAULT_CONFIG) - DISPLAY_KEYS) <= set(value):
+  if type(value) is not dict or set(value) - set(DEFAULT_CONFIG) or not (set(DEFAULT_CONFIG) - OPTIONAL_KEYS) <= set(value):
     raise ValueError('Invalid detector configuration')
   config = {**DEFAULT_CONFIG, **value}
   if type(config['transparency']) is not int or not 0 <= config['transparency'] <= 100:
@@ -35,6 +36,10 @@ def normalize_config(value):
     raise ValueError('Invalid detector address')
   if config['enabled'] and not config['address']:
     raise ValueError('Choose a paired detector')
+  for key in ('auto_mute', 'hide_filtered'):
+    if type(config[key]) is not bool:
+      raise ValueError('Filter toggles must be boolean')
+  config['frequency_rules'] = normalize_rules(config['frequency_rules'])
   config['address'] = config['address'].upper()
   return config
 
@@ -68,3 +73,31 @@ def parse_alerts(payload, model='R8'):
 def alert_key(alerts):
   """Stable across strength changes; never use the detector's usually-zero alert ID."""
   return sorted([[a['band'], a['frequency'], a['direction']] for a in alerts], key=str)
+
+
+def normalize_rules(rules):
+  if type(rules) is not list or len(rules) > 32:
+    raise ValueError('Use at most 32 frequency rules')
+  result = []
+  for rule in rules:
+    if type(rule) is not dict or set(rule) != {'enabled', 'label', 'band', 'frequency', 'tolerance_mhz'}:
+      raise ValueError('Invalid frequency rule')
+    if type(rule['enabled']) is not bool or type(rule['label']) is not str or len(rule['label']) > 60:
+      raise ValueError('Use a label of at most 60 characters')
+    bounds = {'X': (10.0, 11.0), 'K': (23.0, 25.0), 'KA': (33.0, 36.0)}
+    band = rule['band']
+    if type(band) is not str or band not in bounds:
+      raise ValueError('Choose X, K or KA band')
+    frequency, tolerance = rule['frequency'], rule['tolerance_mhz']
+    if type(frequency) not in (int, float) or not math.isfinite(frequency) or not bounds[band][0] <= frequency <= bounds[band][1]:
+      raise ValueError('Frequency must be in the selected band, in GHz')
+    if type(tolerance) not in (int, float) or not math.isfinite(tolerance) or not 0 <= tolerance <= 10:
+      raise ValueError('Tolerance must be 0–10 MHz')
+    result.append(dict(rule))
+  return result
+
+
+def matches_rule(alert, rules):
+  frequency = alert.get('frequency')
+  return frequency is not None and any(rule['enabled'] and alert['band'] == rule['band'] and
+    abs(frequency - rule['frequency']) <= rule['tolerance_mhz'] / 1000 + 1e-9 for rule in rules)

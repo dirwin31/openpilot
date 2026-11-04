@@ -149,6 +149,8 @@ class OnroadView:
       self.personality = self.compact_sidebar.personality
 
   def render(self, state: OnroadState) -> None:
+    if uniden := getattr(self, "uniden", None):
+      uniden.feed.set_enabled(uniden.runtime_active)
     if state.camera_available and self.camera_layer is None:
       raise ValueError("Camera observation requires a camera renderer")
     if self.fonts.profile == Profile.LARGE:
