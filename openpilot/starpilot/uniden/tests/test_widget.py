@@ -272,3 +272,20 @@ def test_mute_note_names_quiet_ride_and_mute_memory():
   assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,6&1,00,X,2,0,10.525,S,3')) == 'Muted', 'mixed reasons read as plain muted'
   assert mute_note(parse_alerts(b'1,00,KA,6,0,35.500,F,1&1,00,K,3,0,24.150,F,6')) == '1 Q-Ride'
   assert mute_note(parse_alerts(b'1,00,KA,6,0,35.500,F,1')) == ''
+
+
+def test_custom_filters_hide_only_matching_rows():
+  from openpilot.starpilot.ui.onroad_uniden import shown_alerts
+  alerts = parse_alerts(b'1,00,KA,3,0,34.313,F,1&1,00,KA,3,0,34.7,R,1')
+  alerts[0]['filtered'] = True
+  assert shown_alerts(alerts, {'hide_filtered': True}) == alerts[1:]
+  assert shown_alerts(alerts, {'hide_filtered': False}) == alerts
+
+
+def test_hidden_widget_keeps_runtime_feed_active():
+  feed = Mock()
+  widget = UnidenWidget(Mock(), feed)
+  widget.runtime_active = True
+  state = NS(alert=NS(size='full'), customization={'layouts': {'large': {}}})
+  widget.render(state)
+  feed.set_enabled.assert_called_once_with(True)

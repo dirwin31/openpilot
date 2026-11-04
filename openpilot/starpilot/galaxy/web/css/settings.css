@@ -740,3 +740,10 @@ html.gx-maker-open, html.gx-maker-open body { touch-action: manipulation; }
 @media (forced-colors: active) {
   .gx-model-card--polaris .gx-model-card__title { background: none; -webkit-text-fill-color: currentColor; color: CanvasText; }
 }
+
+/* Simple Bluetooth device name and connection-status rows. */
+.gx-bluetooth__device + .gx-bluetooth__device { border-top: 1px solid var(--glass-border); }
+.gx-bluetooth__device .gx-row__info { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .gx-bluetooth .gx-row { flex-wrap: wrap; }
+}

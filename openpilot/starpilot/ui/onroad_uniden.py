@@ -30,7 +30,8 @@ def mute_note(alerts):
 def shown_alerts(alerts, config):
   """Alerts the driver asked to see: Quiet Ride and mute-memory alerts can be left off the card."""
   hidden = (('quiet_ride',) if config.get('hide_quiet_ride') else ()) + (MEMORY_MUTES if config.get('hide_mute_memory') else ())
-  return [item for item in alerts if item.get('mute_mode', '') not in hidden]
+  return [item for item in alerts if item.get('mute_mode', '') not in hidden and
+          not (config.get('hide_filtered') and item.get('filtered'))]
 
 
 def card_scale(config):
@@ -97,7 +98,7 @@ class UnidenWidget:
     import time
     p = self.placement(state)
     self.visible_until = 0.
-    self.feed.set_enabled(self.runtime_active and p is not None)
+    self.feed.set_enabled(self.runtime_active)
     data = self.preview_data or self.feed.snapshot()
     if not p or not data.get('config', {}).get('enabled'):
       return
@@ -146,7 +147,7 @@ class UnidenWidget:
 
     # The mute state rides in the top edge of the card rather than taking a row of its own.
     muted = sum(bool(item['muted']) for item in alerts)
-    notes = ['Mute sent' if data.get('command') and muted < len(alerts) else mute_note(alerts)]
+    notes = ['Filtered' if all(a.get('filtered') for a in alerts) else 'Mute sent' if data.get('command') and muted < len(alerts) else mute_note(alerts)]
     if len(alerts) > MAX_ROWS:
       notes.append(f'+{len(alerts) - MAX_ROWS} more')
     note = '  •  '.join(n for n in notes if n)
