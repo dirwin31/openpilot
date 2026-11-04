@@ -42,5 +42,21 @@ class DetectorService:
       except (BluetoothRejected, BluetoothUnavailable, OSError, RuntimeError, ValueError) as error:
         if operation == 'mute':
           raise
-        result = {'connected': False, 'alerts': [], 'error': str(error)[:160]}
+        code = getattr(error, 'code', 'unavailable')
+        if str(error) in ('org.bluez.Error.Failed', 'org.bluez.Error.InProgress', 'org.bluez.Error.NotReady'):
+          code = 'reconnecting'
+        elif str(error) in ('org.bluez.Error.NotAuthorized', 'org.bluez.Error.AuthenticationFailed'):
+          code = 'detector_pairing_required'
+        messages = {
+          'reconnecting': 'Reconnecting to detector',
+          'radio_off': 'Turn on Bluetooth to connect the detector',
+          'busy': 'Waiting for Bluetooth to become available',
+          'detector_pairing_required': 'Pair or select the detector in Bluetooth settings',
+          'session_expired': 'Sign in to Galaxy again',
+        }
+        # Unknown transport errors remain visible as a failed connection, but
+        # D-Bus identifiers are not useful as user-facing status messages.
+        result = {'connected': False, 'alerts': [], 'connection_state': code if code in messages else 'unavailable',
+                  'error': messages.get(code, 'Unable to read detector alerts. Check the detector connection.')}
+
       return {**result, 'config': config}
