@@ -176,6 +176,8 @@ class OnroadView:
       raise ValueError("Camera observation requires a camera renderer")
     if self.fonts.profile == Profile.LARGE:
       self._large(state)
+      if uniden := getattr(self, "uniden", None):
+        uniden.render_border(state, *(self.projection_viewport or (state.viewport_width, 1080)))
     else:
       self._compact(state)
 
