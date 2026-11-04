@@ -62,3 +62,19 @@ test('selecting a paired detector infers model and enables integration', () => {
   UnidenPanel.methods.selectDetector.call(state)
   assert.deepEqual(state.config, { enabled: true, model: 'R4' })
 })
+
+test('reconnecting status stays stable and does not display transport errors', async () => {
+  const { detectorStatus } = await import('../web/js/uniden.js')
+  const failed = detectorStatus({ connected: false, connection_state: 'reconnecting', error: 'org.bluez.Error.Failed' })
+  const waiting = detectorStatus({ connected: false, connection_state: 'reconnecting', error: 'Waiting to reconnect detector' })
+  assert.deepEqual(failed, waiting)
+  assert.equal(failed.label, 'Reconnecting')
+  assert.equal(detectorStatus({ connected: true }).label, 'Connected')
+  assert.equal(detectorStatus({ connection_state: 'radio_off' }).label, 'Bluetooth off')
+  assert.equal(detectorStatus({ connection_state: 'detector_pairing_required' }).label, 'Check pairing')
+})
+
+test('rule summary explains exact matching and MHz tolerance in GHz', () => {
+  assert.equal(UnidenPanel.methods.ruleRange({ frequency: 34.313, tolerance_mhz: 0 }), 'Matches 34.313 GHz exactly')
+  assert.equal(UnidenPanel.methods.ruleRange({ frequency: 34.313, tolerance_mhz: 2 }), 'Matches 34.3110–34.3150 GHz')
+})
