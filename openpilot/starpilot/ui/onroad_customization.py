@@ -852,6 +852,8 @@ def widget_size(document, profile, widget):
   position = placement(document, profile, widget)
   if widget == "cruise_limits":
     return default["width"], default["height"] + sources_extent(document)
+  if widget == UNIDEN_WIDGET and type(position.get("scale")) is int:
+    return round(default["width"] * position["scale"] / 100), round(default["height"] * position["scale"] / 100)
   if default.get("box"):
     return position["width"], position["height"]
   if widget == SIGNAL_WIDGET:
