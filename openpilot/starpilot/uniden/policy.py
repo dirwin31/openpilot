@@ -11,7 +11,7 @@ def fresh_context(context, now):
 
 
 def apply(alerts, rules, situation, previous, now):
-  """Marks each alert filtered, quiet and instant_on. Returns the state to pass in on the next read."""
+  """Marks each alert filtered (ruled or locked), quiet and instant_on. Returns the state to pass in on the next read."""
   context = fresh_context(situation.get('context'), now)
   quiet = situation.get('quiet')
   locks = situation.get('locks', [])
@@ -28,11 +28,14 @@ def apply(alerts, rules, situation, previous, now):
                'since': now, 'loud': False}
     chosen = bool(timed and alert['band'] in timed['bands'])
     # Once a signal reaches the strength it stays loud until it clears, so it cannot flap at the threshold.
-    seen[key] = entry = {**entry, 'loud': entry['loud'] or (chosen and alert['strength'] >= timed['strength'])}
+    # A strength of 0 means never warn again: the signal stays muted however strong it gets.
+    seen[key] = entry = {**entry, 'loud': entry['loud'] or (chosen and timed['strength'] > 0 and alert['strength'] >= timed['strength'])}
     instant = entry['instant']
     alert['instant_on'] = instant
     alert['timed'] = chosen and not instant and not entry['loud'] and now - entry['since'] >= timed['seconds']
     alert['breakthrough'] = chosen and entry['loud']
-    alert['filtered'] = matches_rule(alert, rules) or any(matches_lock(alert, lock, context) for lock in locks)
+    alert['ruled'] = matches_rule(alert, rules)
+    alert['locked'] = any(matches_lock(alert, lock, context) for lock in locks)
+    alert['filtered'] = alert['ruled'] or alert['locked']
     alert['quiet'] = bool(within and alert['band'] in quiet['bands'] and not instant)
   return now, seen

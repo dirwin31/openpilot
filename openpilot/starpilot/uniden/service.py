@@ -60,7 +60,8 @@ class DetectorService:
     timed = None
     if config['timed_mute']:
       timed = {'bands': config['timed_mute_bands'], 'seconds': config['timed_mute_seconds'],
-               'strength': config['timed_mute_strength'], 'unmute': config['unmute_on_breakthrough']}
+               # The detector's unmute command was never confirmed on hardware; the saved setting is kept but unused.
+               'strength': config['timed_mute_strength'], 'unmute': False}
     return {'context': context, 'locks': near, 'quiet': quiet, 'timed': timed}
 
   def observe(self, result, config, context):

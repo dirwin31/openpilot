@@ -570,7 +570,9 @@ def test_unmute_needs_the_setting_and_never_undoes_the_drivers_own_mute(setup):
 def test_service_sends_the_timed_settings_and_validates_them(tmp_path):
   service, _, _ = make_service(tmp_path, {**CONFIG, 'timed_mute': True, 'timed_mute_seconds': 8, 'timed_mute_strength': 5,
                                           'timed_mute_bands': ['K'], 'unmute_on_breakthrough': True})
-  assert service.situation(service.config(), None)['timed'] == {'bands': ['K'], 'seconds': 8, 'strength': 5, 'unmute': True}
+  assert service.situation(service.config(), None)['timed'] == {'bands': ['K'], 'seconds': 8, 'strength': 5, 'unmute': False}, \
+    'the saved unmute setting is kept but no longer sends the untested command'
+  assert normalize_config({**CONFIG, 'timed_mute_strength': 0})['timed_mute_strength'] == 0, '0 is never warn again'
   assert make_service(tmp_path)[0].situation(CONFIG, None)['timed'] is None
   for change in ({'timed_mute_seconds': 0}, {'timed_mute_seconds': 61}, {'timed_mute_strength': 1}, {'timed_mute_strength': 9},
                  {'timed_mute_seconds': 5.5}, {'timed_mute_bands': ['LASER']}, {'timed_mute': 1}, {'unmute_on_breakthrough': 'yes'}):
