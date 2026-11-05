@@ -9,6 +9,7 @@ export function detectorStatus(state) {
   return { label: 'Reconnecting', detail: 'Keep the detector on and close other apps connected to it. Retrying automatically.', tone: 'waiting' }
 }
 
+const LEARNING_ROWS = 5
 const defaults = () => ({ enabled: false, address: '', model: 'R8', transparency: 8, hide_when_no_alert: true,
   auto_mute: false, hide_filtered: false, frequency_rules: [], quiet_ride: false, quiet_margin: 0, quiet_bands: ['X', 'K'],
   auto_learn: false, learn_bands: ['X', 'K'], border_bands: ['KA', 'LASER'], border_colors: { KA: 'purple', K: 'yellow', LASER: 'white' },
@@ -49,12 +50,23 @@ export const UnidenPanel = {
   components: { StylePreview },
   props: { devices: { type: Array, default: () => [] }, parked: Boolean, unauthorized: Function, settings: Boolean },
   data: () => ({ config: defaults(), saved: null, loaded: false, busy: false, error: '', state: null, editing: false,
-    locks: [], candidates: 0, metric: false, swatches: SWATCHES, styles: STYLES, help: STYLE_HELP, bands: BANDS }),
+    locks: [], candidates: 0, learning: [], metric: false, swatches: SWATCHES, styles: STYLES, help: STYLE_HELP, bands: BANDS }),
   computed: {
     detectors() { return this.devices.filter(d => d.paired && /(?:^|[^a-z0-9])r[48]w?(?=$|[^a-z0-9])/i.test(d.name)) },
     selected() { return this.detectors.find(d => d.address.toUpperCase() === this.config.address.toUpperCase()) },
     dirty() { return this.saved !== null && JSON.stringify(this.config) !== JSON.stringify(this.saved) },
     ready() { return !!this.saved?.address && this.detectors.some(d => d.address.toUpperCase() === this.saved.address.toUpperCase()) },
+    learningOn() { return !!this.saved?.auto_learn },
+    learningRows() {
+      const bands = this.saved?.learn_bands || []
+      return this.learning.slice(0, LEARNING_ROWS).map(item => ({ ...item, learnable: bands.includes(item.band),
+        percent: Math.min(100, Math.round(item.count / item.need * 100)), left: Math.max(0, item.need - item.count) }))
+    },
+    learningTitle() {
+      if (!this.learningOn) return 'Learning is off'
+      const count = this.learning.length
+      return count ? `Learning ${count} ${count === 1 ? 'source' : 'sources'}` : 'Learning: watching for repeat sources'
+    },
     savedName() { return this.detectors.find(d => d.address.toUpperCase() === this.saved?.address)?.name || (this.saved?.address ? `Uniden ${this.saved.model}` : 'Select your detector') },
     connection() {
       if (!this.saved?.address) return { label: 'Not configured', detail: 'Choose a paired detector to get started.', tone: 'waiting' }
@@ -108,12 +120,12 @@ export const UnidenPanel = {
     async loadLocks(payload = { operation: 'locks' }) {
       try {
         const value = await this.request(payload)
-        if (this.alive) { this.locks = value.locks; this.candidates = value.candidates; this.metric = value.metric }
+        if (this.alive) { this.locks = value.locks; this.candidates = value.candidates; this.learning = value.learning || []; this.metric = value.metric }
       } catch (error) { if (this.alive && payload.operation === 'unlock') this.error = error.message }
     },
     lockLabel(lock) { return BANDS[lock.band] + (lock.frequency ? ` ${lock.frequency.toFixed(3)} GHz` : '') },
     lockDetail(lock) {
-      return `${lock.source === 'auto' ? 'Learned' : 'Held on screen'} · ${lock.count} ${lock.count === 1 ? 'pass' : 'passes'} · ${lock.lat.toFixed(4)}, ${lock.lon.toFixed(4)} · ${lock.radius_m} m`
+      return `${lock.count} ${lock.count === 1 ? 'pass' : 'passes'} · ${lock.lat.toFixed(4)}, ${lock.lon.toFixed(4)} · ${lock.radius_m} m`
     },
     selectDetector() {
       const match = this.selected?.name.match(/(?:^|[^a-z0-9])(r[48])w?(?=$|[^a-z0-9])/i)
@@ -240,10 +252,30 @@ export const UnidenPanel = {
         <section class="gx-card" aria-label="Saved lockouts">
           <div class="gx-section__header"><span class="gx-section__title">Saved lockouts</span></div>
           <div class="gx-panel gx-stack">
-            <p class="gx-note">Hold an alert on the driving screen to lock it out where you are. Lockouts only apply near that place. Learning has seen {{ candidates }} other {{ candidates === 1 ? 'source' : 'sources' }} so far.</p>
+            <div class="gx-uniden__learning" :class="{ 'gx-uniden__learning--on': learningOn }" role="status">
+              <div class="gx-uniden__learning-head">
+                <span class="gx-uniden__learning-badge"><span class="gx-uniden__learning-dot" aria-hidden="true"></span>{{ learningOn ? 'Learning' : 'Off' }}</span>
+                <strong>{{ learningTitle }}</strong>
+              </div>
+              <p v-if="!learningOn" class="gx-note">Turn on Learn lockouts automatically above to lock out sources you pass again and again.</p>
+              <p v-else-if="!learning.length" class="gx-note">A fixed source becomes a lockout after you pass it on separate trips: three for X and K, five for Ka and Laser.</p>
+              <ul v-if="learningOn && learningRows.length" class="gx-uniden__learning-list">
+                <li v-for="item in learningRows" :key="item.id" :class="{ 'gx-uniden__learning-item--paused': !item.learnable }">
+                  <div class="gx-uniden__learning-line">
+                    <span class="gx-uniden__learning-name">{{ lockLabel(item) }}</span>
+                    <span class="gx-uniden__learning-count">{{ item.learnable ? item.count + ' of ' + item.need + ' passes' : 'Band not learned' }}</span>
+                  </div>
+                  <div v-if="item.learnable" class="gx-uniden__meter" role="progressbar" :aria-label="lockLabel(item) + ' learning progress'"
+                       aria-valuemin="0" :aria-valuemax="item.need" :aria-valuenow="item.count"><span :style="{ width: item.percent + '%' }"></span></div>
+                  <span v-if="item.learnable" class="gx-note">{{ item.left === 1 ? 'Locks out on the next pass' : item.left + ' more passes to lock out' }}{{ item.misses ? ' · missed ' + item.misses + ' ' + (item.misses === 1 ? 'drive-by' : 'drive-bys') : '' }}</span>
+                </li>
+              </ul>
+              <p v-if="learningOn && learning.length > learningRows.length" class="gx-note">+{{ learning.length - learningRows.length }} more being learned</p>
+            </div>
+            <p class="gx-note">Hold an alert on the driving screen to lock it out where you are. Lockouts only apply near that place.</p>
             <div v-if="!locks.length" class="gx-uniden__empty"><strong>No saved lockouts</strong></div>
             <div v-for="lock in locks" :key="lock.id" class="gx-uniden__rule-footer">
-              <div><h4>{{ lockLabel(lock) }}</h4><p class="gx-note">{{ lockDetail(lock) }}</p></div>
+              <div><h4>{{ lockLabel(lock) }} <span class="gx-uniden__lock-source" :class="{ 'gx-uniden__lock-source--auto': lock.source === 'auto' }">{{ lock.source === 'auto' ? 'Learned' : 'Held on screen' }}</span></h4><p class="gx-note">{{ lockDetail(lock) }}</p></div>
               <button class="gx-btn gx-btn--tonal" @click="unlock(lock.id)" :aria-label="'Remove lockout ' + lockLabel(lock)">Remove</button>
             </div>
           </div>

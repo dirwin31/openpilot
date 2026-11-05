@@ -187,9 +187,11 @@ def test_feed_stale_and_hidden_and_failed_mute_not_replayed():
   feed.mute(feed.snapshot())
   call.return_value = (503, {'error': 'Lost connection'})
   feed.poll()
-  assert call.call_args.args[2]['operation'] == 'mute' and feed.snapshot()['alerts'] == []
+  assert call.call_args.args[2]['operation'] == 'mute' and feed.snapshot()['alerts'], 'one failed read does not blink the alerts'
+  now[0] = 10.8
   feed.poll()
-  assert call.call_args.args[2]['operation'] == 'status'
+  assert call.call_args.args[2]['operation'] == 'status' and feed.snapshot()['alerts'] == [], 'a lasting failure clears them'
+  now[0] = 10
   feed.state = state
   now[0] = 14
   assert not feed.snapshot()['connected']
