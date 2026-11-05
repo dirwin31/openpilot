@@ -7,6 +7,7 @@ from openpilot.starpilot.uniden.protocol import alert_key
 ENDPOINT = '/api/bluetooth/uniden'
 OFFLINE_S = 10
 NOTICE_S = 2.5
+HOLD_S = .75     # a failed or empty read this soon after alerts keeps them, so one bad poll does not blink the card and frame
 
 
 def drive_context():
@@ -37,6 +38,7 @@ class DetectorFeed:
     self.enabled = False
     self.requested_at = 0
     self.live_at = 0
+    self.alerts_at = None
     self.state = {}
     self.pending = None
     self.notice = ('', 0)
@@ -119,6 +121,12 @@ class DetectorFeed:
       return
     with self.lock:
       if self.enabled:
+        if result.get('connected') and result.get('alerts'):
+          self.alerts_at = self.clock()
+        elif self.alerts_at is not None and self.clock() - self.alerts_at < HOLD_S and self.state.get('alerts'):
+          return
+        else:
+          self.alerts_at = None
         self.state = {**result, 'config': result.get('config', self.state.get('config', {}))}
         if result.get('connected'):
           self.live_at = self.clock()
