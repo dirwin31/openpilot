@@ -1,4 +1,5 @@
 """Shared R4/R8 alert card and touch target for comma 3X and Android Auto."""
+import math
 import time
 
 from openpilot.starpilot.ui.raylib import rl
@@ -17,7 +18,8 @@ SCALE_RANGE = (50, 150)       # percent
 MEMORY_MUTES = ('memory', 'auto_memory')
 NOTE_SIZE = 23
 HOLD_S = .8
-BORDER_INSET, BORDER_WIDTH, PULSE_HZ, BADGE_TOP = 11, 8, 3, 42
+BORDER_INSET, BORDER_WIDTH, PULSE_HZ, BADGE_TOP = 11, 12, 3, 42
+EDGE_FRAME, EDGE_ROUNDNESS = 30, .12   # onroad's engagement edge, whose rounded corners the frame follows
 CORNER_ARM, DIM_ALPHA = 160, 70
 DIRECTION_SIDES = {'front': ('top',), 'rear': ('bottom',), 'side': ('left', 'right')}
 OFFLINE_SIZE = (330, 56)
@@ -46,12 +48,12 @@ def hex_color(value):
 
 
 def threat(alerts, bands):
-  """The most serious live alert the driver asked to be warned about; locked out and quiet ones do not count."""
+  """The most serious live alert the driver asked to be warned about; locked out and quiet ones do not count.
+  A mute, by hand or timed, only silences the detector: the signal is still there, so the frame stays up."""
   for band in ('LASER', 'KA', 'K'):
     if band in bands:
       for alert in alerts:
-        if alert['band'] == band and not (alert.get('filtered') or alert.get('quiet') or alert.get('timed')) and \
-           (alert.get('breakthrough') or not alert.get('muted')):
+        if alert['band'] == band and not (alert.get('filtered') or alert.get('quiet')):
           return alert
   return None
 
@@ -66,30 +68,69 @@ def chase_share(strength):
   return .15 + .02 * (min(8, max(1, strength)) - 1)
 
 
-def perimeter_spans(width, height, start, length):
-  """Clockwise (side, from, to) pieces of a rectangle's outline, wrapping past the end of the lap."""
-  sides = (('top', width), ('right', height), ('bottom', width), ('left', height))
-  total, start = 2 * (width + height), start % (2 * (width + height))
-  windows = [(start, min(start + length, total))] + ([(0, start + length - total)] if start + length > total else [])
-  spans, offset = [], 0
-  for side, size in sides:
-    for begin, end in windows:
-      low, high = max(begin, offset), min(end, offset + size)
-      if high > low:
-        spans.append((side, low - offset, high - offset))
-    offset += size
-  return spans
+def frame_radius(width, height):
+  """Outer corner radius that keeps the frame concentric with the engagement edge's rounded corners."""
+  return EDGE_ROUNDNESS * (min(width, height) - 2 * EDGE_FRAME) / 2 + EDGE_FRAME - BORDER_INSET
 
 
-def side_rect(frame, thickness, side, begin, end):
-  x, y, width, height = frame.x, frame.y, frame.width, frame.height
-  if side == 'top':
-    return rl.Rectangle(x + begin, y, end - begin, thickness)
-  if side == 'right':
-    return rl.Rectangle(x + width - thickness, y + begin, thickness, end - begin)
-  if side == 'bottom':
-    return rl.Rectangle(x + width - end, y + height - thickness, end - begin, thickness)
-  return rl.Rectangle(x, y + height - end, thickness, end - begin)
+class RoundedFrame:
+  """The frame's clockwise path from the top-left end of the top edge: straight sides and quarter-circle corners."""
+  CORNERS = {'top': 270, 'right': 0, 'bottom': 90, 'left': 180}   # raylib angle where the corner after each side starts
+
+  def __init__(self, rect, thickness, radius):
+    self.rect, self.thickness, self.radius = rect, thickness, radius
+    self.arc = math.pi / 2 * (radius - thickness / 2)             # quarter-circle length along the stroke's centre
+    straight = {'top': rect.width - 2 * radius, 'right': rect.height - 2 * radius}
+    straight.update(bottom=straight['top'], left=straight['right'])
+    self.pieces, at = [], 0.
+    for side in ('top', 'right', 'bottom', 'left'):
+      self.pieces += [(side, at, straight[side]), (side + '_corner', at + straight[side], self.arc)]
+      at += straight[side] + self.arc
+    self.total = at
+
+  def side_span(self, side):
+    """A side's straight edge plus half of each corner beside it."""
+    start = next(at for name, at, _ in self.pieces if name == side)
+    length = next(size for name, _, size in self.pieces if name == side)
+    return start - self.arc / 2, length + self.arc
+
+  def corner_span(self, side, arm):
+    """The corner after `side`, with `arm` of straight edge either side of it."""
+    start = next(at for name, at, _ in self.pieces if name == side + '_corner')
+    reach = max(0., arm - self.radius)
+    return start - reach, self.arc + 2 * reach
+
+  def draw(self, start, length, color):
+    start %= self.total
+    for begin, end in [(start, min(start + length, self.total))] + ([(0., start + length - self.total)] if start + length > self.total else []):
+      for name, at, size in self.pieces:
+        low, high = max(begin, at), min(end, at + size)
+        if high > low:
+          self._piece(name, low - at, high - at, color)
+
+  def _piece(self, name, low, high, color):
+    x, y, width, height, t, r = self.rect.x, self.rect.y, self.rect.width, self.rect.height, self.thickness, self.radius
+    if name.endswith('_corner'):
+      side = name[:-7]
+      cx = x + r if side in ('bottom', 'left') else x + width - r
+      cy = y + r if side in ('top', 'left') else y + height - r
+      start = self.CORNERS[side] + math.degrees(low / (r - t / 2))
+      end = self.CORNERS[side] + math.degrees(high / (r - t / 2))
+      rl.draw_ring(rl.Vector2(cx, cy), r - t, r, start, end, max(2, round(16 * (high - low) / self.arc)), color)
+    elif name == 'top':
+      rl.draw_rectangle_rec(rl.Rectangle(x + r + low, y, high - low, t), color)
+    elif name == 'right':
+      rl.draw_rectangle_rec(rl.Rectangle(x + width - t, y + r + low, t, high - low), color)
+    elif name == 'bottom':
+      rl.draw_rectangle_rec(rl.Rectangle(x + width - r - high, y + height - t, high - low, t), color)
+    else:
+      rl.draw_rectangle_rec(rl.Rectangle(x, y + height - r - high, t, high - low), color)
+
+  def ring(self, color):
+    t, rect = self.thickness, self.rect
+    inner = rl.Rectangle(rect.x + t, rect.y + t, rect.width - 2 * t, rect.height - 2 * t)
+    # raylib strokes rounded lines outward from the rectangle, so `inner` carries the stroke's inner radius.
+    rl.draw_rectangle_rounded_lines_ex(inner, 2 * (self.radius - t) / min(inner.width, inner.height), 24, t, color)
 
 
 def card_scale(config):
@@ -206,31 +247,26 @@ class UnidenWidget:
     styles = {**DEFAULT_CONFIG['border_styles'], **data['config'].get('border_styles', {})}
     style = styles[alert['band']]
     still = state.customization.get('reduceMotion')
-    frame = rl.Rectangle(BORDER_INSET, BORDER_INSET, width - 2 * BORDER_INSET, height - 2 * BORDER_INSET)
+    frame = RoundedFrame(rl.Rectangle(BORDER_INSET, BORDER_INSET, width - 2 * BORDER_INSET, height - 2 * BORDER_INSET),
+                         BORDER_WIDTH, frame_radius(width, height))
     now = time.monotonic()
     if style == 'pulse' and not still and int(now * PULSE_HZ * 2) % 2:
       color = rl.Color(color.r, color.g, color.b, 110)
     if style == 'corners':
-      arm = min(CORNER_ARM, frame.width / 2, frame.height / 2)
-      for side, begin, end in ((s, b, e) for s in ('top', 'bottom') for b, e in ((0, arm), (frame.width - arm, frame.width))):
-        rl.draw_rectangle_rec(side_rect(frame, BORDER_WIDTH, side, begin, end), color)
-      for side, begin, end in ((s, b, e) for s in ('left', 'right') for b, e in ((0, arm), (frame.height - arm, frame.height))):
-        rl.draw_rectangle_rec(side_rect(frame, BORDER_WIDTH, side, begin, end), color)
+      for side in ('top', 'right', 'bottom', 'left'):
+        frame.draw(*frame.corner_span(side, CORNER_ARM), color)
     elif style == 'direction' and alert['direction'] in DIRECTION_SIDES:
-      rl.draw_rectangle_lines_ex(frame, BORDER_WIDTH, rl.Color(color.r, color.g, color.b, DIM_ALPHA))
+      frame.ring(rl.Color(color.r, color.g, color.b, DIM_ALPHA))
       for side in DIRECTION_SIDES[alert['direction']]:
-        size = frame.width if side in ('top', 'bottom') else frame.height
-        rl.draw_rectangle_rec(side_rect(frame, BORDER_WIDTH, side, 0, size), color)
+        frame.draw(*frame.side_span(side), color)
     elif style in ('chase', 'direction') and not still:
       phase, at = self.chase
       phase = (phase + min(.2, now - at) / chase_lap(alert['strength'])) % 1 if at else 0.
       self.chase = (phase, now)
-      total = 2 * (frame.width + frame.height)
-      rl.draw_rectangle_lines_ex(frame, BORDER_WIDTH, rl.Color(color.r, color.g, color.b, DIM_ALPHA))
-      for side, begin, end in perimeter_spans(frame.width, frame.height, phase * total, total * chase_share(alert['strength'])):
-        rl.draw_rectangle_rec(side_rect(frame, BORDER_WIDTH, side, begin, end), color)
+      frame.ring(rl.Color(color.r, color.g, color.b, DIM_ALPHA))
+      frame.draw(phase * frame.total, frame.total * chase_share(alert['strength']), color)
     else:
-      rl.draw_rectangle_lines_ex(frame, BORDER_WIDTH, color)
+      frame.ring(color)
 
   def _card(self, state, data, alerts, config, x, y):
     width, height = card_size(alerts)

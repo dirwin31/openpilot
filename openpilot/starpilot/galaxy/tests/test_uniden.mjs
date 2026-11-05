@@ -90,3 +90,15 @@ test('every frame style has a preview, a description and a toggle that keeps ban
   UnidenPanel.methods.toggleBand.call(state, 'border_bands', 'KA')
   assert.deepEqual(state.config.border_bands, ['LASER', 'K'])
 })
+
+test('saved lockouts make learning progress stand out', () => {
+  const { computed } = UnidenPanel
+  const learning = [{ id: 'a', band: 'K', frequency: 24.15, count: 2, need: 3, misses: 1 }, { id: 'b', band: 'KA', frequency: 34.7, count: 1, need: 5, misses: 0 }]
+  const panel = { saved: { auto_learn: true, learn_bands: ['X', 'K'] }, learning }
+  panel.learningOn = computed.learningOn.call(panel)
+  const rows = computed.learningRows.call(panel)
+  assert.deepEqual(rows.map(r => [r.learnable, r.percent, r.left]), [[true, 67, 1], [false, 20, 4]])
+  assert.equal(computed.learningTitle.call(panel), 'Learning 2 sources')
+  assert.equal(computed.learningTitle.call({ ...panel, learning: [] }), 'Learning: watching for repeat sources')
+  assert.equal(computed.learningTitle.call({ ...panel, learningOn: false }), 'Learning is off')
+})
