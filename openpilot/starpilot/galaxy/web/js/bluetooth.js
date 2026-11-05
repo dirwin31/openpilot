@@ -198,6 +198,11 @@ export const BluetoothPage = {
   methods: {
     reportSave,
     bluetoothError,
+    // Unsaved Uniden settings hold navigation the way the theme maker does.
+    requestLeave(proceed, presentation) {
+      if (this.$refs.uniden) this.$refs.uniden.requestLeave(proceed, presentation)
+      else proceed()
+    },
     async openAdd() {
       this.adding = true
       await this.$nextTick()
@@ -302,7 +307,7 @@ export const BluetoothPage = {
           </section>
         </template>
       </template>
-      <UnidenPanel v-if="unidenSettings && mode === 'local' && status" :settings="unidenSettings" :devices="status.devices" :parked="status.parked" :unauthorized="unauthorized" />
+      <UnidenPanel ref="uniden" v-if="unidenSettings && mode === 'local' && status" :settings="unidenSettings" :devices="status.devices" :parked="status.parked" :unauthorized="unauthorized" />
       <GxDialog v-if="forgetting" labelledby="gx-bt-forget-title" describedby="gx-bt-forget-body" alert @close="closeForget">
         <template v-if="forgetting.state === 'done'">
           <h3 id="gx-bt-forget-title">{{ forgetting.name }} forgotten</h3>

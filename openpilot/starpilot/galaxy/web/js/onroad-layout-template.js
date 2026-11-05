@@ -254,11 +254,7 @@ export const ONROAD_LAYOUT_TEMPLATE = `
                   <GalaxySettingRow feedback="draft" :row="switchRow('Hide when no alert', selectedPosition.hide_when_no_alert === true)" :index="0"
                     :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setUnidenDisplay('hide_when_no_alert', value === 'On')" />
                   <p class="gx-note">Hide quiet and disconnected cards. Turn off to show detector readiness and connection status.</p>
-                  <GalaxySettingRow feedback="draft" :row="switchRow('Hide Quiet Ride alerts', selectedPosition.hide_quiet_ride === true)" :index="0"
-                    :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setUnidenDisplay('hide_quiet_ride', value === 'On')" />
-                  <GalaxySettingRow feedback="draft" :row="switchRow('Hide mute memory alerts', selectedPosition.hide_mute_memory === true)" :index="0"
-                    :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setUnidenDisplay('hide_mute_memory', value === 'On')" />
-                  <p class="gx-note">Leave off alerts the detector is already silencing for Quiet Ride, or for a saved or learned mute location.</p>
+                  <p class="gx-note">Which alerts appear is set in Uniden Preferences, under On the screen. It applies to this widget and the full-screen warning.</p>
                 </template>
                 <template v-if="selectedWidget.opacity">
                   <label for="layout-widget-opacity">{{ selectedWidget.box ? 'Map opacity' : ['cruise_limits', 'jetlink_status'].includes(selectedWidget.kind) ? 'Background opacity' : 'Opacity' }} · {{ selectedPosition.opacity }}%</label>
