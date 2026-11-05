@@ -5,7 +5,7 @@ import time
 from openpilot.starpilot.ui.raylib import rl
 
 from openpilot.starpilot.ui.presentation import FontRole
-from openpilot.starpilot.ui.onroad_customization import PALETTE, widget_palette
+from openpilot.starpilot.ui.onroad_customization import PALETTE, offset, widget_palette
 from openpilot.starpilot.uniden.feed import DetectorFeed
 from openpilot.starpilot.uniden.protocol import BORDER_SWATCHES, DEFAULT_CONFIG, alert_key
 
@@ -18,29 +18,54 @@ SCALE_RANGE = (50, 150)       # percent
 MEMORY_MUTES = ('memory', 'auto_memory')
 NOTE_SIZE = 23
 HOLD_S = .8
-BORDER_INSET, BORDER_WIDTH, PULSE_HZ, BADGE_TOP = 11, 12, 3, 42
-EDGE_FRAME, EDGE_ROUNDNESS = 30, .12   # onroad's engagement edge, whose rounded corners the frame follows
-CORNER_ARM, DIM_ALPHA = 160, 70
+BADGE_TOP = 42
+EDGE_FRAME, EDGE_ROUNDNESS = 30, .12   # onroad's engagement edge, whose rounded corners the warning follows
 DIRECTION_SIDES = {'front': ('top',), 'rear': ('bottom',), 'side': ('left', 'right')}
+# The full-screen warning: a segmented line just inside the engagement edge, chevrons toward the signal, optional glow and veil.
+# Every band draws it the same way in its own color; the saved per-band style from older versions is ignored.
+EDGE_GAP, EDGE_LINE, DASH, DASH_GAP = 12, 8, 56, 30
+GLOW_DEPTH, GLOW_STEPS, VEIL_ALPHA = (35, 135), 12, .62
+CHEVRON_SIZE, CHEVRON_WIDTH, CHEVRON_FROM_SPEED, CHEVRON_FROM_EDGE = 48, 13, 300, 44
+FADE_S = .5
+BAND_RANK = {'K': 0, 'KA': 1, 'LASER': 2}
 OFFLINE_SIZE = (330, 56)
 
 
-def mute_note(alerts):
-  """What the detector is doing with the muted alerts, in the card's top edge: Q-Ride, Mute Memory or plain Muted."""
-  muted = [item for item in alerts if item['muted']]
-  if not muted:
+def mute_reason(alert):
+  """Why an alert is quiet. StarPilot's own reasons come first, since they are why it sent the mute; then the detector's."""
+  if alert.get('locked'):
+    return 'Lockout'
+  if alert.get('ruled'):
+    return 'Frequency rule'
+  if alert.get('filtered'):
+    return 'Filtered'
+  if alert.get('quiet'):
+    return 'Below limit'
+  if alert.get('timed'):
+    return 'Timed mute'
+  if not alert['muted']:
     return ''
-  modes = {'Mute Memory' if item.get('mute_mode') in MEMORY_MUTES else 'Q-Ride' if item.get('mute_mode') == 'quiet_ride' else 'Muted'
-           for item in muted}
-  name = modes.pop() if len(modes) == 1 else 'Muted'
-  return name if len(muted) == len(alerts) else f'{len(muted)} {name}'
+  mode = alert.get('mute_mode')
+  return 'Q-Ride' if mode == 'quiet_ride' else 'Mute Memory' if mode in MEMORY_MUTES else 'Manual mute' if mode == 'manual' else 'Muted'
+
+
+def mute_note(alerts):
+  """The reason in the card's top edge: one shared reason, counted when only some alerts have it, or plain Muted."""
+  reasons = [reason for reason in map(mute_reason, alerts) if reason]
+  if not reasons:
+    return ''
+  name = reasons[0] if len(set(reasons)) == 1 else 'Muted'
+  return name if len(reasons) == len(alerts) else f'{len(reasons)} {name}'
 
 
 def shown_alerts(alerts, config):
-  """Alerts the driver asked to see: Quiet Ride and mute-memory alerts can be left off the card."""
-  hidden = (('quiet_ride',) if config.get('hide_quiet_ride') else ()) + (MEMORY_MUTES if config.get('hide_mute_memory') else ())
-  return [item for item in alerts if item.get('mute_mode', '') not in hidden and
-          not (config.get('hide_filtered') and item.get('filtered'))]
+  """Alerts the driver wants on screen. One set of rules from the detector settings, shared by the card and the
+  full-screen warning; the card's own layout settings never decide this."""
+  return [item for item in alerts if not (
+    (config.get('hide_filtered') and item.get('filtered')) or
+    (config.get('hide_below_limit') and item.get('quiet')) or
+    (config.get('hide_q_ride') and item.get('mute_mode') == 'quiet_ride') or
+    (config.get('hide_mute_memory') and item.get('mute_mode') in MEMORY_MUTES))]
 
 
 def hex_color(value):
@@ -48,33 +73,18 @@ def hex_color(value):
 
 
 def threat(alerts, bands):
-  """The most serious live alert the driver asked to be warned about; locked out and quiet ones do not count.
-  A mute, by hand or timed, only silences the detector: the signal is still there, so the frame stays up."""
+  """The most serious shown alert in a band the driver chose. Muted ones still count: the signal is there, so the
+  warning stays up, dimmed to the muted brightness."""
   for band in ('LASER', 'KA', 'K'):
     if band in bands:
       for alert in alerts:
-        if alert['band'] == band and not (alert.get('filtered') or alert.get('quiet')):
+        if alert['band'] == band:
           return alert
   return None
 
 
-def chase_lap(strength):
-  """Seconds per lap: a stronger signal runs faster."""
-  return 1.8 - .14 * (min(8, max(1, strength)) - 1)
-
-
-def chase_share(strength):
-  """Share of the outline the bright segment covers: a stronger signal lights more of it."""
-  return .15 + .02 * (min(8, max(1, strength)) - 1)
-
-
-def frame_radius(width, height):
-  """Outer corner radius that keeps the frame concentric with the engagement edge's rounded corners."""
-  return EDGE_ROUNDNESS * (min(width, height) - 2 * EDGE_FRAME) / 2 + EDGE_FRAME - BORDER_INSET
-
-
 class RoundedFrame:
-  """The frame's clockwise path from the top-left end of the top edge: straight sides and quarter-circle corners."""
+  """A rounded line's clockwise path from the top-left end of the top edge: straight sides and quarter-circle corners."""
   CORNERS = {'top': 270, 'right': 0, 'bottom': 90, 'left': 180}   # raylib angle where the corner after each side starts
 
   def __init__(self, rect, thickness, radius):
@@ -87,18 +97,6 @@ class RoundedFrame:
       self.pieces += [(side, at, straight[side]), (side + '_corner', at + straight[side], self.arc)]
       at += straight[side] + self.arc
     self.total = at
-
-  def side_span(self, side):
-    """A side's straight edge plus half of each corner beside it."""
-    start = next(at for name, at, _ in self.pieces if name == side)
-    length = next(size for name, _, size in self.pieces if name == side)
-    return start - self.arc / 2, length + self.arc
-
-  def corner_span(self, side, arm):
-    """The corner after `side`, with `arm` of straight edge either side of it."""
-    start = next(at for name, at, _ in self.pieces if name == side + '_corner')
-    reach = max(0., arm - self.radius)
-    return start - reach, self.arc + 2 * reach
 
   def draw(self, start, length, color):
     start %= self.total
@@ -177,13 +175,94 @@ def direction_arrows(cx, cy, direction, accent, radius):
     rl.draw_triangle(tip, right, left, accent)
 
 
+class EdgeMotion:
+  """Pulses when an alert starts or gets worse, a short fade when it ends, and stillness in between."""
+
+  def __init__(self):
+    self.alert, self.baseline, self.pulses, self.ended = None, 0, [], None
+
+  def update(self, alert, now, still):
+    if alert is None:
+      if self.alert is not None:
+        self.ended, self.alert = (now, self.alert), None
+      return
+    previous, self.alert, self.ended = self.alert, alert, None
+    new = previous is None or previous['band'] != alert['band'] or \
+      (alert['frequency'] is not None and previous['frequency'] is not None and abs(alert['frequency'] - previous['frequency']) > .01)
+    if new:
+      self.baseline = alert['strength']
+      if previous is None or BAND_RANK.get(alert['band'], 0) > BAND_RANK.get(previous['band'], 0):
+        self._pulse(now, still, 3 if alert['band'] == 'LASER' else 2 if previous is None else 1)
+    elif alert['strength'] >= self.baseline + 2:
+      self.baseline = alert['strength']
+      self._pulse(now, still, 1)
+    else:
+      self.baseline = min(self.baseline, alert['strength'])
+
+  def _pulse(self, now, still, count):
+    if not still:
+      self.pulses.append((now, count, .25 if count == 3 else .3))
+
+  def boost(self, now):
+    self.pulses = [p for p in self.pulses if now - p[0] < p[1] * p[2]]
+    return max((math.sin(math.pi * (((now - at) / period) % 1)) for at, _, period in self.pulses), default=0.)
+
+  def fading(self, now):
+    """The last alert and how much of it is left while it fades out, or None."""
+    if self.ended is None or now - self.ended[0] >= FADE_S:
+      self.ended = None
+      return None
+    return self.ended[1], 1 - (now - self.ended[0]) / FADE_S
+
+
+def tint(color, alpha):
+  return rl.Color(color.r, color.g, color.b, max(0, min(255, round(255 * alpha))))
+
+
+def rounded_band(content, radius, inset, width, color):
+  """A stroke `width` wide whose outer edge is `inset` inside `content`, concentric with its rounded corners."""
+  inner = rl.Rectangle(content.x + inset + width, content.y + inset + width, content.width - 2 * (inset + width), content.height - 2 * (inset + width))
+  r = max(1., radius - inset - width)
+  rl.draw_rectangle_rounded_lines_ex(inner, min(1., 2 * r / min(inner.width, inner.height)), 16, width, color)
+
+
+def glow_ring(content, radius, depth, alpha, color):
+  """Concentric strokes fading inward: a soft band along the whole edge."""
+  band = depth / GLOW_STEPS
+  for i in range(GLOW_STEPS):
+    fall = 1 - i / GLOW_STEPS
+    rounded_band(content, radius, i * band, band + .6, tint(color, alpha * fall * fall))
+
+
+def chevron_points(side, along, content, index):
+  """Apex and the two arm ends of one chevron pointing toward `side`, `index` steps in from that edge."""
+  size, off = CHEVRON_SIZE, CHEVRON_FROM_EDGE + index * CHEVRON_SIZE * .8 + CHEVRON_SIZE * .4
+  if side == 'top':
+    cx, cy, dx, dy = along, content.y + off, 0, -1
+  elif side == 'bottom':
+    cx, cy, dx, dy = along, content.y + content.height - off, 0, 1
+  elif side == 'left':
+    cx, cy, dx, dy = content.x + off, along, -1, 0
+  else:
+    cx, cy, dx, dy = content.x + content.width - off, along, 1, 0
+  apex = rl.Vector2(cx + dx * size * .5, cy + dy * size * .5)
+  return (rl.Vector2(cx - dy * size - dx * size * .5, cy + dx * size - dy * size * .5), apex,
+          rl.Vector2(cx + dy * size - dx * size * .5, cy - dx * size - dy * size * .5))
+
+
+def chevron_sets(direction, width, height, speed_x):
+  """Ahead (and the R4, which gives no direction) flank the speed; behind is bottom centre; beside is both side edges."""
+  top = [('top', speed_x - CHEVRON_FROM_SPEED), ('top', speed_x + CHEVRON_FROM_SPEED)]
+  return {'front': top, '': top, 'rear': [('bottom', speed_x)], 'side': [('left', height / 2), ('right', height / 2)]}.get(direction, top)
+
+
 class UnidenWidget:
   def __init__(self, fonts, feed=None):
     self.fonts = fonts
     self.feed = feed or DetectorFeed()
     self.pressed = None
     self.held = False
-    self.chase = (0., 0.)
+    self.motion = EdgeMotion()
     self.runtime_active = False
     self.preview_data = None
     self.visible_until = 0.
@@ -209,7 +288,7 @@ class UnidenWidget:
     if self.pressed and not self.held and time.monotonic() - self.pressed[3] >= HOLD_S:
       self.held = True
       self.feed.lock_here(data)
-    alerts = shown_alerts(data.get('alerts', []), config)
+    alerts = shown_alerts(data.get('alerts', []), data.get('config', {}))
     if not alerts and config.get('hide_when_no_alert', True):
       return
     self.visible_until = time.monotonic() + 1
@@ -239,34 +318,80 @@ class UnidenWidget:
     data = self.feed.snapshot()
     if data.get('offline') and data.get('config', {}).get('enabled') and self.placement(state) is None:
       self._offline(state, data['config'], (width - OFFLINE_SIZE[0]) / 2, BADGE_TOP)
-    alert = threat(data.get('alerts', []), data.get('config', {}).get('border_bands', ())) if data.get('connected') else None
-    if alert is None:
-      return
-    colors = {**DEFAULT_CONFIG['border_colors'], **data['config'].get('border_colors', {})}
-    color = hex_color(BORDER_SWATCHES[colors[alert['band']]] + 'FF')
-    styles = {**DEFAULT_CONFIG['border_styles'], **data['config'].get('border_styles', {})}
-    style = styles[alert['band']]
+    config = data.get('config', {})
+    alert = threat(shown_alerts(data.get('alerts', []), config), config.get('border_bands', ())) if data.get('connected') else None
     still = state.customization.get('reduceMotion')
-    frame = RoundedFrame(rl.Rectangle(BORDER_INSET, BORDER_INSET, width - 2 * BORDER_INSET, height - 2 * BORDER_INSET),
-                         BORDER_WIDTH, frame_radius(width, height))
     now = time.monotonic()
-    if style == 'pulse' and not still and int(now * PULSE_HZ * 2) % 2:
-      color = rl.Color(color.r, color.g, color.b, 110)
-    if style == 'corners':
-      for side in ('top', 'right', 'bottom', 'left'):
-        frame.draw(*frame.corner_span(side, CORNER_ARM), color)
-    elif style == 'direction' and alert['direction'] in DIRECTION_SIDES:
-      frame.ring(rl.Color(color.r, color.g, color.b, DIM_ALPHA))
-      for side in DIRECTION_SIDES[alert['direction']]:
-        frame.draw(*frame.side_span(side), color)
-    elif style in ('chase', 'direction') and not still:
-      phase, at = self.chase
-      phase = (phase + min(.2, now - at) / chase_lap(alert['strength'])) % 1 if at else 0.
-      self.chase = (phase, now)
-      frame.ring(rl.Color(color.r, color.g, color.b, DIM_ALPHA))
-      frame.draw(phase * frame.total, frame.total * chase_share(alert['strength']), color)
-    else:
-      frame.ring(color)
+    self.motion.update(alert, now, still)
+    if alert is None:
+      if (fade := self.motion.fading(now)) is not None:
+        self._edge(state, data.get('config', {}), fade[0], width, height, now, fade[1])
+      return
+    self._edge(state, data['config'], alert, width, height, now, 1.)
+
+  @staticmethod
+  def _color(config, alert):
+    """The band's frame color, and how much of it a mute leaves: 0 hides the frame while muted."""
+    colors = {**DEFAULT_CONFIG['border_colors'], **config.get('border_colors', {})}
+    # Muted by the detector, or quieted by StarPilot (timed mute, below the limit, lockout or frequency rule).
+    muted = alert.get('muted') or alert.get('timed') or alert.get('quiet') or alert.get('filtered')
+    return hex_color(BORDER_SWATCHES[colors[alert['band']]] + 'FF'), \
+      config.get('border_muted_percent', DEFAULT_CONFIG['border_muted_percent']) / 100 if muted else 1.
+
+  def _edge(self, state, config, alert, width, height, now, presence):
+    color, mute = self._color(config, alert)
+    if mute == 0:
+      return
+    parts = {**DEFAULT_CONFIG['border_edge'], **config.get('border_edge', {})}
+    content = rl.Rectangle(EDGE_FRAME, EDGE_FRAME, width - 2 * EDGE_FRAME, height - 2 * EDGE_FRAME)
+    radius = EDGE_ROUNDNESS * min(content.width, content.height) / 2
+    s, boost, laser = (alert['strength'] - 1) / 7, self.motion.boost(now), alert['band'] == 'LASER'
+    alpha = (.95 if laser else .45 + .45 * s) if parts['glow'] else (1. if laser else .85)
+    alpha = min(1., alpha * (1 + .9 * boost)) * mute * presence
+    depth = (GLOW_DEPTH[0] + (GLOW_DEPTH[1] - GLOW_DEPTH[0]) * s) * (1 + .35 * boost)
+    sides = DIRECTION_SIDES.get(alert['direction'])
+    if parts['veil']:
+      glow_ring(content, radius, depth * 1.3, VEIL_ALPHA * min(1., alpha / .6), rl.Color(0, 0, 0, 255))
+    if parts['glow'] and sides:
+      # The facing edge carries the glow; the rest keeps a faint rim. Corners stay with the rim.
+      glow_ring(content, radius, max(18., depth * .3), alpha * .5, color)
+      deep, x, y, w, h = depth * 1.6, content.x, content.y, content.width, content.height
+      for side in sides:
+        for near, far, a, b in ((0, .45, 1., .35), (.45, 1., .35, 0.)):
+          start, size = deep * near, deep * (far - near)
+          first, second = tint(color, alpha * a), tint(color, alpha * b)
+          if side == 'top':
+            rl.draw_rectangle_gradient_v(int(x + radius), int(y + start), int(w - 2 * radius), int(size), first, second)
+          elif side == 'bottom':
+            rl.draw_rectangle_gradient_v(int(x + radius), int(y + h - start - size), int(w - 2 * radius), int(size), second, first)
+          elif side == 'left':
+            rl.draw_rectangle_gradient_h(int(x + start), int(y + radius), int(size), int(h - 2 * radius), first, second)
+          else:
+            rl.draw_rectangle_gradient_h(int(x + w - start - size), int(y + radius), int(size), int(h - 2 * radius), second, first)
+    elif parts['glow']:
+      glow_ring(content, radius, depth, alpha, color)
+    if parts['line']:
+      frame = RoundedFrame(rl.Rectangle(content.x + EDGE_GAP, content.y + EDGE_GAP, content.width - 2 * EDGE_GAP, content.height - 2 * EDGE_GAP),
+                           EDGE_LINE, radius - EDGE_GAP)
+      line = tint(color, min(1., alpha * 1.15))
+      if parts['dashes']:
+        at = 0.
+        while at < frame.total:
+          frame.draw(at, min(DASH, frame.total - at), line)
+          at += DASH + DASH_GAP
+      else:
+        frame.ring(line)
+    if parts['chevrons']:
+      try:
+        speed_x = width / 2 + offset(state.customization, 'large', 'current_speed')[0]
+      except (KeyError, TypeError):
+        speed_x = width / 2
+      mark = tint(color, min(1., alpha * 1.1))
+      for side, along in chevron_sets(alert['direction'], width, height, speed_x):
+        for i in range(math.ceil(alert['strength'] / 2)):
+          first, apex, last = chevron_points(side, along, content, i)
+          rl.draw_line_ex(first, apex, CHEVRON_WIDTH, mark)
+          rl.draw_line_ex(apex, last, CHEVRON_WIDTH, mark)
 
   def _card(self, state, data, alerts, config, x, y):
     width, height = card_size(alerts)
@@ -297,10 +422,7 @@ class UnidenWidget:
     # The mute state rides in the top edge of the card rather than taking a row of its own.
     muted = sum(bool(item['muted']) for item in alerts)
     notes = [data.get('notice') or ('Strong signal' if any(a.get('breakthrough') for a in alerts) else
-                                    'Filtered' if all(a.get('filtered') for a in alerts) else
-                                    'Quiet' if all(a.get('quiet') for a in alerts) else
-                                    'Timed mute' if all(a.get('timed') for a in alerts) else
-                                    'Mute sent' if data.get('command') and muted < len(alerts) else mute_note(alerts))]
+                                    mute_note(alerts) or ('Mute sent' if data.get('command') and muted < len(alerts) else ''))]
     if len(alerts) > MAX_ROWS:
       notes.append(f'+{len(alerts) - MAX_ROWS} more')
     note = '  •  '.join(n for n in notes if n)
@@ -344,7 +466,7 @@ class UnidenWidget:
   def touch(self, kind, x, y, state):
     p, data = self.placement(state), self.feed.snapshot()
     config = {**data.get('config', {}), **(p or {})}
-    shown = shown_alerts(data.get('alerts', []), config)
+    shown = shown_alerts(data.get('alerts', []), data.get('config', {}))
     valid = (p is not None and time.monotonic() < self.visible_until and data.get('connected') and
              data.get('can_mute') and bool(shown))
     scale = card_scale(config)
