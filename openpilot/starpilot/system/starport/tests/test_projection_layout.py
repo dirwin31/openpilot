@@ -34,6 +34,14 @@ class TestProjectionLayout(unittest.TestCase):
           self.assertGreaterEqual(placed[axis], metadata['bounds'][axis])
           self.assertLessEqual(placed[axis] + widget[extent], metadata['bounds'][axis] + metadata['bounds'][extent])
 
+  def test_uniden_scale_counts_toward_bounds_and_pulls_old_overhang_back_in(self):
+    document = default_layout(SCREEN)
+    bounds = layout_metadata(SCREEN)['bounds']
+    document['widgets']['uniden_alerts'].update(y=774, scale=130)
+    placed = validate_layout(document, SCREEN)['widgets']['uniden_alerts']
+    self.assertEqual(placed['y'], bounds['y'] + bounds['height'] - round(260 * 1.3))
+    self.assertEqual(validate_layout(validate_layout(document, SCREEN), SCREEN)['widgets']['uniden_alerts'], placed)
+
   def test_unsaved_layer_order_draws_the_editor_default(self):
     document = default_layout(SCREEN)
     self.assertNotIn('widgetOrder', document)

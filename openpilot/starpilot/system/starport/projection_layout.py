@@ -197,6 +197,8 @@ def placement_size(key, widget, placement):
     return (placement.get('size', widget['resizable']['default']),) * 2
   if key == NAV_MAP:
     return placement['width'], placement['height']
+  if key == UNIDEN_WIDGET and type(placement.get('scale')) is int:
+    return round(widget['width'] * placement['scale'] / 100), round(widget['height'] * placement['scale'] / 100)
   return widget['width'], widget['height']
 
 
@@ -326,6 +328,11 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
         type(placement[axis]) in (int, float) and math.isfinite(placement[axis]) and
         bounds[axis] <= placement[axis] <= bounds[axis] + bounds[extent] - dimension
         for (axis, extent), dimension in zip((('x', 'width'), ('y', 'height')), pair, strict=True))), dimensions)
+    if key == UNIDEN_WIDGET:
+      # Layouts saved before the scale counted toward the bounds may overhang; pull them back in.
+      for (axis, extent), dimension in zip((('x', 'width'), ('y', 'height')), dimensions, strict=True):
+        if type(placement[axis]) in (int, float) and math.isfinite(placement[axis]):
+          placement[axis] = min(placement[axis], bounds[axis] + bounds[extent] - dimension)
     for (axis, extent), dimension in zip((('x', 'width'), ('y', 'height')), dimensions, strict=True):
       number = placement[axis]
       if (type(number) not in (int, float) or not math.isfinite(number) or
