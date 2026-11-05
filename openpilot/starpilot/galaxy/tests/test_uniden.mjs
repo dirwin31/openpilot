@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compile } from '../web/vendor/vue/vue.esm-browser.js'
-import { UnidenPanel, STYLES, STYLE_HELP, SWATCHES } from '../web/js/uniden.js'
+import { UnidenPanel, SWATCHES } from '../web/js/uniden.js'
 
 test('detector panel compiles and only offers bonded R4/R8 names', () => {
   assert.equal(typeof compile(UnidenPanel.template, { decodeEntities: value => value }), 'function')
@@ -42,8 +42,11 @@ test('theme maker edits Uniden display settings through draft history', async ()
   edit('hide_when_no_alert', true)
   assert.equal(history.length, 5)
   assert.ok(!UnidenPanel.template.includes('uniden-transparency'))
-  for (const field of ['hide_when_no_alert', 'hide_quiet_ride', 'hide_mute_memory'])
-    assert.ok(ONROAD_LAYOUT_TEMPLATE.includes(`:save-value="(index, value) => setUnidenDisplay('${field}'`))
+  assert.ok(ONROAD_LAYOUT_TEMPLATE.includes(`:save-value="(index, value) => setUnidenDisplay('hide_when_no_alert'`))
+  for (const field of ['hide_quiet_ride', 'hide_mute_memory'])
+    assert.ok(!ONROAD_LAYOUT_TEMPLATE.includes(`setUnidenDisplay('${field}'`), 'which alerts show is a detector setting now')
+  for (const key of ['hide_filtered', 'hide_below_limit', 'hide_q_ride', 'hide_mute_memory'])
+    assert.ok(UnidenPanel.template.includes(`v-model="config.${key}"`), key)
   assert.ok(ONROAD_LAYOUT_TEMPLATE.includes("setUnidenDisplay('scale'"))
 })
 
@@ -79,12 +82,13 @@ test('rule summary explains exact matching and MHz tolerance in GHz', () => {
   assert.equal(UnidenPanel.methods.ruleRange({ frequency: 34.313, tolerance_mhz: 2 }), 'Matches 34.3110–34.3150 GHz')
 })
 
-test('every frame style has a preview, a description and a toggle that keeps bands in a list', () => {
-  const preview = UnidenPanel.components.StylePreview
-  assert.equal(typeof compile(preview.template, { decodeEntities: value => value }), 'function')
-  assert.deepEqual(Object.keys(STYLE_HELP), Object.keys(STYLES))
-  for (const kind of Object.keys(STYLES)) assert.ok(preview.template.includes(`'${kind}'`), kind)
-  assert.deepEqual(Object.keys(SWATCHES), ['purple', 'violet', 'yellow', 'white'])
+test('one warning for every band: colors and on/off only, with a scenario preview beside the settings', () => {
+  assert.ok(!UnidenPanel.template.includes('border_styles'), 'no per-band style picker')
+  assert.deepEqual(Object.values(UnidenPanel.data().sections), ['Preferences', 'Colors', 'Rules', 'Lockouts'])
+  assert.equal(UnidenPanel.data().panel, 'alerts', 'opens on Preferences')
+  for (const hook of ['gx-layout__savebar', 'gx-layout__workspace', 'gx-layout__preview-card', 'aria-label="Preview scenario"', '<edge-preview'])
+    assert.ok(UnidenPanel.template.includes(hook), hook)
+  assert.deepEqual(Object.keys(SWATCHES), ['amber', 'coral', 'magenta', 'ice', 'lime', 'white', 'ultraviolet'])
   const state = { config: { border_bands: ['KA', 'LASER'] } }
   UnidenPanel.methods.toggleBand.call(state, 'border_bands', 'K')
   UnidenPanel.methods.toggleBand.call(state, 'border_bands', 'KA')
@@ -98,7 +102,84 @@ test('saved lockouts make learning progress stand out', () => {
   panel.learningOn = computed.learningOn.call(panel)
   const rows = computed.learningRows.call(panel)
   assert.deepEqual(rows.map(r => [r.learnable, r.percent, r.left]), [[true, 67, 1], [false, 20, 4]])
+  assert.deepEqual(rows.map(r => r.stage), ['Locks out next pass', 'Just started'], 'a stage, not a pass count')
   assert.equal(computed.learningTitle.call(panel), 'Learning 2 sources')
   assert.equal(computed.learningTitle.call({ ...panel, learning: [] }), 'Learning: watching for repeat sources')
   assert.equal(computed.learningTitle.call({ ...panel, learningOn: false }), 'Learning is off')
+})
+
+test('edge preview follows the device rules and only lists old colors while they are chosen', async () => {
+  const { EdgePreview, EdgeMotion, chevronCount, edgeAlpha } = await import('../web/js/uniden-preview.js')
+  const { EDGE_PARTS, LEGACY_SWATCHES } = await import('../web/js/uniden.js')
+  assert.equal(typeof compile(EdgePreview.template, { decodeEntities: value => value }), 'function')
+  assert.deepEqual([1, 2, 3, 6, 7, 8].map(chevronCount), [1, 1, 2, 3, 4, 4])
+  assert.equal(edgeAlpha({ glow: false }, 'K', 1), 0.85)
+  assert.equal(edgeAlpha({ glow: false }, 'LASER', 1), 1)
+  assert.ok(edgeAlpha({ glow: true }, 'K', 8) > edgeAlpha({ glow: true }, 'K', 1))
+  assert.deepEqual(Object.keys(EDGE_PARTS), ['line', 'dashes', 'glow', 'veil', 'chevrons'])
+  const motion = new EdgeMotion()
+  motion.update({ band: 'K', strength: 3 }, 10, false)
+  assert.equal(motion.pulses[0][1], 2)
+  motion.update({ band: 'K', strength: 4 }, 11, false)
+  assert.equal(motion.boost(11.1), 0)
+  motion.update({ band: 'K', strength: 5 }, 12, false)
+  assert.ok(motion.boost(12.15) > 0.9)
+  motion.update({ band: 'LASER', strength: 5 }, 13, false)
+  assert.equal(motion.pulses.at(-1)[1], 3)
+  motion.update(null, 14, false)
+  assert.equal(motion.fading(14.25)[1], 0.5)
+  const { swatchesFor } = UnidenPanel.methods
+  assert.ok(!('purple' in swatchesFor.call({ config: { border_colors: { K: 'amber', KA: 'coral', LASER: 'white' } } }, 'K')))
+  const mixed = { config: { border_colors: { K: 'purple', KA: 'white', LASER: 'yellow' } } }
+  assert.equal(swatchesFor.call(mixed, 'KA').purple, LEGACY_SWATCHES.purple, 'every band lists the same colors')
+  assert.deepEqual(Object.keys(swatchesFor.call(mixed, 'KA')), Object.keys(swatchesFor.call(mixed, 'K')))
+})
+
+test('leaving with unsaved changes asks first, like the theme maker', async () => {
+  const { requestLeave, cancelLeave, discardAndLeave } = UnidenPanel.methods
+  const left = []
+  const panel = { dirty: false, busy: false, leaveAction: null, leaveModal: false, $nextTick() {}, cancelLeave, cancel() { this.dirty = false } }
+  requestLeave.call(panel, () => left.push('clean'))
+  assert.deepEqual(left, ['clean'])
+  panel.dirty = true
+  requestLeave.call(panel, () => left.push('dirty'), 'modal')
+  assert.deepEqual(left, ['clean']) && assert.equal(panel.leaveModal, true)
+  assert.equal(UnidenPanel.computed.leaveInline.call(panel), false, 'menu navigation shows the dialog')
+  discardAndLeave.call(panel)
+  assert.deepEqual(left, ['clean', 'dirty'])
+  assert.equal(panel.leaveAction, null)
+  const { PREVIEW_SCENARIOS, previewScenario } = await import('../web/js/uniden-preview.js')
+  assert.ok(Object.keys(PREVIEW_SCENARIOS).length >= 2 && previewScenario('laser').alert.band === 'LASER')
+  assert.equal(previewScenario('missing').script, true, 'unknown scenarios fall back to the drive-by')
+})
+
+test('picking a color shows that band in the preview', () => {
+  const { pickColor } = UnidenPanel.methods
+  const panel = { config: { border_colors: { K: 'amber', KA: 'coral', LASER: 'coral' } }, scenario: 'drive', replay: 0 }
+  pickColor.call(panel, 'LASER', 'white')
+  assert.equal(panel.config.border_colors.LASER, 'white')
+  assert.equal(panel.scenario, 'laser')
+  pickColor.call(panel, 'LASER', 'lime')
+  assert.deepEqual([panel.scenario, panel.replay], ['laser', 1], 'already showing laser: replay it')
+  pickColor.call(panel, 'KA', 'magenta')
+  assert.equal(panel.scenario, 'ka-strong')
+  panel.scenario = 'drive'
+  pickColor.call(panel, 'K', 'ice')
+  assert.deepEqual([panel.scenario, panel.replay], ['drive', 2], 'the drive-by is a K pass')
+})
+
+test('turning on Ka or laser learning asks first; X, K and turning off do not', () => {
+  const { requestLearnBand, confirmLearnBand, toggleBand } = UnidenPanel.methods
+  const panel = { config: { learn_bands: ['X', 'K'] }, confirmLearn: null, toggleBand }
+  requestLearnBand.call(panel, 'KA')
+  assert.deepEqual([panel.confirmLearn, panel.config.learn_bands], ['KA', ['X', 'K']], 'waits for the dialog')
+  confirmLearnBand.call(panel)
+  assert.deepEqual([panel.confirmLearn, panel.config.learn_bands], [null, ['X', 'K', 'KA']])
+  requestLearnBand.call(panel, 'LASER')
+  panel.confirmLearn = null   // Keep it off
+  assert.ok(!panel.config.learn_bands.includes('LASER'))
+  requestLearnBand.call(panel, 'KA')
+  assert.ok(!panel.config.learn_bands.includes('KA') && panel.confirmLearn === null, 'turning off is immediate')
+  requestLearnBand.call(panel, 'X')
+  assert.ok(!panel.config.learn_bands.includes('X'))
 })

@@ -182,6 +182,7 @@ createApp({
       this.nextLayoutLeavePresentation = "inline"
       if (this.$refs.activeLayout) this.$refs.activeLayout.requestLeave(proceed, presentation)
       else if (this.$refs.activeSettings) this.$refs.activeSettings.requestRouteLeave(proceed)
+      else if (this.$refs.activeBluetooth) this.$refs.activeBluetooth.requestLeave(proceed, presentation)
       else proceed()
     })
   },
@@ -263,7 +264,7 @@ createApp({
         <NavigationPage v-else-if="['/navigation', '/navigation/maps', '/navigation/setup'].includes(route.path)" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" :tabs="currentTool?.children || []"
           :initial-tab="route.path === '/navigation/maps' ? 'maps' : route.path === '/navigation/setup' ? 'setup' : 'route'" />
         <ModelsPage v-else-if="['/manage_models', '/model_laboratory'].includes(route.path)" :mode="state.monitorMode" :unauthorized="sessionExpired" :focus="route.path === '/model_laboratory' ? 'laboratory' : ''" />
-        <BluetoothPage v-else-if="['/bluetooth', '/bluetooth/uniden'].includes(route.path)" :uniden-settings="route.path === '/bluetooth/uniden'" :key="route.path" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
+        <BluetoothPage ref="activeBluetooth" v-else-if="['/bluetooth', '/bluetooth/uniden'].includes(route.path)" :uniden-settings="route.path === '/bluetooth/uniden'" :key="route.path" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <ControllersPage v-else-if="route.path === '/bluetooth/controllers'" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <StarPortPage v-else-if="route.path === '/starport'" :mode="state.monitorMode" :local-access="authState.localAccess" :unauthorized="sessionExpired" />
         <SpotifyPage v-else-if="['/starport/audio', '/spotify'].includes(route.path)" :mode="state.monitorMode" :unauthorized="sessionExpired" />
