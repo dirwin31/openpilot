@@ -178,6 +178,7 @@ createApp({
       this.nextLayoutLeavePresentation = "inline"
       if (this.$refs.activeLayout) this.$refs.activeLayout.requestLeave(proceed, presentation)
       else if (this.$refs.activeSettings) this.$refs.activeSettings.requestRouteLeave(proceed)
+      else if (this.$refs.activeBluetooth) this.$refs.activeBluetooth.requestLeave(proceed, presentation)
       else proceed()
     })
   },
@@ -258,7 +259,7 @@ createApp({
           :initial-tab="route.path === '/navigation/maps' ? 'maps' : route.path === '/navigation/setup' ? 'setup' : 'route'" />
         <ModelsPage v-else-if="route.path === '/manage_models'" :mode="state.monitorMode" :unauthorized="sessionExpired" />
         <LaboratoryPage v-else-if="route.path === '/model_laboratory'" :mode="state.monitorMode" :unauthorized="sessionExpired" />
-        <BluetoothPage v-else-if="['/bluetooth', '/bluetooth/uniden'].includes(route.path)" :uniden-settings="route.path === '/bluetooth/uniden'" :key="route.path" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
+        <BluetoothPage ref="activeBluetooth" v-else-if="['/bluetooth', '/bluetooth/uniden'].includes(route.path)" :uniden-settings="route.path === '/bluetooth/uniden'" :key="route.path" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <ControllersPage v-else-if="route.path === '/bluetooth/controllers'" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <StarPortPage v-else-if="route.path === '/starport'" :mode="state.monitorMode" :local-access="authState.localAccess" :unauthorized="sessionExpired" />
         <SpotifyPage v-else-if="['/starport/audio', '/spotify'].includes(route.path)" :mode="state.monitorMode" :unauthorized="sessionExpired" />
