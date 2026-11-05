@@ -13,16 +13,22 @@ BANDS = {'X', 'K', 'KA', 'LASER', 'MRCD', 'MRCT', 'RT3', 'RT4', 'K POP', 'KA POP
 LOCK_BANDS = ('X', 'K', 'KA', 'LASER')
 BORDER_BANDS = ('K', 'KA', 'LASER')
 TIMED_BANDS = ('X', 'K', 'KA')
-# openpilot already uses green, blue, cyan, pink, orange, red and grey.
-BORDER_STYLES = ('solid', 'pulse', 'chase', 'corners', 'direction')
-BORDER_SWATCHES = {'purple': '#B026FF', 'violet': '#8F7BFF', 'yellow': '#E3FF00', 'white': '#FFFFFF'}
+BORDER_STYLES = ('edge', 'solid', 'pulse', 'chase', 'corners', 'direction')
+# The Edge style marks the detector by shape (dashes, chevrons), so its colors may share a family with the curve glow.
+# Amber and coral match the card's band letters. Purple, violet and yellow stay valid for saved settings.
+BORDER_SWATCHES = {'amber': '#FFBA4E', 'coral': '#FF5B65', 'magenta': '#FF1FCE', 'ice': '#9FE8FF', 'lime': '#A6FF00',
+                   'white': '#FFFFFF', 'ultraviolet': '#7A1FFF', 'purple': '#B026FF', 'violet': '#8F7BFF', 'yellow': '#E3FF00'}
+EDGE_PARTS = ('line', 'dashes', 'glow', 'veil', 'chevrons')
 RULE_BOUNDS = {'X': (10.0, 11.0), 'K': (23.0, 25.0), 'KA': (33.0, 36.0)}
 DEFAULT_CONFIG = {'enabled': False, 'address': '', 'model': 'R8', 'transparency': 8, 'hide_when_no_alert': True,
-                  'auto_mute': False, 'hide_filtered': False, 'frequency_rules': [],
+                  'auto_mute': False, 'hide_filtered': False, 'hide_below_limit': False, 'hide_q_ride': False, 'hide_mute_memory': False,
+                  'frequency_rules': [],
                   'quiet_ride': False, 'quiet_margin': 0, 'quiet_bands': ['X', 'K'],
                   'auto_learn': False, 'learn_bands': ['X', 'K'], 'border_bands': ['KA', 'LASER'],
-                  'border_colors': {'KA': 'purple', 'K': 'yellow', 'LASER': 'white'},
-                  'border_styles': {'KA': 'chase', 'K': 'corners', 'LASER': 'pulse'},
+                  'border_colors': {'KA': 'coral', 'K': 'amber', 'LASER': 'coral'},
+                  'border_styles': {'KA': 'edge', 'K': 'edge', 'LASER': 'edge'},
+                  'border_edge': {'line': True, 'dashes': True, 'glow': False, 'veil': False, 'chevrons': True},
+                  'border_muted_percent': 50,
                   'timed_mute': False, 'timed_mute_seconds': 5, 'timed_mute_strength': 6, 'timed_mute_bands': ['X', 'K', 'KA'],
                   'unmute_on_breakthrough': False}
 OPTIONAL_KEYS = set(DEFAULT_CONFIG) - {'enabled', 'address', 'model'}
@@ -49,7 +55,7 @@ def normalize_config(value):
     raise ValueError('Invalid detector address')
   if config['enabled'] and not config['address']:
     raise ValueError('Choose a paired detector')
-  for key in ('auto_mute', 'hide_filtered'):
+  for key in ('auto_mute', 'hide_filtered', 'hide_below_limit', 'hide_q_ride', 'hide_mute_memory'):
     if type(config[key]) is not bool:
       raise ValueError('Filter toggles must be boolean')
   config['frequency_rules'] = normalize_rules(config['frequency_rules'])
@@ -62,8 +68,9 @@ def normalize_config(value):
     if type(config[key]) is not bool:
       raise ValueError('Timed mute toggles must be boolean')
   for key, low, high, message in (('timed_mute_seconds', 1, 60, 'Mute delay must be 1–60 seconds'),
-                                  ('timed_mute_strength', 2, 8, 'Mute strength must be 2–8')):
-    if type(config[key]) is not int or not low <= config[key] <= high:
+                                  ('timed_mute_strength', 2, 8, 'Warn again at strength 2–8, or never')):
+    # 0 for the strength means never warn again.
+    if type(config[key]) is not int or not (low <= config[key] <= high or (key == 'timed_mute_strength' and config[key] == 0)):
       raise ValueError(message)
   for key, allowed in (('quiet_bands', LOCK_BANDS), ('learn_bands', LOCK_BANDS), ('border_bands', BORDER_BANDS),
                        ('timed_mute_bands', TIMED_BANDS)):
@@ -73,6 +80,12 @@ def normalize_config(value):
     chosen = config[key]
     if type(chosen) is not dict or set(chosen) != set(BORDER_BANDS) or any(type(v) is not str or v not in choices for v in chosen.values()):
       raise ValueError(message)
+  edge = config['border_edge']
+  if type(edge) is not dict or set(edge) != set(EDGE_PARTS) or any(type(v) is not bool for v in edge.values()):
+    raise ValueError('Edge parts must be on or off')
+  if type(config['border_muted_percent']) is not int or not 0 <= config['border_muted_percent'] <= 100:
+    raise ValueError('Muted brightness must be 0–100%')
+  config['border_edge'] = dict(edge)
   config['address'] = config['address'].upper()
   return config
 
