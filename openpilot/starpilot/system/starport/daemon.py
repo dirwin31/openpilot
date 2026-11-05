@@ -30,7 +30,7 @@ from openpilot.starpilot.system.starport.supervisor import Supervisor
 PAIRING_COMMANDS = {"prepare_pairing", "pairing_status", "pairing_response", "cancel_pairing", "pair_device"}
 AUTHENTICATED_COMMANDS = {"start", "set_auto_connect", "select_receiver", "set_view", "set_connection", "set_car_type", "set_car_profile",
                           "prepare_pairing", "pairing_status", "pairing_response", "cancel_pairing", "pair_device", "devices", "bluetooth_action",
-                          "phone_window", "bluetooth_power", "uniden"}
+                          "phone_window", "bluetooth_power", "uniden", "reset_handshake"}
 
 
 def _offroad() -> bool:
@@ -61,7 +61,7 @@ def handle(supervisor: Supervisor, request: dict[str, Any], verifier: StarPortSo
     source = request.get('source')
     if not isinstance(source, str) or verifier is None or not verifier.valid(source):
       raise RuntimeError('Authenticated Galaxy StarPort source required')
-    if command not in ('bluetooth_action', 'phone_window', 'bluetooth_power', 'uniden'):
+    if command not in ('bluetooth_action', 'phone_window', 'bluetooth_power', 'uniden', 'reset_handshake'):
       supervisor.bind_source_session(('galaxy', source))
   if command in PAIRING_COMMANDS and not (parked or _offroad)():
     raise RuntimeError("Disengage and shift into Park before pairing")
@@ -136,6 +136,8 @@ def handle(supervisor: Supervisor, request: dict[str, Any], verifier: StarPortSo
     supervisor.select_receiver(str(request.get("address", "")), str(request.get("name", "")))
   elif command == "forget_receiver":
     return {"cleared": supervisor.forget_receiver(str(request.get("address", "")))}
+  elif command == "reset_handshake":
+    return {"reset": supervisor.reset_handshake()}
   elif command == "set_view":
     supervisor.set_view(str(request.get("view", "")))
   elif command == "set_connection":
