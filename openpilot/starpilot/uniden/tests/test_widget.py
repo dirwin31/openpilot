@@ -117,8 +117,8 @@ def test_one_row_per_threat_overflow_arrows_and_touch_bounds():
     widget.render(state)
     draws = {call.args[0]: call.args for call in fonts.draw.call_args_list}
     assert '35.500 GHz' in draws and '24.150 GHz' in draws
-    assert '1 Muted' in draws and not any('THREATS' in text or 'Tap' in text for text in draws)
-    assert draws['1 Muted'][4] < 50 + 2, 'the mute note sits in the top edge of the card'
+    assert '1 Manual mute' in draws and not any('THREATS' in text or 'Tap' in text for text in draws)
+    assert draws['1 Manual mute'][4] < 50 + 2, 'the mute note sits in the top edge of the card'
     band, frequency = draws['KA'], draws['35.500 GHz']
     assert abs((band[4] + 36 * .6) - (frequency[4] + 28 * .6)) < 1, 'band and frequency share one centre line'
     assert arrows.call_count == 2
@@ -130,7 +130,7 @@ def test_one_row_per_threat_overflow_arrows_and_touch_bounds():
     fonts.reset_mock()
     widget.render(state)
     labels = [call.args[0] for call in fonts.draw.call_args_list]
-    assert '3 Muted  •  +2 more' in labels
+    assert '3 Manual mute  •  +2 more' in labels
     assert labels.count('35.500 GHz') == 2
     assert card_size(data['alerts']) == (460, 256)
     data['model'] = 'R4'
@@ -149,7 +149,7 @@ def test_all_muted_says_so_in_the_outline(outline_guard):
        patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle'), \
        patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_triangle'):
     widget.render(state)
-    assert 'Muted' in [call.args[0] for call in fonts.draw.call_args_list]
+    assert 'Manual mute' in [call.args[0] for call in fonts.draw.call_args_list]
     gap = outline_guard.call_args.args[5]
     assert gap[0] < 30 + 24 < gap[1], 'the outline opens around the note'
     data['alerts'] = parse_alerts(b'1,00,KA,3,0,33.785,R,1')
@@ -224,14 +224,15 @@ def test_quiet_ride_and_mute_memory_alerts_can_be_left_off_the_card():
   alerts = parse_alerts(b'1,00,KA,6,0,35.500,F,1&1,00,K,3,0,24.150,F,6&1,00,K,2,0,24.125,R,3&1,00,X,2,0,10.525,S,4&1,00,K,4,0,24.200,F,2')
   assert sorted(a['mute_mode'] for a in alerts) == ['', 'auto_memory', 'manual', 'memory', 'quiet_ride']
   assert shown_alerts(alerts, {}) == alerts
-  assert {a['mute_mode'] for a in shown_alerts(alerts, {'hide_quiet_ride': True})} == {'', 'memory', 'auto_memory', 'manual'}
+  assert {a['mute_mode'] for a in shown_alerts(alerts, {'hide_q_ride': True})} == {'', 'memory', 'auto_memory', 'manual'}
   assert {a['mute_mode'] for a in shown_alerts(alerts, {'hide_mute_memory': True})} == {'', 'quiet_ride', 'manual'}
   feed, fonts = Mock(), fonts_mock()
   quiet = parse_alerts(b'1,00,K,3,0,24.150,F,6')
-  data = {'config': {'enabled': True}, 'connected': True, 'can_mute': True, 'model': 'R8', 'alerts': quiet}
+  data = {'config': {'enabled': True, 'hide_q_ride': True}, 'connected': True, 'can_mute': True, 'model': 'R8', 'alerts': quiet}
   feed.snapshot.return_value = data
   widget = UnidenWidget(fonts, feed)
-  placement = {'enabled': True, 'x': 30, 'y': 50, 'hide_quiet_ride': True, 'hide_when_no_alert': True}
+  # The old per-layout switch no longer decides anything: the detector settings do, for the card and the warning alike.
+  placement = {'enabled': True, 'x': 30, 'y': 50, 'hide_quiet_ride': False, 'hide_when_no_alert': True}
   state = NS(alert=NS(size='none'), customization={'layouts': {'large': {'uniden_alerts': placement}}})
   with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded') as rounded:
     widget.render(state)
@@ -268,7 +269,7 @@ def test_mute_note_names_quiet_ride_and_mute_memory():
   assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,6')) == 'Q-Ride'
   assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,3')) == 'Mute Memory'
   assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,3&1,00,X,2,0,10.525,S,4')) == 'Mute Memory', 'learned and saved are both mute memory'
-  assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,2')) == 'Muted'
+  assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,2')) == 'Manual mute'
   assert mute_note(parse_alerts(b'1,00,K,3,0,24.150,F,6&1,00,X,2,0,10.525,S,3')) == 'Muted', 'mixed reasons read as plain muted'
   assert mute_note(parse_alerts(b'1,00,KA,6,0,35.500,F,1&1,00,K,3,0,24.150,F,6')) == '1 Q-Ride'
   assert mute_note(parse_alerts(b'1,00,KA,6,0,35.500,F,1')) == ''
@@ -301,67 +302,26 @@ def border_data(packet, **config):
           'alerts': parse_alerts(packet)}
 
 
-def test_border_frames_the_view_over_an_openpilot_alert_in_the_chosen_color():
-  from openpilot.starpilot.ui.onroad_uniden import frame_radius
-  feed = Mock()
-  widget = UnidenWidget(Mock(), feed)
-  feed.snapshot.return_value = border_data(b'1,00,KA,3,0,33.785,R,1')
-  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded_lines_ex') as frame:
-    widget.render_border(border_state(), 1860, 1080)
-    rectangle, roundness, _, width, color = frame.call_args.args
-    # raylib strokes outward, so the 12 px frame's outer edge is still 11 px in from the screen edge.
-    assert (rectangle.x, rectangle.width, width) == (23, 1860 - 46, 12) and (color.r, color.g, color.b, color.a) == (0xB0, 0x26, 0xFF, 255)
-    assert roundness * min(rectangle.width, rectangle.height) / 2 + 12 == pytest.approx(frame_radius(1860, 1080))
-    feed.snapshot.return_value = border_data(b'1,00,KA,3,0,33.785,R,1', border_colors={'KA': 'violet'})
-    widget.render_border(border_state(), 1860, 1080)
-    assert (frame.call_args.args[-1].r, frame.call_args.args[-1].g) == (0x8F, 0x7B)
+def test_warning_ignores_unchosen_absent_locked_out_and_quiet_alerts_and_prefers_laser():
+  for packet, bands in ((b'1,00,K,3,0,24.150,F,1', ['KA', 'LASER']), (b'0', ['KA', 'K', 'LASER'])):
+    _, drawn = edge_run(packet, bands=bands)
+    assert not any(drawn.values())
+  for flag, hide in (('filtered', 'hide_filtered'), ('quiet', 'hide_below_limit')):
+    _, drawn = edge_run(b'1,00,K,3,0,24.150,F,1', flags={flag: True}, config={hide: True})
+    assert not any(drawn.values()), flag
+    _, shown = edge_run(b'1,00,K,3,0,24.150,F,1', flags={flag: True}, reduce_motion=True)
+    assert shown['line'] and shown['line'][0][2].a == round(255 * .85 * .5 * 1.1), f'{flag} but not hidden: shown at the muted brightness'
+  for mode, hide in ((b'6', 'hide_q_ride'), (b'3', 'hide_mute_memory')):
+    _, drawn = edge_run(b'1,00,K,3,0,24.150,F,' + mode, config={hide: True})
+    assert not any(drawn.values()), hide
+  _, drawn = edge_run(b'1,00,K,3,0,24.150,F,1&1,00,LASER,8,0,5,F,1')
+  assert all((c.r, c.g) == (0xFF, 0x5B) for _, c in drawn['rect']), 'laser wins, in its coral'
 
 
-@pytest.mark.parametrize('packet,config', [
-  (b'1,00,K,3,0,24.150,F,1', {}),
-  (b'0', {}),
-])
-def test_border_ignores_unchosen_or_absent_alerts(packet, config):
-  feed = Mock()
-  feed.snapshot.return_value = border_data(packet, **config)
-  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded_lines_ex') as frame:
-    UnidenWidget(Mock(), feed).render_border(border_state(), 1860, 1080)
-    frame.assert_not_called()
-
-
-def test_border_skips_locked_out_and_quiet_alerts_and_prefers_laser_and_k_when_chosen():
-  feed = Mock()
-  widget = UnidenWidget(Mock(), feed)
-  data = border_data(b'1,00,K,3,0,24.150,F,1', border_bands=['K'])
-  data['alerts'][0]['filtered'] = True
-  feed.snapshot.return_value = data
-  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded_lines_ex') as frame:
-    widget.render_border(border_state(), 1860, 1080)
-    data['alerts'][0].update(filtered=False, quiet=True)
-    widget.render_border(border_state(), 1860, 1080)
-    frame.assert_not_called()
-    data['alerts'][0]['quiet'] = False
-    widget.render_border(border_state(), 1860, 1080)
-    assert (frame.call_args.args[-1].r, frame.call_args.args[-1].g) == (0xE3, 0xFF)
-    data = border_data(b'1,00,K,3,0,24.150,F,1&1,00,LASER,8,0,5,F,1', border_bands=['K', 'LASER'])
-    feed.snapshot.return_value = data
-    widget.render_border(border_state(reduceMotion=True), 1860, 1080)
-    assert (frame.call_args.args[-1].r, frame.call_args.args[-1].g) == (0xFF, 0xFF)
-
-
-def test_laser_frame_pulses_unless_motion_is_reduced():
-  feed = Mock()
-  feed.snapshot.return_value = border_data(b'1,00,LASER,8,0,5,F,1', border_styles={'KA': 'solid', 'K': 'solid', 'LASER': 'pulse'})
-  widget = UnidenWidget(Mock(), feed)
-  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded_lines_ex') as frame, \
-       patch('openpilot.starpilot.ui.onroad_uniden.time.monotonic', side_effect=[0., 1 / 6 + .01]):
-    widget.render_border(border_state(), 1860, 1080)
-    widget.render_border(border_state(), 1860, 1080)
-    assert [call.args[-1].a for call in frame.call_args_list] == [255, 110]
-  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded_lines_ex') as frame, \
-       patch('openpilot.starpilot.ui.onroad_uniden.time.monotonic', return_value=1 / 6 + .01):
-    widget.render_border(border_state(reduceMotion=True), 1860, 1080)
-    assert frame.call_args.args[-1].a == 255
+def test_every_band_draws_the_same_warning_whatever_style_was_saved():
+  for style in ('solid', 'pulse', 'chase', 'corners', 'direction'):
+    _, drawn = edge_run(b'1,00,KA,6,0,34.700,R,1', styles={'KA': style, 'K': style, 'LASER': style})
+    assert drawn['rect'] and drawn['line'], style
 
 
 def test_holding_an_alert_locks_it_out_once_and_a_tap_still_mutes():
@@ -408,7 +368,7 @@ def test_offline_detector_shows_a_badge_even_when_idle_and_notices_replace_the_n
     quiet[0]['quiet'] = True
     feed.snapshot.return_value = {**data, 'offline': False, 'connected': True, 'model': 'R8', 'alerts': quiet}
     widget.render(state)
-    assert 'Quiet' in [call.args[0] for call in fonts.draw.call_args_list]
+    assert 'Below limit' in [call.args[0] for call in fonts.draw.call_args_list]
 
 
 def test_offline_badge_moves_to_the_top_of_the_view_when_the_widget_is_off_or_covered():
@@ -439,113 +399,6 @@ def test_onroad_view_draws_the_border_after_the_rest_of_the_frame():
   assert order[0] == 'large' and order[1][0] == 'border' and order[1][1][1:] == (1500, 1000)
 
 
-def test_rounded_frame_follows_the_engagement_edge_and_wraps_clockwise():
-  import math
-  from openpilot.starpilot.ui.onroad_uniden import BORDER_INSET, BORDER_WIDTH, RoundedFrame, frame_radius, rl
-  radius = frame_radius(1860, 1080)
-  # concentric with the edge's inner curve: centre at 30 + 0.12 * 1020 / 2 from the screen edge
-  assert BORDER_INSET + radius == pytest.approx(30 + .12 * 1020 / 2)
-  frame = RoundedFrame(rl.Rectangle(11, 11, 1838, 1058), BORDER_WIDTH, radius)
-  arc = math.pi / 2 * (radius - BORDER_WIDTH / 2)
-  assert frame.total == pytest.approx(2 * (1838 + 1058) - 8 * radius + 4 * arc)
-  pieces = []
-  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rec', side_effect=lambda r, c: pieces.append(('rect', r))), \
-       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_ring', side_effect=lambda c, i, o, a, b, n, color: pieces.append(('ring', (a, b)))):
-    frame.draw(frame.total - 10, 30, 'c')       # across the top-left corner, wrapping onto the top edge
-  assert [kind for kind, _ in pieces] == ['ring', 'rect']
-  assert pieces[0][1][1] == pytest.approx(270) and pieces[0][1][0] < 270, 'the end of the top-left corner'
-  assert pieces[1][1].x == pytest.approx(11 + radius) and pieces[1][1].width == pytest.approx(20), 'the start of the top edge'
-  start, length = frame.side_span('top')
-  assert length == pytest.approx(1838 - 2 * radius + arc)
-
-
-def style_run(styles, colors, packet, reduce_motion=False, moments=(0., .5)):
-  feed = Mock()
-  feed.snapshot.return_value = border_data(packet, border_styles=styles, border_colors=colors, border_bands=['KA', 'K', 'LASER'])
-  widget = UnidenWidget(Mock(), feed)
-  rectangles, lines = [], []
-  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rec', side_effect=lambda r, c: rectangles.append((r, c))), \
-       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_ring', side_effect=lambda center, inner, outer, a, b, n, c: rectangles.append(
-         (NS(x=center.x, y=center.y, width=0, height=0, arc=(a, b)), c))), \
-       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded_lines_ex', side_effect=lambda r, roundness, segments, t, c: lines.append(c)), \
-       patch('openpilot.starpilot.ui.onroad_uniden.time.monotonic', side_effect=list(moments)):
-    for _ in moments:
-      widget.render_border(border_state(reduceMotion=reduce_motion), 1860, 1080)
-  return widget, rectangles, lines
-
-
-ALL = {'KA': 'solid', 'K': 'solid', 'LASER': 'solid'}
-HUES = {'KA': 'yellow', 'K': 'violet', 'LASER': 'purple'}
-
-
-def test_corners_draw_four_brackets_in_the_band_color():
-  from openpilot.starpilot.ui.onroad_uniden import frame_radius
-  _, pieces, lines = style_run({**ALL, 'LASER': 'corners'}, HUES, b'1,00,LASER,8,0,5,F,1', moments=(0.,))
-  rings = [r for r, _ in pieces if hasattr(r, 'arc')]
-  assert len(pieces) == 12 and len(rings) == 4 and not lines, 'each bracket is an arm, a rounded corner and an arm'
-  assert all((c.r, c.g, c.b) == (0xB0, 0x26, 0xFF) for _, c in pieces)
-  radius = frame_radius(1860, 1080)
-  assert {(round(r.x), round(r.y)) for r in rings} == {(round(x), round(y)) for x in (11 + radius, 1849 - radius) for y in (11 + radius, 1069 - radius)}
-
-
-def test_chase_draws_a_dim_ring_with_a_bright_segment_that_advances_and_follows_strength():
-  slow, fast = {}, {}
-  for table, strength in ((slow, 1), (fast, 8)):
-    widget, rectangles, lines = style_run({**ALL, 'KA': 'chase'}, HUES, f'1,00,KA,{strength},0,33.785,R,1'.encode(), moments=(1., 1.1, 1.2))
-    table['phase'], table['lines'], table['rects'] = widget.chase[0], lines, rectangles
-  assert fast['phase'] > slow['phase'] > 0
-  assert all(c.a == 70 for c in slow['lines']) and slow['rects'] and all(c.a == 255 and (c.r, c.g) == (0xE3, 0xFF) for _, c in slow['rects'])
-
-
-def test_chase_and_pulse_fall_back_to_a_solid_frame_when_motion_is_reduced():
-  for style in ('chase', 'pulse'):
-    _, rectangles, lines = style_run({**ALL, 'KA': style}, HUES, b'1,00,KA,3,0,33.785,R,1', reduce_motion=True, moments=(0.1, .3))
-    assert not rectangles and [c.a for c in lines] == [255, 255]
-
-
-def test_each_band_has_its_own_color_and_style():
-  _, ka_rects, _ = style_run({'KA': 'pulse', 'K': 'corners', 'LASER': 'corners'}, {'KA': 'yellow', 'K': 'purple', 'LASER': 'violet'},
-                             b'1,00,LASER,8,0,5,F,1', moments=(0.,))
-  assert len(ka_rects) == 12 and all((c.r, c.g, c.b) == (0x8F, 0x7B, 0xFF) for _, c in ka_rects)
-  _, rectangles, lines = style_run({'KA': 'pulse', 'K': 'corners', 'LASER': 'corners'}, {'KA': 'yellow', 'K': 'purple', 'LASER': 'violet'},
-                                   b'1,00,KA,3,0,33.785,R,1', moments=(0., .2))
-  assert not rectangles and [(c.r, c.g, c.a) for c in lines] == [(0xE3, 0xFF, 255), (0xE3, 0xFF, 110)]
-
-
-def test_direction_style_lights_the_edge_the_signal_comes_from():
-  from openpilot.starpilot.ui.onroad_uniden import frame_radius
-  styles, r = {**ALL, 'KA': 'direction'}, frame_radius(1860, 1080)
-  for letter, edges in (('F', {(11 + r, 11)}), ('R', {(11 + r, 1080 - 11 - 12)}), ('S', {(11, 11 + r), (1860 - 11 - 12, 11 + r)})):
-    _, pieces, lines = style_run(styles, HUES, f'1,00,KA,3,0,33.785,{letter},1'.encode(), moments=(0.,))
-    straight = [p for p, _ in pieces if not hasattr(p, 'arc')]
-    assert {(round(p.x), round(p.y)) for p in straight} == {(round(x), round(y)) for x, y in edges} and [c.a for c in lines] == [70]
-    assert len(pieces) == 3 * len(edges), 'each lit edge carries half of each corner beside it'
-    assert all((c.r, c.g, c.a) == (0xE3, 0xFF, 255) for _, c in pieces)
-
-
-def test_direction_style_chases_when_the_detector_gives_no_direction():
-  feed = Mock()
-  data = border_data(b'1,00,K,4,0,24.150,F,1', border_styles={**ALL, 'K': 'direction'}, border_bands=['K'])
-  data['alerts'] = parse_alerts(b'1,00,K,4,0,24.150,F,1', 'R4')
-  feed.snapshot.return_value = data
-  widget = UnidenWidget(Mock(), feed)
-  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rec') as rectangles, \
-       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded_lines_ex'), \
-       patch('openpilot.starpilot.ui.onroad_uniden.time.monotonic', side_effect=[1., 1.1]):
-    widget.render_border(border_state(), 1860, 1080)
-    widget.render_border(border_state(), 1860, 1080)
-  assert widget.chase[0] > 0 and rectangles.called
-
-
-def test_a_stronger_signal_lights_more_of_the_outline():
-  from openpilot.starpilot.ui.onroad_uniden import chase_lap, chase_share
-  assert chase_share(1) < chase_share(8) < .3 and chase_lap(8) < chase_lap(1)
-  def lit(strength):
-    _, rectangles, _ = style_run({**ALL, 'KA': 'chase'}, HUES, f'1,00,KA,{strength},0,33.785,R,1'.encode(), moments=(1., 1.))
-    return sum(r.width * r.height for r, _ in rectangles) / 2
-  assert lit(8) > lit(1)
-
-
 def test_a_mute_silences_the_detector_but_keeps_the_frame_while_the_signal_lasts():
   from openpilot.starpilot.ui.onroad_uniden import threat
   alert = parse_alerts(b'1,00,K,7,0,24.150,F,2')[0]
@@ -553,8 +406,7 @@ def test_a_mute_silences_the_detector_but_keeps_the_frame_while_the_signal_lasts
   assert threat([alert], ['K']) is alert
   assert threat([{**alert, 'timed': True}], ['K'])
   assert threat([{**alert, 'breakthrough': True}], ['K'])
-  assert threat([{**alert, 'quiet': True}], ['K']) is None
-  assert threat([{**alert, 'filtered': True}], ['K']) is None
+  assert threat([{**alert, 'quiet': True}], ['K']), 'hiding is up to the shared on-screen rules, not threat()'
 
 
 def test_card_note_names_timed_mute_and_strong_signals():
@@ -572,3 +424,140 @@ def test_card_note_names_timed_mute_and_strong_signals():
        patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_triangle'):
     assert 'Timed mute' in notes(timed=True)
     assert 'Strong signal' in notes(breakthrough=True, timed=False)
+
+
+def edge_run(packet, *, parts=None, muted_percent=50, moments=(5.,), model='R8', speed_x=640, reduce_motion=False,
+             bands=('KA', 'K', 'LASER'), flags=None, styles=None, config=None):
+  """Render the Edge style and collect what it drew: rounded strokes, straight pieces, rings and chevron lines."""
+  from openpilot.starpilot.uniden.protocol import DEFAULT_CONFIG
+  feed = Mock()
+  data = border_data(packet, border_styles=styles or {'KA': 'edge', 'K': 'edge', 'LASER': 'edge'}, border_bands=list(bands),
+                     border_edge={**DEFAULT_CONFIG['border_edge'], **(parts or {})}, border_muted_percent=muted_percent, **(config or {}))
+  data['alerts'] = [{**alert, **(flags or {})} for alert in parse_alerts(packet, model)]
+  feed.snapshot.return_value = data
+  widget = UnidenWidget(Mock(), feed)
+  drawn = {'band': [], 'rect': [], 'ring': [], 'line': [], 'gradient': []}
+  customization = {'reduceMotion': reduce_motion, 'layouts': {'large': {'current_speed': {'x': speed_x, 'y': 30}}}}
+  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded_lines_ex', side_effect=lambda r, k, n, t, c: drawn['band'].append((r, t, c))), \
+       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rec', side_effect=lambda r, c: drawn['rect'].append((r, c))), \
+       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_ring', side_effect=lambda *a: drawn['ring'].append(a)), \
+       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_line_ex', side_effect=lambda a, b, t, c: drawn['line'].append((a, b, c))), \
+       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_gradient_v', side_effect=lambda *a: drawn['gradient'].append(a)), \
+       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_gradient_h', side_effect=lambda *a: drawn['gradient'].append(a)), \
+       patch('openpilot.starpilot.ui.onroad_uniden.offset', return_value=(speed_x - 640, 0)), \
+       patch('openpilot.starpilot.ui.onroad_uniden.time.monotonic', side_effect=list(moments)):
+    for _ in moments:
+      widget.render_border(NS(alert=NS(size='none'), customization=customization), 1860, 1080)
+  return widget, drawn
+
+
+def test_edge_draws_a_segmented_line_that_follows_the_rounded_corners_and_chevrons_by_strength():
+  _, drawn = edge_run(b'1,00,K,8,0,24.150,F,1')
+  assert drawn['rect'] and drawn['ring'], 'dashes along the straight sides and around the corners'
+  assert min(r.x for r, _ in drawn['rect']) >= 30 + 12 and all(c.r == 0xFF and c.g == 0xBA for _, c in drawn['rect'])
+  assert not drawn['band'] and not drawn['gradient'], 'no glow or veil unless chosen'
+  assert len(drawn['line']) == 2 * 4 * 2, 'strength 8 is four chevrons in each of the two sets beside the speed'
+  for strength, count in ((1, 1), (2, 1), (3, 2), (5, 3), (7, 4)):
+    _, drawn = edge_run(f'1,00,K,{strength},0,24.150,F,1'.encode())
+    assert len(drawn['line']) == 2 * count * 2
+
+
+def test_edge_chevrons_flank_the_speed_ahead_and_for_the_r4_and_point_toward_the_signal():
+  _, ahead = edge_run(b'1,00,K,2,0,24.150,F,1', speed_x=700)
+  apexes = sorted(round(b.x) for a, b, c in ahead['line'][::2])
+  assert apexes == [930 + 60 - 300, 930 + 60 + 300], 'one set each side of the moved speed'
+  assert all(b.y < a.y for a, b, _ in ahead['line'][::2]), 'pointing up, ahead'
+  _, r4 = edge_run(b'1,00,K,2,0,24.150,F,1', model='R4')
+  assert sorted(round(b.x) for a, b, c in r4['line'][::2]) == [630, 1230]
+  _, rear = edge_run(b'1,00,K,2,0,24.150,R,1')
+  assert [round(b.x) for a, b, c in rear['line'][::2]] == [930] and all(b.y > a.y for a, b, _ in rear['line'][::2])
+  _, beside = edge_run(b'1,00,K,2,0,24.150,S,1')
+  assert sorted(round(b.y) for a, b, c in beside['line'][::2]) == [540, 540]
+
+
+def test_edge_parts_can_be_switched_and_muted_alerts_use_the_chosen_brightness():
+  _, drawn = edge_run(b'1,00,K,4,0,24.150,F,1', parts={'line': False, 'chevrons': False, 'glow': True, 'veil': True})
+  assert drawn['band'] and not drawn['rect'] and not drawn['line']
+  assert any(c.r == 0 and c.g == 0 and c.b == 0 for _, _, c in drawn['band']), 'the veil is black'
+  _, solid = edge_run(b'1,00,K,4,0,24.150,F,1', parts={'dashes': False, 'chevrons': False})
+  assert len(solid['band']) == 1 and not solid['rect'], 'an unbroken line is one rounded stroke'
+  _, loud = edge_run(b'1,00,K,4,0,24.150,F,1', reduce_motion=True)
+  _, half = edge_run(b'1,00,K,4,0,24.150,F,2', reduce_motion=True)
+  _, hidden = edge_run(b'1,00,K,4,0,24.150,F,2', muted_percent=0)
+  assert loud['line'][0][2].a == round(255 * .85 * 1.1) and half['line'][0][2].a == round(255 * .85 * .5 * 1.1)
+  assert not any(hidden.values()), '0% hides the frame while muted'
+
+
+def test_edge_pulses_on_a_new_alert_and_a_two_bar_jump_and_fades_out():
+  from openpilot.starpilot.ui.onroad_uniden import EdgeMotion
+  motion = EdgeMotion()
+  alert = parse_alerts(b'1,00,K,3,0,24.150,F,1')[0]
+  motion.update(alert, 10., False)
+  assert [p[1] for p in motion.pulses] == [2] and motion.boost(10.15) > .9
+  motion.update({**alert, 'strength': 4}, 11., False)
+  assert motion.boost(11.1) == 0, 'one bar is not worth a pulse'
+  motion.update({**alert, 'strength': 5}, 12., False)
+  assert motion.boost(12.15) > .9, 'two bars over the last pulse is'
+  motion.update({**alert, 'band': 'LASER', 'frequency': None}, 13., False)
+  assert motion.pulses[-1][1] == 3, 'laser gets three'
+  motion.update(None, 14., False)
+  assert motion.fading(14.25)[1] == pytest.approx(.5) and motion.fading(14.6) is None
+  still = EdgeMotion()
+  still.update(alert, 10., True)
+  assert not still.pulses
+
+
+def test_old_saved_colors_and_styles_stay_valid():
+  from openpilot.starpilot.uniden.protocol import DEFAULT_CONFIG, normalize_config
+  old = {**DEFAULT_CONFIG, 'border_colors': {'KA': 'white', 'K': 'purple', 'LASER': 'yellow'},
+         'border_styles': {'KA': 'direction', 'K': 'chase', 'LASER': 'pulse'}}
+  del old['border_edge'], old['border_muted_percent']
+  config = normalize_config(old)
+  assert config['border_styles']['K'] == 'chase' and config['border_colors']['K'] == 'purple' and config['border_muted_percent'] == 50
+  for change in ({'border_edge': {'line': True}}, {'border_edge': {**DEFAULT_CONFIG['border_edge'], 'line': 1}},
+                 {'border_muted_percent': 101}, {'border_muted_percent': True}):
+    with pytest.raises(ValueError):
+      normalize_config({**DEFAULT_CONFIG, **change})
+
+
+def test_mute_note_says_why_starpilot_or_the_detector_muted():
+  from openpilot.starpilot.ui.onroad_uniden import mute_note
+  def note(**flags):
+    alert = parse_alerts(b'1,00,K,3,0,24.150,F,2')[0]   # the detector reports our own mutes as manual
+    return mute_note([{**alert, **flags}])
+  assert note(locked=True, filtered=True) == 'Lockout'
+  assert note(ruled=True, filtered=True) == 'Frequency rule'
+  assert note(quiet=True) == 'Below limit'
+  assert note(timed=True) == 'Timed mute'
+  assert note() == 'Manual mute'
+  quiet = parse_alerts(b'1,00,K,3,0,24.150,F,1')[0]
+  assert mute_note([{**quiet, 'quiet': True}]) == 'Below limit', 'quieted before the detector confirms the mute'
+
+
+def test_never_warn_again_keeps_a_strong_signal_muted():
+  from openpilot.starpilot.uniden.policy import apply
+  def run(strength_setting):
+    timed = {'bands': ['K'], 'seconds': 5, 'strength': strength_setting, 'unmute': False}
+    state = None
+    for step in range(13):   # read every half second, as the feed does, for six seconds
+      alerts = parse_alerts(b'1,00,K,8,0,24.150,F,2')
+      state = apply(alerts, [], {'timed': timed}, state, step * .5)
+    return alerts[0]
+  assert run(6)['breakthrough'] and not run(6)['timed']
+  assert not run(0)['breakthrough'] and run(0)['timed'], 'never: a strength-8 signal stays on its timed mute'
+
+
+def test_card_and_warning_share_the_on_screen_rules_and_work_without_each_other():
+  feed, fonts = Mock(), fonts_mock()
+  data = {'config': {'enabled': True, 'border_bands': ['K'], 'hide_below_limit': True}, 'connected': True, 'model': 'R8',
+          'alerts': [{**parse_alerts(b'1,00,K,3,0,24.150,F,1')[0], 'quiet': True}]}
+  feed.snapshot.return_value = data
+  widget = UnidenWidget(fonts, feed)
+  state = NS(alert=NS(size='none'), customization={'layouts': {'large': {}}})   # no card in this layout
+  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rec') as dashes, \
+       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_ring'), patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_line_ex'):
+    widget.render_border(state, 1860, 1080)
+    dashes.assert_not_called()
+    data['config']['hide_below_limit'] = False
+    widget.render_border(state, 1860, 1080)
+    assert dashes.called, 'the warning works with no card on screen'
