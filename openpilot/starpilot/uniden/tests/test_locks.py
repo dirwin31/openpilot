@@ -282,6 +282,20 @@ def test_hold_to_lock_uses_the_pinpointed_source_and_unlock_removes_it(tmp_path)
   assert service.request({'operation': 'unlock', 'id': result['locks'][0]['id']}, Mock())['locks'] == []
 
 
+def test_listing_shows_learning_progress_closest_first(tmp_path):
+  service, _, _ = make_service(tmp_path)
+  store = service.store
+  store.candidates = [
+    {'id': 'a', 'band': 'KA', 'frequency': 34.7, 'lat': 36., 'lon': -115., 'count': 2, 'misses': 0, 'last': 1., 'max_strength': 3},
+    {'id': 'b', 'band': 'K', 'frequency': 24.15, 'lat': 36., 'lon': -115., 'count': 2, 'misses': 1, 'last': 1., 'max_strength': 3},
+    {'id': 'c', 'band': 'X', 'frequency': 10.525, 'lat': 36., 'lon': -115., 'count': 2, 'misses': 0, 'last': 1., 'max_strength': 3},
+  ]
+  listing = service.request({'operation': 'locks'}, Mock())
+  assert listing['candidates'] == 3
+  assert [(c['id'], c['count'], c['need']) for c in listing['learning']] == [('c', 2, 3), ('b', 2, 3), ('a', 2, 5)]
+  assert all('lat' not in c and 'lon' not in c for c in listing['learning']), 'only progress, no position'
+
+
 def test_lock_is_rejected_for_a_changed_alert_stale_read_or_no_fix(tmp_path):
   service, _, clock = make_service(tmp_path)
   service.request({'operation': 'status', 'context': context(at=100.)}, lambda config, mute, sit: reading(b'1,00,K,3,0,24.150,F,1', 100.))
