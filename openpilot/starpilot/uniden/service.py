@@ -5,7 +5,7 @@ import time
 from datetime import UTC, datetime
 
 from openpilot.starpilot.bluetooth.owner import BluetoothRejected, BluetoothUnavailable
-from openpilot.starpilot.uniden.locks import LockStore, distance_m, matches_lock, new_lock, same_signal
+from openpilot.starpilot.uniden.locks import LEARN_COUNT, LockStore, distance_m, matches_lock, new_lock, same_signal
 from openpilot.starpilot.uniden.policy import fresh_context
 from openpilot.starpilot.uniden.protocol import DEFAULT_CONFIG, LOCK_BANDS, alert_key, normalize_config
 from openpilot.starpilot.uniden.tracker import PassTracker
@@ -77,7 +77,12 @@ class DetectorService:
     self.store.visit(result['alerts'], fresh_context(context, now))
 
   def listing(self):
-    return {'locks': [dict(lock) for lock in self.store.locks], 'candidates': len(self.store.candidates), 'metric': self.metric()}
+    # Sources still being learned, closest to a lockout first; position stays on the device.
+    learning = sorted(({'id': c['id'], 'band': c['band'], 'frequency': c['frequency'], 'count': c['count'],
+                        'need': LEARN_COUNT[c['band']], 'misses': c['misses']} for c in self.store.candidates),
+                      key=lambda c: (-c['count'] / c['need'], c['misses']))
+    return {'locks': [dict(lock) for lock in self.store.locks], 'candidates': len(self.store.candidates), 'learning': learning,
+            'metric': self.metric()}
 
   def lock_here(self, payload, config):
     last, now = self.last, self.clock()
