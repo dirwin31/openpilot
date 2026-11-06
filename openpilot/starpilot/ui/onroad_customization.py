@@ -222,10 +222,10 @@ PROFILES["large"]["widgets"][UNIDEN_WIDGET] = _uniden
 JETLINK_WIDGET = "jetlink_status"
 JETLINK_SIZE = (420, 84)
 JETLINK_OPACITY = (0, 100, 85)  # percent: min, max, default
-_jetlink = _widget("Jetlink status", JETLINK_WIDGET, *JETLINK_SIZE, 30, 650)
+_jetlink = _widget("Big model", JETLINK_WIDGET, *JETLINK_SIZE, 30, 650)
 _jetlink["default"].update(enabled=False, opacity=JETLINK_OPACITY[2])
 _jetlink["opacity"] = dict(zip(("min", "max", "default"), JETLINK_OPACITY, strict=True))
-_jetlink["note"] = "Shown while Jetlink is on: connection, device and host processing time. Opacity sets the card background."
+_jetlink["note"] = "Big or small model driving, and Jetlink's or the Chestnut's state (else Disconnected). Opacity sets the card background."
 PROFILES["large"]["widgets"][JETLINK_WIDGET] = _jetlink
 # Restore the Dom road graphic in the gap between the speed card and main speed.
 # Center the road gauge above the driver monitor, below the speed-limit controls.
