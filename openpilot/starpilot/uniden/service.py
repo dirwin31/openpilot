@@ -59,9 +59,9 @@ class DetectorService:
                                      distance_m(here['lat'], here['lon'], lock['lat'], lock['lon']) <= NEAR_M + lock['radius_m']]
     timed = None
     if config['timed_mute']:
+      # Warn again also unmutes the detector (never, at strength 0). unmute_on_breakthrough is kept for saved configs only.
       timed = {'bands': config['timed_mute_bands'], 'seconds': config['timed_mute_seconds'],
-               # The detector's unmute command was never confirmed on hardware; the saved setting is kept but unused.
-               'strength': config['timed_mute_strength'], 'unmute': False}
+               'strength': config['timed_mute_strength'], 'unmute': True}
     return {'context': context, 'locks': near, 'quiet': quiet, 'timed': timed}
 
   def observe(self, result, config, context):
