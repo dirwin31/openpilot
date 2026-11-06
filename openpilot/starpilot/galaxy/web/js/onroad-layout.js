@@ -237,8 +237,8 @@ export const LayoutWidgetPreview = {
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
         <circle :cx="widget.height / 2" :cy="widget.height / 2" r="9" fill="#46c86e" />
-        <text :x="widget.height - 6" y="38" font-size="28" font-weight="600" fill="#f5f2fc">Link up</text>
-        <text :x="widget.height - 6" y="66" font-size="22" fill="#b8b2c8">Jetlink • iPhone</text>
+        <text :x="widget.height - 6" y="38" font-size="28" font-weight="600" fill="#f5f2fc">Big model</text>
+        <text :x="widget.height - 6" y="66" font-size="22" fill="#b8b2c8">Jetlink</text>
         <text :x="widget.width - 70" :y="widget.height / 2 + 12" text-anchor="end" font-size="34" font-weight="600" fill="#f5f2fc">24.6</text>
         <text :x="widget.width - 30" :y="widget.height / 2 + 12" text-anchor="end" font-size="22" fill="#b8b2c8">ms</text>
       </g>
@@ -297,8 +297,8 @@ export const LayoutWidgetPreview = {
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
         <circle :cx="widget.height / 2" :cy="widget.height / 2" r="9" fill="#46c86e" />
-        <text :x="widget.height - 6" y="40" font-size="28" font-weight="600" fill="#f5f2fc">Link up</text>
-        <text :x="widget.height - 6" y="68" font-size="22" fill="#b8b2c8">Jetlink • iPhone</text>
+        <text :x="widget.height - 6" y="40" font-size="28" font-weight="600" fill="#f5f2fc">Big model</text>
+        <text :x="widget.height - 6" y="68" font-size="22" fill="#b8b2c8">Jetlink</text>
         <text :x="widget.width - 70" y="52" text-anchor="end" font-size="34" font-weight="600" fill="#f5f2fc">24.6</text>
         <text :x="widget.width - 30" y="52" text-anchor="end" font-size="22" fill="#b8b2c8">ms</text>
       </g>

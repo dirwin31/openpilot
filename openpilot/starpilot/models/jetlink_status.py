@@ -13,6 +13,8 @@ STALE_NS = 2_500_000_000
 LATENCY_RECORD = "/dev/shm/jetlink/starpilot_latency.json"
 LATENCY_FRESH_S = 3.
 RUNNING = {'ready': 'ready', 'joining': 'connecting', 'retrying': 'connecting'}
+# progress codes (jetlink.openpilot.status.PROGRESS_CODES) while the big model is fetched or built
+BUILDING = ('downloading', 'download', 'upload', 'patch', 'parse', 'convert', 'compile', 'build')
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,8 @@ class JetlinkStatus:
   state: str = 'off'  # off, disconnected, connected, connecting, ready, active, unavailable
   latency_ms: float | None = None
   port: str | None = None  # jetlink's port_state: 'connected' (host on the link), 'device' (plugged in), else None
+  offer: bool = False  # joined in modeld and ready: re-engage to switch
+  building: bool = False  # the picked model is downloading or building
 
 
 def _write_latency(model, path) -> None:
@@ -76,7 +80,9 @@ def read_status() -> JetlinkStatus:
     return JetlinkStatus(device, 'active', read_latency(), port)
   if status.reason:
     return JetlinkStatus(device, 'unavailable', port=port)
-  return JetlinkStatus(device, RUNNING.get(status.running, 'ready' if status.ready else 'connected'), port=port)
+  progress = status.progress if isinstance(status.progress, dict) else {}  # only while provisioning or joining
+  return JetlinkStatus(device, RUNNING.get(status.running, 'ready' if status.ready else 'connected'), port=port,
+                       offer=status.running == 'ready', building=not status.ready and progress.get('code') in BUILDING)
 
 
 class JetlinkStatusFeed:
