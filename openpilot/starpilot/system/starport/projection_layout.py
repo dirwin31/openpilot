@@ -118,9 +118,9 @@ def layout_metadata_for_viewport(viewport):
                                  'collapseToggle': True,
                                  'default': {'x': width - 30 - NOW_PLAYING_SIZE[0], 'y': height - 30 - NOW_PLAYING_SIZE[1],
                                              'enabled': True, 'opacity': NOW_PLAYING_OPACITY[2], 'collapse': False}}
-  widgets[JETLINK_WIDGET] = {'label': 'Jetlink status', 'kind': JETLINK_WIDGET,
+  widgets[JETLINK_WIDGET] = {'label': 'Big model', 'kind': JETLINK_WIDGET,
                              'width': JETLINK_SIZE[0], 'height': JETLINK_SIZE[1], 'colors': {},
-                             'note': 'Shown while Jetlink is on: connection, device and host processing time. Opacity sets the card background.',
+                             'note': "Big or small model driving, and Jetlink's or the Chestnut's state (else Disconnected). Opacity sets the card background.",
                              'opacity': {'min': JETLINK_OPACITY[0], 'max': JETLINK_OPACITY[1], 'default': JETLINK_OPACITY[2]},
                              'default': {'x': 30, 'y': 650, 'enabled': False, 'opacity': JETLINK_OPACITY[2]}}
   exit_w, exit_h = CAR_EXIT_SIZE
