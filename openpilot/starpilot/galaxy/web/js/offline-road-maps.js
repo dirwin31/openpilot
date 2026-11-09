@@ -231,7 +231,7 @@ export const OfflineRoadMapsPanel = {
       <p v-if="mode !== 'local'" class="gx-note">Connect to your comma to manage offline road maps.</p>
       <template v-else>
         <GxNotice tone="danger" v-if="error">{{ error }}</GxNotice>
-        <GxNotice tone="warn" v-if="!hasKey">Add your Mapbox key in Setup. Road maps download with the same key.</GxNotice>
+        <GxNotice tone="warn" v-if="!hasKey">Add your Mapbox key in Setup. Offline road maps download with that key.</GxNotice>
         <GxNotice tone="warn" v-else-if="service.failure === 'key'">Mapbox rejected the saved key for map tiles. Check that it is a public (pk.) key without URL restrictions.</GxNotice>
         <GxNotice tone="warn" v-if="service.failure === 'budget'">This comma's Mapbox road tile allowance is used up, so downloads pause until the 1st.</GxNotice>
         <GxNotice tone="warn" v-if="service.noSpace">The comma's storage is nearly full, so new map areas are paused. Delete an area or free space.</GxNotice>
