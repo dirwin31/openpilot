@@ -1906,7 +1906,8 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
             fields = {'configure': {'patch'}, 'select': {'destination'}, 'selectPlace': {'id', 'searchId'},
                       'cancelSearch': {'searchId'}, 'clear': set(), 'favorite': {'destination'},
                       'favoritePlace': {'id', 'searchId'}, 'removeFavorite': {'id'}, 'labelFavorite': {'id', 'label'},
-                      'removeRecent': {'id'}, 'clearRecents': set(), 'selectRoute': {'index'}, 'testGoogleKey': set()}
+                      'removeRecent': {'id'}, 'clearRecents': set(), 'selectRoute': {'index'}, 'testGoogleKey': set(),
+                      'resolveShare': {'text'}}
             action = payload.get('action')
             optional = ({'label'} if action in ('favorite', 'favoritePlace') and 'label' in payload else
                         {'key'} if action == 'testGoogleKey' and 'key' in payload else set())
@@ -1915,7 +1916,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
             needs_park = action == 'configure' and isinstance(payload['patch'], dict) and bool({'token', 'googleKey'} & payload['patch'].keys())
             def authorized():
               return self.settings_session() == identity and (not needs_park or configuration_allowed())
-            with (nullcontext() if action in ('selectPlace', 'favoritePlace', 'testGoogleKey') else effect_lock):
+            with (nullcontext() if action in ('selectPlace', 'favoritePlace', 'testGoogleKey', 'resolveShare') else effect_lock):
               if not authorized():
                 raise PermissionError('Park your car before changing a map key' if needs_park else 'Sign in to Galaxy')
               nav = navigation_owner()
@@ -1924,6 +1925,8 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
                 result = nav.configure(payload['patch'], **keywords)
               elif action == 'testGoogleKey':
                 result = dict(nav.snapshot(), googleKeyTest=nav.test_google_key(payload.get('key')))
+              elif action == 'resolveShare':
+                result = dict(nav.snapshot(), sharedText=nav.resolve_share(payload['text']))
               elif action == 'selectPlace':
                 result = nav.select_place(payload['id'], payload['searchId'], identity, **keywords)
               elif action == 'cancelSearch':

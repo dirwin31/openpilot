@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import time
+from collections import deque
 
 from pathlib import Path
 
@@ -18,6 +20,9 @@ from openpilot.starpilot.navigation.route_engine import MAX_POINTS, NavigationRo
 
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 FREE_ROUTES = 5_000           # Compute Routes Pro: traffic-aware routing and the car's heading
+FREE_ESSENTIAL_ROUTES = 10_000  # Compute Routes Essentials: no traffic, no heading
+TRAFFIC_MASK = "routes.duration,routes.distanceMeters"
+PRO_ROUTES_PER_HOUR = 20      # past this many traffic-aware routes in an hour (off-route loops), reroutes use free routes
 FIELD_MASK = ",".join((
   "routes.distanceMeters", "routes.duration", "routes.polyline.encodedPolyline", "routes.legs.steps.distanceMeters",
   "routes.legs.steps.staticDuration", "routes.legs.steps.navigationInstruction",
@@ -58,6 +63,10 @@ class GoogleRoutesFailed(Exception):
 
 def route_budget(root: Path | None = None) -> GoogleBudget:
   return GoogleBudget(root, file="routes-usage.json", month_free=FREE_ROUTES, day_free=None)
+
+
+def essentials_budget(root: Path | None = None) -> GoogleBudget:
+  return GoogleBudget(root, file="routes-essentials-usage.json", month_free=FREE_ESSENTIAL_ROUTES, day_free=None)
 
 
 def write_route_status(root: Path, failure: str | None) -> None:
@@ -141,21 +150,22 @@ def mapbox_shape(route: dict) -> dict:
   return {"geometry": {"coordinates": coordinates}, "legs": [{"steps": steps}], "distance": route["distanceMeters"], "duration": total}
 
 
-def request_body(position, destination: dict, bearing: float | None, exclusions: tuple[str, ...], alternatives: bool = True) -> dict:
+def request_body(position, destination: dict, bearing: float | None, exclusions: tuple[str, ...], alternatives: bool = True,
+                 traffic: bool = False) -> dict:
   location: dict = {"latLng": {"latitude": position[1], "longitude": position[0]}}
   if bearing is not None and math.isfinite(bearing):
     location["heading"] = int(bearing % 360)
   origin = {"location": location}
   return {"origin": origin, "destination": {"location": {"latLng": {"latitude": destination["latitude"], "longitude": destination["longitude"]}}},
-          "travelMode": "DRIVE", "routingPreference": "TRAFFIC_AWARE", "computeAlternativeRoutes": alternatives, "languageCode": "en-US",
+          "travelMode": "DRIVE", "routingPreference": "TRAFFIC_AWARE" if traffic else "TRAFFIC_UNAWARE",
+          "computeAlternativeRoutes": alternatives, "languageCode": "en-US",
           "polylineQuality": "HIGH_QUALITY",
           "routeModifiers": {AVOID[name]: True for name in exclusions if name in AVOID}}
 
 
-def compute_routes(http, key: str, body: dict, timeout=TIMEOUT) -> list[NavigationRoute]:
-  """Up to three routes, or GoogleRoutesFailed saying why not."""
+def _post(http, key: str, body: dict, mask: str, timeout) -> list:
   try:
-    with http.post(ROUTES_URL, json=body, headers={"X-Goog-Api-Key": key, "X-Goog-FieldMask": FIELD_MASK},
+    with http.post(ROUTES_URL, json=body, headers={"X-Goog-Api-Key": key, "X-Goog-FieldMask": mask},
                    timeout=timeout, stream=True) as response:
       status, raw = response.status_code, _body(response, MAX_RESPONSE)
   except requests.RequestException:
@@ -167,6 +177,17 @@ def compute_routes(http, key: str, body: dict, timeout=TIMEOUT) -> list[Navigati
     raise GoogleRoutesFailed(failure)
   try:
     rows = json.loads(raw).get("routes", [])
+  except (ValueError, AttributeError):
+    raise GoogleRoutesFailed(FAILURE_SERVER) from None
+  if not isinstance(rows, list) or not rows:
+    raise GoogleRoutesFailed(FAILURE_SERVER)
+  return rows
+
+
+def compute_routes(http, key: str, body: dict, timeout=TIMEOUT) -> list[NavigationRoute]:
+  """Up to three routes, or GoogleRoutesFailed saying why not."""
+  rows = _post(http, key, body, FIELD_MASK, timeout)
+  try:
     routes = [NavigationRoute(mapbox_shape(row)) for row in rows[:3]]
   except (ValidationError, ValueError, KeyError, TypeError, IndexError, AttributeError):
     raise GoogleRoutesFailed(FAILURE_SERVER) from None
@@ -176,22 +197,52 @@ def compute_routes(http, key: str, body: dict, timeout=TIMEOUT) -> list[Navigati
 
 
 class GoogleRouteEngine:
-  def __init__(self, session, budget: GoogleBudget):
+  """Traffic-aware (Pro) routes, with the car's heading when it is moving; free Essentials routes once the Pro allowance
+  or the hourly reroute limit is used up."""
+
+  def __init__(self, session, budget: GoogleBudget, essentials: GoogleBudget, clock=time.monotonic):
     self.session = session
     self.budget = budget
+    self.essentials = essentials
+    self.clock = clock
+    self._pro_routes: deque[float] = deque()
 
   def fetch(self, key: str, position, destination: dict, bearing: float | None = None,
             exclusions: tuple[str, ...] = ()) -> NavigationRoute:
-    if not self.budget.spend():
+    now = self.clock()
+    while self._pro_routes and now - self._pro_routes[0] > 3600:
+      self._pro_routes.popleft()
+    pro = len(self._pro_routes) < PRO_ROUTES_PER_HOUR and self.budget.spend()
+    if pro:
+      self._pro_routes.append(now)
+    elif not self.essentials.spend():
       raise GoogleRoutesFailed(FAILURE_BUDGET)
-    routes = compute_routes(self.session, key, request_body(position, destination, bearing, exclusions))
+    body = request_body(position, destination, bearing if pro else None, exclusions, traffic=pro)
+    routes = compute_routes(self.session, key, body)
+    for route in routes:
+      route.traffic_aware = pro
     routes[0].alternatives = routes
     return routes[0]
 
+  def traffic(self, key: str, position, destination: dict, bearing: float | None = None,
+              exclusions: tuple[str, ...] = ()) -> tuple[float, float]:
+    """Google's traffic-aware (seconds, meters) from here to the destination, one Pro request."""
+    if not self.budget.spend():
+      raise GoogleRoutesFailed(FAILURE_BUDGET)
+    body = request_body(position, destination, bearing, exclusions, alternatives=False, traffic=True)
+    row = _post(self.session, key, body, TRAFFIC_MASK, TIMEOUT)[0]
+    try:
+      duration, meters = seconds(row["duration"]), float(row["distanceMeters"])
+    except (ValidationError, KeyError, TypeError, ValueError):
+      raise GoogleRoutesFailed(FAILURE_SERVER) from None
+    if not math.isfinite(meters) or meters < 0:
+      raise GoogleRoutesFailed(FAILURE_SERVER)
+    return duration, meters
+
 
 def test_routes(key: str, http=requests, budget: GoogleBudget | None = None) -> dict:
-  """One short traffic-aware route, the same request navigation sends."""
-  budget = budget or route_budget(google_root())
+  """One short free (Essentials) route, the same request a trip starts with."""
+  budget = budget or essentials_budget(google_root())
   if not budget.spend():
     return {"ok": False, "message": MESSAGES[FAILURE_BUDGET]}
   body = request_body((-122.0840, 37.4220), {"latitude": 37.4275, "longitude": -122.1697}, None, (), alternatives=False)

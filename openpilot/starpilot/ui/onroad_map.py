@@ -37,6 +37,7 @@ from openpilot.starpilot.navigation.road_tiles import (
 from openpilot.system.ui.lib.application import GL_VERSION
 
 SUPERSAMPLE = 1.5            # canvas pixels per screen pixel: edges are smoothed when it is scaled down
+RASTER_SUPERSAMPLE = 1.0     # Google's pictures gain nothing from it, and the canvas needs under half the memory
 MAX_CANVAS = 2560
 TILE_CACHE = 48
 MISSING_RETRY_S = 3.0
@@ -62,6 +63,10 @@ NAME_HOLD_S = 1.5            # a new road name must hold this long to replace th
 ROAD_NAME_MAX_AGE_S = 3.0
 GUIDANCE_SLACK_PX = 4.0      # screen pixels of driven route left under the puck before guidance is trimmed again
 RASTER_REDRAW_S = 0.25       # newly arrived Google tiles redraw the canvas at most this often
+SNAP_M = 22.0                # the car is drawn on the route line when it is this close to it
+SNAP_HEADING_DEG = 45.0      # ...and, while moving, heading along it
+SNAP_AHEAD = 400             # route points searched past the last snapped one
+SNAP_RATE = 4.0              # 1/s: how quickly the car eases onto and off the line
 
 
 @dataclass(frozen=True)
@@ -181,6 +186,7 @@ class CanvasRequest:
   route_done: np.ndarray | None        # (N, 2) world points already driven
   tiles: tuple[TileKey, ...]
   raster: tuple[TileKey, ...] = ()     # Google tiles drawn over the road lines
+  supersample: float = SUPERSAMPLE     # canvas pixels per screen pixel
 
 
 @dataclass
@@ -194,12 +200,12 @@ class CanvasGeometry:
 def build_canvas(request: CanvasRequest, tiles: dict[TileKey, RoadTile], latitude: float) -> CanvasGeometry:
   """Screen-space strips for a north-up canvas. Pure numpy; runs off the render thread."""
   side = request.side
-  px_per_m = SUPERSAMPLE / request.m_per_px
+  px_per_m = request.supersample / request.m_per_px
   px_per_unit = meters_per_tile(latitude) * px_per_m           # canvas pixels per world tile unit
   cx, cy = request.center
   bounds = (-8.0, -8.0, side + 8.0, side + 8.0)
   ratio = math.sqrt(REFERENCE_M_PER_PX / request.m_per_px)
-  width_scale = SUPERSAMPLE * min(1.35, max(0.7, ratio))
+  width_scale = request.supersample * min(1.35, max(0.7, ratio))
   geometry = CanvasGeometry(request)
   per_class: dict[int, list[tuple[np.ndarray, np.ndarray]]] = {}
   for key in request.tiles:
@@ -242,9 +248,9 @@ def route_guidance(route, request: CanvasRequest, latitude: float):
   """Build only the remaining route; the road canvas never bakes in a driven tail."""
   if route is None or len(route) < 2:
     return []
-  scale = meters_per_tile(latitude) * SUPERSAMPLE / request.m_per_px
+  scale = meters_per_tile(latitude) * request.supersample / request.m_per_px
   points = ((route - request.center) * scale + request.side / 2).astype(np.float32)
-  width_scale = SUPERSAMPLE * min(1.35, max(0.7, math.sqrt(REFERENCE_M_PER_PX / request.m_per_px)))
+  width_scale = request.supersample * min(1.35, max(0.7, math.sqrt(REFERENCE_M_PER_PX / request.m_per_px)))
   bounds = (-8.0, -8.0, request.side + 8.0, request.side + 8.0)
   # Every frame draws these strips: keep only the stretches that can reach the canvas, widest line included.
   reach = 8.0 + 17.0 * width_scale / 2
@@ -273,6 +279,33 @@ def visible_runs(points: np.ndarray, bounds: tuple[float, float, float, float]) 
   if not runs:
     return points[:0], np.zeros(1, np.int32)
   return np.concatenate(runs), np.concatenate(([0], np.cumsum([len(run) for run in runs]))).astype(np.int32)
+
+
+def snap_to_route(route: np.ndarray, position: tuple[float, float], bearing: float | None, max_offset: float,
+                  start: int | None = None) -> tuple[tuple[float, float], int, float] | None:
+  """The nearest point on the route ahead of ``start`` within ``max_offset`` world units (and heading along it):
+  (point, segment, segment bearing), or None."""
+  if route is None or len(route) < 2:
+    return None
+  first = 0 if start is None else max(0, start - 1)
+  last = len(route) - 1 if start is None else min(len(route) - 1, start + SNAP_AHEAD)
+  a, b = route[first:last], route[first + 1:last + 1]
+  if not len(a):
+    return None
+  ab = b - a
+  lengths = np.einsum('ij,ij->i', ab, ab)
+  p = np.asarray(position, np.float64)
+  t = np.clip(np.einsum('ij,ij->i', p - a, ab) / np.maximum(lengths, 1e-18), 0.0, 1.0)
+  nearest = a + ab * t[:, None]
+  offsets = np.hypot(*(nearest - p).T)
+  headings = np.degrees(np.arctan2(ab[:, 0], -ab[:, 1])) % 360.0
+  usable = (offsets <= max_offset) & (lengths > 0)
+  if bearing is not None:
+    usable &= np.abs((headings - bearing + 180.0) % 360.0 - 180.0) <= SNAP_HEADING_DEG
+  if not usable.any():
+    return None
+  index = int(np.argmin(np.where(usable, offsets, np.inf)))
+  return (float(nearest[index, 0]), float(nearest[index, 1])), first + index, float(headings[index])
 
 
 def split_route(route: np.ndarray | None, position: tuple[float, float]) -> tuple[np.ndarray | None, np.ndarray | None]:
@@ -477,6 +510,8 @@ class MapOverlay:
     self._name_layout: tuple | None = None
     self._attribution_layout: tuple | None = None
     self._m_per_px = ZOOM_SLOW_M_PER_PX
+    self._snap_index: int | None = None
+    self._snap_weight = 0.0
     self._last_prepare: float | None = None
     self.status = "waiting"
     self._input = MapInput(None)
@@ -494,13 +529,26 @@ class MapOverlay:
       return
     target_world = world_xy(fix.latitude, fix.longitude)
     age = min(PHONE_DEAD_RECKON_S if data.source == "phone" else DEAD_RECKON_S, max(0.0, now - fix.monotonic))
-    if fix.bearing is not None and fix.speed > MIN_HEADING_SPEED:
+    moving = fix.bearing is not None and fix.speed > MIN_HEADING_SPEED
+    if moving:
       units = fix.speed * age / meters_per_tile(fix.latitude)
       heading = math.radians(fix.bearing)
       target_world = (target_world[0] + math.sin(heading) * units, target_world[1] - math.cos(heading) * units)
-      delta = (fix.bearing - self._bearing + 540.0) % 360.0 - 180.0
+    snap = None
+    if data.navigation_active and self._route_world is not None:
+      snap = snap_to_route(self._route_world, target_world, fix.bearing if moving else None,
+                           SNAP_M / meters_per_tile(fix.latitude), self._snap_index)
+    self._snap_index = snap[1] if snap is not None else None
+    self._snap_weight += ((1.0 if snap is not None else 0.0) - self._snap_weight) * min(1.0, dt * SNAP_RATE)
+    if snap is not None:
+      w = self._snap_weight
+      target_world = (target_world[0] + (snap[0][0] - target_world[0]) * w, target_world[1] + (snap[0][1] - target_world[1]) * w)
+    if moving:
+      assert fix.bearing is not None
+      road_bearing = snap[2] if snap is not None else fix.bearing
+      delta = (road_bearing - self._bearing + 540.0) % 360.0 - 180.0
       if not self._has_heading:
-        self._bearing, self._has_heading = fix.bearing % 360.0, True
+        self._bearing, self._has_heading = road_bearing % 360.0, True
       elif fix.speed > ROTATE_MIN_SPEED and abs(delta) > HEADING_DEADBAND_DEG:
         limit = MAX_TURN_DEG_S * dt
         self._bearing = (self._bearing + max(-limit, min(limit, delta * min(1.0, dt * HEADING_RATE)))) % 360.0
@@ -533,6 +581,7 @@ class MapOverlay:
       return                                                   # MapFeed hands back the same tuple until the route changes
     if route != self._route_key:
       self._guidance_key = None
+      self._snap_index = None
       self._route_world = np.array([world_xy(lat, lon) for lat, lon in route], np.float64) if len(route) >= 2 else None
     self._route_key = route
 
@@ -567,8 +616,11 @@ class MapOverlay:
     """Screen pixels from the car to the widget's farthest corner, at any rotation."""
     return math.hypot(width / 2, height * max(CAR_ANCHOR, 1 - CAR_ANCHOR))
 
+  def _supersample(self) -> float:
+    return RASTER_SUPERSAMPLE if self.raster is not None and self.raster.active else SUPERSAMPLE
+
   def _canvas_side(self, width: int, height: int) -> int:
-    return int(min(MAX_CANVAS, math.ceil(self._reach(width, height) * 2 * 1.6 * SUPERSAMPLE / 64) * 64))
+    return int(min(MAX_CANVAS, math.ceil(self._reach(width, height) * 2 * 1.6 * self._supersample() / 64) * 64))
 
   def _needs_canvas(self, side: int) -> bool:
     request = self._canvas_request
@@ -576,16 +628,17 @@ class MapOverlay:
       return True
     assert self._world is not None
     assert self._widget_size is not None
-    px_per_unit = meters_per_tile(self._latitude) * SUPERSAMPLE / request.m_per_px
+    px_per_unit = meters_per_tile(self._latitude) * request.supersample / request.m_per_px
     drift = math.hypot(self._world[0] - request.center[0], self._world[1] - request.center[1]) * px_per_unit
-    reach = self._reach(*self._widget_size) * SUPERSAMPLE * self._m_per_px / request.m_per_px
+    reach = self._reach(*self._widget_size) * request.supersample * self._m_per_px / request.m_per_px
     ratio = request.m_per_px / self._m_per_px
-    replan = self.raster is not None and not request.raster and self.raster.active
+    replan = (self.raster is not None and not request.raster and self.raster.active) or request.supersample != self._supersample()
     return drift > (side / 2 - reach) * 0.5 or not 0.82 < ratio < 1.22 or self.reader.generation != self._generation_built or replan
 
   def _request(self, side: int) -> CanvasRequest:
     assert self._world is not None
-    reach_m = side / SUPERSAMPLE * self._m_per_px * 0.75
+    supersample = self._supersample()
+    reach_m = side / supersample * self._m_per_px * 0.75
     reach = reach_m / meters_per_tile(self._latitude)
     x, y = self._world
     tiles = tuple(TileKey(DATA_ZOOM, tx % (1 << DATA_ZOOM), ty)
@@ -593,14 +646,14 @@ class MapOverlay:
                   for tx in range(int(math.floor(x - reach)), int(math.floor(x + reach)) + 1)
                   if 0 <= ty < 1 << DATA_ZOOM)
     done, ahead = split_route(self._route_world, self._world) if self._route_world is not None else (None, None)
-    return CanvasRequest(self._world, self._m_per_px, side, ahead, done, tiles, self._raster_plan(side))
+    return CanvasRequest(self._world, self._m_per_px, side, ahead, done, tiles, self._raster_plan(side, supersample), supersample)
 
-  def _raster_plan(self, side: int) -> tuple[TileKey, ...]:
+  def _raster_plan(self, side: int, supersample: float = SUPERSAMPLE) -> tuple[TileKey, ...]:
     """Google tiles out to the widget's farthest corner plus the drift and zoom a canvas allows before it is rebuilt."""
     if self.raster is None or self._world is None or self._widget_size is None:
       return ()
     reach = self._reach(*self._widget_size)
-    drift = max(0.0, side / SUPERSAMPLE / 2 - reach) * 0.5
+    drift = max(0.0, side / supersample / 2 - reach) * 0.5
     latitude, longitude = lat_lon(*self._world)
     return self.raster.plan(latitude, longitude, self._m_per_px, (reach + drift) * self._m_per_px * 1.22)
 
@@ -678,7 +731,7 @@ class MapOverlay:
       return 0
     self._raster_generation = self.raster.generation
     textures = self.raster.textures(request.raster)
-    px_per_unit = meters_per_tile(lat_lon(*request.center)[0]) * SUPERSAMPLE / request.m_per_px
+    px_per_unit = meters_per_tile(lat_lon(*request.center)[0]) * request.supersample / request.m_per_px
     rl.begin_blend_mode(rl.BlendMode.BLEND_ALPHA)
     try:
       for key, texture in textures.items():
@@ -722,11 +775,11 @@ class MapOverlay:
       request = self._canvas_request
       if self._canvas is not None and request is not None and self._world is not None:
         px_per_unit = meters_per_tile(self._latitude) / request.m_per_px
-        zoom = request.m_per_px / self._m_per_px / SUPERSAMPLE
+        zoom = request.m_per_px / self._m_per_px / request.supersample
         side = request.side
         # The car's spot on the canvas, in canvas pixels.
-        car_x = (self._world[0] - request.center[0]) * px_per_unit * SUPERSAMPLE + side / 2
-        car_y = (self._world[1] - request.center[1]) * px_per_unit * SUPERSAMPLE + side / 2
+        car_x = (self._world[0] - request.center[0]) * px_per_unit * request.supersample + side / 2
+        car_y = (self._world[1] - request.center[1]) * px_per_unit * request.supersample + side / 2
         anchor = rl.Vector2(width / 2, height * CAR_ANCHOR)
         if guidance:
           # Road geometry is cached across many frames. Guidance is trimmed at the
@@ -775,8 +828,8 @@ class MapOverlay:
     if not self._ensure_targets(width, height, 0):
       return
     now = self.clock()
-    self._advance(data, now)
     self._route(data.route)
+    self._advance(data, now)
     self._track_route(data, now)
     if self._world is not None:
       side = self._canvas_side(width, height)

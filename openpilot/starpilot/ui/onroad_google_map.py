@@ -21,7 +21,8 @@ from openpilot.starpilot.navigation.google_tiles import (
 from openpilot.starpilot.navigation.offline_roads import read_json
 from openpilot.starpilot.navigation.road_tiles import TileKey
 
-TEXTURE_CACHE = 64
+TEXTURE_CACHE = 16
+TEXTURE_SPARE = 8            # textures kept past the wanted set, for a zoom step back
 UPLOADS_PER_FRAME = 3
 SETTINGS_EVERY_S = 5.0
 STATUS_EVERY_S = 10.0
@@ -107,7 +108,7 @@ class GoogleRaster:
       ready = list(self._decoded.items())[:limit]
       for key, _ in ready:
         del self._decoded[key]
-      keep = max(TEXTURE_CACHE, len(self._wanted))
+      keep = max(TEXTURE_CACHE, len(self._wanted) + TEXTURE_SPARE)
     changed = False
     if reset and self._textures:
       for texture in self._textures.values():
