@@ -297,9 +297,9 @@ def classify(status: int, body: bytes) -> str | None:
 
 
 MESSAGES = {
-  FAILURE_KEY: "Google rejected the key. Check that it was copied whole and that its restrictions allow the Map Tiles API.",
+  FAILURE_KEY: "Google rejected the key for the Map Tiles API. Check that it was copied whole and that its API restrictions allow the Map Tiles API.",
   FAILURE_BILLING: "Billing is not turned on for this Google Cloud project. Add a billing account, then test again.",
-  FAILURE_DISABLED: "The Map Tiles API is not enabled for this key's project. Enable it in Google Cloud, then test again.",
+  FAILURE_DISABLED: "The Map Tiles API is off for this key. Enable it in Google Cloud and allow it in the key's API restrictions, then test again.",
   FAILURE_SERVER: "Google is busy or refused the request. Try again in a minute.",
   FAILURE_NETWORK: "The comma could not reach Google. Check its internet connection.",
   FAILURE_BUDGET: "This month's or today's free Google tiles are used up. The map uses Mapbox road lines until they reset.",

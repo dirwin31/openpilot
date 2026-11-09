@@ -1,4 +1,4 @@
-import { SHORT_MAP_LINK, isMapLink, parseSharedDestination } from "./share-destination.js"
+import { isMapLink } from "./share-destination.js"
 import { GxNotice } from "./notice.js"
 import { BluetoothNotice, bluetoothConnection } from "./bluetooth-notice.js"
 import { connectionError } from "./polling.js"
@@ -97,10 +97,11 @@ export class NavigationClient {
     this.busy = false
     this.error = ""
     this.stale = false
+    this.refusal = null
   }
 
   emit() { this.publish({ data: this.data, results: this.results, searched: this.searched, busy: this.busy, error: this.error, stale: this.stale,
-    suggestions: this.suggestions }) }
+    suggestions: this.suggestions, resultsProvider: this.resultsProvider, suggestionsProvider: this.suggestionsProvider }) }
   stop() {
     if (this.searchId && this.data) {
       this.fetcher("./api/navigation/action", { method: "POST", credentials: "same-origin", cache: "no-store",
@@ -182,6 +183,7 @@ export class NavigationClient {
         this.suggestions = []
       } else {
         this.suggestions = payload.results
+        this.suggestionsProvider = payload.provider
         this.suggestionResultsQuery = text
       }
       this.emit()
@@ -208,6 +210,7 @@ export class NavigationClient {
   }
 
   async run(operation, body = null) {
+    this.refusal = null
     if (!this.active || this.busy) return null
     this.controller?.abort()
     if (this.timer !== null) this.cancelTimer(this.timer)
@@ -220,7 +223,7 @@ export class NavigationClient {
     if (operation !== "status") this.error = ""
     this.emit()
     const deadline = this.later(() => controller.abort(), operation === "search" ? 24000 : operation === "action" && body?.action === "selectPlace" ? 12000 :
-      operation === "action" && body?.action === "testGoogleKey" ? 45000 : operation === "action" && body?.action === "resolveShare" ? 20000 : 4000)
+      operation === "action" && body?.action === "testGoogleKey" ? 45000 : operation === "action" && body?.action === "resolveShare" ? 20000 : operation === "action" && body?.action === "share" ? 30000 : 4000)
     try {
       // Status polls name the route lines they already hold; the comma then leaves them out.
       const query = operation === "status" && this.data?.routeKey ? `?routeKey=${this.data.routeKey}` : ""
@@ -235,12 +238,17 @@ export class NavigationClient {
       if (response.status === 401 || response.status === 503 && ["access_unavailable", "setup_required"].includes(payload?.code)) {
         this.stop(); this.unauthorized(); return null
       }
-      if (!response.ok) throw new Error(payload?.error || "Navigation could not complete this request.")
+      if (!response.ok) {
+        // A shared place the comma could not pin down comes back with the search to show instead.
+        if (response.status === 400 && body?.action === "share" && typeof payload?.query === "string") { this.refusal = payload; return null }
+        throw new Error(payload?.error || "Navigation could not complete this request.")
+      }
       this.error = ""
       if (operation === "search") {
         if (!Array.isArray(payload.results) || payload.results.length > 20 || !payload.results.every(validSearchResult))
           throw new Error("Search results could not be read.")
         this.results = payload.results
+        this.resultsProvider = payload.provider
         this.searched = true
       } else {
         if (payload?.routeUnchanged === true) {
@@ -263,7 +271,7 @@ export class NavigationClient {
         }
         if (!sameSnapshot(payload, this.data)) this.data = payload
         this.stale = false
-        if (operation === "action" && ["select", "selectPlace", "clear"].includes(body.action)) { this.results = []; this.searched = false }
+        if (operation === "action" && ["select", "selectPlace", "clear", "share"].includes(body.action)) { this.results = []; this.searched = false }
       }
       return payload
     } catch (error) {
@@ -302,7 +310,7 @@ export const NavigationPage = {
   props: { mode: { type: String, required: true }, unauthorized: { type: Function, required: true },
     go: { type: Function, default: null }, initialTab: { type: String, default: "route" }, tabs: { type: Array, required: true } },
   data() { return { bluetooth: bluetoothConnection(), data: null, results: [], busy: false, error: "", stale: false, tab: this.initialTab, gpsGuide: "android", query: "", token: "", googleKey: "", googleTest: null, mapboxOpen: false, googleOpen: false, searched: false,
-    suggestions: [], suggestOpen: false, savedSuggestionPlaces: {}, favoritePicker: null, searchPending: false } },
+    suggestions: [], suggestOpen: false, savedSuggestionPlaces: {}, favoritePicker: null, searchPending: false, resultsProvider: null, suggestionsProvider: null } },
   watch: { initialTab(value) { this.tab = value } },
   computed: {
     routeAvoidances() { return ROUTE_AVOIDANCES },
@@ -311,12 +319,12 @@ export const NavigationPage = {
     mapChoices() {
       return [{ value: "mapbox", label: "Mapbox", detail: "Road lines, drawn from saved or live Mapbox data.", limit: "Works offline once roads are saved." },
         { value: "google", label: "Google", detail: "Google's street map with traffic colors.", disabled: !this.googleReady, badge: this.googleReady ? "" : "Needs Google key",
-          limit: "Needs internet. Google tiles can't be saved offline." }]
+          limit: "Needs internet and the Mapbox key. Google tiles can't be saved offline." }]
     },
     routeChoices() {
       return [{ value: "mapbox", label: "Mapbox", detail: "Turn-by-turn with lane arrows.", limit: "Counted against your Mapbox allowance." },
-        { value: "google", label: "Google", detail: "Routes that follow live traffic.", disabled: !this.googleReady, badge: this.googleReady ? "" : "Needs Google key",
-          limit: "No lane arrows. Falls back to Mapbox when its limits run out." },
+        { value: "google", label: "Google", detail: "Routes that follow live traffic, and place search by Google.", disabled: !this.googleReady, badge: this.googleReady ? "" : "Needs Google key",
+          limit: "Needs the Mapbox key too. No lane arrows. Falls back to Mapbox when its limits run out." },
         { value: "phone", label: "Google Maps on your phone", detail: "Follow the turns from the Google Maps app.", disabled: true, badge: "Android, coming soon",
           limit: "Turn card only, no route line." }]
     },
@@ -360,16 +368,33 @@ export const NavigationPage = {
       return [["searchSessions", "Searches"], ["geocoding", "Address lookups"], ["directions", "Routes"], ["staticTiles", "Map views"]]
         .filter(([key]) => usage[key]).map(([key, label]) => ({ key, label, ...usage[key] }))
     },
+    // Place search follows the Directions choice, as on the comma.
+    googlePlaces() { return this.data?.routeProvider === "google" && !!this.data?.hasGoogleKey },
     sources() {
       if (!this.data) return []
       const google = (value) => value === "google" && !!this.data.hasGoogleKey ? "Google" : "Mapbox"
       return [{ label: "Map", value: google(this.data.mapProvider), icon: "bi-map" },
         { label: "Directions", value: google(this.data.routeProvider), icon: "bi-signpost-split" },
+        { label: "Places", value: google(this.data.routeProvider), icon: "bi-geo-alt" },
         { label: "Position", value: this.gpsLabel.replace("GPS: ", ""), icon: "bi-crosshair" }]
     },
     googleUsage() { return this.data?.googleMap?.usage || null },
     googleRouteUsage() { return this.data?.googleRoutes?.usage || null },
     googleEssentialUsage() { return this.data?.googleRoutes?.essentials || null },
+    googlePlaceUsage() { return this.data?.googlePlaces?.usage || null },
+    googleSuggestionUsage() { return this.data?.googlePlaces?.suggestions || null },
+    googleTests() {
+      const test = this.googleTest
+      if (!test) return []
+      return [["Map Tiles API", test, "tile.googleapis.com"], ["Routes API", test.routes, "routes.googleapis.com"], ["Places API (New)", test.places, "places.googleapis.com"]]
+        .filter(([, result]) => result).map(([name, result, api]) => ({ name, ok: !!result.ok, message: result.message, missing: !result.ok && result.failure !== "budget",
+          link: result.failure === "billing" ? { href: "https://console.cloud.google.com/billing", label: "Turn on billing" } :
+            ["key", "disabled"].includes(result.failure) ? { href: `https://console.cloud.google.com/apis/library/${api}`, label: `Open ${name} in Google Cloud` } : null }))
+    },
+    googleWorking() {
+      const rows = this.googleTests
+      return rows.length ? `${rows.length - rows.filter((row) => row.missing).length} of ${rows.length} APIs working` : ""
+    },
     path() { return routePath(this.data?.route) },
     summary() {
       const instruction = this.data?.instruction, route = this.data?.alternatives?.[this.data?.selectedRoute || 0]
@@ -415,17 +440,15 @@ export const NavigationPage = {
       this.tab = tab
       this.go?.(tab === 'route' ? '/navigation' : `/navigation/${tab}`)
     },
+    // The comma opens the link, looks the place up, turns navigation on and starts the route.
     async openShared(text) {
-      let parsed = parseSharedDestination(text)
-      // A Google Maps short link is followed on the comma to the full link, which carries the coordinates.
-      if (!parsed.destination && SHORT_MAP_LINK.test(text)) {
-        const resolved = (await this.client.action('resolveShare', { text: String(text).slice(0, 8192) }))?.sharedText
-        if (resolved) parsed = parseSharedDestination(resolved)
-      }
-      if (parsed.destination) { await this.client.action('select', { destination: parsed.destination }); return }
+      if (await this.client.action('share', { text: String(text).slice(0, 8192) })) return
+      const query = this.client.refusal?.query
+      if (!query) return
       // Text shares can be ambiguous ("Starbucks"); show the results and let the driver pick.
-      this.query = parsed.query
-      await this.client.search(parsed.query)
+      if (!this.client.data?.enabled && !await this.client.action('configure', { patch: { enabled: true } })) return
+      this.query = query
+      await this.client.search(query)
     },
     async search() {
       if (this.searchPending) return
@@ -544,7 +567,7 @@ export const NavigationPage = {
         <section class="gx-card gx-starport-step" :class="{ 'gx-starport-step--done': data?.hasKey }">
           <div class="gx-starport-step__head">
             <span class="gx-starport-step__num" aria-hidden="true"><i v-if="data?.hasKey" class="bi bi-check-lg"></i><template v-else>1</template></span>
-            <div><h3>Mapbox key</h3><p>Required. Finds places, saves offline roads and plans routes.</p></div>
+            <div><h3>Mapbox key</h3><p>Required, with or without Google. Finds places, saves offline roads, plans routes and backs up Google.</p></div>
             <button v-if="data?.hasKey" type="button" class="gx-btn gx-btn--tonal" :aria-expanded="mapboxOpen" aria-controls="navigation-mapbox" @click="mapboxOpen = !mapboxOpen">{{ mapboxOpen ? 'Hide' : 'Manage' }}</button>
           </div>
           <div id="navigation-mapbox" v-show="!data?.hasKey || mapboxOpen" class="gx-starport-step__body">
@@ -568,20 +591,21 @@ export const NavigationPage = {
         <section class="gx-card gx-starport-step" :class="{ 'gx-starport-step--done': data?.hasGoogleKey }">
           <div class="gx-starport-step__head">
             <span class="gx-starport-step__num" aria-hidden="true"><i v-if="data?.hasGoogleKey" class="bi bi-check-lg"></i><template v-else>2</template></span>
-            <div><h3>Google key</h3><p>Optional. Adds Google's street map and traffic routes.</p></div>
+            <div><h3>Google key</h3><p>Optional, added on top of the Mapbox key. Adds Google's street map, traffic routes and place search.</p></div>
             <button type="button" class="gx-btn gx-btn--tonal" :aria-expanded="googleOpen" aria-controls="navigation-google" @click="googleOpen = !googleOpen">{{ googleOpen ? 'Hide' : data?.hasGoogleKey ? 'Manage' : 'Add key' }}</button>
           </div>
+          <GxNotice v-if="data?.hasGoogleKey && !data?.hasKey" tone="warn">Google isn't used until the Mapbox key above is added too.</GxNotice>
           <div id="navigation-google" v-show="googleOpen" class="gx-starport-step__body">
-            <p class="gx-starport-pill" :class="data?.hasGoogleKey ? 'gx-starport-pill--ready' : ''" role="status">{{ data?.hasGoogleKey ? 'Key saved' : 'No key' }}</p>
+            <p class="gx-starport-pill" :class="data?.hasGoogleKey ? 'gx-starport-pill--ready' : ''" role="status">{{ data?.hasGoogleKey ? (googleWorking ? 'Key saved, ' + googleWorking : 'Key saved') : 'No key' }}</p>
             <form @submit.prevent="saveGoogleKey" class="gx-navigation__search">
               <label for="navigation-google-key" class="gx-sr-only">Google Maps Platform API key</label>
               <input id="navigation-google-key" class="gx-field" type="password" autocomplete="off" v-model="googleKey" placeholder="AIza…" maxlength="128" required :disabled="!controlsAvailable">
               <button class="gx-btn" type="submit" :disabled="!controlsAvailable || !googleKey.trim()">{{ data?.hasGoogleKey ? 'Replace key' : 'Save key' }}</button>
             </form>
             <div class="gx-actions"><button type="button" class="gx-btn gx-btn--tonal" :disabled="!available || !googleKey.trim() && !data?.hasGoogleKey" @click="testGoogleKey">Test key</button></div>
-            <GxNotice v-if="googleTest" :tone="googleTest.ok ? 'success' : 'warn'">Map: {{ googleTest.message }}</GxNotice>
-            <GxNotice v-if="googleTest?.routes" :tone="googleTest.routes.ok ? 'success' : 'warn'">Routes: {{ googleTest.routes.message }}</GxNotice>
-            <GxNotice v-if="googleTest?.places" :tone="googleTest.places.ok ? 'success' : 'warn'">Shared places: {{ googleTest.places.message }}</GxNotice>
+            <p v-if="googleWorking && !data?.hasGoogleKey" class="gx-note" role="status"><strong>{{ googleWorking }}</strong></p>
+            <GxNotice v-for="row in googleTests" :key="row.name" :tone="row.ok ? 'success' : 'warn'">{{ row.name }}: {{ row.message }}
+              <a v-if="row.link" :href="row.link.href" target="_blank" rel="noopener noreferrer">{{ row.link.label }}</a></GxNotice>
             <GxNotice v-if="data?.googleMap?.failure" tone="warn">{{ data.googleMap.failure }}</GxNotice>
             <GxNotice v-if="data?.googleRoutes?.failure" tone="warn">{{ data.googleRoutes.failure }}</GxNotice>
             <dl v-if="googleUsage" class="gx-navigation__usage" aria-label="Google use">
@@ -589,17 +613,19 @@ export const NavigationPage = {
               <dt>Map tiles today</dt><dd>{{ googleUsage.dayUsed.toLocaleString() }} of {{ googleUsage.dayLimit.toLocaleString() }} free</dd>
               <template v-if="googleEssentialUsage"><dt>Routes this month</dt><dd>{{ googleEssentialUsage.monthUsed.toLocaleString() }} of {{ googleEssentialUsage.monthLimit.toLocaleString() }} free</dd></template>
               <template v-if="googleRouteUsage"><dt>Traffic routes this month</dt><dd>{{ googleRouteUsage.monthUsed.toLocaleString() }} of {{ googleRouteUsage.monthLimit.toLocaleString() }} free</dd></template>
+              <template v-if="googlePlaceUsage"><dt>Place searches this month</dt><dd>{{ googlePlaceUsage.monthUsed.toLocaleString() }} of {{ googlePlaceUsage.monthLimit.toLocaleString() }} free</dd></template>
+              <template v-if="googleSuggestionUsage"><dt>Typing suggestions this month</dt><dd>{{ googleSuggestionUsage.monthUsed.toLocaleString() }} of {{ googleSuggestionUsage.monthLimit.toLocaleString() }} free</dd></template>
             </dl>
             <details class="gx-starport-wiki"><summary>Get a Google key (about 10 minutes, once)</summary>
               <ol><li>Sign in to <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud</a> and create a project.</li>
                 <li><a href="https://console.cloud.google.com/billing" target="_blank" rel="noopener noreferrer">Turn on billing</a>. Google asks for a card even though the comma stays inside the free allowance.</li>
-                <li>Enable the <a href="https://console.cloud.google.com/apis/library/tile.googleapis.com" target="_blank" rel="noopener noreferrer">Map Tiles API</a> the <a href="https://console.cloud.google.com/apis/library/routes.googleapis.com" target="_blank" rel="noopener noreferrer">Routes API</a> and <a href="https://console.cloud.google.com/apis/library/places.googleapis.com" target="_blank" rel="noopener noreferrer">Places API (New)</a>.</li>
+                <li>Enable the <a href="https://console.cloud.google.com/apis/library/tile.googleapis.com" target="_blank" rel="noopener noreferrer">Map Tiles API</a> for the map, the <a href="https://console.cloud.google.com/apis/library/routes.googleapis.com" target="_blank" rel="noopener noreferrer">Routes API</a> for routes and <a href="https://console.cloud.google.com/apis/library/places.googleapis.com" target="_blank" rel="noopener noreferrer">Places API (New)</a> for place search.</li>
                 <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Create an API key</a> and limit it to those three APIs. Leave application restrictions off; the comma's address changes on cellular.</li>
-                <li>Paste the key here while parked, then press <strong>Test key</strong>.</li></ol>
+                <li>Keep your Mapbox key; Google works alongside it. Paste the Google key here while parked, then press <strong>Test key</strong>. It checks all three APIs.</li></ol>
             </details>
             <details class="gx-starport-wiki"><summary>How the Google limits work</summary>
-              <p>The comma stops at 99% of Google's free allowance: 100,000 map tiles a month (15,000 a day), 10,000 routes, 5,000 traffic routes and 5,000 shared-place lookups. Every route and reroute uses live traffic, and one more request every 7½ minutes corrects the arrival time.</p>
-              <p>Past 20 reroutes in an hour, or when traffic routes run out, routes ignore traffic. Past both limits the comma uses Mapbox until they reset. Google routes have no lane arrows. Shared places use Mapbox if Google can't look them up.</p>
+              <p>The comma stops at 99% of Google's free allowance: 100,000 map tiles a month (15,000 a day), 10,000 routes, 5,000 traffic routes, 5,000 place searches (shared places included) and 10,000 typing suggestions. Every route and reroute uses live traffic, and one more request every 7½ minutes corrects the arrival time.</p>
+              <p>Past 20 reroutes in an hour, or when traffic routes run out, routes ignore traffic. Past both limits the comma uses Mapbox until they reset. Google routes have no lane arrows. Place search uses Google when Google gives directions, and Mapbox if Google can't answer.</p>
             </details>
           </div>
         </section>
@@ -607,7 +633,7 @@ export const NavigationPage = {
         <section class="gx-card gx-starport-step">
           <div class="gx-starport-step__head">
             <span class="gx-starport-step__num" aria-hidden="true">3</span>
-            <div><h3>Choose your sources</h3><p>Each one falls back to Mapbox if it can't work.</p></div>
+            <div><h3>Choose your sources</h3><p>Google choices need both keys. Each one falls back to Mapbox if it can't work.</p></div>
           </div>
           <div class="gx-starport-step__body">
             <ChoiceGroup label="Map picture" :model-value="data?.mapProvider || 'mapbox'" :options="mapChoices" :disabled="!available || !data"
@@ -724,6 +750,7 @@ export const NavigationPage = {
                 <button type="button" class="gx-navigation__icon" :aria-label="'Save ' + place.name" :aria-expanded="favoritePicker === favoriteKey(place)" :disabled="!controlsAvailable || place.temporary" :title="place.temporary ? 'Search for an address to save this place' : undefined" @click="openFavorite(place)"><i class="bi" :class="isFavorite(place) ? 'bi-star-fill' : 'bi-star'" aria-hidden="true"></i></button>
                 <FavoriteChoices v-if="favoritePicker === favoriteKey(place)" :available="controlsAvailable" @choose="saveAs(place, $event)" />
               </div>
+              <div v-if="suggestions.length && googlePlaces" class="gx-navigation__group"><span>{{ suggestionsProvider === 'google' ? 'Suggestions from Google' : 'Suggestions from Mapbox, Google unavailable' }}</span></div>
               <div v-for="place in suggestions" :key="place.id" class="gx-navigation__row">
                 <button type="button" class="gx-navigation__suggestion" :disabled="!controlsAvailable" @click="pick(place)">
                   <i class="bi bi-geo-alt-fill" aria-hidden="true"></i><span><strong><span translate="no">{{ place.name }}</span></strong><small v-if="place.description">{{ place.description }}</small></span></button>
@@ -767,6 +794,7 @@ export const NavigationPage = {
           <template v-else>
             <p v-if="busy || searchPending" role="status" class="gx-navigation__busy">{{ searchPending ? 'Searching…' : 'Working…' }}</p>
             <p v-if="searched && !busy && !error && results.length === 0" class="gx-card gx-navigation__section gx-note">No places found. Try a nearby town or a more specific address.</p>
+            <p v-if="results.length && googlePlaces" class="gx-note" role="status">{{ resultsProvider === 'google' ? 'Places found with Google.' : "Google couldn't search just now, so these places are from Mapbox." }}</p>
             <ul v-if="results.length" class="gx-navigation__places" aria-label="Search results">
               <li v-for="place in results" :key="place.id" class="gx-navigation__row">
                 <button type="button" class="gx-navigation__suggestion" :disabled="!controlsAvailable" @click="pick(place)" :aria-label="'Start navigation to ' + place.name">
