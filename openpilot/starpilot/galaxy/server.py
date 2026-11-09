@@ -1899,9 +1899,10 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
               raise ValidationError('Enter a destination to search')
             if 'autocomplete' in payload and payload['autocomplete'] is not True:
               raise ValidationError('Enter a destination to search')
-            result = {'results': (navigation_owner().search_places(payload['query'], identity, payload['searchId'], payload['clientId'],
-                                                                   autocomplete='autocomplete' in payload)
-                                  if 'searchId' in payload else navigation_owner().search(payload['query']))}
+            results = (navigation_owner().search_places(payload['query'], identity, payload['searchId'], payload['clientId'],
+                                                        autocomplete='autocomplete' in payload)
+                       if 'searchId' in payload else navigation_owner().search(payload['query']))
+            result = {'results': results, 'provider': getattr(results, 'provider', 'mapbox')}
           else:
             fields = {'configure': {'patch'}, 'select': {'destination'}, 'selectPlace': {'id', 'searchId'},
                       'cancelSearch': {'searchId'}, 'clear': set(), 'favorite': {'destination'},

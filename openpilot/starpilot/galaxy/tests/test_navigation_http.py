@@ -169,10 +169,13 @@ class NavigationHttpTest(unittest.TestCase):
     status, body, _ = self.action('configure', patch={'googleKey': key, 'mapProvider': 'google'})
     self.assertEqual((status, body['hasGoogleKey'], body['mapProvider']), (200, True, 'google'))
     self.assertNotIn(key, json.dumps(self.request('/api/navigation/status', cookie=self.local_cookie)[1]))
-    with patch('openpilot.starpilot.navigation.google_tiles.test_key', return_value={'ok': False, 'message': 'Billing is off'}) as tested:
+    with (patch('openpilot.starpilot.navigation.google_tiles.test_key', return_value={'ok': False, 'message': 'Billing is off'}) as tested,
+          patch('openpilot.starpilot.navigation.google_routes.test_routes', return_value={'ok': True, 'failure': None, 'message': 'routes'}),
+          patch('openpilot.starpilot.navigation.google_places.test_places', return_value={'ok': True, 'failure': None, 'message': 'places'})):
       self.parked = False
       status, body, _ = self.action('testGoogleKey')
       self.assertEqual((status, body['googleKeyTest']['message'], body['hasGoogleKey']), (200, 'Billing is off', True))
+      self.assertEqual((body['googleKeyTest']['routes']['ok'], body['googleKeyTest']['places']['message']), (True, 'places'))
       self.assertEqual(self.action('testGoogleKey', key='AIzaSyOtherKey_0123456789abcdefgh')[0], 200)
     self.assertEqual([call.args[0] for call in tested.call_args_list], [key, 'AIzaSyOtherKey_0123456789abcdefgh'])
     self.assertEqual(self.action('testGoogleKey', key='bad key')[0], 400)
@@ -259,6 +262,27 @@ class NavigationHttpTest(unittest.TestCase):
     self.assertEqual(self.action('removeRecent',id=place)[1]['recents'],[])
     self.assertEqual(self.action('clearRecents')[1]['recents'],[])
     self.assertEqual(self.action('removeFavorite',id=place)[1]['favorites'],[])
+
+  def test_search_names_the_provider_that_found_the_places(self):
+    self.action('configure', patch={'token':'pk.synthetic','enabled':True})
+    def search():
+      return {'query':'bellagio', 'searchId':str(uuid.uuid4()), 'clientId':str(uuid.uuid4())}
+    suggestion = {'suggestions':[{'mapbox_id':'poi/id','name':'Coffee Shop','feature_type':'poi'}]}
+    with patch('openpilot.starpilot.navigation.owner.response_json', return_value=suggestion):
+      self.assertEqual(self.request('/api/navigation/search',payload=search(),cookie=self.local_cookie)[1]['provider'], 'mapbox')
+    key = 'AIzaSyFixtureKey_0123456789abcdef'
+    self.action('configure', patch={'googleKey':key, 'routeProvider':'google'})
+    found = [{'name':'Bellagio','address':'3600 S Las Vegas Blvd','latitude':36.1126,'longitude':-115.1767}]
+    with patch('openpilot.starpilot.navigation.google_places.text_search', return_value=found) as google:
+      status, result, _ = self.request('/api/navigation/search',payload=search(),cookie=self.local_cookie)
+    self.assertEqual((status, result['provider'], result['results'][0]['name']), (200, 'google', 'Bellagio'))
+    self.assertNotIn('searchId', result['results'][0])
+    self.assertEqual(google.call_args.args[1], key)
+    self.assertNotIn(key, json.dumps(result))
+    from openpilot.starpilot.navigation.google_places import GooglePlacesFailed
+    with (patch('openpilot.starpilot.navigation.google_places.text_search', side_effect=GooglePlacesFailed('budget')),
+          patch('openpilot.starpilot.navigation.owner.response_json', return_value=suggestion)):
+      self.assertEqual(self.request('/api/navigation/search',payload=search(),cookie=self.local_cookie)[1]['provider'], 'mapbox')
 
   def test_temporary_search_result_cannot_be_saved(self):
     self.action('configure', patch={'token':'pk.synthetic','enabled':True})

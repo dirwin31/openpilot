@@ -126,21 +126,50 @@ def test_older_settings_files_read_with_google_defaults(owner):
   assert settings['mapProvider'] == 'mapbox' and settings['googleKey'] == ''
 
 
-def test_google_key_test_uses_typed_or_saved_key(owner):
+def test_google_key_test_checks_all_three_apis_whatever_the_route_provider(owner):
   with (patch('openpilot.starpilot.navigation.google_tiles.test_key', return_value={'ok': True}) as tested,
         patch('openpilot.starpilot.navigation.google_routes.test_routes', return_value={'ok': False}) as routed,
         patch('openpilot.starpilot.navigation.google_places.test_places', return_value={'ok': True, 'message': 'works'}) as placed):
     with pytest.raises(ValidationError):
       owner.test_google_key()
-    assert owner.test_google_key(GOOGLE_KEY) == {'ok': True}
+    both = {'ok': True, 'routes': {'ok': False}, 'places': {'ok': True, 'message': 'works'}}
+    assert owner.test_google_key(GOOGLE_KEY) == both
     saved = owner.configure({'googleKey': GOOGLE_KEY}, '0', True)
-    owner.test_google_key()
-    assert not routed.called
+    assert owner.read()['routeProvider'] == 'mapbox' and owner.test_google_key() == both
     owner.configure({'routeProvider': 'google'}, saved['revision'], True)
-    assert owner.test_google_key() == {'ok': True, 'routes': {'ok': False}, 'places': {'ok': True, 'message': 'works'}}
-  assert [call.args[0] for call in tested.call_args_list] == [GOOGLE_KEY] * 3
-  assert [call.args[0] for call in routed.call_args_list] == [GOOGLE_KEY]
-  assert [call.args[0] for call in placed.call_args_list] == [GOOGLE_KEY]
+    assert owner.test_google_key() == both
+  for mock in (tested, routed, placed):
+    assert [call.args[0] for call in mock.call_args_list] == [GOOGLE_KEY] * 3
+
+
+class GoogleRefusal:
+  def __init__(self, status, text):
+    self.status, self.text = status, text
+
+  def _answer(self, *args, **kwargs):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    return nullcontext(SimpleNamespace(status_code=self.status, iter_content=lambda size: [json.dumps({'error': {'message': self.text}}).encode()]))
+
+  post = get = _answer
+
+
+@pytest.mark.parametrize('status, text, failure, words', [
+  (403, 'Places API (New) has not been used in project 1 before or it is disabled.', 'disabled',
+   "Enable it in Google Cloud and allow it in the key's API restrictions"),
+  (403, 'Requests to this API are blocked. API_KEY_SERVICE_BLOCKED', 'disabled', "allow it in the key's API restrictions"),
+  (400, 'API key not valid. Please pass a valid API key.', 'key', 'copied whole'),
+  (403, 'This API method requires billing to be enabled.', 'billing', 'Add a billing account')])
+def test_google_key_test_names_each_api_and_what_to_fix(tmp_path, status, text, failure, words):
+  from openpilot.starpilot.navigation.google_places import places_budget, test_places
+  from openpilot.starpilot.navigation.google_routes import essentials_budget, test_routes
+  from openpilot.starpilot.navigation.google_tiles import GoogleBudget, test_key
+  http = GoogleRefusal(status, text)
+  results = {'Map Tiles API': test_key(GOOGLE_KEY, http, GoogleBudget(tmp_path)), 'Routes API': test_routes(GOOGLE_KEY, http, essentials_budget(tmp_path)),
+             'Places API (New)': test_places(GOOGLE_KEY, http, places_budget(tmp_path))}
+  for api, result in results.items():
+    assert result['ok'] is False and result['failure'] == failure and words in result['message']
+    assert failure == 'billing' or api in result['message']
 
 
 def test_route_provider_is_saved_and_reports_google_route_use(owner):
@@ -345,6 +374,6 @@ def test_google_place_lookup_test_reports_disabled_api():
   from openpilot.starpilot.navigation.google_places import places_budget, test_places
   import tempfile
   with tempfile.TemporaryDirectory() as root:
-    assert test_places(GOOGLE_KEY, GooglePlaces(status=403), places_budget(root)) == {
-      'ok': False, 'message': "Places API (New) is not enabled for this key's project. Enable it in Google Cloud, then test again."}
+    assert test_places(GOOGLE_KEY, GooglePlaces(status=403), places_budget(root)) == {'ok': False, 'failure': 'disabled',
+      'message': "Places API (New) is off for this key. Enable it in Google Cloud and allow it in the key's API restrictions, then test again."}
     assert test_places(GOOGLE_KEY, GooglePlaces(places=[{'location': {'latitude': 1.5, 'longitude': 2.5}}]), places_budget(root))['ok']
