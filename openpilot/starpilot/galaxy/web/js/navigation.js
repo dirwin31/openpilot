@@ -562,22 +562,38 @@ export const NavigationPage = {
           <div class="gx-row gx-row--borderless"><span class="gx-row__info"><strong class="gx-row__label">Navigation</strong><small class="gx-note">Turn-by-turn guidance on your comma. It works with every driving model and never steers for you.</small></span>
             <label v-if="data" class="gx-switch"><input type="checkbox" role="switch" aria-label="Navigation" :checked="data.enabled" :disabled="!controlsAvailable"
               @change="$event.target.checked=data.enabled; reportSave(() => client.action('configure', {patch: {enabled: !data.enabled}}))"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
+          <div class="gx-navigation__prefs" role="group" aria-label="Route preferences">
+            <div class="gx-navigation__prefs-head">
+              <strong class="gx-row__label">Route preferences</strong>
+              <small class="gx-note">Applies to new routes and reroutes, and recalculates your current route.</small>
+            </div>
+            <div class="gx-navigation__pref-chips">
+              <label v-for="option in routeAvoidances" :key="option.key" class="gx-navigation__pref" :class="{ 'gx-navigation__pref--on': !!data?.[option.key], 'gx-navigation__pref--disabled': !available }">
+                <input type="checkbox" role="switch" class="gx-sr-only" :aria-label="option.label" :checked="!!data?.[option.key]"
+                  :disabled="!available" @change="reportSave(() => client.action('configure', {patch: {[option.key]: $event.target.checked}}))">
+                <i class="bi" :class="data?.[option.key] ? 'bi-check-lg' : 'bi-slash-circle'" aria-hidden="true"></i>
+                <span>{{ option.label }}</span>
+              </label>
+            </div>
+          </div>
         </section>
 
         <section class="gx-card gx-starport-step" :class="{ 'gx-starport-step--done': data?.hasKey }">
           <div class="gx-starport-step__head">
             <span class="gx-starport-step__num" aria-hidden="true"><i v-if="data?.hasKey" class="bi bi-check-lg"></i><template v-else>1</template></span>
-            <div><h3>Mapbox key</h3><p>Required, with or without Google. Finds places, saves offline roads, plans routes and backs up Google.</p></div>
+            <div>
+              <div class="gx-navigation__step-title"><h3>Mapbox key</h3><span class="gx-starport-pill" :class="data?.hasKey ? 'gx-starport-pill--ready' : 'gx-starport-pill--soon'" role="status">{{ data?.hasKey ? 'Key saved' : 'Needs a key' }}</span></div>
+              <p>Required, with or without Google. Finds places, saves offline roads, plans routes and backs up Google.</p>
+            </div>
             <button v-if="data?.hasKey" type="button" class="gx-btn gx-btn--tonal" :aria-expanded="mapboxOpen" aria-controls="navigation-mapbox" @click="mapboxOpen = !mapboxOpen">{{ mapboxOpen ? 'Hide' : 'Manage' }}</button>
           </div>
           <div id="navigation-mapbox" v-show="!data?.hasKey || mapboxOpen" class="gx-starport-step__body">
-            <p class="gx-starport-pill" :class="data?.hasKey ? 'gx-starport-pill--ready' : 'gx-starport-pill--soon'" role="status">{{ data?.hasKey ? 'Key saved' : 'Needs a key' }}</p>
             <form @submit.prevent="saveKey(false)" class="gx-navigation__search">
               <label for="navigation-token" class="gx-sr-only">Public Mapbox access token</label>
               <input id="navigation-token" class="gx-field" type="password" autocomplete="off" v-model="token" placeholder="pk.…" maxlength="2048" required :disabled="!controlsAvailable">
               <button class="gx-btn" type="submit" :disabled="!controlsAvailable || !token.trim()">{{ data?.hasKey ? 'Replace key' : 'Save key' }}</button>
             </form>
-            <a class="gx-btn gx-btn--tonal" href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener noreferrer">Get a Mapbox token</a>
+            <div class="gx-actions"><a class="gx-btn gx-btn--tonal" href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener noreferrer">Get a Mapbox token</a></div>
             <dl v-if="usageRows.length" class="gx-navigation__usage" aria-label="Mapbox use this month">
               <template v-for="row in usageRows" :key="row.key"><dt>{{ row.label }}</dt><dd>{{ row.used.toLocaleString() }} of {{ row.limit.toLocaleString() }} free</dd></template>
             </dl>
@@ -591,12 +607,14 @@ export const NavigationPage = {
         <section class="gx-card gx-starport-step" :class="{ 'gx-starport-step--done': data?.hasGoogleKey }">
           <div class="gx-starport-step__head">
             <span class="gx-starport-step__num" aria-hidden="true"><i v-if="data?.hasGoogleKey" class="bi bi-check-lg"></i><template v-else>2</template></span>
-            <div><h3>Google key</h3><p>Optional, added on top of the Mapbox key. Adds Google's street map, traffic routes and place search.</p></div>
+            <div>
+              <div class="gx-navigation__step-title"><h3>Google key</h3><span class="gx-starport-pill" :class="data?.hasGoogleKey ? 'gx-starport-pill--ready' : ''" role="status">{{ data?.hasGoogleKey ? (googleWorking ? 'Key saved · ' + googleWorking : 'Key saved') : 'Optional' }}</span></div>
+              <p>Added on top of the Mapbox key. Unlocks Google's street &amp; traffic map, live-traffic routes and place search.</p>
+            </div>
             <button type="button" class="gx-btn gx-btn--tonal" :aria-expanded="googleOpen" aria-controls="navigation-google" @click="googleOpen = !googleOpen">{{ googleOpen ? 'Hide' : data?.hasGoogleKey ? 'Manage' : 'Add key' }}</button>
           </div>
           <GxNotice v-if="data?.hasGoogleKey && !data?.hasKey" tone="warn">Google isn't used until the Mapbox key above is added too.</GxNotice>
           <div id="navigation-google" v-show="googleOpen" class="gx-starport-step__body">
-            <p class="gx-starport-pill" :class="data?.hasGoogleKey ? 'gx-starport-pill--ready' : ''" role="status">{{ data?.hasGoogleKey ? (googleWorking ? 'Key saved, ' + googleWorking : 'Key saved') : 'No key' }}</p>
             <form @submit.prevent="saveGoogleKey" class="gx-navigation__search">
               <label for="navigation-google-key" class="gx-sr-only">Google Maps Platform API key</label>
               <input id="navigation-google-key" class="gx-field" type="password" autocomplete="off" v-model="googleKey" placeholder="AIza…" maxlength="128" required :disabled="!controlsAvailable">
@@ -640,44 +658,50 @@ export const NavigationPage = {
               @update:model-value="reportSave(() => client.action('configure', {patch: {mapProvider: $event}}))" />
             <ChoiceGroup label="Directions" :model-value="data?.routeProvider || 'mapbox'" :options="routeChoices" :disabled="!available || !data"
               @update:model-value="reportSave(() => client.action('configure', {patch: {routeProvider: $event}}))" />
-            <ChoiceGroup label="Position" :model-value="data?.gpsSource || 'backup'" :options="gpsChoices" :disabled="!available || !data"
-              @update:model-value="reportSave(() => client.action('configure', {patch: {gpsSource: $event}}))" />
-            <SourceCompare />
-          </div>
-        </section>
-
-        <section ref="gpsSetup" tabindex="-1" class="gx-card gx-starport-step gx-navigation__gps">
-          <div class="gx-starport-step__head">
-            <span class="gx-starport-step__num" aria-hidden="true"><i class="bi bi-phone"></i></span>
-            <div><h3>Phone GPS</h3><p v-if="data?.phoneGps">{{ data.phoneGps.usable ? 'Receiving updates' : 'Waiting for a usable fix' }}, last {{ Math.round(data.phoneGps.receivedAgeMs / 1000) }} seconds ago.
-              <span v-if="!data.phoneGps.accepted">{{ ({poorAccuracy: 'Accuracy is too low.', outOfOrder: 'An older update was ignored.', delayed: 'An update arrived late.'})[data.phoneGps.reason] || 'The last update was invalid.' }}</span></p>
-              <p v-else>Share your phone's location from the StarPilot app. It reaches the comma over Bluetooth or local Wi-Fi, never the remote tunnel.</p></div>
-          </div>
-          <div class="gx-starport-step__body">
-            <div class="gx-actions" role="group" aria-label="Phone GPS guides">
-              <button v-for="source in [{id:'android',label:'Android'},{id:'iphone',label:'iPhone'}]" :key="source.id"
-                type="button" class="gx-btn" :class="gpsGuide === source.id ? '' : 'gx-btn--tonal'" :aria-pressed="gpsGuide === source.id"
-                @click="gpsGuide = source.id">{{ source.label }}</button>
+            <div ref="gpsSetup" tabindex="-1" class="gx-navigation__gps">
+              <ChoiceGroup label="Position" :model-value="data?.gpsSource || 'backup'" :options="gpsChoices" :disabled="!available || !data"
+                @update:model-value="reportSave(() => client.action('configure', {patch: {gpsSource: $event}}))" />
+              <p v-if="data?.phoneGps" class="gx-navigation__gps-status" role="status">
+                <span class="gx-starport-pill" :class="data.phoneGps.usable ? 'gx-starport-pill--ready' : 'gx-starport-pill--soon'">
+                  Phone GPS: {{ data.phoneGps.usable ? 'Receiving updates' : 'Waiting for a usable fix' }} · {{ Math.round(data.phoneGps.receivedAgeMs / 1000) }}s ago
+                </span>
+                <small v-if="!data.phoneGps.accepted" class="gx-note">{{ ({poorAccuracy: 'Accuracy is too low.', outOfOrder: 'An older update was ignored.', delayed: 'An update arrived late.'})[data.phoneGps.reason] || 'The last update was invalid.' }}</small>
+              </p>
+              <details class="gx-starport-wiki">
+                <summary>How to share phone GPS from the StarPilot app</summary>
+                <p class="gx-note">Reaches your comma over Bluetooth or local Wi-Fi, never the remote tunnel.</p>
+                <div class="gx-navigation__gps-guides">
+                  <div class="gx-navigation__gps-card">
+                    <strong><i class="bi bi-android2" aria-hidden="true"></i> Android</strong>
+                    <ol class="gx-starport-mirror-steps">
+                      <li>Open the StarPilot app and connect to your comma.</li>
+                      <li>Open <strong>Connections → Phone GPS</strong> and turn on <strong>Share phone GPS with comma</strong>.</li>
+                      <li>Allow precise location and leave the sharing notification on while driving.</li>
+                    </ol>
+                  </div>
+                  <div class="gx-navigation__gps-card">
+                    <strong><i class="bi bi-apple" aria-hidden="true"></i> iPhone</strong>
+                    <ol class="gx-starport-mirror-steps">
+                      <li>Open the StarPilot app and connect to your comma.</li>
+                      <li>On the main Settings page, turn on <strong>Share Phone Location</strong>.</li>
+                      <li>Set location access to <strong>Always</strong> and turn on <strong>Precise Location</strong> in iPhone Settings.</li>
+                    </ol>
+                  </div>
+                </div>
+                <p class="gx-note"><strong>Switching phones:</strong> stop sharing in the old app before turning it on in the new one.</p>
+              </details>
             </div>
-            <ol v-if="gpsGuide === 'android'" class="gx-starport-mirror-steps"><li>Open the StarPilot app and connect to your comma.</li>
-              <li>Open Connections, then Phone GPS, and turn on <strong>Share phone GPS with comma</strong>.</li>
-              <li>Allow precise location and leave the sharing notification on while driving.</li></ol>
-            <ol v-else class="gx-starport-mirror-steps"><li>Open the StarPilot app and connect to your comma.</li>
-              <li>On the main Settings page, turn on <strong>Share Phone Location</strong>.</li>
-              <li>Set location access to <strong>Always</strong> and turn on Precise Location in iPhone Settings.</li></ol>
-            <details class="gx-starport-wiki"><summary>Switching phones</summary>
-              <p>Stop sharing in the old app, then turn it on in the new one. Both apps need a version with phone GPS.</p>
-            </details>
+            <SourceCompare />
           </div>
         </section>
 
         <section class="gx-card gx-starport-step">
           <div class="gx-starport-step__head">
             <span class="gx-starport-step__num" aria-hidden="true"><i class="bi bi-send"></i></span>
-            <div><h3>Send a destination</h3><p>Ways to start a trip.</p></div>
+            <div><h3>Ways to send a destination</h3><p>Start a trip from Galaxy or share a place straight from your phone.</p></div>
           </div>
           <div class="gx-starport-step__body">
-            <ul class="gx-starport-list" aria-label="Ways to set a destination">
+            <ul class="gx-starport-list gx-navigation__ways" aria-label="Ways to set a destination">
               <li v-for="way in destinationWays" :key="way.title" class="gx-starport-row"><i class="bi" :class="way.icon" aria-hidden="true"></i>
                 <span class="gx-starport-row__text"><strong>{{ way.title }}</strong><small>{{ way.detail }}</small></span>
                 <span class="gx-starport-pill" :class="way.ready ? 'gx-starport-pill--ready' : 'gx-starport-pill--soon'">{{ way.ready ? 'Ready' : way.status }}</span></li>
@@ -689,16 +713,6 @@ export const NavigationPage = {
               <p>Both need the latest StarPilot app, a Mapbox key above, and a way to reach your comma: Bluetooth, local Wi-Fi or the remote route. If your comma can't be reached, the phone keeps the place and sends it when it next connects, within 12 hours.</p>
             </details>
           </div>
-        </section>
-
-        <section class="gx-card gx-navigation__section">
-          <div class="gx-section__header"><i class="bi bi-signpost-split" aria-hidden="true"></i><span class="gx-section__title">Route preferences</span></div>
-          <div v-for="option in routeAvoidances" :key="option.key" class="gx-row">
-            <span class="gx-row__info gx-row__label">{{ option.label }}</span>
-            <label class="gx-switch"><input type="checkbox" role="switch" :aria-label="option.label" :checked="!!data?.[option.key]"
-              :disabled="!available" @change="reportSave(() => client.action('configure', {patch: {[option.key]: $event.target.checked}}))"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label>
-          </div>
-          <p class="gx-note">Applies to new routes and reroutes, and recalculates your current route.</p>
         </section>
       </template>
       <template v-else>

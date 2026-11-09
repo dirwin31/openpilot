@@ -1016,9 +1016,10 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           self.json(400, {'error': 'Invalid map tile'})
           return
         try:
-          query = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=1)
+          query = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=2)
           theme = query.get('theme', ['light'])[0]
-          if set(query) - {'theme'} or theme not in ('light', 'dark'):
+          provider = query.get('provider', ['mapbox'])[0]
+          if set(query) - {'theme', 'provider'} or theme not in ('light', 'dark') or provider not in ('mapbox', 'google'):
             raise ValueError('Invalid map theme')
         except ValueError:
           self.json(400, {'error': 'Invalid map theme'})
