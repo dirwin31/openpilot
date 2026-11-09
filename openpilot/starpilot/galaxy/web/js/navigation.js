@@ -318,23 +318,23 @@ export const NavigationPage = {
     googleReady() { return !!this.data?.hasGoogleKey },
     mapChoices() {
       return [{ value: "mapbox", label: "Mapbox", detail: "Road lines, drawn from saved or live Mapbox data.", limit: "Works offline once roads are saved." },
-        { value: "google", label: "Google", detail: "Google's street map with traffic colors.", disabled: !this.googleReady, badge: this.googleReady ? "" : "Needs Google key",
+        { value: "google", label: "Google", detail: "Google's street map with traffic colors.", disabled: !this.googleReady, badge: this.googleReady ? "" : "Needs key",
           limit: "Needs internet and the Mapbox key. Google tiles can't be saved offline." }]
     },
     routeChoices() {
       return [{ value: "mapbox", label: "Mapbox", detail: "Turn-by-turn with lane arrows.", limit: "Counted against your Mapbox allowance." },
-        { value: "google", label: "Google", detail: "Routes that follow live traffic, and place search by Google.", disabled: !this.googleReady, badge: this.googleReady ? "" : "Needs Google key",
+        { value: "google", label: "Google", detail: "Routes that follow live traffic, and place search by Google.", disabled: !this.googleReady, badge: this.googleReady ? "" : "Needs key",
           limit: "Needs the Mapbox key too. No lane arrows. Falls back to Mapbox when its limits run out." },
-        { value: "phone", label: "Google Maps on your phone", detail: "Follow the turns from the Google Maps app.", disabled: true, badge: "Android, coming soon",
-          limit: "Turn card only, no route line." }]
+        { value: "phone", label: "Google Maps on phone", detail: "Follow the turns from the Google Maps app.", disabled: true, badge: "Coming soon",
+          limit: "Android, coming soon. Turn card only, no route line." }]
     },
     gpsChoices() { return GPS_MODES.map((mode) => ({ value: mode.value, label: mode.label, detail: mode.hint })) },
     destinationWays() {
-      return [{ icon: "bi-search", title: "Search here", detail: "Type an address or place on the Destination page.", ready: true },
-        { icon: "bi-link-45deg", title: "Paste a Google Maps link", detail: "Paste a place link into search, short links included.", ready: true },
-        { icon: "bi-android2", title: "Share from Android", detail: "Google Maps, Share, StarPilot. The route starts on your comma.", ready: true },
-        { icon: "bi-apple", title: "Share from iPhone", detail: "Google Maps or Apple Maps, Share, StarPilot. The route starts on your comma.", ready: true },
-        { icon: "bi-phone", title: "Follow Google Maps", detail: "Show Google Maps' next turn on the turn card.", status: "Android, coming soon" }]
+      return [{ icon: "bi-search", title: "Search here", detail: "Type an address or place on the Destination page." },
+        { icon: "bi-link-45deg", title: "Paste a Google Maps link", detail: "Paste a place link into search, short links included." },
+        { icon: "bi-android2", title: "Share from Android", detail: "Google Maps → Share → StarPilot. The route starts on your comma." },
+        { icon: "bi-apple", title: "Share from iPhone", detail: "Google Maps or Apple Maps → Share → StarPilot. The route starts on your comma." },
+        { icon: "bi-phone", title: "Follow Google Maps", detail: "Show Google Maps' next turn on the turn card (Android, coming soon)." }]
     },
     gpsLabel() {
       if (this.mode !== "local" || !this.ready || this.stale) return "GPS Source"
@@ -548,10 +548,6 @@ export const NavigationPage = {
           type="button" class="gx-btn" :class="tab === item.tab ? '' : 'gx-btn--tonal'" :aria-pressed="tab === item.tab" @click="selectTab(item.tab)">{{ item.name }}</button>
       </div>
       <div v-if="tab === 'maps'" class="gx-navigation__offline">
-        <section class="gx-card gx-navigation__section">
-          <div class="gx-section__header"><i class="bi bi-cloud-download" aria-hidden="true"></i><span class="gx-section__title">Offline maps use Mapbox</span></div>
-          <p class="gx-note">Saved areas keep road lines on your map with no signal. Google's map needs internet and can't be saved, so it draws on top when it's online and these road lines show through everywhere else.</p>
-        </section>
         <OfflineRoadMapsPanel :mode="mode" :unauthorized="unauthorized" :has-key="!!data?.hasKey" :metric="data?.isMetric !== false" />
         <MapOperationsPanel :mode="mode" :unauthorized="unauthorized" />
       </div>
@@ -701,10 +697,9 @@ export const NavigationPage = {
             <div><h3>Ways to send a destination</h3><p>Start a trip from Galaxy or share a place straight from your phone.</p></div>
           </div>
           <div class="gx-starport-step__body">
-            <ul class="gx-starport-list gx-navigation__ways" aria-label="Ways to set a destination">
+            <ul class="gx-starport-list" aria-label="Ways to set a destination">
               <li v-for="way in destinationWays" :key="way.title" class="gx-starport-row"><i class="bi" :class="way.icon" aria-hidden="true"></i>
-                <span class="gx-starport-row__text"><strong>{{ way.title }}</strong><small>{{ way.detail }}</small></span>
-                <span class="gx-starport-pill" :class="way.ready ? 'gx-starport-pill--ready' : 'gx-starport-pill--soon'">{{ way.ready ? 'Ready' : way.status }}</span></li>
+                <span class="gx-starport-row__text"><strong>{{ way.title }}</strong><small>{{ way.detail }}</small></span></li>
             </ul>
             <details class="gx-starport-wiki"><summary>How to share a place from your phone</summary>
               <p><strong>Android:</strong> open a place in Google Maps, tap Share, then choose StarPilot.</p>

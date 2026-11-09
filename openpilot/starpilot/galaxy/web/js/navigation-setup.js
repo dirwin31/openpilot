@@ -1,9 +1,13 @@
-// Pieces of the navigation setup page: a card-style radio group and the Mapbox/Google comparison.
+// Pieces of the navigation setup page: a compact M3 choice group with an info popover and the Mapbox/Google comparison.
 export const ChoiceGroup = {
   name: "ChoiceGroup",
   props: { label: { type: String, required: true }, hint: { type: String, default: "" }, modelValue: { type: String, default: "" },
     options: { type: Array, required: true }, disabled: { type: Boolean, default: false } },
   emits: ["update:modelValue"],
+  data() { return { infoOpen: false } },
+  computed: {
+    selectedOption() { return this.options.find((option) => option.value === this.modelValue) || this.options[0] || null },
+  },
   methods: {
     pick(event, option) {
       event.target.checked = this.modelValue === option.value
@@ -12,19 +16,40 @@ export const ChoiceGroup = {
   },
   template: `
     <fieldset class="gx-choice" :disabled="disabled">
-      <legend class="gx-choice__legend">{{ label }}</legend>
+      <div class="gx-choice__head">
+        <legend class="gx-choice__legend">{{ label }}</legend>
+        <button type="button" class="gx-choice__info-btn" :aria-expanded="infoOpen" :aria-label="'More info about ' + label"
+          :title="'More info about ' + label" @click="infoOpen = !infoOpen">
+          <i class="bi" :class="infoOpen ? 'bi-info-circle-fill' : 'bi-info-circle'" aria-hidden="true"></i>
+        </button>
+      </div>
       <p v-if="hint" class="gx-choice__hint">{{ hint }}</p>
       <div class="gx-choice__grid">
         <label v-for="option in options" :key="option.value" class="gx-choice__card"
           :class="{ 'gx-choice__card--on': modelValue === option.value, 'gx-choice__card--off': option.disabled }">
           <input type="radio" class="gx-sr-only" :name="label" :value="option.value" :checked="modelValue === option.value"
             :disabled="option.disabled || disabled" @change="pick($event, option)">
-          <span class="gx-choice__title"><strong>{{ option.label }}</strong>
+          <span class="gx-choice__title">
+            <i class="bi" :class="modelValue === option.value ? 'bi-check-circle-fill' : 'bi-circle'" aria-hidden="true"></i>
+            <strong>{{ option.label }}</strong>
             <span v-if="option.badge" class="gx-starport-pill gx-starport-pill--soon">{{ option.badge }}</span>
-            <i v-else-if="modelValue === option.value" class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-          <span class="gx-choice__line">{{ option.detail }}</span>
-          <span v-if="option.limit" class="gx-choice__limit">{{ option.limit }}</span>
+          </span>
         </label>
+      </div>
+      <p v-if="selectedOption?.detail && !infoOpen" class="gx-choice__active-summary">{{ selectedOption.detail }}</p>
+      <div v-if="infoOpen" class="gx-choice__popover" role="region" :aria-label="label + ' details'">
+        <div class="gx-choice__popover-head">
+          <strong>{{ label }} options</strong>
+          <button type="button" class="gx-choice__popover-close" aria-label="Close details" @click="infoOpen = false">
+            <i class="bi bi-x-lg" aria-hidden="true"></i>
+          </button>
+        </div>
+        <dl class="gx-choice__popover-list">
+          <div v-for="option in options" :key="option.value" class="gx-choice__popover-item">
+            <dt><strong>{{ option.label }}</strong> <span v-if="option.badge" class="gx-starport-pill gx-starport-pill--soon">{{ option.badge }}</span></dt>
+            <dd>{{ option.detail }} <span v-if="option.limit" class="gx-choice__limit">{{ option.limit }}</span></dd>
+          </div>
+        </dl>
       </div>
     </fieldset>`,
 }

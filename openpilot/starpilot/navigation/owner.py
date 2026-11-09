@@ -463,8 +463,8 @@ class NavigationOwner:
       (self.transient_root / 'routes.cache').write_text(json.dumps(value, allow_nan=False))
     return self.snapshot()
 
-  def map_tile(self, z: int, x: int, y: int, theme: str = 'light') -> bytes:
-    if theme not in MAP_STYLES:
+  def map_tile(self, z: int, x: int, y: int, theme: str = 'light', *, provider: str = 'mapbox') -> bytes:
+    if theme not in MAP_STYLES or provider not in ('mapbox', 'google'):
       raise ValidationError('Invalid map theme')
     if any(type(v) is not int for v in (z, x, y)) or not 0 <= z <= 18 or not 0 <= x < 2 ** z or not 0 <= y < 2 ** z:
       raise ValidationError('Invalid map tile')
@@ -472,7 +472,7 @@ class NavigationOwner:
     token = settings['token']
     if not token:
       raise ValidationError('Save a Mapbox key to view the map')
-    google_key = settings.get('googleKey', '') if settings.get('mapProvider') == 'google' else ''
+    google_key = settings.get('googleKey', '') if provider == 'google' and settings.get('mapProvider') == 'google' else ''
     if google_key:
       if not self._tile_slots.acquire(timeout=TILE_SLOT_WAIT_S):
         raise ValidationError('Map is busy; try again')

@@ -192,10 +192,12 @@ def test_google_map_provider_serves_google_tiles_and_falls_back_to_mapbox(tmp_pa
   provider = Provider()
   owner = tile_owner(tmp_path, provider)
   owner.read = lambda: {'token': 'pk.fixture', 'googleKey': 'AIzaSyTestKey123456', 'mapProvider': 'google'}
-  assert owner.map_tile(4, 2, 5, 'light') == google_png
+  assert owner.map_tile(4, 2, 5, 'light', provider='google') == google_png
   assert calls == [('AIzaSyTestKey123456', 4, 2, 5, 'light')]
   assert not provider.calls
-  assert owner.map_tile(4, 2, 5, 'dark') == PNG
+  assert owner.map_tile(4, 2, 5, 'light') == PNG, 'offline maps and unflagged requests always use Mapbox even when Google is selected'
   assert len(provider.calls) == 1
-  assert '/mapbox/dark-v11/tiles/512/4/2/5.png' in provider.calls[0][0]
+  assert owner.map_tile(4, 2, 5, 'dark', provider='google') == PNG
+  assert len(provider.calls) == 2
+  assert '/mapbox/dark-v11/tiles/512/4/2/5.png' in provider.calls[1][0]
 

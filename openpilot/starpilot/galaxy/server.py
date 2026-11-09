@@ -1023,15 +1023,16 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           return
         try:
           query = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=2)
-          theme = query.get('theme', ['light'])[0]
-          provider = query.get('provider', ['mapbox'])[0]
-          if set(query) - {'theme', 'provider'} or theme not in ('light', 'dark') or provider not in ('mapbox', 'google'):
+          theme = query.get('theme', ['light'])
+          provider = query.get('provider', ['mapbox'])
+          if (set(query) - {'theme', 'provider'} or len(theme) != 1 or theme[0] not in ('light', 'dark') or
+              len(provider) != 1 or provider[0] not in ('mapbox', 'google')):
             raise ValueError('Invalid map theme')
         except ValueError:
           self.json(400, {'error': 'Invalid map theme'})
           return
         try:
-          tile = navigation_owner().map_tile(*(int(value) for value in match.groups()), theme)
+          tile = navigation_owner().map_tile(*(int(value) for value in match.groups()), theme[0], provider=provider[0])
         except (OSError, ValueError, RuntimeError):
           self.json(503, {'error': 'Map tiles are unavailable'})
         else:

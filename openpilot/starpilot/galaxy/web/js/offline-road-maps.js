@@ -226,8 +226,16 @@ export const OfflineRoadMapsPanel = {
   },
   template: `
     <section class="gx-card gx-offline-roads" aria-label="Offline road maps" :inert="busy" :aria-busy="busy || undefined">
-      <div class="gx-section__header"><i class="bi bi-signpost-split"></i><span class="gx-section__title">Map Overlay Roads</span></div>
-      <p class="gx-note">Road lines for the Android Auto map overlay. Saved areas stay on your comma, so the overlay keeps drawing roads with no signal. Downloads happen on Wi-Fi.</p>
+      <div class="gx-offline-roads__head">
+        <span class="gx-starport-step__num" aria-hidden="true"><i class="bi bi-cloud-download"></i></span>
+        <div>
+          <div class="gx-navigation__step-title">
+            <h3 class="gx-section__title">Map Overlay Roads</h3>
+            <span class="gx-starport-pill">Mapbox only</span>
+          </div>
+          <p class="gx-note">Saves Mapbox road lines on your comma so the map overlay keeps drawing roads with no cell signal. Google Maps tiles require internet and can't be saved offline, so these road lines always back them up. Downloads happen on Wi-Fi.</p>
+        </div>
+      </div>
       <p v-if="mode !== 'local'" class="gx-note">Connect to your comma to manage offline road maps.</p>
       <template v-else>
         <GxNotice tone="danger" v-if="error">{{ error }}</GxNotice>
@@ -247,9 +255,10 @@ export const OfflineRoadMapsPanel = {
           :index="0" :busy="busy" :disabled="!data" :save-value="(index, value) => setSaveDriven(value === 'On')" />
         <div class="gx-offline-roads__picker">
           <BluetoothNotice v-if="bluetooth" feature="Offline area map preview">Saved map settings remain available.</BluetoothNotice>
-          <div v-else-if="hasKey" class="gx-offline-roads__map"><canvas ref="canvas" tabindex="0" aria-label="Map. Tap or press Enter to center a new offline area; drag or use arrow keys to pan."></canvas>
-            <div class="gx-navigation-map__controls"><button class="gx-btn" type="button" @click="zoom(1)" aria-label="Zoom in">+</button>
-              <button class="gx-btn" type="button" @click="zoom(-1)" aria-label="Zoom out">−</button></div>
+          <div v-else-if="hasKey" class="gx-offline-roads__map"><canvas ref="canvas" tabindex="0" aria-label="Mapbox map. Tap or press Enter to center a new offline area; drag or use arrow keys to pan."></canvas>
+            <span class="gx-offline-roads__provider">Mapbox preview</span>
+            <div class="gx-navigation-map__controls"><button class="gx-navigation-map__control" type="button" @click="zoom(1)" aria-label="Zoom in"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
+              <button class="gx-navigation-map__control" type="button" @click="zoom(-1)" aria-label="Zoom out"><i class="bi bi-dash-lg" aria-hidden="true"></i></button></div>
             <span class="gx-offline-roads__hint">{{ point ? 'Adjust the radius, name it, then save.' : 'Tap the map to center a new area.' }}</span></div>
           <div class="gx-offline-roads__form">
             <button type="button" class="gx-btn gx-btn--tonal" :disabled="!data?.position" @click="useLocation"><i class="bi bi-crosshair"></i> Around my car</button>
