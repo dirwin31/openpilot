@@ -186,6 +186,33 @@ class NavigationHttpTest(unittest.TestCase):
     resolved.assert_called_once_with('Bellagio https://maps.app.goo.gl/abc123')
     self.assertEqual(self.action('resolveShare')[0], 400)
 
+  def test_shared_place_turns_navigation_on_and_starts_the_route(self):
+    self.assertEqual(self.action('share', text='geo:40.5,-89.5')[1], {'error': 'Add your Mapbox access token first'})
+    self.navigation.configure({'token': 'pk.test'}, self.navigation.read()['revision'], True)
+    self.assertFalse(self.navigation.snapshot()['enabled'])
+    status, body, _ = self.action('share', remote=True, text='https://www.google.com/maps/place/Bellagio/data=!3d36.1126!4d-115.1767')
+    self.assertEqual(status, 200)
+    self.assertEqual(body['shared'], {'name': 'Bellagio', 'latitude': 36.1126, 'longitude': -115.1767})
+    self.assertTrue(body['enabled'] and body['hasKey'])
+    self.assertEqual((body['destination']['latitude'], body['revision']), (36.1126, self.navigation.snapshot()['revision']))
+    self.assertNotIn('pk.test', json.dumps(body))
+    feature = {'features': [{'properties': {'name': '3600 S Las Vegas Blvd', 'full_address': '3600 S Las Vegas Blvd, Las Vegas, NV'},
+                             'geometry': {'coordinates': [-115.17, 36.11]}}]}
+    with patch('openpilot.starpilot.navigation.owner.response_json', return_value=feature) as geocode:
+      status, body, _ = self.action('share', text='https://www.google.com/maps/place/Bellagio,+3600+S+Las+Vegas+Blvd,+Las+Vegas,+NV/data=!4m2!3m1!1s0x1:0x2')
+    self.assertEqual((status, body['shared']), (200, {'name': 'Bellagio', 'latitude': 36.11, 'longitude': -115.17}))
+    self.assertEqual(geocode.call_args.args[2]['q'], '3600 S Las Vegas Blvd, Las Vegas, NV')
+    with patch('openpilot.starpilot.navigation.owner.response_json', return_value={'features': []}):
+      self.assertEqual(self.action('share', text='https://maps.google.com/?q=Nowhere,+Atlantis')[1],
+                       {'error': 'No map location found for Nowhere', 'query': 'Nowhere, Atlantis'})
+    self.assertEqual(self.action('share', text='Starbucks')[:2], (400, {'error': 'Open StarPilot to search for Starbucks', 'query': 'Starbucks'}))
+    revision = self.navigation.read()['revision']
+    stale = {'action': 'share', 'revision': '0', 'text': 'geo:40.5,-89.5'}
+    self.assertEqual(self.request('/api/navigation/action', payload=stale, cookie=self.local_cookie)[0], 409)
+    self.assertEqual(self.navigation.read()['revision'], revision)
+    self.assertEqual(self.action('share')[0], 400)
+    self.assertNotIn('query', self.action('share', text='x' * 8193)[1])
+
   def test_stale_or_invalid_actions_never_overwrite_configuration(self):
     self.action('configure', patch={'enabled': True})
     before = self.navigation.path.read_bytes()

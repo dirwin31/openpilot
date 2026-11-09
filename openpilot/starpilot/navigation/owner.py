@@ -65,6 +65,13 @@ class ValidationError(ValueError):
   pass
 
 
+class ShareQueryError(ValidationError):
+  """A shared place the driver has to pick from search results."""
+  def __init__(self, message: str, query: str):
+    super().__init__(message)
+    self.query = query
+
+
 class ConflictError(ValueError):
   pass
 
@@ -555,9 +562,11 @@ class NavigationOwner:
     if settings['routeProvider'] != 'google':
       return test_key(key, self.session, GoogleBudget(self.google_root))
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    from openpilot.starpilot.navigation.google_places import places_budget, test_places
+    with ThreadPoolExecutor(max_workers=3) as pool:
       routes = pool.submit(test_routes, key, self.session, essentials_budget(self.google_root))
-      return dict(test_key(key, self.session, GoogleBudget(self.google_root)), routes=routes.result())
+      places = pool.submit(test_places, key, self.session, places_budget(self.google_root))
+      return dict(test_key(key, self.session, GoogleBudget(self.google_root)), routes=routes.result(), places=places.result())
 
   def resolve_share(self, text) -> str:
     """A shared Google Maps short link followed to the full link, which carries the place's coordinates."""
@@ -581,6 +590,61 @@ class NavigationOwner:
         break
       current = following
     return text.replace(match.group(0), current) if current != match.group(0) else text
+
+  def share(self, text, expected_revision: str, authorized) -> dict:
+    """A place shared from a phone: turns navigation on and starts the route."""
+    if not isinstance(text, str) or not text.strip() or len(text) > 8192:
+      raise ValidationError('The shared text could not be read')
+    current = self.read()
+    if not current['token']:
+      raise ValidationError('Add your Mapbox access token first')
+    if not isinstance(expected_revision, str) or current['revision'] != expected_revision:
+      raise ConflictError('Navigation changed; refresh and try again')
+    if not (authorized() if callable(authorized) else authorized is True):
+      raise PermissionError('Navigation changes are not available right now')
+    from openpilot.starpilot.navigation.share import map_link_query, search_text, shared_coordinates
+    text = self.resolve_share(text)
+    shared = shared_coordinates(text)
+    if shared is None:
+      query = map_link_query(text)
+      if query is None:
+        query = search_text(text)
+        if not query:
+          raise ValidationError('This map link could not be opened')
+        raise ShareQueryError(f'Open StarPilot to search for {query}', query)
+      shared = self._geocode_share(query)
+    selected = destination(shared)
+    def update(doc):
+      self._reject_temporary_promotion(doc, selected)
+      doc['enabled'] = True
+      self._navigate(doc, selected)
+    result = self._change(update, expected_revision, authorized)
+    return dict(result, shared={key: selected[key] for key in ('name', 'latitude', 'longitude')})
+
+  def _geocode_share(self, query: str) -> dict:
+    from openpilot.starpilot.navigation.share import place
+    name, _, rest = query.partition(',')
+    settings = self.read()
+    if settings['routeProvider'] == 'google' and settings['googleKey']:
+      from openpilot.starpilot.navigation.google_places import GooglePlacesFailed, places_budget, text_search
+      proximity = self._search_context().get('proximity')
+      try:
+        found = text_search(self.session, settings['googleKey'], query, places_budget(self.google_root),
+                            tuple(float(value) for value in proximity.split(',')) if proximity else None)
+      except GooglePlacesFailed:
+        found = False  # Mapbox looks it up instead
+      if found is None:
+        raise ShareQueryError(f'No map location found for {name.strip() or query}', query[:200])
+      if found:
+        return place(found['name'], found['latitude'], found['longitude'], found['address'] or found['name'])
+    # Geocoding finds addresses, not names: "Name, 123 Main St, City" tries the street address first.
+    attempts = ([rest.strip()] if any(ch.isdigit() for ch in rest.split(',')[0]) else []) + [query]
+    for attempt in attempts:
+      results = self.search(attempt) if len(attempt.strip()) >= 2 else []
+      if results:
+        top = results[0]
+        return place(name.strip() or query, top['latitude'], top['longitude'], top.get('address') or top['name'])
+    raise ShareQueryError(f'No map location found for {name.strip() or query}', query[:200])
 
   def search(self, query: str) -> list[dict]:
     if not isinstance(query, str) or not 2 <= len(query.strip()) <= 256:

@@ -325,7 +325,7 @@ export const NavigationPage = {
       return [{ icon: "bi-search", title: "Search here", detail: "Type an address or place on the Destination page.", ready: true },
         { icon: "bi-link-45deg", title: "Paste a Google Maps link", detail: "Paste a place link into search, short links included.", ready: true },
         { icon: "bi-android2", title: "Share from Android", detail: "Google Maps, Share, StarPilot. The route starts on your comma.", ready: true },
-        { icon: "bi-apple", title: "Share from iPhone", detail: "Google or Apple Maps, Share, Send to StarPilot, after a one-time Shortcut.", ready: true },
+        { icon: "bi-apple", title: "Share from iPhone", detail: "Google Maps or Apple Maps, Share, StarPilot. The route starts on your comma.", ready: true },
         { icon: "bi-phone", title: "Follow Google Maps", detail: "Show Google Maps' next turn on the turn card.", status: "Android, coming soon" }]
     },
     gpsLabel() {
@@ -581,6 +581,7 @@ export const NavigationPage = {
             <div class="gx-actions"><button type="button" class="gx-btn gx-btn--tonal" :disabled="!available || !googleKey.trim() && !data?.hasGoogleKey" @click="testGoogleKey">Test key</button></div>
             <GxNotice v-if="googleTest" :tone="googleTest.ok ? 'success' : 'warn'">Map: {{ googleTest.message }}</GxNotice>
             <GxNotice v-if="googleTest?.routes" :tone="googleTest.routes.ok ? 'success' : 'warn'">Routes: {{ googleTest.routes.message }}</GxNotice>
+            <GxNotice v-if="googleTest?.places" :tone="googleTest.places.ok ? 'success' : 'warn'">Shared places: {{ googleTest.places.message }}</GxNotice>
             <GxNotice v-if="data?.googleMap?.failure" tone="warn">{{ data.googleMap.failure }}</GxNotice>
             <GxNotice v-if="data?.googleRoutes?.failure" tone="warn">{{ data.googleRoutes.failure }}</GxNotice>
             <dl v-if="googleUsage" class="gx-navigation__usage" aria-label="Google use">
@@ -592,13 +593,13 @@ export const NavigationPage = {
             <details class="gx-starport-wiki"><summary>Get a Google key (about 10 minutes, once)</summary>
               <ol><li>Sign in to <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud</a> and create a project.</li>
                 <li><a href="https://console.cloud.google.com/billing" target="_blank" rel="noopener noreferrer">Turn on billing</a>. Google asks for a card even though the comma stays inside the free allowance.</li>
-                <li>Enable the <a href="https://console.cloud.google.com/apis/library/tile.googleapis.com" target="_blank" rel="noopener noreferrer">Map Tiles API</a> and the <a href="https://console.cloud.google.com/apis/library/routes.googleapis.com" target="_blank" rel="noopener noreferrer">Routes API</a>.</li>
-                <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Create an API key</a> and limit it to those two APIs. Leave application restrictions off; the comma's address changes on cellular.</li>
+                <li>Enable the <a href="https://console.cloud.google.com/apis/library/tile.googleapis.com" target="_blank" rel="noopener noreferrer">Map Tiles API</a> the <a href="https://console.cloud.google.com/apis/library/routes.googleapis.com" target="_blank" rel="noopener noreferrer">Routes API</a> and <a href="https://console.cloud.google.com/apis/library/places.googleapis.com" target="_blank" rel="noopener noreferrer">Places API (New)</a>.</li>
+                <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Create an API key</a> and limit it to those three APIs. Leave application restrictions off; the comma's address changes on cellular.</li>
                 <li>Paste the key here while parked, then press <strong>Test key</strong>.</li></ol>
             </details>
             <details class="gx-starport-wiki"><summary>How the Google limits work</summary>
-              <p>The comma stops at 99% of Google's free allowance: 100,000 map tiles a month (15,000 a day), 10,000 routes and 5,000 traffic routes. Every route and reroute uses live traffic, and one more request every 7½ minutes corrects the arrival time.</p>
-              <p>Past 20 reroutes in an hour, or when traffic routes run out, routes ignore traffic. Past both limits the comma uses Mapbox until they reset. Google routes have no lane arrows.</p>
+              <p>The comma stops at 99% of Google's free allowance: 100,000 map tiles a month (15,000 a day), 10,000 routes, 5,000 traffic routes and 5,000 shared-place lookups. Every route and reroute uses live traffic, and one more request every 7½ minutes corrects the arrival time.</p>
+              <p>Past 20 reroutes in an hour, or when traffic routes run out, routes ignore traffic. Past both limits the comma uses Mapbox until they reset. Google routes have no lane arrows. Shared places use Mapbox if Google can't look them up.</p>
             </details>
           </div>
         </section>
@@ -656,9 +657,10 @@ export const NavigationPage = {
                 <span class="gx-starport-pill" :class="way.ready ? 'gx-starport-pill--ready' : 'gx-starport-pill--soon'">{{ way.ready ? 'Ready' : way.status }}</span></li>
             </ul>
             <details class="gx-starport-wiki"><summary>How to share a place from your phone</summary>
-              <p><strong>Android:</strong> open a place in Google Maps, tap Share, then choose StarPilot. Places with a location go straight to your comma and start the route. A name alone opens here as a search.</p>
-              <p><strong>iPhone:</strong> in Shortcuts, make a shortcut named Send to StarPilot that appears in the Share Sheet for URLs and text, and add the StarPilot BT action Send to StarPilot with the Shortcut Input as the place. Then share from Google Maps or Apple Maps.</p>
-              <p>Both need the latest StarPilot app, a Mapbox key above, and a way to reach your comma: Bluetooth, local Wi-Fi or the remote route. Short Google links are opened on the phone, only on Google's own sites.</p>
+              <p><strong>Android:</strong> open a place in Google Maps, tap Share, then choose StarPilot.</p>
+              <p><strong>iPhone:</strong> open a place in Google Maps or Apple Maps, tap Share, then choose StarPilot. The first time, scroll the app row to More and turn on StarPilot.</p>
+              <p>Your comma turns on navigation and starts the route. Places without coordinates are looked up on your comma with your chosen route provider. A name alone opens the StarPilot app as a search.</p>
+              <p>Both need the latest StarPilot app, a Mapbox key above, and a way to reach your comma: Bluetooth, local Wi-Fi or the remote route. If your comma can't be reached, the phone keeps the place and sends it when it next connects, within 12 hours.</p>
             </details>
           </div>
         </section>
