@@ -24,8 +24,10 @@ export function remainingLocationLease(lease, requestStarted, now = performance.
 const STATUS = new Set(["disabled", "needsKey", "noDestination", "waitingForLocation", "routing", "guiding", "arrived", "routeUnavailable", "stale"])
 const ROUTE_AVOIDANCES = [{ key: "avoidTolls", label: "Avoid tolls" }, { key: "avoidHighways", label: "Avoid highways" },
   { key: "avoidFerries", label: "Avoid ferries" }]
-const GPS_MODES = [{ value: "backup", label: "Phone GPS as backup" }, { value: "comma", label: "Comma and car GPS only" },
-  { value: "phone", label: "Prefer phone GPS" }]
+const GPS_MODES = [
+  { value: "backup", label: "Comma and car first, phone as backup", hint: "Uses the comma's or car's GPS. The phone fills in only when neither has a fix." },
+  { value: "comma", label: "Comma and car only", hint: "Never uses the phone. Choose this if you don't share phone GPS." },
+  { value: "phone", label: "Phone first", hint: "Uses the phone whenever it has a recent fix, otherwise the comma or car." }]
 const GPS_NAMES = { comma: "Comma", car: "Car", phone: "Phone" }
 const coordinate = (value) => !!value && Number.isFinite(value.latitude) && Math.abs(value.latitude) <= 90 &&
   Number.isFinite(value.longitude) && Math.abs(value.longitude) <= 180
@@ -304,6 +306,12 @@ export const NavigationPage = {
   computed: {
     routeAvoidances() { return ROUTE_AVOIDANCES },
     gpsModes() { return GPS_MODES },
+    gpsHint() { return (GPS_MODES.find((mode) => mode.value === (this.data?.gpsSource || "backup")) || GPS_MODES[0]).hint },
+    sourcesLine() {
+      if (!this.data) return ""
+      const map = this.providerJobs
+      return `Map: ${map[0].by.split(",")[0]} · Routes: ${map[2].by.split(",")[0].replace(" with live traffic", "")} · ${this.gpsLabel}`
+    },
     gpsLabel() {
       if (this.mode !== "local" || !this.ready || this.stale) return "GPS Source"
       const source = this.data?.location?.lastKnown ? null : GPS_NAMES[this.data?.location?.source]
@@ -335,6 +343,15 @@ export const NavigationPage = {
       if (!usage) return []
       return [["searchSessions", "Searches"], ["geocoding", "Address lookups"], ["directions", "Routes"], ["staticTiles", "Map views"]]
         .filter(([key]) => usage[key]).map(([key, label]) => ({ key, label, ...usage[key] }))
+    },
+    providerJobs() {
+      const mapGoogle = this.data?.mapProvider === "google" && !!this.data?.hasGoogleKey
+      const routeGoogle = this.data?.routeProvider === "google" && !!this.data?.hasGoogleKey
+      return [{ job: "Map picture", by: mapGoogle ? "Google, with Mapbox road lines as backup" : "Mapbox" },
+        { job: "Place search", by: "Mapbox" },
+        { job: "Routes", by: routeGoogle ? "Google with live traffic, Mapbox as backup" : "Mapbox" },
+        { job: "Lane arrows", by: routeGoogle ? "Not shown with Google routes" : "Shown on the turn card" },
+        { job: "Offline road maps", by: "Mapbox" }]
     },
     googleUsage() { return this.data?.googleMap?.usage || null },
     googleRouteUsage() { return this.data?.googleRoutes?.usage || null },
@@ -485,7 +502,8 @@ export const NavigationPage = {
   template: `
     <div class="gx-view gx-navigation" :inert="busy || searchPending" :aria-busy="busy || searchPending || undefined">
       <header class="gx-settings__header gx-page-header"><div><h2>Navigation</h2>
-        <p>Set a destination, prepare offline maps, and configure navigation and Mapbox.</p></div></header>
+        <p>Set a destination, download offline maps, and choose your map, route and GPS sources.</p></div></header>
+      <p v-if="sourcesLine" class="gx-note" aria-label="Current sources">{{ sourcesLine }}</p>
       <div class="gx-tabs gx-actions" role="group" aria-label="Navigation tools">
         <button v-for="item in tabs" :key="item.tab"
           type="button" class="gx-btn" :class="tab === item.tab ? '' : 'gx-btn--tonal'" :aria-pressed="tab === item.tab" @click="selectTab(item.tab)">{{ item.name }}</button>
@@ -505,11 +523,90 @@ export const NavigationPage = {
             <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Navigation" :checked="data.enabled" :disabled="!controlsAvailable"
               @change="$event.target.checked=data.enabled; reportSave(() => client.action('configure', {patch: {enabled: !data.enabled}}))"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
         </section>
-        <section ref="gpsSetup" tabindex="-1" class="gx-card gx-navigation__section gx-navigation__gps" aria-labelledby="navigation-gps-heading">
-          <h3 id="navigation-gps-heading">GPS Source</h3>
-          <p>Choose where your comma gets its position for navigation and map speed limits. Phone GPS comes from the StarPilot app over Bluetooth or local Wi-Fi.</p>
+        <section class="gx-card gx-navigation__section">
+          <div class="gx-section__header"><i class="bi bi-map" aria-hidden="true"></i><span class="gx-section__title">Mapbox key</span></div>
+          <p>Required. Mapbox finds places and addresses, downloads offline road maps, and plans routes unless you choose Google routes below. Use one public access token (starting with pk.); a secret token is not needed.</p>
+          <p>Save your token while parked. Galaxy keeps it on your comma and never displays it after saving. Address searches use temporary geocoding. Search suggestions are temporary and used only for the current route. Favorites and recent destinations are also kept on your comma; going to one skips search, so it uses none of your search allowance. URL-restricted keys may reject map requests.</p>
+          <p class="gx-note">Typing suggestions, address lookups and offline road maps stop just short of their free monthly allowances and resume on the 1st. Routes, full place searches and map views are counted but not limited. These counts cover this comma only; Mapbox bills total account usage, including other apps and devices.</p>
+          <dl v-if="usageRows.length" class="gx-navigation__usage" aria-label="Mapbox use this month">
+            <template v-for="row in usageRows" :key="row.key"><dt>{{ row.label }}</dt><dd>{{ row.used.toLocaleString() }} of {{ row.limit.toLocaleString() }} free this month</dd></template>
+          </dl>
+          <a class="gx-btn gx-btn--tonal gx-navigation__token-link" href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener noreferrer">Get a Mapbox access token</a>
+          <p v-if="data?.hasKey" class="gx-note">A Mapbox key is saved.</p>
+          <div class="gx-field-group"><label for="navigation-token">Public Mapbox access token</label>
+          <form @submit.prevent="saveKey(false)" class="gx-navigation__search">
+            <input id="navigation-token" class="gx-field" type="password" autocomplete="off" v-model="token" placeholder="pk.…" maxlength="2048" required :disabled="!controlsAvailable">
+            <button class="gx-btn" type="submit" :disabled="!controlsAvailable || !token.trim()">{{ data?.hasKey ? 'Replace key' : 'Save key' }}</button>
+          </form></div>
+        </section>
+        <section class="gx-card gx-navigation__section" aria-labelledby="navigation-providers-heading">
+          <div class="gx-section__header"><i class="bi bi-layers" aria-hidden="true"></i><span class="gx-section__title" id="navigation-providers-heading">Map and routes</span></div>
+          <p>Choose what draws the map and plans routes. Google options turn on once a Google key is saved below.</p>
           <div class="gx-row gx-row--stack gx-row--borderless">
-            <span class="gx-row__label" id="navigation-gps-mode">Use</span>
+            <span class="gx-row__label" id="navigation-map-style">Map style</span>
+            <GalaxySelect class="gx-field gx-field--full" aria-labeledby="navigation-map-style" :value="data?.mapProvider || 'mapbox'" :disabled="!available || !data"
+              @change="reportSave(() => client.action('configure', {patch: {mapProvider: $event.target.value}}))">
+              <option value="mapbox">Mapbox road lines</option>
+              <option value="google" :disabled="!data?.hasGoogleKey">Google map</option>
+            </GalaxySelect>
+          </div>
+          <div class="gx-row gx-row--stack gx-row--borderless">
+            <span class="gx-row__label" id="navigation-route-provider">Routes</span>
+            <GalaxySelect class="gx-field gx-field--full" aria-labeledby="navigation-route-provider" :value="data?.routeProvider || 'mapbox'" :disabled="!available || !data"
+              @change="reportSave(() => client.action('configure', {patch: {routeProvider: $event.target.value}}))">
+              <option value="mapbox">Mapbox (with lane arrows)</option>
+              <option value="google" :disabled="!data?.hasGoogleKey">Google traffic routes</option>
+            </GalaxySelect>
+          </div>
+          <p v-if="data && !data.hasGoogleKey" class="gx-note">Using Mapbox for everything. Add a Google key to choose Google.</p>
+          <dl class="gx-navigation__usage" aria-label="Who does what">
+            <template v-for="row in providerJobs" :key="row.job"><dt>{{ row.job }}</dt><dd>{{ row.by }}</dd></template>
+          </dl>
+        </section>
+        <section class="gx-card gx-navigation__section">
+          <div class="gx-section__header"><i class="bi bi-globe-americas" aria-hidden="true"></i><span class="gx-section__title">Google key</span></div>
+          <p>Optional. Add your own Google Maps Platform key to unlock the Google map and traffic routes in <strong>Map and routes</strong> above. Search and offline road maps stay on Mapbox, and Mapbox routes whenever Google cannot.</p>
+          <details><summary>Get a Google key (about 10 minutes, once)</summary>
+            <ol><li>Sign in to <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud</a> and create a project.</li>
+              <li><a href="https://console.cloud.google.com/billing" target="_blank" rel="noopener noreferrer">Turn on billing</a> for it. Google asks for a card even though the comma stays inside the free allowance.</li>
+              <li>Enable the <a href="https://console.cloud.google.com/apis/library/tile.googleapis.com" target="_blank" rel="noopener noreferrer">Map Tiles API</a>, and the <a href="https://console.cloud.google.com/apis/library/routes.googleapis.com" target="_blank" rel="noopener noreferrer">Routes API</a> for Google routes.</li>
+              <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Create an API key</a> and restrict it to those APIs. Leave application restrictions off; the comma's address changes on cellular.</li>
+              <li>Paste the key below while parked, then press <strong>Test key</strong>.</li></ol>
+          </details>
+          <p class="gx-note">The comma stops at 99% of Google's free 100,000 map tiles a month and 15,000 a day, and at 99% of Google's free routes: 10,000 a month without traffic, and 5,000 traffic requests. Every route, including a reroute, uses live traffic (one traffic request each), and every 7½ minutes one more corrects the arrival time. Past 20 reroutes in an hour, or once traffic requests run out, routes ignore traffic; past both limits the comma uses Mapbox until they reset. Google routes have no lane arrows. These counts cover this comma only; Google bills everything that uses the key.</p>
+          <dl v-if="googleUsage" class="gx-navigation__usage" aria-label="Google map use">
+            <dt>Map tiles this month</dt><dd>{{ googleUsage.monthUsed.toLocaleString() }} of {{ googleUsage.monthLimit.toLocaleString() }} free</dd>
+            <dt>Map tiles today</dt><dd>{{ googleUsage.dayUsed.toLocaleString() }} of {{ googleUsage.dayLimit.toLocaleString() }} free</dd>
+            <template v-if="googleEssentialUsage"><dt>Routes this month</dt><dd>{{ googleEssentialUsage.monthUsed.toLocaleString() }} of {{ googleEssentialUsage.monthLimit.toLocaleString() }} free</dd></template>
+            <template v-if="googleRouteUsage"><dt>Traffic requests this month</dt><dd>{{ googleRouteUsage.monthUsed.toLocaleString() }} of {{ googleRouteUsage.monthLimit.toLocaleString() }} free</dd></template>
+          </dl>
+          <GxNotice v-if="data?.googleMap?.failure" tone="warn">{{ data.googleMap.failure }}</GxNotice>
+          <GxNotice v-if="data?.googleRoutes?.failure" tone="warn">{{ data.googleRoutes.failure }}</GxNotice>
+          <p v-if="data?.hasGoogleKey" class="gx-note">A Google key is saved.</p>
+          <div class="gx-field-group"><label for="navigation-google-key">Google Maps Platform API key</label>
+          <form @submit.prevent="saveGoogleKey" class="gx-navigation__search">
+            <input id="navigation-google-key" class="gx-field" type="password" autocomplete="off" v-model="googleKey" placeholder="AIza…" maxlength="128" required :disabled="!controlsAvailable">
+            <button class="gx-btn" type="submit" :disabled="!controlsAvailable || !googleKey.trim()">{{ data?.hasGoogleKey ? 'Replace key' : 'Save key' }}</button>
+          </form></div>
+          <div class="gx-actions"><button type="button" class="gx-btn gx-btn--tonal" :disabled="!available || !googleKey.trim() && !data?.hasGoogleKey" @click="testGoogleKey">Test key</button></div>
+          <GxNotice v-if="googleTest" :tone="googleTest.ok ? 'success' : 'warn'">Map: {{ googleTest.message }}</GxNotice>
+          <GxNotice v-if="googleTest?.routes" :tone="googleTest.routes.ok ? 'success' : 'warn'">Routes: {{ googleTest.routes.message }}</GxNotice>
+        </section>
+        <section class="gx-card gx-navigation__section">
+          <div class="gx-section__header"><i class="bi bi-signpost-split" aria-hidden="true"></i><span class="gx-section__title">Route preferences</span></div>
+          <p>Apply to new routes and automatic reroutes. Changing a preference recalculates your current route.</p>
+          <div v-for="option in routeAvoidances" :key="option.key" class="gx-row">
+            <span class="gx-row__info gx-row__label">{{ option.label }}</span>
+            <label class="gx-switch"><input type="checkbox" role="switch" :aria-label="option.label" :checked="!!data?.[option.key]"
+              :disabled="!available" @change="reportSave(() => client.action('configure', {patch: {[option.key]: $event.target.checked}}))"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label>
+          </div>
+        </section>
+        <section ref="gpsSetup" tabindex="-1" class="gx-card gx-navigation__section gx-navigation__gps" aria-labelledby="navigation-gps-heading">
+          <h3 id="navigation-gps-heading">GPS source</h3>
+          <p>Choose where your comma gets its position for navigation and map speed limits. Phone GPS comes from the StarPilot app over Bluetooth or local Wi-Fi.</p>
+          <p v-if="data" class="gx-note">{{ gpsHint }}</p>
+          <div class="gx-row gx-row--stack gx-row--borderless">
+            <span class="gx-row__label" id="navigation-gps-mode">Position comes from</span>
             <GalaxySelect class="gx-field gx-field--full" aria-labeledby="navigation-gps-mode" :value="data?.gpsSource || 'backup'" :disabled="!available || !data"
               @change="client.action('configure', {patch: {gpsSource: $event.target.value}})">
               <option v-for="option in gpsModes" :key="option.value" :value="option.value">{{ option.label }}</option>
@@ -541,76 +638,6 @@ export const NavigationPage = {
             <p>The GPS source you choose is used for navigation and for map-based speed limits and curves. The phone must reach the comma over Bluetooth or local Wi-Fi; the remote tunnel doesn't carry GPS.</p>
             <p>To change phones, stop GPS sharing in the old app and enable it in the other app. Both apps need a version with phone GPS support, and your comma must support receiving it.</p>
           </details>
-        </section>
-        <section class="gx-card gx-navigation__section">
-          <div class="gx-section__header"><i class="bi bi-signpost-split" aria-hidden="true"></i><span class="gx-section__title">Route preferences</span></div>
-          <p>Apply to new routes and automatic reroutes. Changing a preference recalculates your current route.</p>
-          <div v-for="option in routeAvoidances" :key="option.key" class="gx-row">
-            <span class="gx-row__info gx-row__label">{{ option.label }}</span>
-            <label class="gx-switch"><input type="checkbox" role="switch" :aria-label="option.label" :checked="!!data?.[option.key]"
-              :disabled="!available" @change="reportSave(() => client.action('configure', {patch: {[option.key]: $event.target.checked}}))"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label>
-          </div>
-        </section>
-        <section class="gx-card gx-navigation__section">
-          <div class="gx-section__header"><i class="bi bi-map" aria-hidden="true"></i><span class="gx-section__title">Mapbox</span></div>
-          <p>One public Mapbox access token (starting with pk.) handles the map, place and address search, and routes. A separate secret token is not needed.</p>
-          <p>Save your token while parked. Galaxy keeps it on your comma and never displays it after saving. Address searches use temporary geocoding. Search suggestions are temporary and used only for the current route. Favorites and recent destinations are also kept on your comma; going to one skips search, so it uses none of your search allowance. URL-restricted keys may reject map requests.</p>
-          <p class="gx-note">Typing suggestions, address lookups and offline road maps stop just short of their free monthly allowances and resume on the 1st. Routes, full place searches and map views are counted but not limited. These counts cover this comma only; Mapbox bills total account usage, including other apps and devices.</p>
-          <dl v-if="usageRows.length" class="gx-navigation__usage" aria-label="Mapbox use this month">
-            <template v-for="row in usageRows" :key="row.key"><dt>{{ row.label }}</dt><dd>{{ row.used.toLocaleString() }} of {{ row.limit.toLocaleString() }} free this month</dd></template>
-          </dl>
-          <a class="gx-btn gx-btn--tonal gx-navigation__token-link" href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener noreferrer">Get a Mapbox access token</a>
-          <p v-if="data?.hasKey" class="gx-note">A Mapbox key is saved.</p>
-          <div class="gx-field-group"><label for="navigation-token">Public Mapbox access token</label>
-          <form @submit.prevent="saveKey(false)" class="gx-navigation__search">
-            <input id="navigation-token" class="gx-field" type="password" autocomplete="off" v-model="token" placeholder="pk.…" maxlength="2048" required :disabled="!controlsAvailable">
-            <button class="gx-btn" type="submit" :disabled="!controlsAvailable || !token.trim()">{{ data?.hasKey ? 'Replace key' : 'Save key' }}</button>
-          </form></div>
-        </section>
-        <section class="gx-card gx-navigation__section">
-          <div class="gx-section__header"><i class="bi bi-globe-americas" aria-hidden="true"></i><span class="gx-section__title">Google map and routes</span></div>
-          <p>Show Google's road map with live traffic in the map widget, and route with Google's traffic, using your own Google Maps Platform key. Mapbox still handles search and offline road maps, its road lines show wherever a Google tile hasn't loaded, and it routes whenever Google can't.</p>
-          <div class="gx-row gx-row--stack gx-row--borderless">
-            <span class="gx-row__label" id="navigation-map-style">Map style</span>
-            <GalaxySelect class="gx-field gx-field--full" aria-labeledby="navigation-map-style" :value="data?.mapProvider || 'mapbox'" :disabled="!available || !data"
-              @change="reportSave(() => client.action('configure', {patch: {mapProvider: $event.target.value}}))">
-              <option value="mapbox">Mapbox road lines</option>
-              <option value="google" :disabled="!data?.hasGoogleKey">Google map</option>
-            </GalaxySelect>
-          </div>
-          <div class="gx-row gx-row--stack gx-row--borderless">
-            <span class="gx-row__label" id="navigation-route-provider">Routes</span>
-            <GalaxySelect class="gx-field gx-field--full" aria-labeledby="navigation-route-provider" :value="data?.routeProvider || 'mapbox'" :disabled="!available || !data"
-              @change="reportSave(() => client.action('configure', {patch: {routeProvider: $event.target.value}}))">
-              <option value="mapbox">Mapbox (with lane arrows)</option>
-              <option value="google" :disabled="!data?.hasGoogleKey">Google traffic routes</option>
-            </GalaxySelect>
-          </div>
-          <details><summary>Get a Google key (about 10 minutes, once)</summary>
-            <ol><li>Sign in to <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud</a> and create a project.</li>
-              <li><a href="https://console.cloud.google.com/billing" target="_blank" rel="noopener noreferrer">Turn on billing</a> for it. Google asks for a card even though the comma stays inside the free allowance.</li>
-              <li>Enable the <a href="https://console.cloud.google.com/apis/library/tile.googleapis.com" target="_blank" rel="noopener noreferrer">Map Tiles API</a>, and the <a href="https://console.cloud.google.com/apis/library/routes.googleapis.com" target="_blank" rel="noopener noreferrer">Routes API</a> for Google routes.</li>
-              <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Create an API key</a> and restrict it to those APIs. Leave application restrictions off; the comma's address changes on cellular.</li>
-              <li>Paste the key below while parked, then press <strong>Test key</strong>.</li></ol>
-          </details>
-          <p class="gx-note">The comma stops at 99% of Google's free 100,000 map tiles a month and 15,000 a day, and at 99% of Google's free routes: 10,000 a month without traffic, and 5,000 traffic requests. Every route, including a reroute, uses live traffic (one traffic request each), and every 7½ minutes one more corrects the arrival time. Past 20 reroutes in an hour, or once traffic requests run out, routes ignore traffic; past both limits the comma uses Mapbox until they reset. Google routes have no lane arrows. These counts cover this comma only; Google bills everything that uses the key.</p>
-          <dl v-if="googleUsage" class="gx-navigation__usage" aria-label="Google map use">
-            <dt>Map tiles this month</dt><dd>{{ googleUsage.monthUsed.toLocaleString() }} of {{ googleUsage.monthLimit.toLocaleString() }} free</dd>
-            <dt>Map tiles today</dt><dd>{{ googleUsage.dayUsed.toLocaleString() }} of {{ googleUsage.dayLimit.toLocaleString() }} free</dd>
-            <template v-if="googleEssentialUsage"><dt>Routes this month</dt><dd>{{ googleEssentialUsage.monthUsed.toLocaleString() }} of {{ googleEssentialUsage.monthLimit.toLocaleString() }} free</dd></template>
-            <template v-if="googleRouteUsage"><dt>Traffic requests this month</dt><dd>{{ googleRouteUsage.monthUsed.toLocaleString() }} of {{ googleRouteUsage.monthLimit.toLocaleString() }} free</dd></template>
-          </dl>
-          <GxNotice v-if="data?.googleMap?.failure" tone="warn">{{ data.googleMap.failure }}</GxNotice>
-          <GxNotice v-if="data?.googleRoutes?.failure" tone="warn">{{ data.googleRoutes.failure }}</GxNotice>
-          <p v-if="data?.hasGoogleKey" class="gx-note">A Google key is saved.</p>
-          <div class="gx-field-group"><label for="navigation-google-key">Google Maps Platform API key</label>
-          <form @submit.prevent="saveGoogleKey" class="gx-navigation__search">
-            <input id="navigation-google-key" class="gx-field" type="password" autocomplete="off" v-model="googleKey" placeholder="AIza…" maxlength="128" required :disabled="!controlsAvailable">
-            <button class="gx-btn" type="submit" :disabled="!controlsAvailable || !googleKey.trim()">{{ data?.hasGoogleKey ? 'Replace key' : 'Save key' }}</button>
-          </form></div>
-          <div class="gx-actions"><button type="button" class="gx-btn gx-btn--tonal" :disabled="!available || !googleKey.trim() && !data?.hasGoogleKey" @click="testGoogleKey">Test key</button></div>
-          <GxNotice v-if="googleTest" :tone="googleTest.ok ? 'success' : 'warn'">Map: {{ googleTest.message }}</GxNotice>
-          <GxNotice v-if="googleTest?.routes" :tone="googleTest.routes.ok ? 'success' : 'warn'">Routes: {{ googleTest.routes.message }}</GxNotice>
         </section>
       </template>
       <template v-else>
