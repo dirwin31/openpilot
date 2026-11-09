@@ -10,7 +10,7 @@ from openpilot.starpilot.navigation.owner import ValidationError, response_json
 
 EARTH_RADIUS = 6371007.2
 MAX_POINTS = 20000
-PREVIEW_POINTS = 1024
+PREVIEW_POINTS = 512
 PREVIEW_TOLERANCE_M = 1.0
 HEADING_CHECK_MPS = 8.          # pointing away from the route counts as off it only at road speed, not on ramps or in lots
 SLOW_MPS = 5.
