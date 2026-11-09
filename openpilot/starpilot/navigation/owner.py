@@ -34,8 +34,8 @@ MAX_SEARCHES = 32
 TILE_CACHE_TTL = 15 * 60
 TILE_CACHE_ENTRIES = 256
 TILE_CACHE_BYTES = 32 * 1024 * 1024
-TILE_SLOTS = 6
-TILE_SLOT_WAIT_S = 3.0  # a panned-away request still holds its slot until Mapbox answers; wait instead of failing
+TILE_SLOTS = 16
+TILE_SLOT_WAIT_S = 5.0  # a panned-away request still holds its slot until Mapbox answers; wait instead of failing
 AUTOCOMPLETE_TYPES = {'poi', 'address', 'street', 'place', 'neighborhood', 'locality'}
 SUGGESTS_PER_SESSION = 50  # Mapbox starts a new billable session after this many suggestions
 MAX_FAVORITES = 100
@@ -142,13 +142,22 @@ def response_json(session, url: str, params: dict) -> dict:
     raise ValidationError('The map service could not complete this request') from None
 
 
+def _pooled_session() -> requests.Session:
+  session = requests.Session()
+  adapter = requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=24)
+  session.mount('https://', adapter)
+  session.mount('http://', adapter)
+  return session
+
+
 class NavigationOwner:
-  def __init__(self, root: Path | None = None, runtime_source=None, session=requests, transient_root: Path | None = None):
+  def __init__(self, root: Path | None = None, runtime_source=None, session=None, transient_root: Path | None = None):
     self.root = Path(root) if root is not None else starpilot_storage_root() / 'navigation'
     self.path = self.root / 'settings.json'
     self.position_store = LastPositionStore(self.root)
     self.google_root = self.root / 'google-tiles'
-    self.runtime_source, self.session = runtime_source, session
+    self.runtime_source = runtime_source
+    self.session = _pooled_session() if session is None or session is requests else session
     self._tile_slots = threading.BoundedSemaphore(TILE_SLOTS)
     from openpilot.starpilot.navigation.mapbox_budget import MonthlyBudget
     self.search_budget = MonthlyBudget('searchSessions', self.root / 'mapbox-usage')
@@ -506,13 +515,13 @@ class NavigationOwner:
     try:
       started = time.monotonic()
       with self.session.get(f'https://api.mapbox.com/styles/v1/{MAP_STYLES[theme]}/tiles/512/{z}/{x}/{y}.png',
-                            params={'access_token': token}, timeout=(2, 2), stream=True, allow_redirects=False) as response:
+                            params={'access_token': token}, timeout=(3.05, 5.0), stream=True, allow_redirects=False) as response:
         if response.status_code != 200 or response.headers.get('Content-Type', '').split(';')[0] != 'image/png':
           raise ValidationError('Map tiles are unavailable')
         raw = bytearray()
         for chunk in response.iter_content(64 * 1024):
           raw.extend(chunk)
-          if len(raw) > 2 * 1024 * 1024 or time.monotonic() - started > 5:
+          if len(raw) > 2 * 1024 * 1024 or time.monotonic() - started > 7:
             raise ValidationError('Map tile exceeded the request limit')
         if bytes(raw[:8]) != b'\x89PNG\r\n\x1a\n' or bytes(raw[12:16]) != b'IHDR' or bytes(raw[16:24]) != b'\x00\x00\x02\x00' * 2:
           raise ValidationError('Invalid map tile response')
