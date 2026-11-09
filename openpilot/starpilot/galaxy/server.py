@@ -1032,7 +1032,9 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           self.json(400, {'error': 'Invalid map theme'})
           return
         try:
-          tile = navigation_owner().map_tile(*(int(value) for value in match.groups()), theme[0], provider=provider[0])
+          coords = (int(value) for value in match.groups())
+          tile = (navigation_owner().map_tile(*coords, theme[0], provider='google')
+                  if provider[0] == 'google' else navigation_owner().map_tile(*coords, theme[0]))
         except (OSError, ValueError, RuntimeError):
           self.json(503, {'error': 'Map tiles are unavailable'})
         else:

@@ -366,22 +366,26 @@ export class RasterMap {
         return
       }
       this.tiles.set(key, image);
+      this.failed.delete(key);
       this.failures = 0
       while (this.tiles.size > TILE_BITMAPS) {
         const oldest = this.tiles.keys().next().value;
         this.tiles.get(oldest).close();
         this.tiles.delete(oldest)
       }
-      if (!this.failed.size) this.changed('')
+      this.changed('')
+      if (this.failed.size && !this.retryTimer) {
+        this.retryTimer = setTimeout(() => { this.retryTimer = null; this.retry() }, 400)
+      }
     } catch (error) {
       if (this.pending.get(key) === controller && (timedOut || !controller.signal.aborted)) {
         this.failed.add(key);
         if (this.failed.size > 64) this.failed.delete(this.failed.values().next().value);
         // A quick refusal (a busy moment) is retried quickly and silently; a hung request or a run of failures is reported.
         this.failures = (this.failures || 0) + 1
-        const persistent = timedOut || this.failures >= 6
+        const persistent = timedOut || this.failures >= 8
         if (persistent) this.changed('Map tiles unavailable. Check the saved key and connection. Reconnecting automatically…')
-        this.retryTimer ??= setTimeout(() => { this.retryTimer = null; this.retry() }, persistent ? 5000 : 800)
+        this.retryTimer ??= setTimeout(() => { this.retryTimer = null; this.retry() }, persistent ? 3000 : 600)
       }
     } finally {
       clearTimeout(timer);
