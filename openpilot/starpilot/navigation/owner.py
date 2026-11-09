@@ -376,8 +376,11 @@ class NavigationOwner:
     result['mapProvider'] = document['mapProvider']
     result['hasGoogleKey'] = bool(document['googleKey'])
     from openpilot.starpilot.navigation.google_tiles import MESSAGES, GoogleBudget, read_status
-    failure = read_status(self.google_root).get('failure') if document['mapProvider'] == 'google' else None
-    result['googleMap'] = {'usage': GoogleBudget(self.google_root).snapshot(), 'failure': MESSAGES.get(failure)}
+    google_status = read_status(self.google_root)
+    failure = google_status.get('failure') if document['mapProvider'] == 'google' else None
+    copyright_text = google_status.get('copyright')
+    result['googleMap'] = {'usage': GoogleBudget(self.google_root).snapshot(), 'failure': MESSAGES.get(failure),
+                           **({'copyright': copyright_text} if isinstance(copyright_text, str) and copyright_text else {})}
     from openpilot.starpilot.navigation.google_routes import essentials_budget, read_route_failure, route_budget
     result['routeProvider'] = document['routeProvider']
     google_routing = document['routeProvider'] == 'google' and bool(document['googleKey'])
@@ -465,9 +468,27 @@ class NavigationOwner:
       raise ValidationError('Invalid map theme')
     if any(type(v) is not int for v in (z, x, y)) or not 0 <= z <= 18 or not 0 <= x < 2 ** z or not 0 <= y < 2 ** z:
       raise ValidationError('Invalid map tile')
-    token = self.read()['token']
+    settings = self.read()
+    token = settings['token']
     if not token:
       raise ValidationError('Save a Mapbox key to view the map')
+    google_key = settings.get('googleKey', '') if settings.get('mapProvider') == 'google' else ''
+    if google_key:
+      if not self._tile_slots.acquire(timeout=TILE_SLOT_WAIT_S):
+        raise ValidationError('Map is busy; try again')
+      try:
+        from openpilot.starpilot.navigation.google_tiles import fetch_tile
+        tile = fetch_tile(google_key, z, x, y, theme, http=self.session, root=self.google_root)
+        current = self.read()
+        if current.get('googleKey', '') != google_key or current.get('mapProvider') != 'google':
+          raise ValidationError('Map key changed; try again')
+        return tile
+      except ValidationError:
+        raise
+      except (requests.RequestException, ValueError, OSError):
+        pass
+      finally:
+        self._tile_slots.release()
     key = hashlib.sha256(token.encode()).digest()
     coordinates = (theme, z, x, y)
     with self._tile_lock:
