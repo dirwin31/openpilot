@@ -8,6 +8,7 @@ import uuid
 
 from openpilot.starpilot.navigation.owner import ConflictError, NavigationOwner, ValidationError, ROUTE_AVOIDANCES
 from openpilot.starpilot.navigation.route_engine import MapboxRouteEngine, distance
+from openpilot.starpilot.navigation.google_routes import GoogleRouteEngine, GoogleRoutesFailed, route_budget, write_route_status
 
 from openpilot.starpilot.gps.phone import read_phone_gps
 from openpilot.starpilot.gps.source import GPS_MAX_AGE_NS, GPS_SERVICES, bearing, select_location
@@ -29,12 +30,13 @@ def location(sm, now_ns: int, phone_fix=None):
 
 
 class RouteRuntime:
-  def __init__(self, owner: NavigationOwner, engine=None, executor=None):
+  def __init__(self, owner: NavigationOwner, engine=None, executor=None, google_engine=None):
     self.owner = owner
     if engine is None:
       from openpilot.starpilot.navigation.mapbox_budget import MonthlyBudget
       engine = MapboxRouteEngine(owner.session, MonthlyBudget('directions', owner.root / 'mapbox-usage'))
     self.engine = engine
+    self.google_engine = google_engine or GoogleRouteEngine(owner.session, route_budget(owner.google_root))
     self.executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix='route')
     self.key = None
     self.route = None
@@ -72,7 +74,8 @@ class RouteRuntime:
     selected = settings['destination']
     destination_key = None if selected is None else (selected['id'], selected['longitude'], selected['latitude'])
     exclusions = tuple(value for key, value in ROUTE_AVOIDANCES.items() if settings[key])
-    key = settings['enabled'], hashlib.sha256(settings['token'].encode()).digest(), destination_key, drive_id, exclusions
+    credentials = (settings['token'], settings['googleKey'] if settings['routeProvider'] == 'google' else '')
+    key = settings['enabled'], hashlib.sha256('\0'.join(credentials).encode()).digest(), destination_key, drive_id, exclusions
     if key != self.key:
       self.key, self.route = key, None
       self.routes = []
@@ -123,8 +126,8 @@ class RouteRuntime:
           if self.future is None and now_ns >= self.retry_after:
             self.preview_only = True
             self.fetch_key = self.key
-            self.future = self.executor.submit(self.engine.fetch, settings['token'],
-                                               (saved['longitude'], saved['latitude']), settings['destination'], saved.get('bearing'), exclusions)
+            self.future = self.executor.submit(*self._fetcher(credentials), (saved['longitude'], saved['latitude']),
+                                               settings['destination'], saved.get('bearing'), exclusions)
       return result
     stamp, coordinates, speed, bearing = position
     result['locationMonoTime'] = stamp
@@ -132,7 +135,7 @@ class RouteRuntime:
       result['status'] = 'routeUnavailable' if self.retry_after > now_ns else 'routing'
       if self.future is None and now_ns >= self.retry_after:
         self.fetch_key = self.key
-        self.future = self.executor.submit(self.engine.fetch, settings['token'], coordinates, settings['destination'], bearing, exclusions)
+        self.future = self.executor.submit(*self._fetcher(credentials), coordinates, settings['destination'], bearing, exclusions)
       return result
     progress = self.route.progress(coordinates, speed, bearing)
     fresh = now_ns <= stamp + GPS_MAX_AGE_NS
@@ -152,6 +155,20 @@ class RouteRuntime:
                   nextManeuver=progress.next_maneuver, route=self.route.preview(),
                   controlValid=bool(speed is not None and fresh and drive_id > 0 and not progress.off_route and not arriving and stamp >= drive_id))
     return result
+
+  def _fetcher(self, credentials):
+    return (self._fetch_google, credentials) if credentials[1] else (self.engine.fetch, credentials[0])
+
+  def _fetch_google(self, credentials, position, destination, bearing, exclusions):
+    """Google's traffic-aware route; Mapbox routes the trip whenever Google cannot."""
+    token, key = credentials
+    try:
+      route = self.google_engine.fetch(key, position, destination, bearing, exclusions)
+    except GoogleRoutesFailed as error:
+      write_route_status(self.owner.google_root, error.failure)
+      return self.engine.fetch(token, position, destination, bearing, exclusions)
+    write_route_status(self.owner.google_root, None)
+    return route
 
   @staticmethod
   def _near_destination(settings, coordinates) -> bool:

@@ -1,5 +1,6 @@
 """Map overlay geometry (CPU) and rendering (STARPILOT_AUTO_GL_TEST=1 for a real GL context)."""
 
+import json
 import math
 import os
 import time
@@ -825,3 +826,70 @@ def test_map_feed_reports_maneuver_distance_and_road_name(monkeypatch):
   assert feed.read(sm).road_name == "Desert Inn Road"
   sm.valid["mapdOut"] = False
   assert feed.read(sm).road_name == "", "an invalid road match clears its name"
+
+
+def google_overlay(tmp_path):
+  import io
+  from PIL import Image
+  from openpilot.starpilot.navigation.google_tiles import GoogleTileStore, key_digest, tiles_in_radius
+  from openpilot.starpilot.ui.onroad_google_map import GoogleRaster
+  key = "AIzaSyFixtureKey_0123456789abcdef"
+  settings = tmp_path / "settings.json"
+  settings.write_text(json.dumps({"mapProvider": "google", "googleKey": key}))
+  store = GoogleTileStore(tmp_path / "google")
+  # Each pixel carries its own position inside its tile, so any misplacement or flip shows in the colors.
+  x, y = np.meshgrid(np.arange(256), np.arange(256))
+  for tile in tiles_in_radius(*CENTER, 1500.0, 17):
+    pixels = np.stack((x, y, np.full_like(x, 60 + 120 * (tile.x % 2)), np.full_like(x, 255)), axis=-1).astype(np.uint8)
+    out = io.BytesIO()
+    Image.fromarray(pixels, "RGBA").save(out, "PNG")
+    store.write(key_digest(key), tile, out.getvalue(), 3600)
+  raster = GoogleRaster(tmp_path / "google", settings=settings, want=tmp_path / "want.json")
+  return MapOverlay(tmp_path / "roads", raster=raster)
+
+
+def test_google_tiles_line_up_with_the_car_and_heading(gl, tmp_path):
+  rl = gl
+  overlay = google_overlay(tmp_path)
+  width, height = 560, 420
+  data = MapInput(MapFix(*CENTER, 0.0, 3.0, time.monotonic() + 3600), ())
+  try:
+    for _ in range(80):
+      overlay.prepare(data, width, height)
+      if overlay._raster_drawn and overlay.raster.generation == overlay._raster_generation and not overlay.raster._decoded:
+        break
+      time.sleep(0.05)
+    overlay.prepare(data, width, height)
+    assert overlay._raster_drawn > 4 and overlay.has_roads
+    target = rl.load_render_texture(width, height)
+    rl.begin_texture_mode(target)
+    rl.clear_background(rl.Color(0, 0, 0, 255))
+    overlay.draw(rl.Rectangle(0, 0, width, height), 1.0)
+    rl.end_texture_mode()
+    image = rl.load_image_from_texture(target.texture)
+    rl.image_flip_vertical(image)
+    pixels = np.frombuffer(image.data[:width * height * 4], np.uint8).reshape(height, width, 4).copy()
+    rl.unload_image(image)
+    rl.unload_render_texture(target)
+  finally:
+    overlay.close()
+  # Heading north, 60 screen pixels left of the car is 60 * 0.9 m west of it.
+  from openpilot.starpilot.navigation.road_tiles import meters_per_tile
+  cx, cy = world_xy(*CENTER, 17)
+  expected_x = (cx - 60 * ZOOM_SLOW_M_PER_PX / meters_per_tile(CENTER[0], 17)) % 1 * 256
+  r, g = pixels[int(height * CAR_ANCHOR), width // 2 - 60, :2].astype(int)
+  assert abs(r - expected_x) <= 4 and abs(g - cy % 1 * 256) <= 4
+  # 60 pixels above the car is north of it: the same column, a smaller row in the tile (or the tile above).
+  r2, g2 = pixels[int(height * CAR_ANCHOR) - 60, width // 2, :2].astype(int)
+  assert abs(r2 - cx % 1 * 256) <= 4 and abs(g2 - (cy - 60 * ZOOM_SLOW_M_PER_PX / meters_per_tile(CENTER[0], 17)) % 1 * 256) <= 4
+  assert json.loads((tmp_path / "want.json").read_text())["tiles"]
+
+
+def test_google_layer_is_off_unless_google_is_chosen(tmp_path):
+  from openpilot.starpilot.ui.onroad_google_map import chosen_key
+  path = tmp_path / "settings.json"
+  assert chosen_key(path) == ""
+  path.write_text(json.dumps({"mapProvider": "mapbox", "googleKey": "AIzaSyFixtureKey_0123456789abcdef"}))
+  assert chosen_key(path) == ""
+  path.write_text(json.dumps({"mapProvider": "google", "googleKey": "AIzaSyFixtureKey_0123456789abcdef"}))
+  assert chosen_key(path) == "AIzaSyFixtureKey_0123456789abcdef"

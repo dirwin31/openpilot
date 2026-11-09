@@ -96,3 +96,59 @@ def test_reads_reparse_only_after_a_write(owner):
     assert owner.read()['favorites'] == [], "cached copies are independent of what callers change"
   assert owner.select(PLACE, saved['revision'], True)['destination']['name'] == 'Home'
   assert owner.read()['destination']['name'] == 'Home'
+
+
+GOOGLE_KEY = 'AIzaSyFixtureKey_0123456789abcdef'
+
+
+def test_google_map_style_is_saved_without_exposing_the_key(owner):
+  assert owner.snapshot()['mapProvider'] == 'mapbox' and owner.snapshot()['hasGoogleKey'] is False
+  selected = owner.select(PLACE, owner.configure({'enabled': True, 'token': 'pk.test'}, '0', True)['revision'], True)
+  saved = owner.configure({'mapProvider': 'google', 'googleKey': GOOGLE_KEY}, selected['revision'], True)
+  assert saved['mapProvider'] == 'google' and saved['hasGoogleKey'] is True
+  assert saved['destination']['name'] == 'Home'
+  assert GOOGLE_KEY not in json.dumps(owner.snapshot())
+  assert saved['googleMap']['usage']['monthLimit'] == 99_000 and saved['googleMap']['failure'] is None
+  assert owner.read()['googleKey'] == GOOGLE_KEY
+
+
+@pytest.mark.parametrize('patch', [{'mapProvider': 'apple'}, {'googleKey': 'short'}, {'googleKey': 'AIza key with spaces 0123456789'},
+                                   {'googleKey': 7}, {'googleKey': 'A' * 129}])
+def test_invalid_google_settings_rejected(owner, patch):
+  with pytest.raises(ValidationError):
+    owner.configure(patch, '0', True)
+
+
+def test_older_settings_files_read_with_google_defaults(owner):
+  owner.path.write_text(json.dumps({'version': 1, 'revision': 'abc', 'enabled': True, 'token': 'pk.test', 'destination': None,
+                                    'favorites': []}))
+  settings = owner.read()
+  assert settings['mapProvider'] == 'mapbox' and settings['googleKey'] == ''
+
+
+def test_google_key_test_uses_typed_or_saved_key(owner):
+  with (patch('openpilot.starpilot.navigation.google_tiles.test_key', return_value={'ok': True}) as tested,
+        patch('openpilot.starpilot.navigation.google_routes.test_routes', return_value={'ok': False}) as routed):
+    with pytest.raises(ValidationError):
+      owner.test_google_key()
+    assert owner.test_google_key(GOOGLE_KEY) == {'ok': True}
+    saved = owner.configure({'googleKey': GOOGLE_KEY}, '0', True)
+    owner.test_google_key()
+    assert not routed.called
+    owner.configure({'routeProvider': 'google'}, saved['revision'], True)
+    assert owner.test_google_key() == {'ok': True, 'routes': {'ok': False}}
+  assert [call.args[0] for call in tested.call_args_list] == [GOOGLE_KEY] * 3
+  assert [call.args[0] for call in routed.call_args_list] == [GOOGLE_KEY]
+
+
+def test_route_provider_is_saved_and_reports_google_route_use(owner):
+  snapshot = owner.snapshot()
+  assert snapshot['routeProvider'] == 'mapbox' and snapshot['googleRoutes']['usage']['monthLimit'] == 4950
+  assert snapshot['googleRoutes']['failure'] is None
+  saved = owner.configure({'routeProvider': 'google', 'googleKey': GOOGLE_KEY}, snapshot['revision'], True)
+  assert saved['routeProvider'] == 'google' and owner.read()['routeProvider'] == 'google'
+  from openpilot.starpilot.navigation.google_routes import write_route_status
+  write_route_status(owner.google_root, 'budget')
+  assert 'used up' in owner.snapshot()['googleRoutes']['failure']
+  with pytest.raises(ValidationError, match='route provider'):
+    owner.configure({'routeProvider': 'apple'}, saved['revision'], True)

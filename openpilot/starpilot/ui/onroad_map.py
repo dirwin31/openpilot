@@ -32,7 +32,7 @@ from openpilot.starpilot.gps.acquisition import GpsAcquisition, acquisition_prog
 from openpilot.starpilot.gps.source import GPS_MAX_AGE_NS, PHONE_MAX_AGE_NS
 from openpilot.starpilot.navigation.road_tiles import (
   DATA_ZOOM, EXTENT, LINK, MAJOR, MINOR, MOTORWAY, STREET, RoadTile, TileFormatError, TileKey, decode_road_tile,
-  encode_road_tile, meters_per_tile, world_xy,
+  encode_road_tile, lat_lon, meters_per_tile, world_xy,
 )
 from openpilot.system.ui.lib.application import GL_VERSION
 
@@ -61,6 +61,7 @@ OVERVIEW_MIN_MANEUVER_M = 50.0  # ...unless a maneuver is about to happen
 NAME_HOLD_S = 1.5            # a new road name must hold this long to replace the old one
 ROAD_NAME_MAX_AGE_S = 3.0
 GUIDANCE_SLACK_PX = 4.0      # screen pixels of driven route left under the puck before guidance is trimmed again
+RASTER_REDRAW_S = 0.25       # newly arrived Google tiles redraw the canvas at most this often
 
 
 @dataclass(frozen=True)
@@ -179,6 +180,7 @@ class CanvasRequest:
   route: np.ndarray | None             # (N, 2) world points ahead of the car
   route_done: np.ndarray | None        # (N, 2) world points already driven
   tiles: tuple[TileKey, ...]
+  raster: tuple[TileKey, ...] = ()     # Google tiles drawn over the road lines
 
 
 @dataclass
@@ -433,8 +435,9 @@ class MapOverlay:
   """Owns two canvases (front/back), a widget texture and the mask shader."""
 
   def __init__(self, root: Path | None = None, *, reader: TileReader | SampleTileReader | None = None, fonts=None,
-               clock: Callable[[], float] = time.monotonic):
+               clock: Callable[[], float] = time.monotonic, raster=None):
     self.reader = reader or TileReader(root, clock)
+    self.raster = raster
     self.fonts = fonts
     self.clock = clock
     self._lock = threading.Lock()
@@ -453,6 +456,10 @@ class MapOverlay:
     self._uniform_values = (rl.Vector2(), np.zeros(1, dtype=np.float32), np.zeros(1, dtype=np.float32), np.zeros(1, dtype=np.float32))
     self._pending_at = -math.inf
     self.has_roads = False
+    self._geometry: CanvasGeometry | None = None
+    self._raster_drawn = 0
+    self._raster_generation = 0
+    self._raster_redrawn = -math.inf
     self._route_key: tuple | None = None
     self._route_world: np.ndarray | None = None
     self._route_last_shown: float | None = None   # clock time the route was last available this navigation session
@@ -468,6 +475,7 @@ class MapOverlay:
     self._name_candidate = ''
     self._name_since = 0.0
     self._name_layout: tuple | None = None
+    self._attribution_layout: tuple | None = None
     self._m_per_px = ZOOM_SLOW_M_PER_PX
     self._last_prepare: float | None = None
     self.status = "waiting"
@@ -572,7 +580,8 @@ class MapOverlay:
     drift = math.hypot(self._world[0] - request.center[0], self._world[1] - request.center[1]) * px_per_unit
     reach = self._reach(*self._widget_size) * SUPERSAMPLE * self._m_per_px / request.m_per_px
     ratio = request.m_per_px / self._m_per_px
-    return drift > (side / 2 - reach) * 0.5 or not 0.82 < ratio < 1.22 or self.reader.generation != self._generation_built
+    replan = self.raster is not None and not request.raster and self.raster.active
+    return drift > (side / 2 - reach) * 0.5 or not 0.82 < ratio < 1.22 or self.reader.generation != self._generation_built or replan
 
   def _request(self, side: int) -> CanvasRequest:
     assert self._world is not None
@@ -584,7 +593,16 @@ class MapOverlay:
                   for tx in range(int(math.floor(x - reach)), int(math.floor(x + reach)) + 1)
                   if 0 <= ty < 1 << DATA_ZOOM)
     done, ahead = split_route(self._route_world, self._world) if self._route_world is not None else (None, None)
-    return CanvasRequest(self._world, self._m_per_px, side, ahead, done, tiles)
+    return CanvasRequest(self._world, self._m_per_px, side, ahead, done, tiles, self._raster_plan(side))
+
+  def _raster_plan(self, side: int) -> tuple[TileKey, ...]:
+    """Google tiles out to the widget's farthest corner plus the drift and zoom a canvas allows before it is rebuilt."""
+    if self.raster is None or self._world is None or self._widget_size is None:
+      return ()
+    reach = self._reach(*self._widget_size)
+    drift = max(0.0, side / SUPERSAMPLE / 2 - reach) * 0.5
+    latitude, longitude = lat_lon(*self._world)
+    return self.raster.plan(latitude, longitude, self._m_per_px, (reach + drift) * self._m_per_px * 1.22)
 
   def _schedule(self, request: CanvasRequest) -> None:
     self._pending = request
@@ -646,11 +664,33 @@ class MapOverlay:
         strip = np.ascontiguousarray(strip, np.float32)
         rl.draw_triangle_strip(strip, len(strip), color)
       rl.end_blend_mode()
+      self._raster_drawn = self._draw_raster(geometry.request)
     finally:
       rl.end_texture_mode()
+    self._geometry = geometry
     self._guidance_key = None
     self._canvas_request = geometry.request
-    self.has_roads = geometry.tiles_missing < len(geometry.request.tiles)
+    self.has_roads = geometry.tiles_missing < len(geometry.request.tiles) or self._raster_drawn > 0
+
+  def _draw_raster(self, request: CanvasRequest) -> int:
+    """Google tiles over the road lines, which show through wherever a tile has not arrived yet."""
+    if self.raster is None or not request.raster:
+      return 0
+    self._raster_generation = self.raster.generation
+    textures = self.raster.textures(request.raster)
+    px_per_unit = meters_per_tile(lat_lon(*request.center)[0]) * SUPERSAMPLE / request.m_per_px
+    rl.begin_blend_mode(rl.BlendMode.BLEND_ALPHA)
+    try:
+      for key, texture in textures.items():
+        scale = 2.0 ** (DATA_ZOOM - key.z)
+        x = (key.x * scale - request.center[0]) * px_per_unit + request.side / 2
+        y = (key.y * scale - request.center[1]) * px_per_unit + request.side / 2
+        size = scale * px_per_unit + 1.0      # a pixel of overlap hides seams between tiles
+        rl.draw_texture_pro(texture, rl.Rectangle(0, 0, texture.width, texture.height), rl.Rectangle(x, y, size, size),
+                            rl.Vector2(0, 0), 0, rl.WHITE)
+    finally:
+      rl.end_blend_mode()
+    return len(textures)
 
   def _puck(self, x: float, y: float) -> None:
     rl.draw_circle_v(rl.Vector2(x, y), 26, premultiplied((150, 110, 255, 70)))
@@ -744,6 +784,12 @@ class MapOverlay:
         ready, self._ready = self._ready, None
       if ready is not None:
         self._draw_canvas(ready)
+      if self.raster is not None:
+        self.raster.upload()
+        if (self._geometry is not None and self.raster.generation != self._raster_generation and
+            now - self._raster_redrawn >= RASTER_REDRAW_S):
+          self._raster_redrawn = now
+          self._draw_canvas(self._geometry)
       in_flight = self._pending is not None and self._canvas_request is not self._pending and now - self._pending_at < 2.0
       if not in_flight and self._needs_canvas(side):
         self._schedule(self._request(side))
@@ -772,6 +818,8 @@ class MapOverlay:
     finally:
       rl.end_shader_mode()
       rl.end_blend_mode()
+    if self._raster_drawn:
+      self._draw_attribution(rect)
     if self.status == "waiting":
       self._draw_gps_status(rect)
       return
@@ -806,6 +854,28 @@ class MapOverlay:
     rl.draw_rectangle_rounded(pill, 0.5, 8, rl.Color(15, 13, 23, 255))
     rl.draw_rectangle_rounded_lines_ex(pill, 0.5, 8, 1.5, rl.Color(150, 140, 200, 255))
     self.fonts.draw(text, FontRole.MEDIUM, size, pill.x + pad, pill.y + size * 0.27, rl.Color(240, 242, 250, 255))
+
+  def _draw_attribution(self, rect: rl.Rectangle) -> None:
+    """Google's name and data credit along the bottom edge, solid whatever the map's opacity."""
+    if self.fonts is None:
+      return
+    from openpilot.starpilot.ui.onroad_google_map import ATTRIBUTION
+    from openpilot.starpilot.ui.presentation import FontRole
+    scale = max(.7, min(1.0, rect.width / 560, rect.height / 420))
+    inset, bottom = 16 * scale, rect.y + rect.height - 10 * scale
+    logo = self.fonts.measure(ATTRIBUTION, FontRole.SEMI_BOLD, 17 * scale)
+    self.fonts.draw(ATTRIBUTION, FontRole.SEMI_BOLD, 17 * scale, rect.x + inset, bottom - logo.height, rl.Color(240, 242, 250, 255))
+    size, room = 13 * scale, rect.width - logo.width - inset * 3
+    key = (self.raster.copyright if self.raster is not None else '', size, round(room))
+    if self._attribution_layout is None or self._attribution_layout[0] != key:
+      text = key[0] if room > 0 else ''
+      while len(text) > 3 and self.fonts.measure(text, FontRole.NORMAL, size).width > room:
+        text = text[:-4] + "..." if text.endswith("...") else text[:-1] + "..."
+      self._attribution_layout = key, text, self.fonts.measure(text, FontRole.NORMAL, size) if text else None
+    _, text, measured = self._attribution_layout
+    if text:
+      self.fonts.draw(text, FontRole.NORMAL, size, rect.x + rect.width - inset - measured.width, bottom - measured.height,
+                      rl.Color(214, 218, 230, 255))
 
   def _draw_source_chip(self, rect: rl.Rectangle) -> None:
     """Where the fix comes from, left of the compass; solid whatever the map's opacity so it always reads."""
@@ -886,6 +956,8 @@ class MapOverlay:
 
   def close(self) -> None:
     self.reader.close()
+    if self.raster is not None:
+      self.raster.close()
     if rl.is_window_ready():
       for target in (self._canvas, self._widget, self._guidance):
         if target is not None:
@@ -895,6 +967,12 @@ class MapOverlay:
     self._canvas = self._widget = self._guidance = None
     self._route_layers = []
     self._shader = None
+
+
+def live_overlay(fonts=None) -> MapOverlay:
+  """The driving map: road lines from disk, with Google tiles over them when Google is the chosen map style."""
+  from openpilot.starpilot.ui.onroad_google_map import GoogleRaster
+  return MapOverlay(fonts=fonts, raster=GoogleRaster())
 
 
 # ---------------------------------------------------------------- live input
@@ -1051,7 +1129,6 @@ class SampleTileReader:
 
 
 def sample_input() -> MapInput:
-  from openpilot.starpilot.navigation.road_tiles import lat_lon
   def world(x, y):
     return lat_lon(SAMPLE_TILE.x + x / EXTENT, SAMPLE_TILE.y + y / EXTENT)
   latitude, longitude = world(*SAMPLE_CAR)
