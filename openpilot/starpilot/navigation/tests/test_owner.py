@@ -152,3 +152,30 @@ def test_route_provider_is_saved_and_reports_google_route_use(owner):
   assert 'used up' in owner.snapshot()['googleRoutes']['failure']
   with pytest.raises(ValidationError, match='route provider'):
     owner.configure({'routeProvider': 'apple'}, saved['revision'], True)
+
+
+class Redirects:
+  def __init__(self, hops):
+    self.hops, self.calls = dict(hops), []
+
+  def get(self, url, **kwargs):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    self.calls.append((url, kwargs))
+    location = self.hops.get(url)
+    return nullcontext(SimpleNamespace(status_code=302 if location else 200, headers={'Location': location} if location else {}))
+
+
+def test_shared_short_link_follows_google_redirects_only(owner):
+  owner.session = Redirects({'https://maps.app.goo.gl/abc123': 'https://www.google.com/maps/place/X/@36.1,-115.1,17z/data=!3d36.1!4d-115.1'})
+  resolved = owner.resolve_share('Bellagio\nhttps://maps.app.goo.gl/abc123')
+  assert resolved == 'Bellagio\nhttps://www.google.com/maps/place/X/@36.1,-115.1,17z/data=!3d36.1!4d-115.1'
+  assert owner.session.calls[0][1]['allow_redirects'] is False and owner.session.calls[0][1]['stream'] is True
+  owner.session = Redirects({'https://maps.app.goo.gl/abc123': 'https://evil.example/maps?q=1'})
+  assert owner.resolve_share('https://maps.app.goo.gl/abc123') == 'https://maps.app.goo.gl/abc123'
+  owner.session = Redirects({'https://maps.app.goo.gl/abc123': 'http://www.google.com/maps'})
+  assert owner.resolve_share('https://maps.app.goo.gl/abc123') == 'https://maps.app.goo.gl/abc123'
+  owner.session = Redirects({})
+  assert owner.resolve_share('Starbucks') == 'Starbucks' and not owner.session.calls
+  with pytest.raises(ValidationError):
+    owner.resolve_share(None)

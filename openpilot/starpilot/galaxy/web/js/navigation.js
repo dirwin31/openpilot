@@ -1,4 +1,4 @@
-import { parseSharedDestination } from "./share-destination.js"
+import { SHORT_MAP_LINK, isMapLink, parseSharedDestination } from "./share-destination.js"
 import { GxNotice } from "./notice.js"
 import { BluetoothNotice, bluetoothConnection } from "./bluetooth-notice.js"
 import { connectionError } from "./polling.js"
@@ -217,7 +217,7 @@ export class NavigationClient {
     if (operation !== "status") this.error = ""
     this.emit()
     const deadline = this.later(() => controller.abort(), operation === "search" ? 24000 : operation === "action" && body?.action === "selectPlace" ? 12000 :
-      operation === "action" && body?.action === "testGoogleKey" ? 45000 : 4000)
+      operation === "action" && body?.action === "testGoogleKey" ? 45000 : operation === "action" && body?.action === "resolveShare" ? 20000 : 4000)
     try {
       // Status polls name the route lines they already hold; the comma then leaves them out.
       const query = operation === "status" && this.data?.routeKey ? `?routeKey=${this.data.routeKey}` : ""
@@ -338,6 +338,7 @@ export const NavigationPage = {
     },
     googleUsage() { return this.data?.googleMap?.usage || null },
     googleRouteUsage() { return this.data?.googleRoutes?.usage || null },
+    googleEssentialUsage() { return this.data?.googleRoutes?.essentials || null },
     path() { return routePath(this.data?.route) },
     summary() {
       const instruction = this.data?.instruction, route = this.data?.alternatives?.[this.data?.selectedRoute || 0]
@@ -366,13 +367,7 @@ export const NavigationPage = {
         if (!share || !this.client.data || this.client.stale || !this.client.active) return
         params.delete('share')
         history.replaceState(history.state, '', `${location.pathname}${params.size ? '?' + params : ''}${location.hash}`)
-        const parsed = parseSharedDestination(share)
-        if (parsed.destination) await this.client.action('select', { destination: parsed.destination })
-        else {
-          // Text shares can be ambiguous ("Starbucks"); show the results and let the driver pick.
-          this.query = parsed.query
-          await this.client.search(parsed.query)
-        }
+        await this.openShared(share)
       })
     }
   },
@@ -389,6 +384,18 @@ export const NavigationPage = {
       this.tab = tab
       this.go?.(tab === 'route' ? '/navigation' : `/navigation/${tab}`)
     },
+    async openShared(text) {
+      let parsed = parseSharedDestination(text)
+      // A Google Maps short link is followed on the comma to the full link, which carries the coordinates.
+      if (!parsed.destination && SHORT_MAP_LINK.test(text)) {
+        const resolved = (await this.client.action('resolveShare', { text: String(text).slice(0, 8192) }))?.sharedText
+        if (resolved) parsed = parseSharedDestination(resolved)
+      }
+      if (parsed.destination) { await this.client.action('select', { destination: parsed.destination }); return }
+      // Text shares can be ambiguous ("Starbucks"); show the results and let the driver pick.
+      this.query = parsed.query
+      await this.client.search(parsed.query)
+    },
     async search() {
       if (this.searchPending) return
       clearTimeout(this.suggestTimer)
@@ -396,13 +403,13 @@ export const NavigationPage = {
       this.savedSuggestionPlaces = {}
       this.favoritePicker = null
       this.searchPending = true
-      try { await this.client.search(this.query) }
+      try { await (isMapLink(this.query) ? this.openShared(this.query) : this.client.search(this.query)) }
       finally { this.searchPending = false }
     },
     typed() {
       clearTimeout(this.suggestTimer)
       this.suggestOpen = true
-      if (!this.query.trim()) { this.client.endSuggestions(); return }
+      if (!this.query.trim() || isMapLink(this.query)) { this.client.endSuggestions(); return }
       this.favoritePicker = null
       this.suggestTimer = setTimeout(() => this.client.suggest(this.query), 150)
     },
@@ -586,11 +593,12 @@ export const NavigationPage = {
               <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Create an API key</a> and restrict it to those APIs. Leave application restrictions off; the comma's address changes on cellular.</li>
               <li>Paste the key below while parked, then press <strong>Test key</strong>.</li></ol>
           </details>
-          <p class="gx-note">The comma stops at 99% of Google's free 100,000 map tiles a month and 15,000 a day, and at 99% of 5,000 traffic-aware routes a month, counted on Google's Pacific-time calendar, then uses Mapbox until they reset. Google routes have no lane arrows. These counts cover this comma only; Google bills everything that uses the key.</p>
+          <p class="gx-note">The comma stops at 99% of Google's free 100,000 map tiles a month and 15,000 a day, and at 99% of Google's free routes: 10,000 a month without traffic, and 5,000 traffic requests. Every route, including a reroute, uses live traffic (one traffic request each), and every 7½ minutes one more corrects the arrival time. Past 20 reroutes in an hour, or once traffic requests run out, routes ignore traffic; past both limits the comma uses Mapbox until they reset. Google routes have no lane arrows. These counts cover this comma only; Google bills everything that uses the key.</p>
           <dl v-if="googleUsage" class="gx-navigation__usage" aria-label="Google map use">
             <dt>Map tiles this month</dt><dd>{{ googleUsage.monthUsed.toLocaleString() }} of {{ googleUsage.monthLimit.toLocaleString() }} free</dd>
             <dt>Map tiles today</dt><dd>{{ googleUsage.dayUsed.toLocaleString() }} of {{ googleUsage.dayLimit.toLocaleString() }} free</dd>
-            <template v-if="googleRouteUsage"><dt>Routes this month</dt><dd>{{ googleRouteUsage.monthUsed.toLocaleString() }} of {{ googleRouteUsage.monthLimit.toLocaleString() }} free</dd></template>
+            <template v-if="googleEssentialUsage"><dt>Routes this month</dt><dd>{{ googleEssentialUsage.monthUsed.toLocaleString() }} of {{ googleEssentialUsage.monthLimit.toLocaleString() }} free</dd></template>
+            <template v-if="googleRouteUsage"><dt>Traffic requests this month</dt><dd>{{ googleRouteUsage.monthUsed.toLocaleString() }} of {{ googleRouteUsage.monthLimit.toLocaleString() }} free</dd></template>
           </dl>
           <GxNotice v-if="data?.googleMap?.failure" tone="warn">{{ data.googleMap.failure }}</GxNotice>
           <GxNotice v-if="data?.googleRoutes?.failure" tone="warn">{{ data.googleRoutes.failure }}</GxNotice>

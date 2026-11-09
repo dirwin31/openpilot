@@ -8,10 +8,11 @@ import hashlib
 import json
 import math
 import os
+import re
 import stat
 import sys
 import subprocess
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlsplit
 from pathlib import Path
 from itertools import islice
 import tempfile
@@ -44,6 +45,8 @@ ROUTE_AVOIDANCES = {'avoidTolls': 'toll', 'avoidHighways': 'motorway', 'avoidFer
 # Fixed provider styles matching Galaxy; cache entries are separate for each theme.
 MAP_STYLES = {'light': 'mapbox/light-v11', 'dark': 'mapbox/dark-v11'}
 MAP_PROVIDERS = ('mapbox', 'google')
+SHORT_MAP_LINK = re.compile(r'https://(?:maps\.app\.goo\.gl|goo\.gl/maps)/[A-Za-z0-9_-]{1,64}')
+GOOGLE_MAP_HOST = re.compile(r'(?:maps\.app\.goo\.gl|goo\.gl|(?:[a-z0-9-]+\.)*google\.com)')
 CONFIGURABLE = {'enabled', 'token', 'gpsSource', 'mapProvider', 'routeProvider', 'googleKey'}
 KEEPS_ACTIVE = {'gpsSource', 'mapProvider', 'routeProvider', 'googleKey'}
 GOOGLE_KEY_CHARS = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-')
@@ -361,10 +364,10 @@ class NavigationOwner:
     from openpilot.starpilot.navigation.google_tiles import MESSAGES, GoogleBudget, read_status
     failure = read_status(self.google_root).get('failure') if document['mapProvider'] == 'google' else None
     result['googleMap'] = {'usage': GoogleBudget(self.google_root).snapshot(), 'failure': MESSAGES.get(failure)}
-    from openpilot.starpilot.navigation.google_routes import read_route_failure, route_budget
+    from openpilot.starpilot.navigation.google_routes import essentials_budget, read_route_failure, route_budget
     result['routeProvider'] = document['routeProvider']
     google_routing = document['routeProvider'] == 'google' and bool(document['googleKey'])
-    result['googleRoutes'] = {'usage': route_budget(self.google_root).snapshot(),
+    result['googleRoutes'] = {'usage': route_budget(self.google_root).snapshot(), 'essentials': essentials_budget(self.google_root).snapshot(),
                               'failure': read_route_failure(self.google_root) if google_routing else None}
     result['alternatives'] = [dict(row, geometry=rounded(row['geometry'])) for row in self.route_options(document['revision'])]
     result['selectedRoute'] = document.get('routeChoice', 0)
@@ -548,13 +551,36 @@ class NavigationOwner:
     if not isinstance(key, str) or not key or not valid_google_key(key):
       raise ValidationError('Enter a valid Google Maps API key')
     from openpilot.starpilot.navigation.google_tiles import GoogleBudget, test_key
-    from openpilot.starpilot.navigation.google_routes import route_budget, test_routes
+    from openpilot.starpilot.navigation.google_routes import essentials_budget, test_routes
     if settings['routeProvider'] != 'google':
       return test_key(key, self.session, GoogleBudget(self.google_root))
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=2) as pool:
-      routes = pool.submit(test_routes, key, self.session, route_budget(self.google_root))
+      routes = pool.submit(test_routes, key, self.session, essentials_budget(self.google_root))
       return dict(test_key(key, self.session, GoogleBudget(self.google_root)), routes=routes.result())
+
+  def resolve_share(self, text) -> str:
+    """A shared Google Maps short link followed to the full link, which carries the place's coordinates."""
+    if not isinstance(text, str) or len(text) > 8192:
+      raise ValidationError('The shared text could not be read')
+    match = SHORT_MAP_LINK.search(text)
+    if match is None:
+      return text
+    current = match.group(0)
+    for _ in range(4):
+      try:
+        with self.session.get(current, allow_redirects=False, stream=True, timeout=(2., 2.)) as response:
+          location = response.headers.get('Location') if 300 <= response.status_code < 400 else None
+      except requests.RequestException:
+        break
+      if not location:
+        break
+      following = urljoin(current, location)
+      parts = urlsplit(following)
+      if parts.scheme != 'https' or not GOOGLE_MAP_HOST.fullmatch(parts.hostname or '') or len(following) > 8192:
+        break
+      current = following
+    return text.replace(match.group(0), current) if current != match.group(0) else text
 
   def search(self, query: str) -> list[dict]:
     if not isinstance(query, str) or not 2 <= len(query.strip()) <= 256:

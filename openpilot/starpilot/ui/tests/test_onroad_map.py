@@ -18,7 +18,7 @@ from openpilot.starpilot.navigation.road_tiles import (
 )
 from openpilot.starpilot.ui.onroad_map import (
   CAR_ANCHOR, HEADING_DEADBAND_DEG, MAX_TURN_DEG_S, ZOOM_FAST_M_PER_PX, ZOOM_SLOW_M_PER_PX, CanvasRequest, MapFix, MapInput, MapOverlay, TileReader,
-  build_canvas, line_strip, route_guidance, split_route, zoom_for_speed, zoom_target,
+  build_canvas, line_strip, route_guidance, snap_to_route, split_route, zoom_for_speed, zoom_target,
 )
 from openpilot.starpilot.system.starport.tests import test_gpu_nv12
 
@@ -159,6 +159,43 @@ def test_tile_reader_finishes_canvas_larger_than_cache(tmp_path):
     assert len(reader.snapshot(keys)) == len(keys)
   finally:
     reader.close()
+
+
+def test_snap_to_route_keeps_the_car_on_the_line_ahead():
+  from openpilot.starpilot.navigation.road_tiles import meters_per_tile
+  meter = 1 / meters_per_tile(CENTER[0])
+  x, y = world_xy(*CENTER)
+  out_and_back = np.array([(x, y), (x + 500 * meter, y), (x + 500 * meter, y - 10 * meter), (x, y - 10 * meter)])
+  snapped = snap_to_route(out_and_back, (x + 100 * meter, y - 8 * meter), 90., 22 * meter)
+  assert snapped is not None and snapped[1] == 0 and snapped[0] == pytest.approx((x + 100 * meter, y))
+  assert snapped[2] == pytest.approx(90.)
+  assert snap_to_route(out_and_back, (x + 100 * meter, y + 40 * meter), 90., 22 * meter) is None
+  back = snap_to_route(out_and_back, (x + 100 * meter, y - 2 * meter), 270., 22 * meter)
+  assert back is not None and back[1] == 2, "heading picks the leg the car is driving"
+  assert snap_to_route(out_and_back, (x + 100 * meter, y - 2 * meter), None, 22 * meter, start=2)[1] == 2
+
+
+def test_car_eases_onto_the_route_and_turns_with_it(tmp_path):
+  from openpilot.starpilot.navigation.road_tiles import meters_per_tile
+  overlay = MapOverlay(tmp_path)
+  try:
+    meter = 1 / meters_per_tile(CENTER[0])
+    east = tuple(lat_lon(world_xy(*CENTER)[0] + i * 50 * meter, world_xy(*CENTER)[1]) for i in range(40))
+    overlay._route(east)
+    north_of_route = lat_lon(world_xy(*CENTER)[0] + 5 * meter, world_xy(*CENTER)[1] - 12 * meter)
+    for frame in range(200):
+      now = 100. + frame / 50
+      overlay._advance(MapInput(MapFix(*north_of_route, 80., 0.2, now), east, True), now)
+    assert overlay._world is not None and abs(overlay._world[1] - world_xy(*CENTER)[1]) < 0.5 * meter
+    overlay._advance(MapInput(MapFix(*north_of_route, 80., 10., 104.), east, True), 104.)
+    for frame in range(1, 300):
+      now = 104. + frame / 50
+      overlay._advance(MapInput(MapFix(*north_of_route, 80., 10., now), east, True), now)
+    assert overlay._bearing == pytest.approx(90., abs=HEADING_DEADBAND_DEG)
+    overlay._advance(MapInput(MapFix(*north_of_route, 80., 0.2, 200.), east, False), 200.)
+    assert overlay._snap_index is None
+  finally:
+    overlay.close()
 
 
 def test_lost_gps_marks_previous_position_stale(tmp_path):
@@ -861,6 +898,11 @@ def test_google_tiles_line_up_with_the_car_and_heading(gl, tmp_path):
       time.sleep(0.05)
     overlay.prepare(data, width, height)
     assert overlay._raster_drawn > 4 and overlay.has_roads
+    from openpilot.starpilot.ui.onroad_map import RASTER_SUPERSAMPLE, SUPERSAMPLE
+    assert overlay._canvas_request.supersample == RASTER_SUPERSAMPLE
+    side = math.ceil(MapOverlay._reach(width, height) * 2 * 1.6 * RASTER_SUPERSAMPLE / 64) * 64
+    assert overlay._canvas.texture.width == side < math.ceil(MapOverlay._reach(width, height) * 2 * 1.6 * SUPERSAMPLE / 64) * 64
+    assert len(overlay.raster._textures) <= max(16, len(overlay.raster._wanted) + 8)
     target = rl.load_render_texture(width, height)
     rl.begin_texture_mode(target)
     rl.clear_background(rl.Color(0, 0, 0, 255))
