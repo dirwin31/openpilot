@@ -125,3 +125,31 @@
 .gx-navigation__gps { scroll-margin-top: 100px; }
 .gx-navigation__gps li { margin-block: var(--sp-2); line-height: 1.5; }
 .gx-navigation__gps summary { cursor: pointer; min-height: 44px; display: list-item; align-content: center; }
+
+/* Setup choices: one card per source, with what it gives and where it stops. */
+.gx-choice { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: var(--sp-2); }
+.gx-choice__legend { padding: 0; font-weight: var(--fw-medium); }
+.gx-choice__hint { margin: 0; color: var(--text-muted); }
+.gx-choice__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--sp-3); }
+.gx-choice__card { display: grid; gap: var(--sp-1); align-content: start; padding: var(--sp-3) var(--sp-4); border: 1px solid var(--outline);
+  border-radius: var(--radius-md); background: var(--surface-container); cursor: pointer; min-width: 0; }
+.gx-choice__card--on { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.gx-choice__card--off { opacity: .6; cursor: default; }
+.gx-choice__card:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 3px; }
+.gx-choice__title { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.gx-choice__title .bi { color: var(--primary); }
+.gx-choice__title .gx-starport-pill { padding: 2px 10px; font-size: .75rem; }
+.gx-choice__line { line-height: 1.4; }
+.gx-choice__limit { color: var(--text-muted); font-size: .85rem; line-height: 1.4; }
+.gx-compare { display: grid; margin-top: var(--sp-3); border: 1px solid var(--outline); border-radius: var(--radius-md); overflow: hidden; }
+.gx-compare__row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); font-size: .85rem; }
+.gx-compare__row + .gx-compare__row { border-top: 1px solid var(--outline); }
+.gx-compare__row--head { font-weight: var(--fw-medium); background: var(--surface-container); }
+.gx-compare__row > :first-child { color: var(--text-muted); }
+.gx-compare__row--head > :first-child { color: inherit; }
+.gx-navigation__sources { display: flex; flex-wrap: wrap; gap: var(--sp-2); list-style: none; margin: 0; padding: 0; }
+.gx-navigation__sources .gx-navigation__chip { text-decoration: none; border: 1px solid var(--outline); }
+.gx-navigation__power .gx-row__info { display: grid; gap: 2px; }
+.gx-navigation .gx-starport-step__body { padding-left: 0; }
+@media (min-width: 640px) { .gx-navigation .gx-starport-step__body { padding-left: calc(36px + var(--sp-4)); } }
+@media (max-width: 540px) { .gx-compare__row { grid-template-columns: 1fr; gap: 2px; } .gx-compare__row--head { display: none; } .gx-compare__row > :nth-child(2)::before { content: "Mapbox: "; } .gx-compare__row > :nth-child(3)::before { content: "Google: "; } }
