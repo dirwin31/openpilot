@@ -117,3 +117,26 @@ This is the sequence used on a comma mici for route `000000ab--33dc3445cf`. The 
      --reserve-core 6 --reserve-ms 2 --reserve-period-ms 10 --reserve-nice -5
    hd report --output /data/bench/core6 --skip-seconds 20
    ```
+
+## Music-chain probe
+
+`audio_probe.py` answers what Heatdeath alone cannot: whether music survives the driving load. One run starts a private copy of the shipped audio server (same binary, flags, resampler and nice level; your live one is untouched), feeds it a constant tone through the phone relay's client call, and reads the pipe with StarPort's own `PipeSource` on core 6. Alongside it runs one Heatdeath replay and, with `--road`, stand-in loads for the other road processes, each with its real scheduling class, cores and average CPU from route `000000ab` segments 11-19.
+
+```sh
+cp tools/heatdeath/audio_probe.py /data/bench/hd-tool/
+# with the onroad CPU settings applied as above:
+sudo env -i PATH=$PATH HOME=/root /usr/local/venv/bin/python3 -B /data/bench/hd-tool/audio_probe.py run \
+  --repo /data/openpilot --bundle /data/bench/civic58 --output /data/bench/p-road --road --config new
+```
+
+It prints and saves `probe.json`:
+
+- `silenceMs` / `silenceEvents`: tone samples that came out silent, i.e. audible dropouts.
+- `latenessMs`: how far delivery to the reader falls behind real time, which is what the head unit's queue has to absorb.
+- `overruns`, `pipeQueuedMaxMs`: sound discarded by, or waiting in, the pipe.
+- `coreBusyPct`: compare with the road to judge the stand-in loads.
+- `controls`, `lagFlags`: Heatdeath's controls timing from the same run.
+
+`--config old` uses the priorities from before the audio server was raised to nice -5. `--rate 48000` skips resampling, as phone passthrough does. `--control` pauses the tone source for 0.6 s; run it once and expect several hundred milliseconds of silence, otherwise a zero from the other runs means nothing.
+
+Limits: the stand-in loads match average occupancy, not each process's burst pattern. The head unit, Wi-Fi, video encoding and Spotify's decoder are not in the loop, and Spotify's stream is assumed to be 44.1 kHz.
