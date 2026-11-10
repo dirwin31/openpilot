@@ -201,6 +201,9 @@ def test_pipe_source_counts_reads_that_find_the_pipe_full(tmp_path):
     source.capacity = ma.PIPE_PAGE + 1000
     os.write(writer, TONE[:1000])
     assert source.read(65536) == TONE[:1000] and source.overruns == 1
+    source.close()
+    os.write(writer, TONE[:1000])
+    assert source.read(65536) == TONE[:1000] and source.overruns == 1  # backlog left while nobody read
   finally:
     source.close()
     os.close(writer)
