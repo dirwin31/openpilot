@@ -324,17 +324,14 @@ export const NavigationPage = {
     routeChoices() {
       return [{ value: "mapbox", label: "Mapbox", detail: "Turn-by-turn with lane arrows.", limit: "Counted against your Mapbox allowance." },
         { value: "google", label: "Google", detail: "Routes that follow live traffic, and place search by Google.", disabled: !this.googleReady, badge: this.googleReady ? "" : "Needs key",
-          limit: "Needs the Mapbox key too. No lane arrows. Falls back to Mapbox when its limits run out." },
-        { value: "phone", label: "Google Maps on phone", detail: "Follow the turns from the Google Maps app.", disabled: true, badge: "Coming soon",
-          limit: "Android, coming soon. Turn card only, no route line." }]
+          limit: "Needs the Mapbox key too. No lane arrows. Falls back to Mapbox when its limits run out." }]
     },
     gpsChoices() { return GPS_MODES.map((mode) => ({ value: mode.value, label: mode.label, detail: mode.hint })) },
     destinationWays() {
       return [{ icon: "bi-search", title: "Search here", detail: "Type an address or place on the Destination page." },
         { icon: "bi-link-45deg", title: "Paste a Google Maps link", detail: "Paste a place link into search, short links included." },
         { icon: "bi-android2", title: "Share from Android", detail: "Google Maps → Share → StarPilot. The route starts on your comma." },
-        { icon: "bi-apple", title: "Share from iPhone", detail: "Google Maps or Apple Maps → Share → StarPilot. The route starts on your comma." },
-        { icon: "bi-phone", title: "Follow Google Maps", detail: "Show Google Maps' next turn on the turn card (Android, coming soon)." }]
+        { icon: "bi-apple", title: "Share from iPhone", detail: "Google Maps or Apple Maps → Share → StarPilot. The route starts on your comma." }]
     },
     gpsLabel() {
       if (this.mode !== "local" || !this.ready || this.stale) return "GPS Source"
