@@ -242,3 +242,13 @@ def test_native_navigation_approach_has_braking_capacity_without_changing_cruise
           assert planner.a_cruise >= -max(1., {'sport': 2.4, 'standard': 1.2}.get(response, 0.))
         else:
           assert cruise.call_args.kwargs['base_brake_floor'] == -{None: .5, 'eco': .6, 'standard': 1.2, 'sport': 2.4}[response]
+
+
+@pytest.mark.parametrize('source', ['phone:googleMaps', 'phone:waze'])
+def test_notification_guidance_never_grants_vehicle_control_even_if_flag_is_forged(sm, source):
+  sm['starpilotNavigation'].navigation.source = source
+  sm['starpilotNavigation'].navigation.controlValid = True
+  assert current_instruction(sm, NOW) is None
+  assert turn_desire(sm, NOW, log.Desire.none, supported=True) == log.Desire.none
+  cp = NS(openpilotLongitudinalControl=True, passive=False, dashcamOnly=False, minSteerSpeed=0.)
+  assert cruise_ceiling(sm, cp, NOW, 20.) is None
