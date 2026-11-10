@@ -122,6 +122,15 @@ def test_screen_off_clears_stale_timing_without_render_or_warning(frame, monkeyp
   warning.assert_not_called()
 
 
+def test_screen_off_polls_at_a_low_rate(frame, monkeypatch):
+  app, _, _, _ = frame
+  app._should_render = False
+  sleeps = []
+  monkeypatch.setattr(application.time, "sleep", sleeps.append)
+  assert next(app.render()) == (False, 0.0, 0.0)
+  assert sleeps == [1 / application.SCREEN_OFF_FPS]
+
+
 def test_timing_warning_retains_existing_rate_limit(frame):
   app, _, _, warning = frame
   app.frame_timing = application.FrameTiming(1, 2, 3, 4, 5, 6)
