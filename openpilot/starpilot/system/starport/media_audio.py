@@ -107,8 +107,8 @@ class PipeSource:
       except OSError:
         return b''
       self.capacity = self._grow(self.fd)
-    if self._queued(self.fd) >= self.capacity - PIPE_PAGE:
-      self.overruns += 1  # full: the audio server was discarding sound
+    elif self._queued(self.fd) >= self.capacity - PIPE_PAGE:
+      self.overruns += 1  # full between reads: the audio server was discarding sound
     chunks, total = [], 0
     while total < limit:
       try:
