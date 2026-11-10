@@ -62,6 +62,7 @@ def test_launch_commands_isolate_the_server_and_player(layout):
   server = backend.server_launch(layout, prefs, alsa_base=Path('/usr/share/alsa/alsa.conf'))
   assert '-n' in server.argv and '--system=no' in server.argv
   assert '--realtime=no' in server.argv and '--high-priority=yes' in server.argv
+  assert '--resample-method=speex-float-3' in server.argv
   assert (layout.runtime / 'daemon.conf').read_text() == 'nice-level = -5\n'
   assert server.env['PULSE_CONFIG'] == str(layout.runtime / 'daemon.conf')
   assert any(arg.startswith('module-alsa-sink device=starpilot_spotify') for arg in server.argv)

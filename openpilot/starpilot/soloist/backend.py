@@ -112,7 +112,7 @@ def server_launch(layout: Layout, prefs: Preferences, *, silent: bool = False, a
   sink = ' '.join(_sink('silent' if silent else prefs.output, paths))
   argv = [str(root / 'bin' / 'pulseaudio'), '--daemonize=no', '--system=no', '--use-pid-file=no', '-n',
           '--exit-idle-time=-1', '--realtime=no', '--high-priority=yes', '--disallow-exit', '--log-target=stderr',
-          '--log-level=notice', f'--dl-search-path={root / "modules"}',
+          '--log-level=notice', '--resample-method=speex-float-3', f'--dl-search-path={root / "modules"}',
           '-L', f'module-native-protocol-unix socket={paths["socket"]} auth-anonymous=1', '-L', sink]
   return Launch(argv, env)
 
