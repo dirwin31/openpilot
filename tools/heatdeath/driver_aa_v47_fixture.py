@@ -466,7 +466,7 @@ def run(args):
     assert digest(repo / 'opendbc_repo/opendbc/car/car.capnp') == args.car_schema_sha256
   with car.CarParams.from_bytes(args.car_params.read_bytes()) as cp:
     expected_cp = cp.to_dict()
-    assert cp.carFingerprint == 'HYUNDAI_IONIQ_6' and cp.brand == 'hyundai' and len(cp.safetyConfigs) == 1
+    assert (cp.carFingerprint, cp.brand) in (('HYUNDAI_IONIQ_6', 'hyundai'), ('HONDA_CIVIC_2022', 'honda')) and len(cp.safetyConfigs) == 1
     assert not cp.passive and not cp.dashcamOnly and not cp.notCar
     pinned_cp = cp.as_builder()
   output = args.output.resolve()
@@ -760,6 +760,8 @@ def run(args):
           str(reserve['cpuMs']),
           '--period-ms',
           str(reserve['periodMs']),
+          '--nice',
+          str(reserve['nice']),
           '--duration-ns',
           str(meta['durationNs']),
           '--release',
@@ -805,11 +807,10 @@ def run(args):
             assert checkpoint['routeCpSha256'] == args.route_car_params_sha256
             assert checkpoint['carSchemaSha256'] == args.car_schema_sha256
             assert checkpoint['paramsRoot'] == str(params_root) and checkpoint['prefix'] == prefix
+            ioniq6 = expected_cp['carFingerprint'] == 'HYUNDAI_IONIQ_6'
             assert checkpoint['restoredFieldsAfter'] == {
               'ci_initialized': True,
-              'ioniq6_long_selected': True,
-              'ioniq6_long_prearmed': True,
-              'ioniq6_long_pending': False,
+              **({'ioniq6_long_selected': True, 'ioniq6_long_prearmed': True, 'ioniq6_long_pending': False} if ioniq6 else {}),
             }
             assert checkpoint['restoredPrivateParamsAfter'] == {'FirmwareQueryDone': True, 'ControlsReady': True}
             if cruise_checkpoint is not None:

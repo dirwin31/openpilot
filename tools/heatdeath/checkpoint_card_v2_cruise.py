@@ -157,7 +157,8 @@ def main():
   apply('card')
   with car.CarParams.from_bytes(pinned) as source:
     cp = source.as_builder()
-  assert eligible(cp), 'Only exact current Ioniq6 active-LONG CP checkpoint is supported'
+  ioniq6 = eligible(cp)
+  assert ioniq6 or (cp.carFingerprint == 'HONDA_CIVIC_2022' and cp.openpilotLongitudinalControl), 'Only Ioniq6 or Civic 2022 active-LONG CP is supported'
   interface = interfaces[cp.carFingerprint]
   selected = Car(CI=interface(cp), RI=interface.RadarInterface(cp))
   try:
@@ -168,7 +169,9 @@ def main():
     assert not selected.ioniq6_host_warmed and not selected.ioniq6_panda_armed
     assert not selected.ioniq6_long_lost
     assert selected.ioniq6_keepalive is None and selected.ioniq6_restore_callbacks is None
-    restored_fields = {'ci_initialized': True, 'ioniq6_long_selected': True, 'ioniq6_long_prearmed': True, 'ioniq6_long_pending': False}
+    restored_fields = {'ci_initialized': True}
+    if ioniq6:
+      restored_fields.update({'ioniq6_long_selected': True, 'ioniq6_long_prearmed': True, 'ioniq6_long_pending': False})
     before = {name: getattr(selected, name) for name in restored_fields}
     # Explicit root-authorized phase checkpoint only. No accepted command,
     # driver latch, parser sample, native status, proof, clock or session is copied.

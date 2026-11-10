@@ -13,6 +13,7 @@ def main():
   parser.add_argument('--core', type=int, required=True)
   parser.add_argument('--cpu-ms', type=float, required=True)
   parser.add_argument('--period-ms', type=float, default=50)
+  parser.add_argument('--nice', type=int, default=0)
   parser.add_argument('--duration-ns', type=int, required=True)
   parser.add_argument('--release', type=Path, required=True)
   parser.add_argument('--output', type=Path, required=True)
@@ -20,7 +21,7 @@ def main():
   assert 0 < args.cpu_ms < args.period_ms <= 1000
   os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
   os.sched_setaffinity(0, {args.core})
-  os.setpriority(os.PRIO_PROCESS, 0, 0)
+  os.setpriority(os.PRIO_PROCESS, 0, args.nice)
   deadline = time.monotonic() + 20
   while not args.release.exists():
     if time.monotonic() > deadline:

@@ -103,8 +103,8 @@ def prepare(args):
   if cp is None:
     raise ValueError('Include the route startup rlog containing its original CarParams')
   with car.CarParams.from_bytes(cp) as parsed:
-    if parsed.carFingerprint != 'HYUNDAI_IONIQ_6' or not parsed.openpilotLongitudinalControl:
-      raise ValueError('This exported steady-state fixture supports active-long Ioniq 6 recordings only')
+    if parsed.carFingerprint not in ('HYUNDAI_IONIQ_6', 'HONDA_CIVIC_2022') or not parsed.openpilotLongitudinalControl:
+      raise ValueError('This exported steady-state fixture supports active-long Ioniq 6 and Honda Civic 2022 recordings only')
   prior.sort(key=lambda row: row['monoNs'])
   last = prior[-2:]
   if (
@@ -267,7 +267,9 @@ def build(args):
       str(out / 'libsafety.o'),
     ]
   )
-  commands.append(['cc', '-shared', str(out / 'libsafety.o'), '-o', str(out / 'libsafety.so'), '-fsanitize=undefined', '-fno-sanitize-recover=undefined'])
+  commands.append(
+    ['cc', '-shared', str(out / 'libsafety.o'), '-o', str(out / 'libsafety.so'), '-fsanitize=undefined', '-fno-sanitize-recover=undefined', '-l:libubsan.so.1']
+  )
   for index, command in enumerate(commands):
     parked()
     with (out / f'build-{index}.log').open('x') as stream:
@@ -359,7 +361,9 @@ def run(args):
   if args.reserve_core is not None:
     if args.reserve_core not in available or not 0 < args.reserve_ms < args.reserve_period_ms <= 1000:
       raise ValueError('Reserve needs an available core and 0 < dose < period <= 1000 ms')
-    reserve = {'core': args.reserve_core, 'cpuMs': args.reserve_ms, 'periodMs': args.reserve_period_ms}
+    if not -20 <= args.reserve_nice <= 19:
+      raise ValueError('Reserve nice must be from -20 through 19')
+    reserve = {'core': args.reserve_core, 'cpuMs': args.reserve_ms, 'periodMs': args.reserve_period_ms, 'nice': args.reserve_nice}
   env['HEATDEATH_RESERVE'] = json.dumps(reserve)
   context_before = context()
   old_handlers = {}
@@ -507,6 +511,7 @@ def main():
   execute.add_argument('--reserve-core', type=int, help='Add an explicitly synthetic CFS reserve on this CPU')
   execute.add_argument('--reserve-ms', type=float, default=8)
   execute.add_argument('--reserve-period-ms', type=float, default=50)
+  execute.add_argument('--reserve-nice', type=int, default=0, help='CFS nice level of the synthetic reserve')
   results = commands.add_parser('report', help='Summarize captured timing, native evidence and limitations')
   results.add_argument('--output', type=Path, required=True)
   results.add_argument('--skip-seconds', type=float, default=10)
