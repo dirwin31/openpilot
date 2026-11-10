@@ -2278,6 +2278,8 @@ class Supervisor:
         if int(now - started) % 30 == 0:
           self.log("stats", **{**device_health.sample(getattr(watch.lease, "interface", "wlan0")), **stats})
           encode_peak = 0.0  # the peak covers each logged 30 s window
+          if audio is not None:
+            audio.reset_peaks()
       spent = time.monotonic() - pass_started
       if spent > STREAM_STALL_LOG:
         # Nothing was read from the car meanwhile: pings, focus and ACKs all waited on this pass.

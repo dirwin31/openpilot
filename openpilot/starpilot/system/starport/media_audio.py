@@ -184,6 +184,8 @@ class MediaAudio:
     self.base_us = 0
     self.last_sound = -1e9
     self.car_paused = False
+    self.last_service: float | None = None
+    self.max_gap = 0.0
     self.source_generation = getattr(source, 'generation', None)
     self.stats: dict[str, Any] = {'chunks_sent': 0, 'acked': 0, 'dropped_ms': 0, 'focus': None}
     self.track_info = None  # MediaStatus for the car's own displays, when the head unit offers it
@@ -212,6 +214,9 @@ class MediaAudio:
     if self.track_info is not None:
       self.track_info.service()
     now = self.clock()
+    if self.state == 'playing' and self.last_service is not None:
+      self.max_gap = max(self.max_gap, now - self.last_service)
+    self.last_service = now
     active = self.source.active(now)
     if not active:
       self.buffer.clear()
@@ -353,7 +358,10 @@ class MediaAudio:
 
   def status(self) -> dict:
     return {'state': self.state, 'window': self.window, 'pending': self.unacked, **self.stats,
-            'pipe_overruns': getattr(self.source, 'overruns', 0)}
+            'pipe_overruns': getattr(self.source, 'overruns', 0), 'max_service_gap_ms': round(self.max_gap * 1000)}
+
+  def reset_peaks(self) -> None:
+    self.max_gap = 0.0
 
   def close(self) -> None:
     self.source.close()

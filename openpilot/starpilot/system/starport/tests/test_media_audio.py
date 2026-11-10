@@ -213,6 +213,22 @@ def test_status_reports_pipe_overruns(audio):
   assert stream.status()['pipe_overruns'] == 3
 
 
+def test_longest_service_gap_while_playing_lasts_until_reset(audio):
+  stream, session, source, now, _ = audio
+  ready(stream, session)
+  now[0] += 5.0
+  play(stream, session, source, now)
+  assert stream.status()['max_service_gap_ms'] == 0
+  now[0] += 0.25
+  stream.service()
+  now[0] += 0.05
+  stream.service()
+  assert stream.status()['max_service_gap_ms'] == 250
+  assert stream.status()['max_service_gap_ms'] == 250
+  stream.reset_peaks()
+  assert stream.status()['max_service_gap_ms'] == 0
+
+
 def test_source_switch_discards_old_audio_and_releases_focus(audio):
   stream, session, source, now, _ = audio
   source.generation = 1
