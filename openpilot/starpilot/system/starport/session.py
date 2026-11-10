@@ -661,6 +661,8 @@ class ProjectionSession(Session):
 
   # Replaced by the supervisor: whether the comma's other Wi-Fi joined or roamed in the last few seconds.
   radio_change: Callable[..., bool] = staticmethod(lambda: False)
+  # Replaced by the supervisor: stops a join still under way on the comma's other Wi-Fi.
+  radio_stalled: Callable[..., None] = staticmethod(lambda: None)
 
   # HeadunitPad acknowledges every fragment (codec config included) rather than every frame.
   fragment_acks = False
@@ -1078,6 +1080,7 @@ class ProjectionSession(Session):
         raise TimeoutError(f"Video acknowledgement older than {self.ACK_TIMEOUT:.1f} s")
       self.grace_frame = oldest
       self.event("ack_grace", after_ms=round((now - oldest) * 1000))
+      self.radio_stalled()
     if now - oldest > self.ACK_GRACE_TIMEOUT:
       raise SharedRadioStall(f"Video acknowledgement older than {self.ACK_GRACE_TIMEOUT:.1f} s while the comma's Wi-Fi was switching networks")
 

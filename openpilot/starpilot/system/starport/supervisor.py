@@ -280,11 +280,13 @@ class SharedRadioWatch:
   """
 
   def __init__(self, log: Callable[..., None], interface: str = "wlan0", interval: float = RADIO_CHECK_INTERVAL,
-               counter: Path | None = None, carrier: Path | None = None, on_down: Callable[[], None] | None = None):
+               counter: Path | None = None, carrier: Path | None = None, on_down: Callable[[], None] | None = None,
+               on_stall: Callable[[], None] | None = None):
     self.log, self.interface, self.interval = log, interface, interval
     self.counter = counter or Path(f"/sys/class/net/{interface}/carrier_changes")
     self.carrier = carrier or Path(f"/sys/class/net/{interface}/carrier")
     self.on_down = on_down  # the other network was lost, not just roamed
+    self.on_stall = on_stall  # the car's acks stopped after a change
     self.changed_at: float | None = None
     self._stop = threading.Event()
     self._thread = threading.Thread(target=self._run, name="aa_radio_watch", daemon=True)
@@ -317,11 +319,19 @@ class SharedRadioWatch:
       last = current
       self.changed_at = time.monotonic()
       self.log("other_wifi_changed", interface=self.interface)
-      if self.on_down is not None and not self._carrier():
-        try:
-          self.on_down()
-        except Exception as error:  # the watch must keep running for the ACK grace window
-          self.log("other_wifi_hold_failed", error=str(error) or type(error).__name__)
+      if not self._carrier():
+        self._hold(self.on_down)
+
+  def stalled(self) -> None:
+    self._hold(self.on_stall)
+
+  def _hold(self, hold: Callable[[], None] | None) -> None:
+    if hold is None:
+      return
+    try:
+      hold()
+    except Exception as error:  # the watch and the stream must keep running for the ACK grace window
+      self.log("other_wifi_hold_failed", error=str(error) or type(error).__name__)
 
   def _carrier(self) -> bool:
     try:
@@ -2058,8 +2068,10 @@ class Supervisor:
     watch = LinkWatch(lease, self.log).start()
     radio = None
     if getattr(lease, "dedicated", False) and getattr(lease, "interface", "wlan0") != "wlan0":
-      radio = SharedRadioWatch(self.log, on_down=getattr(lease, "hold_home_wifi", None)).start()
+      radio = SharedRadioWatch(self.log, on_down=getattr(lease, "hold_home_wifi", None),
+                               on_stall=getattr(lease, "stop_home_join", None)).start()
       session.radio_change = radio.recent
+      session.radio_stalled = radio.stalled
     try:
       from openpilot.starpilot.system.starport.media_audio import MediaAudio, music_control
       from openpilot.starpilot.system.starport.media_status import MediaStatus

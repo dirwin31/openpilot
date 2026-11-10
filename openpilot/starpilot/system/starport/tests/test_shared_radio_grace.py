@@ -42,6 +42,16 @@ def test_radio_change_waits_up_to_the_grace_limit(identity):
   end_session(session, hu)
 
 
+def test_grace_stops_the_other_join_once(identity):
+  hu, session, sent = stalled(identity, True)
+  stops = []
+  session.radio_stalled = lambda: stops.append(True)
+  session.check_progress(sent + session.ACK_TIMEOUT + 0.1)
+  session.check_progress(sent + session.ACK_TIMEOUT + 1.0)
+  assert stops == [True]
+  end_session(session, hu)
+
+
 def test_grace_started_by_a_change_survives_the_change_ageing_out(identity):
   hu, session, sent = stalled(identity, True)
   session.check_progress(now=sent + ProjectionSession.ACK_TIMEOUT + 0.05)
@@ -123,6 +133,17 @@ def test_watch_holds_home_wifi_only_when_it_was_lost(tmp_path, carrier, held):
     assert holds == ([True] if held else [])
   finally:
     watch.stop()
+
+
+def test_watch_survives_a_failing_stall_hold(tmp_path):
+  logged = []
+
+  def fail():
+    raise RuntimeError("bus gone")
+  watch = SharedRadioWatch(lambda name, **fields: logged.append(name), counter=tmp_path / "carrier_changes", on_stall=fail)
+  watch.stalled()
+  SharedRadioWatch(lambda *a, **k: None, counter=tmp_path / "carrier_changes").stalled()
+  assert logged == ["other_wifi_hold_failed"]
 
 
 def test_watch_without_the_counter_never_reports(tmp_path):
