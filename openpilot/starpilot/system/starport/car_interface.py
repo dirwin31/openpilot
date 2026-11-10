@@ -28,8 +28,9 @@ LEASE_TIMEOUT_S = 10.0
 READY_TIMEOUT_S = 5.0
 # The car's network never appeared this many times on aa0; finish the session on wlan0 in case aa0 is the reason.
 DEDICATED_TIMEOUTS = 2
-# A join on wlan0 that stalled the car is stopped, then allowed once more after this long.
+# Every wlan0 hold ends on its own so internet is never off for the whole drive; each new hold waits twice as long.
 HOME_RETRY_S = 60.0
+HOME_RETRY_MAX_S = 300.0
 
 
 class DedicatedInterface:
@@ -105,6 +106,7 @@ class DedicatedLease:
     self.home = None
     self._home_lock = threading.Lock()
     self._home_retry: threading.Timer | None = None
+    self._home_holds = 0
 
   @property
   def local_ip(self):
@@ -160,7 +162,7 @@ class DedicatedLease:
       self.lease = self.lease_factory(self.log, self.fallback_interface)
 
   def hold_home_wifi(self) -> None:
-    """Keep wlan0 from searching on the shared radio until the session ends."""
+    """Keep wlan0 from joining on the shared radio for a while; each hold waits longer, up to HOME_RETRY_MAX_S."""
     with self._home_lock:
       if self.legacy or self._cancel.is_set() or self.home is not None:
         return
@@ -174,23 +176,21 @@ class DedicatedLease:
         home.release(restore=True)
         return
       self.home = home
-      self.log("wifi_home_held", interface=self.fallback_interface)
-
-  def stop_home_join(self) -> None:
-    """Stop a wlan0 join that is stalling the car; the first time, let it try again after HOME_RETRY_S."""
-    held = self.home is not None
-    self.hold_home_wifi()
-    with self._home_lock:
-      if held or self.home is None or self._home_retry is not None:
-        return
-      self._home_retry = threading.Timer(HOME_RETRY_S, self._release_home)
+      after_s = min(HOME_RETRY_S * 2 ** self._home_holds, HOME_RETRY_MAX_S)
+      self._home_holds += 1
+      self._home_retry = threading.Timer(after_s, self._release_home)
       self._home_retry.daemon = True
       self._home_retry.start()
-      self.log("wifi_home_retry_set", interface=self.fallback_interface, after_s=HOME_RETRY_S)
+      self.log("wifi_home_held", interface=self.fallback_interface, retry_after_s=after_s)
+
+  def stop_home_join(self) -> None:
+    """Stop a wlan0 join that is stalling the car."""
+    self.hold_home_wifi()
 
   def _release_home(self) -> None:
     with self._home_lock:
       home, self.home = self.home, None
+      self._home_retry = None
     if home is not None:
       try:
         home.release(restore=True)
@@ -272,9 +272,10 @@ class DedicatedLease:
     if self.lease is not None:
       self.lease.release(restore=restore)
     if restore:
-      if self._home_retry is not None:
-        self._home_retry.cancel()
-        self._home_retry = None
+      with self._home_lock:
+        retry, self._home_retry, self._home_holds = self._home_retry, None, 0
+      if retry is not None:
+        retry.cancel()
       self._release_home()
       if self.iface is not None:
         self.iface.close()

@@ -155,7 +155,8 @@ def test_watch_without_the_counter_never_reports(tmp_path):
     watch.stop()
 
 
-def test_notice_is_shown_once_and_only_while_fresh(tmp_path):
+def test_notice_is_shown_once_and_only_while_fresh(tmp_path, monkeypatch):
+  monkeypatch.setattr(reconnect_notice.identity_store, "boot_id", lambda: "current")  # no /proc off device
   path = tmp_path / "notice.json"
   reconnect_notice.write("Reconnected", path, now=1000.0)
   assert reconnect_notice.take(path, now=1010.0) == "Reconnected"

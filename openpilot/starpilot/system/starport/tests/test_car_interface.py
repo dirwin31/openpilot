@@ -158,7 +158,7 @@ def test_aa0_that_cannot_be_rebuilt_finishes_on_wlan0():
   assert lease.legacy and not lease.dedicated and not lease.aa0_failed
 
 
-def test_lost_home_wifi_is_held_until_the_session_ends():
+def test_lost_home_wifi_is_held_across_attempts_until_the_session_ends():
   lease, leases, log = make()
   lease.acquire(credentials())
   lease.hold_home_wifi()
@@ -172,32 +172,38 @@ def test_lost_home_wifi_is_held_until_the_session_ends():
   assert log.names().count("wifi_home_held") == 1 and "wifi_home_released" in log.names()
 
 
-def test_stalling_home_join_is_stopped_then_allowed_once_more(monkeypatch):
-  monkeypatch.setattr(car_interface, "HOME_RETRY_S", 0.05)
-  lease, leases, log = make()
-  lease.acquire(credentials())
-  lease.stop_home_join()
-  home = [item for item in leases if item.interface == "wlan0"]
-  assert len(home) == 1 and home[0].held
+def wait_released(lease):
   deadline = time.monotonic() + 2
   while lease.home is not None:
     assert time.monotonic() < deadline
     time.sleep(0.01)
-  assert home[0].releases == [True]
-  lease.stop_home_join()  # the retry stalled the car too: held for the rest of the session
-  time.sleep(0.15)
-  assert lease.home is not None and log.names().count("wifi_home_retry_set") == 1
+
+
+def test_every_hold_ends_on_its_own_and_backs_off_to_a_cap(monkeypatch):
+  monkeypatch.setattr(car_interface, "HOME_RETRY_S", 0.02)
+  monkeypatch.setattr(car_interface, "HOME_RETRY_MAX_S", 0.05)
+  lease, leases, log = make()
+  lease.acquire(credentials())
+  waits = []
+  for hold in (lease.hold_home_wifi, lease.stop_home_join, lease.stop_home_join, lease.hold_home_wifi):
+    hold()
+    assert lease.home is not None and leases[-1].held
+    waits.append([fields for event, fields in log.events if event == "wifi_home_held"][-1]["retry_after_s"])
+    wait_released(lease)
+    assert leases[-1].releases == [True]
+  assert waits == [0.02, 0.04, 0.05, 0.05]
   lease.release(restore=True)
-  assert lease.home is None
 
 
-def test_lost_home_wifi_gets_no_retry():
+def test_a_held_join_is_not_held_twice_and_the_session_end_resets_the_backoff(monkeypatch):
+  monkeypatch.setattr(car_interface, "HOME_RETRY_S", 30.0)
   lease, leases, log = make()
   lease.acquire(credentials())
   lease.hold_home_wifi()
   lease.stop_home_join()
-  assert lease.home is not None and "wifi_home_retry_set" not in log.names()
+  assert log.names().count("wifi_home_held") == 1
   lease.release(restore=True)
+  assert lease.home is None and lease._home_retry is None and lease._home_holds == 0
 
 
 def test_home_wifi_is_never_held_while_the_car_uses_it():
