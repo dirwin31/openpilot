@@ -29,7 +29,7 @@ AUTO_TIMING_MAX_SAMPLES = 360
 FPS_DROP_THRESHOLD = 0.9  # FPS drop threshold for triggering a warning
 FPS_CRITICAL_THRESHOLD = 0.5  # Critical threshold for triggering strict actions
 MOUSE_THREAD_RATE = 140  # touch controller runs at 140Hz
-SCREEN_OFF_FPS = 5
+SCREEN_OFF_FPS = 10  # controller presses expire after 250 ms
 MAX_TOUCH_SLOTS = 2
 TOUCH_HISTORY_TIMEOUT = 3.0  # Seconds before touch points fade out
 
