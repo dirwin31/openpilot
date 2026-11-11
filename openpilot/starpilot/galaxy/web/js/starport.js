@@ -10,6 +10,7 @@ import { BluetoothDeviceList } from "./bluetooth-devices.js"
 import { BluetoothNotice, bluetoothConnection } from "./bluetooth-notice.js"
 import { GalaxySettingRow, switchRow } from "./galaxy-setting-row.js"
 import { StarPortGuidedSetup, guidedState, handshakeResettable } from "./starport-guided.js"
+import { PhoneNotifications } from "./phone-notifications.js"
 
 export function uploadTimeout(bytes) {
   return Math.max(180000, Math.ceil(bytes / (64 * 1024)) * 1000)
@@ -560,7 +561,7 @@ export function connectionProgress(runtime, { wired = false, app = "", selected 
 }
 
 export const StarPortPage = {
-  components: { WikiHelp, GxCollapse, GxState, GxIconButton, GxNotice, BluetoothNotice, GxDialog, GalaxySettingRow, StarPortGuidedSetup },
+  components: { WikiHelp, GxCollapse, GxState, GxIconButton, GxNotice, BluetoothNotice, GxDialog, GalaxySettingRow, StarPortGuidedSetup, PhoneNotifications },
   props: {
     mode: { type: String, required: true }, localAccess: { type: Boolean, required: true },
     unauthorized: { type: Function, required: true }
@@ -1010,6 +1011,8 @@ export const StarPortPage = {
           </div>
         </li>
       </ol>
+
+      <PhoneNotifications v-if="setup" :mode="mode" :unauthorized="unauthorized" />
 
       <section v-if="setup" class="gx-card gx-step" aria-labelledby="gx-starport-help-title">
         <div class="gx-step__head">
