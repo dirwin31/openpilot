@@ -154,3 +154,14 @@ def test_actual_go_wire_fixture_confirms_phone_turn():
     local_map.update(event.mapdOut, valid=event.valid, event_boot_ns=event.logMonoTime,
                      received=True, alive=True, now_boot_ns=BOOT)
   assert local_map.status(phone()) == 'mapAligned'
+
+
+def test_trip_totals_do_not_affect_map_corroboration():
+  local_map = LocalMapCorroborator()
+  update(local_map, packet())
+  plain = select_navigation({'status': 'noDestination'}, phone(), now_ns=NOW, drive_id=NOW - 1, local_map=local_map)
+  totals = select_navigation({'status': 'noDestination'}, phone(remainingMeters=3000, remainingSeconds=240), now_ns=NOW,
+                             drive_id=NOW - 1, local_map=local_map)
+  assert plain['controlValid'] == totals['controlValid']
+  assert not plain['totalsKnown'] and totals['totalsKnown']
+  assert totals['instruction']['remainingDistanceMeters'] == 3000 and totals['instruction']['remainingDurationSeconds'] == 240
