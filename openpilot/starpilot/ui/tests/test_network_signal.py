@@ -76,3 +76,57 @@ def test_starport_signal_style_is_validated_and_pulled_on_screen():
   layout['widgets'][SIGNAL_WIDGET]['size'] = 'big'
   with pytest.raises(ValueError):
     validate_layout_for_viewport(layout, (1920, 1080))
+
+
+@pytest.mark.parametrize('style', ['ring', 'horizontal', 'vertical'])
+def test_every_signal_style_shrinks_to_30_percent(style):
+  from openpilot.starpilot.ui.onroad_customization import SIGNAL_SIZES, widget_size
+  document = default_document()
+  placed = document['layouts']['large'][SIGNAL_WIDGET]
+  assert placed['scale'] == 100
+  placed.update(size=style, scale=30)
+  document = validate_document(document)
+  width, height = SIGNAL_SIZES[style]
+  assert widget_size(document, 'large', SIGNAL_WIDGET) == (round(width * .3), round(height * .3))
+  for bad in (29, 101, 50.0):
+    document['layouts']['large'][SIGNAL_WIDGET]['scale'] = bad
+    with pytest.raises(ValueError):
+      validate_document(document)
+
+
+def test_older_signal_layouts_default_to_full_size():
+  document = default_document()
+  del document['layouts']['large'][SIGNAL_WIDGET]['scale']
+  assert validate_document(document)['layouts']['large'][SIGNAL_WIDGET]['scale'] == 100
+
+
+def test_starport_signal_scale_is_validated():
+  from openpilot.starpilot.system.starport.projection_layout import default_layout_for_viewport, validate_layout_for_viewport
+  from openpilot.starpilot.ui.onroad_customization import SIGNAL_SIZES
+  layout = default_layout_for_viewport((1920, 1080))
+  del layout['widgets'][SIGNAL_WIDGET]['scale']
+  assert validate_layout_for_viewport(layout, (1920, 1080))['widgets'][SIGNAL_WIDGET]['scale'] == 100
+  # At 30% the vertical card fits where the full-size one would not.
+  layout['widgets'][SIGNAL_WIDGET].update(size='vertical', scale=30, y=1080 - 30 - round(SIGNAL_SIZES['vertical'][1] * .3))
+  assert validate_layout_for_viewport(layout, (1920, 1080))['widgets'][SIGNAL_WIDGET]['y'] == layout['widgets'][SIGNAL_WIDGET]['y']
+  layout['widgets'][SIGNAL_WIDGET]['scale'] = 20
+  with pytest.raises(ValueError):
+    validate_layout_for_viewport(layout, (1920, 1080))
+
+
+def test_signal_draws_at_its_size_percentage():
+  from types import SimpleNamespace as NS
+  from unittest.mock import MagicMock
+  from openpilot.starpilot.ui.onroad_customization import SIGNAL_SCALE
+  from openpilot.starpilot.ui.onroad_signal import SignalWidget
+  fonts = MagicMock()
+  fonts.vertical_ink.return_value = (0, 10)
+  fonts.measure.return_value = NS(width=20)
+  widget = SignalWidget(fonts)
+  widget.preview = Signal(2, 4, 'wifi')
+  document = default_document()
+  document['layouts']['large'][SIGNAL_WIDGET].update(enabled=True, scale=30)
+  with patch('openpilot.starpilot.ui.onroad_signal.rl') as rl:
+    widget.render(NS(customization=document, alert=NS(size='none')))
+  assert rl.draw_circle_v.call_args_list[0].args[1] == pytest.approx(44 * SIGNAL_SCALE * .3)
+  assert all(call.args[2] == pytest.approx(14 * SIGNAL_SCALE * .3) for call in fonts.draw.call_args_list)

@@ -272,6 +272,11 @@ export const ONROAD_LAYOUT_TEMPLATE = `
                       @click="setWidgetSize(size)">{{ size[0].toUpperCase() + size.slice(1) }}</button>
                   </div>
                 </div>
+                <template v-if="selectedWidget.scale">
+                  <label for="layout-widget-scale">Size · {{ selectedPosition.scale }}%</label>
+                  <input id="layout-widget-scale" class="gx-slider" type="range" step="5" :min="selectedWidget.scale.min" :max="selectedWidget.scale.max"
+                    :value="selectedPosition.scale" :disabled="!editAvailable || !!state.drag || !!state.layerDrag" @input="scaleInput($event)" @change="finishColorEdit" @blur="finishColorEdit">
+                </template>
                 <GalaxySettingRow v-if="selectedWidget.collapseToggle" :row="switchRow('Collapse when paused', selectedPosition.collapse === true)" :index="0"
                   :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setWidgetCollapse(value)" />
                 <p v-if="selectedWidget.defaultAnchor === 'driver_side'" class="gx-note">The default position follows the driver’s side. A moved position stays where you place it.</p>

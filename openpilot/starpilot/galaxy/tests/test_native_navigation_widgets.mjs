@@ -127,6 +127,24 @@ assert.ok(vm.layout.network_signal.x + signal.sizes.horizontal[0] <= signalBound
 assert.equal(validDocument(vm.state.draft, data.metadata), true)
 vm.setWidgetSize("vertical")
 assert.deepEqual(widgetSize(signal, vm.layout.network_signal), signal.sizes.vertical)
+// Every style shrinks from full size down to 30%; growing back pulls it inside the screen.
+assert.deepEqual(signal.scale, {min: 30, max: 100, default: 100})
+assert.equal(vm.layout.network_signal.scale, 100)
+for (const style of ["ring", "horizontal", "vertical"]) {
+  vm.setWidgetSize(style)
+  vm.scaleInput({ target: { value: "30" } })
+  assert.deepEqual(widgetSize(signal, vm.layout.network_signal), signal.sizes[style].map(side => Math.round(side * 0.3)))
+  assert.equal(validDocument(vm.state.draft, data.metadata), true)
+}
+vm.scaleInput({ target: { value: "25" } })
+assert.equal(vm.layout.network_signal.scale, 30)
+vm.layout.network_signal.x = signalBounds.x + signalBounds.width - widgetSize(signal, vm.layout.network_signal)[0]
+vm.scaleInput({ target: { value: "100" } })
+assert.ok(vm.layout.network_signal.x + signal.sizes.vertical[0] <= signalBounds.x + signalBounds.width)
+assert.equal(validDocument(vm.state.draft, data.metadata), true)
+const badScale = JSON.parse(JSON.stringify(vm.state.draft))
+badScale.layouts.large.network_signal.scale = 20
+assert.equal(validDocument(badScale, data.metadata), false)
 vm.state.profile = "compact"
 vm.add("stopped_timer")
 assert.equal(vm.layout.stopped_timer.enabled, true)
