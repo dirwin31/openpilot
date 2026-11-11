@@ -117,6 +117,16 @@ assert.equal(validDocument(vm.state.draft, data.metadata), true)
 Object.assign(vm.layout.speed_limit_actions, {x:600, y:500})
 vm.setSpeedSources("speedSources", false)
 assert.deepEqual([vm.layout.speed_limit_actions.x, vm.layout.speed_limit_actions.y], [600, 500])
+const signal = vm.profile.widgets.network_signal, signalBounds = signal.bounds || vm.profile.bounds
+assert.equal(signal.label, "Signal strength")
+vm.layout.network_signal.enabled = true
+vm.state.selected = "network_signal"
+vm.setWidgetSize("horizontal")
+assert.deepEqual(widgetSize(signal, vm.layout.network_signal), signal.sizes.horizontal)
+assert.ok(vm.layout.network_signal.x + signal.sizes.horizontal[0] <= signalBounds.x + signalBounds.width)
+assert.equal(validDocument(vm.state.draft, data.metadata), true)
+vm.setWidgetSize("vertical")
+assert.deepEqual(widgetSize(signal, vm.layout.network_signal), signal.sizes.vertical)
 vm.state.profile = "compact"
 vm.add("stopped_timer")
 assert.equal(vm.layout.stopped_timer.enabled, true)

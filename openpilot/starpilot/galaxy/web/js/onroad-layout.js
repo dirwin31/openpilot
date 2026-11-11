@@ -272,7 +272,7 @@ export const LayoutWidgetPreview = {
         <path d="M411 25 L426 51 L396 51 Z" fill="#ff5b65" />
         </g>
       </g>
-      <g v-else-if="widget.kind === 'network_signal'" :transform="'scale(' + widget.width / 88 + ')'">
+      <g v-else-if="widget.kind === 'network_signal' && !['horizontal', 'vertical'].includes(widget.size)" :transform="'scale(' + widget.width / 88 + ')'">
         <circle cx="44" cy="44" r="44" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
         <path d="M39.3 77.7A34 34 0 0 1 19.9 67.9" fill="none" stroke="#f5f2fc" stroke-width="7" />
         <path d="M48.7 77.7A34 34 0 0 0 68.1 67.9" fill="none" stroke="#c7aef7" stroke-width="7" />
@@ -290,6 +290,46 @@ export const LayoutWidgetPreview = {
         <path d="M50.2 31.7A6.5 6.5 0 0 1 59.8 31.7" fill="none" stroke="#c7aef7" stroke-width="2.4" />
         <path d="M46.5 28.3A11.5 11.5 0 0 1 63.5 28.3" fill="none" stroke="#c7aef7" stroke-width="2.4" />
         <text x="44" y="61" text-anchor="middle" font-size="14" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
+      </g>
+      <g v-else-if="widget.kind === 'network_signal' && widget.size === 'horizontal'" :transform="'scale(' + widget.width / 268 + ')'">
+        <rect width="268" height="84" rx="42" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
+        <rect x="24" y="31" width="3" height="4" fill="#b8b2c8" />
+        <rect x="28.5" y="27" width="3" height="8" fill="#b8b2c8" />
+        <rect x="33" y="23" width="3" height="12" fill="#b8b2c8" />
+        <rect x="37.5" y="19" width="3" height="16" fill="#b8b2c8" />
+        <text x="50" y="35" font-size="20" font-weight="600" fill="#b8b2c8">LTE</text>
+        <rect x="122" y="24" width="27" height="8" rx="4" fill="#f5f2fc" />
+        <rect x="154" y="24" width="27" height="8" rx="4" fill="#f5f2fc" />
+        <rect x="186" y="24" width="27" height="8" rx="4" fill="#ffffff2b" />
+        <rect x="218" y="24" width="27" height="8" rx="4" fill="#ffffff2b" />
+        <circle cx="33" cy="62" r="2" fill="#c7aef7" />
+        <path d="M28.17 57.65A6.5 6.5 0 0 1 37.83 57.65" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <path d="M24.45 54.30A11.5 11.5 0 0 1 41.55 54.30" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <text x="50" y="64" font-size="20" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
+        <rect x="122" y="53" width="27" height="8" rx="4" fill="#c7aef7" />
+        <rect x="154" y="53" width="27" height="8" rx="4" fill="#c7aef7" />
+        <rect x="186" y="53" width="27" height="8" rx="4" fill="#c7aef7" />
+        <rect x="218" y="53" width="27" height="8" rx="4" fill="#c7aef7" />
+      </g>
+      <g v-else-if="widget.kind === 'network_signal' && widget.size === 'vertical'" :transform="'scale(' + widget.width / 96 + ')'">
+        <rect width="96" height="160" rx="24" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
+        <rect x="17" y="82" width="22" height="16" rx="5" fill="#f5f2fc" />
+        <rect x="17" y="60" width="22" height="16" rx="5" fill="#f5f2fc" />
+        <rect x="17" y="38" width="22" height="16" rx="5" fill="#ffffff2b" />
+        <rect x="17" y="16" width="22" height="16" rx="5" fill="#ffffff2b" />
+        <rect x="19.75" y="122" width="3" height="4" fill="#b8b2c8" />
+        <rect x="24.25" y="118" width="3" height="8" fill="#b8b2c8" />
+        <rect x="28.75" y="114" width="3" height="12" fill="#b8b2c8" />
+        <rect x="33.25" y="110" width="3" height="16" fill="#b8b2c8" />
+        <text x="28" y="147" text-anchor="middle" font-size="13" font-weight="600" fill="#b8b2c8">LTE</text>
+        <rect x="57" y="82" width="22" height="16" rx="5" fill="#c7aef7" />
+        <rect x="57" y="60" width="22" height="16" rx="5" fill="#c7aef7" />
+        <rect x="57" y="38" width="22" height="16" rx="5" fill="#c7aef7" />
+        <rect x="57" y="16" width="22" height="16" rx="5" fill="#c7aef7" />
+        <circle cx="68" cy="124" r="2" fill="#c7aef7" />
+        <path d="M63.17 119.65A6.5 6.5 0 0 1 72.83 119.65" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <path d="M59.45 116.30A11.5 11.5 0 0 1 76.55 116.30" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <text x="68" y="147" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
@@ -351,7 +391,7 @@ export const LayoutWidgetPreview = {
         <path d="M411 25 L426 51 L396 51 Z" fill="#ff5b65" />
         </g>
       </g>
-      <g v-else-if="widget.kind === 'network_signal'" :transform="'scale(' + widget.width / 88 + ')'">
+      <g v-else-if="widget.kind === 'network_signal' && !['horizontal', 'vertical'].includes(widget.size)" :transform="'scale(' + widget.width / 88 + ')'">
         <circle cx="44" cy="44" r="44" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
         <path d="M39.3 77.7A34 34 0 0 1 19.9 67.9" fill="none" stroke="#f5f2fc" stroke-width="7" />
         <path d="M48.7 77.7A34 34 0 0 0 68.1 67.9" fill="none" stroke="#c7aef7" stroke-width="7" />
@@ -369,6 +409,46 @@ export const LayoutWidgetPreview = {
         <path d="M50.2 31.7A6.5 6.5 0 0 1 59.8 31.7" fill="none" stroke="#c7aef7" stroke-width="2.4" />
         <path d="M46.5 28.3A11.5 11.5 0 0 1 63.5 28.3" fill="none" stroke="#c7aef7" stroke-width="2.4" />
         <text x="44" y="61" text-anchor="middle" font-size="14" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
+      </g>
+      <g v-else-if="widget.kind === 'network_signal' && widget.size === 'horizontal'" :transform="'scale(' + widget.width / 268 + ')'">
+        <rect width="268" height="84" rx="42" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
+        <rect x="24" y="31" width="3" height="4" fill="#b8b2c8" />
+        <rect x="28.5" y="27" width="3" height="8" fill="#b8b2c8" />
+        <rect x="33" y="23" width="3" height="12" fill="#b8b2c8" />
+        <rect x="37.5" y="19" width="3" height="16" fill="#b8b2c8" />
+        <text x="50" y="35" font-size="20" font-weight="600" fill="#b8b2c8">LTE</text>
+        <rect x="122" y="24" width="27" height="8" rx="4" fill="#f5f2fc" />
+        <rect x="154" y="24" width="27" height="8" rx="4" fill="#f5f2fc" />
+        <rect x="186" y="24" width="27" height="8" rx="4" fill="#ffffff2b" />
+        <rect x="218" y="24" width="27" height="8" rx="4" fill="#ffffff2b" />
+        <circle cx="33" cy="62" r="2" fill="#c7aef7" />
+        <path d="M28.17 57.65A6.5 6.5 0 0 1 37.83 57.65" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <path d="M24.45 54.30A11.5 11.5 0 0 1 41.55 54.30" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <text x="50" y="64" font-size="20" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
+        <rect x="122" y="53" width="27" height="8" rx="4" fill="#c7aef7" />
+        <rect x="154" y="53" width="27" height="8" rx="4" fill="#c7aef7" />
+        <rect x="186" y="53" width="27" height="8" rx="4" fill="#c7aef7" />
+        <rect x="218" y="53" width="27" height="8" rx="4" fill="#c7aef7" />
+      </g>
+      <g v-else-if="widget.kind === 'network_signal' && widget.size === 'vertical'" :transform="'scale(' + widget.width / 96 + ')'">
+        <rect width="96" height="160" rx="24" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
+        <rect x="17" y="82" width="22" height="16" rx="5" fill="#f5f2fc" />
+        <rect x="17" y="60" width="22" height="16" rx="5" fill="#f5f2fc" />
+        <rect x="17" y="38" width="22" height="16" rx="5" fill="#ffffff2b" />
+        <rect x="17" y="16" width="22" height="16" rx="5" fill="#ffffff2b" />
+        <rect x="19.75" y="122" width="3" height="4" fill="#b8b2c8" />
+        <rect x="24.25" y="118" width="3" height="8" fill="#b8b2c8" />
+        <rect x="28.75" y="114" width="3" height="12" fill="#b8b2c8" />
+        <rect x="33.25" y="110" width="3" height="16" fill="#b8b2c8" />
+        <text x="28" y="147" text-anchor="middle" font-size="13" font-weight="600" fill="#b8b2c8">LTE</text>
+        <rect x="57" y="82" width="22" height="16" rx="5" fill="#c7aef7" />
+        <rect x="57" y="60" width="22" height="16" rx="5" fill="#c7aef7" />
+        <rect x="57" y="38" width="22" height="16" rx="5" fill="#c7aef7" />
+        <rect x="57" y="16" width="22" height="16" rx="5" fill="#c7aef7" />
+        <circle cx="68" cy="124" r="2" fill="#c7aef7" />
+        <path d="M63.17 119.65A6.5 6.5 0 0 1 72.83 119.65" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <path d="M59.45 116.30A11.5 11.5 0 0 1 76.55 116.30" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <text x="68" y="147" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />

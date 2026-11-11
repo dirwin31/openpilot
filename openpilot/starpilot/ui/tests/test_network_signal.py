@@ -1,6 +1,8 @@
 import json
 from unittest.mock import patch
 
+import pytest
+
 from openpilot.common.hardware.comma import hardware
 from openpilot.starpilot.ui import network_signal
 from openpilot.starpilot.ui.network_signal import Signal, SignalFeed, read_signal, steps
@@ -45,3 +47,32 @@ def test_signal_is_an_opt_in_big_widget_with_background_opacity():
   assert SIGNAL_WIDGET not in document['layouts']['compact']
   del document['layouts']['large'][SIGNAL_WIDGET]
   assert validate_document(document)['layouts']['large'][SIGNAL_WIDGET]['enabled'] is False
+
+
+def test_signal_style_picks_size_and_older_layouts_default_to_ring():
+  from openpilot.starpilot.ui.onroad_customization import SIGNAL_SIZES, widget_size
+  document = default_document()
+  placed = document['layouts']['large'][SIGNAL_WIDGET]
+  assert placed['size'] == 'ring'
+  del placed['size']
+  assert validate_document(document)['layouts']['large'][SIGNAL_WIDGET]['size'] == 'ring'
+  placed.update(size='vertical')
+  document = validate_document(document)
+  assert widget_size(document, 'large', SIGNAL_WIDGET) == SIGNAL_SIZES['vertical']
+  document['layouts']['large'][SIGNAL_WIDGET]['size'] = 'square'
+  with pytest.raises(ValueError):
+    validate_document(document)
+
+
+def test_starport_signal_style_is_validated_and_pulled_on_screen():
+  from openpilot.starpilot.system.starport.projection_layout import default_layout_for_viewport, validate_layout_for_viewport
+  from openpilot.starpilot.ui.onroad_customization import SIGNAL_SIZES
+  layout = default_layout_for_viewport((1920, 1080))
+  del layout['widgets'][SIGNAL_WIDGET]['size']
+  assert validate_layout_for_viewport(layout, (1920, 1080))['widgets'][SIGNAL_WIDGET]['size'] == 'ring'
+  layout['widgets'][SIGNAL_WIDGET].update(size='horizontal', x=1920 - 30 - SIGNAL_SIZES['ring'][0])
+  placed = validate_layout_for_viewport(layout, (1920, 1080))['widgets'][SIGNAL_WIDGET]
+  assert placed['x'] == 1920 - 30 - SIGNAL_SIZES['horizontal'][0]
+  layout['widgets'][SIGNAL_WIDGET]['size'] = 'big'
+  with pytest.raises(ValueError):
+    validate_layout_for_viewport(layout, (1920, 1080))
