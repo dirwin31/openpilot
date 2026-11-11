@@ -91,6 +91,7 @@ def native_dependencies():
   from openpilot.starpilot.ui.shell import ShellMode
   from openpilot.starpilot.system.starport.projection_favorites import ProjectionFavorites
   from openpilot.starpilot.system.starport.projection_now_playing import ProjectionNowPlayingFeed
+  from openpilot.starpilot.system.starport.media_audio import music_control
   from openpilot.starpilot.models.jetlink_status import JetlinkStatusFeed
   from openpilot.starpilot.ui.onroad_jetlink import gpu_inputs
 
@@ -151,7 +152,7 @@ def native_dependencies():
                          pip_rect=Rect, pip_widgets=CAMERA_WIDGETS, placement=placement, widget_size=widget_size,
                          alert=OnroadAlert, alert_size=AlertSize, map_overlay=live_overlay, map_feed=MapFeed,
                          favorites=ProjectionFavorites, standby_logo=standby_logo, now_playing_feed=ProjectionNowPlayingFeed,
-                         jetlink_feed=JetlinkStatusFeed, gpu_inputs=gpu_inputs)
+                         now_playing_control=music_control, jetlink_feed=JetlinkStatusFeed, gpu_inputs=gpu_inputs)
 
 
 class ProjectionOnroad:
@@ -203,6 +204,10 @@ class ProjectionOnroad:
       if getattr(native, 'now_playing_feed', None) is not None:
         self.now_playing_feed = native.now_playing_feed()
         self._resources.callback(self.now_playing_feed.close)
+      self.now_playing_touch = None
+      if self.now_playing_feed is not None and getattr(native, 'now_playing_control', None) is not None:
+        from openpilot.starpilot.ui.onroad_now_playing import NowPlayingTouch
+        self.now_playing_touch = NowPlayingTouch(native.now_playing_control, getattr(self.onroad, 'now_playing', None))
       self.jetlink_feed = None
       if getattr(native, 'jetlink_feed', None) is not None:
         self.jetlink_feed = native.jetlink_feed()
@@ -359,6 +364,7 @@ class ProjectionOnroad:
       placed = (self.customization or {}).get('widgets', {}).get('now_playing', {})
       self.now_playing_feed.set_enabled(bool(placed.get('enabled')))
       self.onroad.now_playing.track = self.now_playing_feed.snapshot()
+      self.onroad.now_playing.artwork = self.now_playing_feed.artwork()
     if self.jetlink_feed is not None:
       placed = (self.customization or {}).get('widgets', {}).get('jetlink_status', {})
       self.jetlink_feed.set_enabled(bool(placed.get('enabled') and self.native.ui_state.started))
@@ -594,12 +600,24 @@ class ProjectionOnroad:
         if self.favorites is not None:
           self.favorites.cancel()
         continue
+      if self._now_playing_touch(event.kind, x, y):
+        if self.favorites is not None:
+          self.favorites.cancel()
+        continue
       if self.favorites is None:
         continue
       if self._state is None or not self.native.ui_state.started:
         self.favorites.cancel()
         continue
       self.favorites.touch(event.kind, x, y, self._state, self.native.ui_state.started_frame)
+
+  def _now_playing_touch(self, kind, x, y) -> bool:
+    touch = self.now_playing_touch
+    if touch is None:
+      return False
+    state = self._state if self.native.ui_state.started else None
+    placed = state.customization['layouts']['large'].get('now_playing') if state is not None else None
+    return touch.touch(kind, x, y, state, placed, self.onroad.now_playing.showing())
 
   def _slc_touch(self, kind, x, y) -> bool:
     """Speed-limit confirmation taps; True while one owns the touch."""
@@ -625,6 +643,8 @@ class ProjectionOnroad:
     if getattr(self.onroad, 'uniden', None):
       self.onroad.uniden.touch('cancel', 0, 0, None)
     self.exit.cancel()
+    if self.now_playing_touch is not None:
+      self.now_playing_touch.cancel()
     if self._slc_input is not None:
       self._slc_input.cancel()
     if self.favorites is not None:

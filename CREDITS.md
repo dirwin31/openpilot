@@ -47,3 +47,7 @@ The current StarPilot Controller replaces that historical curvature-primary tune
 ## Uniden radar detector link
 
 The Uniden detector link builds on **inauner's** earlier Uniden R4/R8/R9 work in [inauner/StarPilot, uniden](https://github.com/inauner/StarPilot/tree/c4b694b2ac8742ddec44123d53f1f84d2990b47e) (`uniden_protocol.py`, `uniden_r4.py`, `uniden_radar_d.py`, the Galaxy Uniden panel and the radar alert banner), which established the detector's BLE alert flow and the Galaxy/UI integration approach. This branch's monitor, transport, widgets and tests are a separate implementation on the current StarPilot Bluetooth owner; the experimental settings and speed-limit slowdown logic are not included. The alert parser and command framing are based on AegisX86/UnidenR8wlink (see THIRD_PARTY_NOTICES.md).
+
+## Car-screen now-playing card
+
+The Android Auto now-playing card (`openpilot/starpilot/ui/onroad_now_playing.py`) adapts Peter Nguyen's contributed card: its shared hit boxes and release-to-fire touch handling, Spotify cover art download and drawing in the card's shape, the accented-name font cuts, scrolling names, the shuffle, repeat and skip glyphs, and the take-over from another Spotify device. The Big and Small sizes and the Galaxy styling are StarPilot's.
