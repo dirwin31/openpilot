@@ -98,8 +98,9 @@ test('one warning for every band: colors and on/off only, with a scenario previe
 test('saved lockouts make learning progress stand out', () => {
   const { computed } = UnidenPanel
   const learning = [{ id: 'a', band: 'K', frequency: 24.15, count: 2, need: 3, misses: 1 }, { id: 'b', band: 'KA', frequency: 34.7, count: 1, need: 5, misses: 0 }]
-  const panel = { saved: { auto_learn: true, learn_bands: ['X', 'K'] }, learning }
+  const panel = { saved: { auto_learn: false, learn_bands: [] }, config: { auto_learn: true, learn_bands: ['X', 'K'] }, learning }
   panel.learningOn = computed.learningOn.call(panel)
+  assert.equal(panel.learningOn, true, 'follows the unsaved toggle')
   const rows = computed.learningRows.call(panel)
   assert.deepEqual(rows.map(r => [r.learnable, r.percent, r.left]), [[true, 67, 1], [false, 20, 4]])
   assert.deepEqual(rows.map(r => r.stage), ['Locks out next pass', 'Just started'], 'a stage, not a pass count')
