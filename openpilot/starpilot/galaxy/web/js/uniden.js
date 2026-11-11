@@ -54,9 +54,9 @@ export const UnidenPanel = {
     dirty() { return this.saved !== null && JSON.stringify(this.config) !== JSON.stringify(this.saved) },
     ready() { return !!this.saved?.address && this.detectors.some(d => d.address.toUpperCase() === this.saved.address.toUpperCase()) },
     leaveInline() { return !!this.leaveAction && !this.leaveModal },
-    learningOn() { return !!this.saved?.auto_learn },
+    learningOn() { return !!this.config.auto_learn },
     learningRows() {
-      const bands = this.saved?.learn_bands || []
+      const bands = this.config.learn_bands || []
       return this.learning.slice(0, LEARNING_ROWS).map(item => ({ ...item, learnable: bands.includes(item.band),
         percent: Math.min(100, Math.round(item.count / item.need * 100)), left: Math.max(0, item.need - item.count),
         stage: item.need - item.count <= 1 ? 'Locks out next pass' : item.count * 2 < item.need ? 'Just started' : 'Learning' }))
