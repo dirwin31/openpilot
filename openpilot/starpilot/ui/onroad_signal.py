@@ -2,7 +2,7 @@
 from openpilot.starpilot.ui.raylib import rl
 
 from openpilot.starpilot.ui.network_signal import Signal, SignalFeed
-from openpilot.starpilot.ui.onroad_customization import SIGNAL_GRIDS, SIGNAL_SCALE, SIGNAL_WIDGET
+from openpilot.starpilot.ui.onroad_customization import SIGNAL_GRIDS, SIGNAL_SCALE, SIGNAL_WIDGET, signal_scale
 from openpilot.starpilot.ui.presentation import FontRole
 
 ACCENT = rl.Color(199, 174, 247, 255)
@@ -11,7 +11,6 @@ GRAY = rl.Color(140, 136, 152, 255)
 TEXT = rl.Color(245, 242, 252, 255)
 MUTED = rl.Color(184, 178, 200, 255)
 DIM = rl.Color(255, 255, 255, 43)
-S = SIGNAL_SCALE
 
 
 def lit(signal: Signal, radio: str) -> rl.Color:
@@ -50,10 +49,11 @@ class SignalWidget:
     self.fonts = fonts
     self.feed = feed or SignalFeed()
     self.preview: Signal | None = None
+    self.s = SIGNAL_SCALE  # px per grid unit: the 88 px grid scale times the placement's size percentage
 
   def _text(self, text, x, cy, size, color, align='center'):
     """Draws text with its ink centered on cy; x is the centre, or the left edge with align='left'."""
-    size *= S
+    size *= self.s
     top, bottom = self.fonts.vertical_ink(text, FontRole.SEMI_BOLD, size)
     if align == 'center':
       x -= self.fonts.measure(text, FontRole.SEMI_BOLD, size).width / 2
@@ -66,6 +66,7 @@ class SignalWidget:
     signal = self.preview or self.feed.snapshot()
     style = placed.get('size', 'ring')
     style = style if style in SIGNAL_GRIDS else 'ring'
+    self.s = S = SIGNAL_SCALE * signal_scale(placed)
     background = rl.Color(15, 13, 23, round(235 * placed.get('opacity', 85) / 100))
     radios = [radio for radio in ('cell', 'wifi') if getattr(signal, radio)]
     x, y = placed['x'], placed['y']
@@ -80,6 +81,7 @@ class SignalWidget:
     return signal.tech if radio == 'cell' else 'Wi-Fi'
 
   def _ring(self, signal, radios, x, y, background):
+    S = self.s
     cx, cy = x + 44 * S, y + 44 * S
     rl.draw_circle_v(rl.Vector2(cx, cy), 44 * S, background)
     radius, width = 34 * S, 7 * S
@@ -106,6 +108,7 @@ class SignalWidget:
       self._text('No link', cx, y + 57 * S, 13, GRAY)
 
   def _lines(self, signal, radios, x, y):
+    S = self.s
     def row(radio, cy, big):
       active = signal.active == radio
       color = lit(signal, radio)
@@ -125,6 +128,7 @@ class SignalWidget:
       self._text('No connection', x + 66 * S, y + 42 * S, 22, GRAY, 'left')
 
   def _columns(self, signal, radios, x, y):
+    S = self.s
     def column(radio, cx, segment, big, on=True):
       active = on and signal.active == radio
       color = lit(signal, radio) if on else GRAY

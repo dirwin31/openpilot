@@ -712,7 +712,8 @@ export const OnroadLayoutPage = {
           ...(widget.opacity ? { opacity: this.layout[widget.id].opacity } : {}),
           ...(widget.backgroundToggle ? { background: this.layout[widget.id].background } : {}),
           ...(widget.collapseToggle ? { collapse: this.layout[widget.id].collapse } : {}),
-          ...(widget.sizes ? { size: this.layout[widget.id].size } : {})
+          ...(widget.sizes ? { size: this.layout[widget.id].size } : {}),
+          ...(widget.scale ? { scale: this.layout[widget.id].scale } : {})
         }
       })
     },
@@ -1336,6 +1337,17 @@ export const OnroadLayoutPage = {
       const before = clone(this.state.draft)
       this.selectedPosition[field] = value
       this.recordChange(before, this.state.profile + ":" + this.state.selected + ":" + field)
+      this.state.notice = ""
+    },
+    scaleInput(event) {
+      const value = Number(event.target.value), range = this.selectedWidget?.scale
+      if (!this.editable || this.state.drag || this.state.layerDrag || !range || !Number.isInteger(value) || value < range.min || value > range.max) return
+      const before = clone(this.state.draft)
+      this.selectedPosition.scale = value
+      // Growing back toward full size may overhang the screen edge; pull it back in.
+      Object.assign(this.selectedPosition, clampPlacement(this.limitProfile, this.state.selected,
+        this.selectedPosition.x, this.selectedPosition.y, this.layout))
+      this.recordChange(before, this.state.profile + ":" + this.state.selected + ":scale")
       this.state.notice = ""
     },
     opacityInput(event) {

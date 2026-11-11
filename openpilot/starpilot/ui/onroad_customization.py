@@ -70,6 +70,7 @@ class Widget(TypedDict):
   box: NotRequired[dict[str, int]]
   opacity: NotRequired[dict[str, int]]
   sizes: NotRequired[dict[str, list[int]]]
+  scale: NotRequired[dict[str, int]]
   anchorShift: NotRequired[float]
   expandable: NotRequired[bool]
   hidden: NotRequired[bool]
@@ -237,10 +238,27 @@ SIGNAL_GRIDS = {"ring": (88, 88), "horizontal": (268, 84), "vertical": (96, 160)
 SIGNAL_SIZES = {style: (round(w * SIGNAL_SCALE), round(h * SIGNAL_SCALE)) for style, (w, h) in SIGNAL_GRIDS.items()}
 SIGNAL_SIZE = SIGNAL_SIZES["ring"]
 SIGNAL_OPACITY = (0, 100, 85)  # percent: min, max, default
+SIGNAL_SCALE_RANGE = (30, 100, 100)  # percent of the style's size: min, max, default
 _signal = _widget("Signal strength", SIGNAL_WIDGET, *SIGNAL_SIZE, 1624, 290)
-_signal["default"].update(enabled=False, opacity=SIGNAL_OPACITY[2], size="ring")
+_signal["default"].update(enabled=False, opacity=SIGNAL_OPACITY[2], size="ring", scale=SIGNAL_SCALE_RANGE[2])
 _signal["opacity"] = dict(zip(("min", "max", "default"), SIGNAL_OPACITY, strict=True))
+_signal["scale"] = dict(zip(("min", "max", "default"), SIGNAL_SCALE_RANGE, strict=True))
 _signal["sizes"] = {style: list(size) for style, size in SIGNAL_SIZES.items()}
+
+
+def valid_signal_scale(placement: dict) -> bool:
+  return type(placement.get("scale")) is int and SIGNAL_SCALE_RANGE[0] <= placement["scale"] <= SIGNAL_SCALE_RANGE[1]
+
+
+def signal_scale(placement: dict | None) -> float:
+  """The chosen fraction of the style's full size; a missing or bad value draws full size."""
+  return placement["scale"] / 100 if placement and valid_signal_scale(placement) else 1.
+
+
+def signal_size(placement: dict | None) -> tuple[int, int]:
+  width, height = SIGNAL_SIZES.get((placement or {}).get("size"), SIGNAL_SIZE)
+  scale = signal_scale(placement)
+  return round(width * scale), round(height * scale)
 _signal["note"] = "Cellular and Wi-Fi strength; the link in use is highlighted. Opacity sets the background."
 PROFILES["large"]["widgets"][SIGNAL_WIDGET] = _signal
 # Restore the Dom road graphic in the gap between the speed card and main speed.
@@ -673,9 +691,10 @@ def validate_document(value):
         placement.setdefault('hide_mute_memory', False)
         placement.setdefault('scale', 100)
         layout[key] = placement
-      if key == SIGNAL_WIDGET and type(placement) is dict and 'size' not in placement:
+      if key == SIGNAL_WIDGET and type(placement) is dict and ('size' not in placement or 'scale' not in placement):
         placement = dict(placement)
-        placement['size'] = 'ring'
+        placement.setdefault('size', 'ring')
+        placement.setdefault('scale', SIGNAL_SCALE_RANGE[2])
         layout[key] = placement
       bounds = widget_bounds(profile, key)
       if value['version'] < 8 and key in SPEED_LAYOUT_V7[profile]:
@@ -688,6 +707,8 @@ def validate_document(value):
         expected.add("opacity")
       if widget.get("sizes"):
         expected.add("size")
+      if key == SIGNAL_WIDGET:
+        expected.add("scale")
       if key == UNIDEN_WIDGET:
         expected |= UNIDEN_DISPLAY_FIELDS
         if type(placement) is not dict or not valid_uniden_display(placement):
@@ -702,6 +723,8 @@ def validate_document(value):
           raise ValueError("Invalid widget opacity")
       if widget.get("sizes") and (type(placement["size"]) is not str or placement["size"] not in widget["sizes"]):
         raise ValueError("Invalid widget style")
+      if key == SIGNAL_WIDGET and not valid_signal_scale(placement):
+        raise ValueError("Invalid widget scale")
       size = WHEEL_SIZES[profile][1]
       if scalable:
         minimum, _, maximum = WIDGET_SIZES[key][profile]
@@ -734,6 +757,7 @@ def validate_document(value):
             dimensions = (576, 148) if profile == 'large' else (348, 54)
         dimension = (dimensions[0 if axis == 'x' else 1] if dimensions else
                      size if key in WIDGET_SIZES else placement[extent] if widget.get("box") else
+                     signal_size(placement)[0 if axis == 'x' else 1] if key == SIGNAL_WIDGET else
                      widget["sizes"][str(placement["size"])][0 if axis == 'x' else 1] if widget.get("sizes") else widget[extent])
         if old_gauge:
           dimension = CEM_GAUGE_FRAME[0 if axis == 'x' else 1]
@@ -875,7 +899,7 @@ def widget_size(document, profile, widget):
   if default.get("box"):
     return position["width"], position["height"]
   if widget == SIGNAL_WIDGET:
-    return SIGNAL_SIZES.get(position.get("size"), SIGNAL_SIZE)
+    return signal_size(position)
   return (position.get("size", WIDGET_SIZES[widget][str(profile)][1]),) * 2 if widget in WIDGET_SIZES else (default["width"], default["height"])
 
 
