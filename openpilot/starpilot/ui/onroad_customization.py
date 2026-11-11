@@ -229,6 +229,15 @@ _jetlink["default"].update(enabled=False, opacity=JETLINK_OPACITY[2])
 _jetlink["opacity"] = dict(zip(("min", "max", "default"), JETLINK_OPACITY, strict=True))
 _jetlink["note"] = "Big or small model driving, and Jetlink's or the Chestnut's state (else Disconnected). Opacity sets the card background."
 PROFILES["large"]["widgets"][JETLINK_WIDGET] = _jetlink
+
+SIGNAL_WIDGET = "network_signal"
+SIGNAL_SIZE = (120, 120)
+SIGNAL_OPACITY = (0, 100, 85)  # percent: min, max, default
+_signal = _widget("Signal", SIGNAL_WIDGET, *SIGNAL_SIZE, 1624, 290)
+_signal["default"].update(enabled=False, opacity=SIGNAL_OPACITY[2])
+_signal["opacity"] = dict(zip(("min", "max", "default"), SIGNAL_OPACITY, strict=True))
+_signal["note"] = "Cellular strength on the left of the ring, Wi-Fi on the right; the middle names the link in use. Opacity sets the background."
+PROFILES["large"]["widgets"][SIGNAL_WIDGET] = _signal
 # Restore the Dom road graphic in the gap between the speed card and main speed.
 # Center the road gauge above the driver monitor, below the speed-limit controls.
 # It has no background and appears only with a current selected source.
@@ -255,7 +264,7 @@ for _key, _widget_data in PROFILES["large"]["widgets"].items():
   _widget_data["expandable"] = True
 # Older documents retain every saved placement and gain this independent widget.
 OPTIONAL_WIDGETS = frozenset({WEATHER_WIDGET, MODE_WIDGET, CLOCK_WIDGET, STOPPED_TIMER_WIDGET, CEM_GAUGE_WIDGET,
-                              NAV_CARD_WIDGET, NAV_MAP_WIDGET, JETLINK_WIDGET, UNIDEN_WIDGET, "rear_fog"})
+                              NAV_CARD_WIDGET, NAV_MAP_WIDGET, JETLINK_WIDGET, SIGNAL_WIDGET, UNIDEN_WIDGET, "rear_fog"})
 
 # The torque arc grows when the developer sidebar closes; protect both road widths.
 _torque = PROFILES['large']['widgets']['torque_bar']
@@ -309,7 +318,7 @@ WIDGET_COLORS = {
 DEFAULT_WIDGET_ORDER = {
   "large": (NAV_MAP_WIDGET, "pip_left", "pip_right", "cruise_limits", "speed_limit_actions", CEM_GAUGE_WIDGET, "current_speed",
             "steering_wheel", "torque_bar", "following_distance", "driver_monitor", MODE_WIDGET, CLOCK_WIDGET, WEATHER_WIDGET,
-            STOPPED_TIMER_WIDGET, NAV_CARD_WIDGET, JETLINK_WIDGET, UNIDEN_WIDGET, "rear_fog"),
+            STOPPED_TIMER_WIDGET, NAV_CARD_WIDGET, JETLINK_WIDGET, SIGNAL_WIDGET, UNIDEN_WIDGET, "rear_fog"),
   "compact": ("pip_left", "pip_right", "speed_limit", "max_speed", "steering_wheel", "torque_bar",
               "speed_limit_actions", "driver_monitor", *RAIL_WIDGETS, MODE_WIDGET, CLOCK_WIDGET, WEATHER_WIDGET, STOPPED_TIMER_WIDGET, "rear_fog"),
 }
