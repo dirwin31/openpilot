@@ -67,6 +67,7 @@ class PhoneGpsPublisher:
   def __init__(self, path=None, mono_clock=time.monotonic_ns):
     self._path, self._mono_clock = path, mono_clock
     self._lock = threading.Lock()
+    self._last_reason = None
 
   def publish(self, payload):
     from openpilot.starpilot.gps.source import PHONE_MAX_AGE_NS, MAX_HORIZONTAL_ACCURACY
@@ -81,7 +82,7 @@ class PhoneGpsPublisher:
       # Keep the last usable measurement through a brief accuracy dropout, without
       # changing its timestamp. It will still expire at the original deadline.
       if gps["horizontalAccuracy"] > MAX_HORIZONTAL_ACCURACY:
-        return self._status(path, now, False, "poorAccuracy")
+        return self._status(path, now, False, "poorAccuracy", gps["horizontalAccuracy"])
       previous = read_phone_gps(now, path)
       if previous is not None:
         stamp, old = previous
@@ -102,8 +103,11 @@ class PhoneGpsPublisher:
       self._status(path, now, True, "accepted")
       return {"ok": True}
 
-  @staticmethod
-  def _status(path, now, accepted, reason):
+  def _status(self, path, now, accepted, reason, accuracy=None):
+    if reason != self._last_reason:
+      from openpilot.common.swaglog import cloudlog
+      self._last_reason = reason
+      cloudlog.info("phone gps: %s", reason if accuracy is None else f"{reason} {round(accuracy)} m")
     status = path.with_name(path.name + ".status")
     temporary = status.with_name(status.name + ".tmp")
     temporary.write_text(json.dumps({"receivedMonoTime": now, "accepted": accepted, "reason": reason}))

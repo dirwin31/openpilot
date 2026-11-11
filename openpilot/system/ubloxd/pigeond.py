@@ -180,7 +180,7 @@ def send_position(pigeon: TTYPigeon) -> None:
     return  # Older STRING cache is not a serialized GPS Event.
   with log.Event.from_bytes(position) as evt:
     gps = evt.gpsLocationExternal
-    if datetime.now(UTC).timestamp() - gps.unixTimestampMillis / 1000 > 7 * 24 * 3600:
+    if system_time_valid() and datetime.now(UTC).timestamp() - gps.unixTimestampMillis / 1000 > 7 * 24 * 3600:
       return
     cloudlog.warning("Sending last position to ublox")
 
@@ -263,7 +263,7 @@ def deinitialize_and_exit(pigeon: TTYPigeon | None):
   set_power(False)
   sys.exit(0)
 
-def init(pigeon: TTYPigeon) -> None:
+def init(pigeon: TTYPigeon) -> bool:
   # register exit handler
   signal.signal(signal.SIGINT, lambda sig, frame: deinitialize_and_exit(pigeon))
 
@@ -276,18 +276,23 @@ def init(pigeon: TTYPigeon) -> None:
   init_baudrate(pigeon)
   init_pigeon(pigeon)
 
-  if system_time_valid():
-    try:
-      send_time(pigeon)
-      send_position(pigeon)
-    except Exception:
-      cloudlog.exception("failed to send time and position to ublox")
+  time_valid = system_time_valid()
+  try:
+    send_time(pigeon)
+  except Exception:
+    cloudlog.exception("failed to send time to ublox")
+  try:
+    send_position(pigeon)
+  except Exception:
+    cloudlog.exception("failed to send position to ublox")
+  return time_valid
 
 def run_receiving(duration: int = 0):
   pm = messaging.PubMaster(['ubloxRaw'])
 
   pigeon = TTYPigeon()
-  init(pigeon)
+  time_pending = not init(pigeon)
+  last_time_check = time.monotonic()
 
   start_time = time.monotonic()
   last_almanac_save = time.monotonic()
@@ -308,6 +313,15 @@ def run_receiving(duration: int = 0):
   threading.Thread(target=download_assistnow, daemon=True).start()
 
   while (duration == 0) or (time.monotonic() - start_time < duration):
+    if time_pending and time.monotonic() - last_time_check > 1.:
+      last_time_check = time.monotonic()
+      if system_time_valid():
+        time_pending = False
+        try:
+          send_time(pigeon)
+        except Exception:
+          cloudlog.exception("failed to send time to ublox")
+
     if assist_messages is not None and not assist_attempted:
       assist_attempted = True
       try:
@@ -322,7 +336,7 @@ def run_receiving(duration: int = 0):
     if len(dat) > 0:
       if dat[0] == 0x00:
         cloudlog.warning("received invalid data from ublox, re-initing!")
-        init(pigeon)
+        time_pending = not init(pigeon)
         assist_attempted = False
         continue
 

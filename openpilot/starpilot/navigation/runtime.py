@@ -12,7 +12,7 @@ from openpilot.starpilot.navigation.google_routes import (
   GoogleRouteEngine, GoogleRoutesFailed, essentials_budget, route_budget, write_route_status,
 )
 
-from openpilot.starpilot.gps.phone import read_phone_gps
+from openpilot.starpilot.gps.phone import phone_gps_status, read_phone_gps
 from openpilot.starpilot.gps.source import GPS_MAX_AGE_NS, GPS_SERVICES, bearing, select_location
 
 ARRIVED_NS = 5_000_000_000      # stopped at the destination this long shows "You have arrived"
@@ -308,6 +308,7 @@ def main():
   rate = Ratekeeper(5.)
   next_update_ns = 0
   last_phone_stamp = 0
+  phone_usable = False
   try:
     while True:
       sm.update(0)
@@ -321,6 +322,14 @@ def main():
                          received=sm.updated['mapdOut'], alive=sm.alive['mapdOut'], now_boot_ns=now + boot_offset_ns())
         phone_fix = read_phone_gps(now)
         phone_stamp = phone_fix[0] if phone_fix is not None else 0
+        if (phone_fix is not None) != phone_usable:
+          phone_usable = phone_fix is not None
+          if phone_usable:
+            cloudlog.info('phone gps usable')
+          elif (status := phone_gps_status(now)) is None:
+            cloudlog.info('phone gps lost: no status')
+          else:
+            cloudlog.info('phone gps lost: last %s %.1f s ago', status['reason'], status['receivedAgeMs'] / 1000)
         if now >= next_update_ns or phone_stamp != last_phone_stamp:
           next_update_ns = now + 1_000_000_000
           last_phone_stamp = phone_stamp

@@ -53,7 +53,10 @@ def test_navigation_forwards_new_phone_fixes_without_waiting_for_heartbeat(monke
     def __getitem__(self, _service):
       return SimpleNamespace(startedMonoTime=0)
 
-  published = []
+  published, logged = [], []
+  from openpilot.common import swaglog
+  monkeypatch.setattr(swaglog.cloudlog, 'info', lambda fmt, *args: logged.append(fmt % args))
+  monkeypatch.setattr(module, 'phone_gps_status', lambda _now: {'reason': 'poorAccuracy', 'receivedAgeMs': 1500.})
   monkeypatch.setitem(sys.modules, 'openpilot.common.realtime', SimpleNamespace(Ratekeeper=Rate))
   monkeypatch.setattr(module, 'NavigationOwner', lambda: owner)
   monkeypatch.setattr(module, 'RouteRuntime', lambda _owner: runtime)
@@ -69,6 +72,11 @@ def test_navigation_forwards_new_phone_fixes_without_waiting_for_heartbeat(monke
   assert runtime.update.call_count == len(expected)
   if changes == {0: 1}:
     assert {fix[0] for _index, fix in published} == {99_000_000_001}, 'held fixes keep their measurement time'
+  phone_logs = [line for line in logged if line.startswith('phone gps')]
+  if 0 in changes.values():
+    assert phone_logs == ['phone gps usable', 'phone gps lost: last poorAccuracy 1.5 s ago']
+  else:
+    assert phone_logs == ['phone gps usable']
   owner.position_store.flush.assert_called_once_with(force=True)
 
 

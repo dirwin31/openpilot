@@ -318,3 +318,22 @@ def test_invalid_upload_reports_reason_without_erasing_last_fix(tmp_path):
     publisher.publish({**FIX, 'ageMs': 5000})
   status = phone_gps_status(NOW, path)
   assert status['reason'] == 'Location is too old' and status['usable']
+
+
+def test_publisher_logs_reason_changes_only(tmp_path, monkeypatch):
+  from openpilot.common import swaglog
+  logged = []
+  monkeypatch.setattr(swaglog.cloudlog, 'info', lambda fmt, *args: logged.append(fmt % args))
+  path = tmp_path / 'gps.json'
+  now = [NOW]
+  publisher = PhoneGpsPublisher(path, lambda: now[0])
+  for step in range(3):
+    now[0] += 1_000_000_000
+    publisher.publish({**FIX, 'timestamp': FIX['timestamp'] + step * 1000})
+  for _ in range(2):
+    publisher.publish({**FIX, 'horizontalAccuracy': 26.4})
+  with pytest.raises(ValueError):
+    publisher.publish({**FIX, 'ageMs': 5000})
+  now[0] += 1_000_000_000
+  publisher.publish({**FIX, 'timestamp': FIX['timestamp'] + 3000})
+  assert logged == ['phone gps: accepted', 'phone gps: poorAccuracy 26 m', 'phone gps: Location is too old', 'phone gps: accepted']
