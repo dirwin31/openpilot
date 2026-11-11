@@ -20,6 +20,7 @@ const BLUETOOTH_ERRORS = {
   projection_active: "StarPort is using this device. Stop StarPort, then try again.",
   session_expired: "The pairing session expired. Refresh and start pairing again.",
   changed: "The Bluetooth device or pairing request changed. Refresh and try again.",
+  unreachable: "The device didn't respond. Make sure it's on, nearby and not connected to another phone or app (like the Uniden app), then try again.",
 }
 export const bluetoothError = (code) => BLUETOOTH_ERRORS[code] || "Bluetooth could not complete the request. Refresh to try again."
 const PROMPT_KINDS = new Set(["pin", "passkey", "confirmation", "authorization", "display_pin", "display_passkey"])
