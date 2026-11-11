@@ -141,6 +141,8 @@ class OnroadView:
       self.steering_wheel = SteeringWheelWidget(asset_directory)
       from openpilot.starpilot.ui.onroad_jetlink import JetlinkStatusWidget
       self.jetlink_status = JetlinkStatusWidget(fonts)
+      from openpilot.starpilot.ui.onroad_signal import SignalWidget
+      self.network_signal = SignalWidget(fonts)
       from openpilot.starpilot.ui.onroad_uniden import UnidenWidget
       self.uniden = UnidenWidget(fonts)
     else:
@@ -302,6 +304,9 @@ class OnroadView:
       if "jetlink_status" in state.customization["layouts"]["large"]:
         if jetlink := getattr(self, "jetlink_status", None):
           submit("jetlink_status", lambda: jetlink.render(state))
+      if "network_signal" in state.customization["layouts"]["large"]:
+        if signal := getattr(self, "network_signal", None):
+          submit("network_signal", lambda: signal.render(state))
       if "car_exit" in state.customization["layouts"]["large"]:
         if exit_layer := getattr(self, "projection_exit_layer", None):
           submit("car_exit", lambda: exit_layer(state))
@@ -423,6 +428,8 @@ class OnroadView:
           uniden.render(state)
         if jetlink := getattr(self, "jetlink_status", None):
           jetlink.render(state)
+        if signal := getattr(self, "network_signal", None):
+          signal.render(state)
         self._driving_mode(state, right_shift / 2)
         self._clock(state, right_shift / 2)
         self._weather(state, right_shift / 2)

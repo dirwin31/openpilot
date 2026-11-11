@@ -248,6 +248,25 @@ export const LayoutWidgetPreview = {
         <path d="M411 25 L426 51 L396 51 Z" fill="#ff5b65" />
         </g>
       </g>
+      <g v-else-if="widget.kind === 'network_signal'" :transform="'scale(' + widget.width / 88 + ')'">
+        <circle cx="44" cy="44" r="44" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
+        <path d="M39.3 77.7A34 34 0 0 1 19.9 67.9" fill="none" stroke="#f5f2fc" stroke-width="7" />
+        <path d="M48.7 77.7A34 34 0 0 0 68.1 67.9" fill="none" stroke="#c7aef7" stroke-width="7" />
+        <path d="M17.9 65.7A34 34 0 0 1 10.0 45.5" fill="none" stroke="#f5f2fc" stroke-width="7" />
+        <path d="M70.1 65.7A34 34 0 0 0 78.0 45.5" fill="none" stroke="#c7aef7" stroke-width="7" />
+        <path d="M10.0 42.5A34 34 0 0 1 17.9 22.3" fill="none" stroke="#ffffff2b" stroke-width="7" />
+        <path d="M78.0 42.5A34 34 0 0 0 70.1 22.3" fill="none" stroke="#c7aef7" stroke-width="7" />
+        <path d="M19.9 20.1A34 34 0 0 1 39.3 10.3" fill="none" stroke="#ffffff2b" stroke-width="7" />
+        <path d="M68.1 20.1A34 34 0 0 0 48.7 10.3" fill="none" stroke="#c7aef7" stroke-width="7" />
+        <rect x="24.0" y="34" width="3" height="4" fill="#b8b2c8" />
+        <rect x="28.5" y="30" width="3" height="8" fill="#b8b2c8" />
+        <rect x="33.0" y="26" width="3" height="12" fill="#b8b2c8" />
+        <rect x="37.5" y="22" width="3" height="16" fill="#b8b2c8" />
+        <circle cx="55" cy="36" r="2" fill="#c7aef7" />
+        <path d="M50.2 31.7A6.5 6.5 0 0 1 59.8 31.7" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <path d="M46.5 28.3A11.5 11.5 0 0 1 63.5 28.3" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <text x="44" y="61" text-anchor="middle" font-size="14" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
+      </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
         <circle :cx="widget.height / 2" :cy="widget.height / 2" r="9" fill="#46c86e" />
@@ -307,6 +326,25 @@ export const LayoutWidgetPreview = {
           :fill="i > 6 ? '#35434d' : unidenSignal(6, i - 1)" />
         <path d="M411 25 L426 51 L396 51 Z" fill="#ff5b65" />
         </g>
+      </g>
+      <g v-else-if="widget.kind === 'network_signal'" :transform="'scale(' + widget.width / 88 + ')'">
+        <circle cx="44" cy="44" r="44" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
+        <path d="M39.3 77.7A34 34 0 0 1 19.9 67.9" fill="none" stroke="#f5f2fc" stroke-width="7" />
+        <path d="M48.7 77.7A34 34 0 0 0 68.1 67.9" fill="none" stroke="#c7aef7" stroke-width="7" />
+        <path d="M17.9 65.7A34 34 0 0 1 10.0 45.5" fill="none" stroke="#f5f2fc" stroke-width="7" />
+        <path d="M70.1 65.7A34 34 0 0 0 78.0 45.5" fill="none" stroke="#c7aef7" stroke-width="7" />
+        <path d="M10.0 42.5A34 34 0 0 1 17.9 22.3" fill="none" stroke="#ffffff2b" stroke-width="7" />
+        <path d="M78.0 42.5A34 34 0 0 0 70.1 22.3" fill="none" stroke="#c7aef7" stroke-width="7" />
+        <path d="M19.9 20.1A34 34 0 0 1 39.3 10.3" fill="none" stroke="#ffffff2b" stroke-width="7" />
+        <path d="M68.1 20.1A34 34 0 0 0 48.7 10.3" fill="none" stroke="#c7aef7" stroke-width="7" />
+        <rect x="24.0" y="34" width="3" height="4" fill="#b8b2c8" />
+        <rect x="28.5" y="30" width="3" height="8" fill="#b8b2c8" />
+        <rect x="33.0" y="26" width="3" height="12" fill="#b8b2c8" />
+        <rect x="37.5" y="22" width="3" height="16" fill="#b8b2c8" />
+        <circle cx="55" cy="36" r="2" fill="#c7aef7" />
+        <path d="M50.2 31.7A6.5 6.5 0 0 1 59.8 31.7" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <path d="M46.5 28.3A11.5 11.5 0 0 1 63.5 28.3" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+        <text x="44" y="61" text-anchor="middle" font-size="14" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
