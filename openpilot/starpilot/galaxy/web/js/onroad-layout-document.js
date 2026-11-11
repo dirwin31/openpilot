@@ -266,7 +266,7 @@ export function validSnapshot(data) {
         widget.opacity.min < 0 || widget.opacity.max > 100 || widget.opacity.min > widget.opacity.default ||
         widget.opacity.default > widget.opacity.max)) return false
       if (widget.collapseToggle != null && (!projection || widget.kind !== "now_playing" || widget.collapseToggle !== true)) return false
-      if (widget.sizes != null && (!projection || widget.kind !== "now_playing" || !object(widget.sizes) ||
+      if (widget.sizes != null && (!(projection && widget.kind === "now_playing" || widget.kind === "network_signal") || !object(widget.sizes) ||
         !Object.values(widget.sizes).every(size => Array.isArray(size) && size.length === 2 && size.every(positive) &&
           size[0] <= area.width && size[1] <= area.height))) return false
       if (widget.backgroundToggle != null && (!projection || !["nav_home", "nav_work", "bookmark", "car_exit"].includes(widget.kind) ||
