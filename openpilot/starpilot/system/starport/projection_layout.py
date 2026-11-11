@@ -7,7 +7,7 @@ from pathlib import Path
 from openpilot.starpilot.system.starport.identity import DATA_DIR
 from openpilot.starpilot.system.starport.display_profile import screen_geometry
 from openpilot.starpilot.ui.onroad_customization import (CEM_GAUGE_WIDGET, CLOCK_WIDGET, JETLINK_WIDGET, MODE_WIDGET, SIGNAL_OPACITY, SIGNAL_WIDGET,
-                                                         UNIDEN_WIDGET, UNIDEN_DISPLAY_FIELDS,
+                                                         SIGNAL_SIZES, UNIDEN_WIDGET, UNIDEN_DISPLAY_FIELDS,
                                                          STOPPED_TIMER_WIDGET, WEATHER_WIDGET, CEM_GAUGE_FRAME, CEM_GAUGE_INSET, MAP_MIN_SIZE, NAV_CARD_SIZE,
                                                          SPEED_ALIGNMENTS, customization_metadata, valid_uniden_display, validate_map_box,
                                                          validate_widget_order)
@@ -214,6 +214,8 @@ def now_playing_size(placement):
 def placement_size(key, widget, placement):
   if key == NOW_PLAYING_WIDGET:
     return now_playing_size(placement)
+  if key == SIGNAL_WIDGET:
+    return SIGNAL_SIZES.get(placement.get('size'), SIGNAL_SIZES['ring'])
   if key in DISPLAY_WIDGETS and placement.get('display') == 'icons':
     return FAVORITE_ICON_SIZE, FAVORITE_ICON_SIZE
   if widget.get('resizable'):
@@ -295,6 +297,8 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
     if key == NOW_PLAYING_WIDGET and type(placement) is dict:
       placement.setdefault('collapse', False)
       placement.setdefault('size', 'small')
+    if key == SIGNAL_WIDGET and type(placement) is dict:
+      placement.setdefault('size', 'ring')
     if key == 'driver_monitor' and type(placement) is dict and 'size' not in placement:
       for axis in ('x', 'y'):
         if type(placement.get(axis)) in (int, float):
@@ -311,6 +315,7 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
               ({'opacity', 'background'} if key in ACTION_WIDGETS else set()) |
               ({'opacity'} if key == 'cruise_limits' or key in CARD_WIDGETS else set()) |
               ({'collapse', 'size'} if key == NOW_PLAYING_WIDGET else set()) |
+              ({'size'} if key == SIGNAL_WIDGET else set()) |
               (UNIDEN_DISPLAY_FIELDS if key == UNIDEN_WIDGET else set()) |
               ({'width', 'height'} if widget.get('box') else set()) |
               ({'opacity'} if key == NAV_MAP else set()))
@@ -334,6 +339,8 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
       raise ValueError('Invalid now playing collapse setting')
     if key == NOW_PLAYING_WIDGET and (type(placement['size']) is not str or placement['size'] not in NOW_PLAYING_SIZES):
       raise ValueError('Invalid now playing size')
+    if key == SIGNAL_WIDGET and (type(placement['size']) is not str or placement['size'] not in SIGNAL_SIZES):
+      raise ValueError('Invalid signal style')
     if key == CAR_EXIT and placement['opacity'] < CAR_EXIT_MIN_OPACITY:
       raise ValueError('Exit to car opacity must be at least 25%')
     if widget.get('resizable'):
@@ -367,8 +374,8 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
         type(placement[axis]) in (int, float) and math.isfinite(placement[axis]) and
         bounds[axis] <= placement[axis] <= bounds[axis] + bounds[extent] - dimension
         for (axis, extent), dimension in zip((('x', 'width'), ('y', 'height')), pair, strict=True))), dimensions)
-    if key in (NOW_PLAYING_WIDGET, UNIDEN_WIDGET):
-      # A larger card size or scale may overhang a saved spot; pull it back in.
+    if key in (UNIDEN_WIDGET, NOW_PLAYING_WIDGET, SIGNAL_WIDGET):
+      # A larger scale or card size may overhang a saved spot; pull it back in.
       for (axis, extent), dimension in zip((('x', 'width'), ('y', 'height')), dimensions, strict=True):
         if type(placement[axis]) in (int, float) and math.isfinite(placement[axis]):
           placement[axis] = min(placement[axis], bounds[axis] + bounds[extent] - dimension)
