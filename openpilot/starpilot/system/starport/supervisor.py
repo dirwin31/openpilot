@@ -1218,7 +1218,9 @@ class Supervisor:
     owner = self._shared_bluetooth_owner
     if owner is None:
       return None
-    with self._lock, owner.lock:
+    # Owner lock only: the lease is released under it, and a detector Connect can block for
+    # seconds. Holding the supervisor lock here stalled video on every reconnect attempt.
+    with owner.lock:
       if owner.phone_lease is None:
         return None
       return exchange(owner, address, model, session, mute=mute, auto_mute=auto_mute, frequency_rules=frequency_rules,
