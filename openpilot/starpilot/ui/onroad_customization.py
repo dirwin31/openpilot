@@ -234,16 +234,17 @@ PROFILES["large"]["widgets"][JETLINK_WIDGET] = _jetlink
 
 SIGNAL_WIDGET = "network_signal"
 SIGNAL_SCALE = 120 / 88  # drawn on an 88 px grid
-SIGNAL_GRIDS = {"ring": (88, 88), "horizontal": (268, 84), "vertical": (96, 160)}
+SIGNAL_GRIDS = {"ring": (112, 128), "horizontal": (268, 112), "vertical": (112, 196)}
 SIGNAL_SIZES = {style: (round(w * SIGNAL_SCALE), round(h * SIGNAL_SCALE)) for style, (w, h) in SIGNAL_GRIDS.items()}
 SIGNAL_SIZE = SIGNAL_SIZES["ring"]
 SIGNAL_OPACITY = (0, 100, 85)  # percent: min, max, default
 SIGNAL_SCALE_RANGE = (30, 100, 100)  # percent of the style's size: min, max, default
-_signal = _widget("Signal strength", SIGNAL_WIDGET, *SIGNAL_SIZE, 1624, 290)
-_signal["default"].update(enabled=False, opacity=SIGNAL_OPACITY[2], size="ring", scale=SIGNAL_SCALE_RANGE[2])
+_signal = _widget("Connections", SIGNAL_WIDGET, *SIGNAL_SIZE, 1624, 290)
+_signal["default"].update(enabled=False, opacity=SIGNAL_OPACITY[2], size="ring", scale=SIGNAL_SCALE_RANGE[2], bluetooth=True)
 _signal["opacity"] = dict(zip(("min", "max", "default"), SIGNAL_OPACITY, strict=True))
 _signal["scale"] = dict(zip(("min", "max", "default"), SIGNAL_SCALE_RANGE, strict=True))
 _signal["sizes"] = {style: list(size) for style, size in SIGNAL_SIZES.items()}
+_signal["bluetoothToggle"] = True
 
 
 def valid_signal_scale(placement: dict) -> bool:
@@ -259,7 +260,7 @@ def signal_size(placement: dict | None) -> tuple[int, int]:
   width, height = SIGNAL_SIZES.get((placement or {}).get("size"), SIGNAL_SIZE)
   scale = signal_scale(placement)
   return round(width * scale), round(height * scale)
-_signal["note"] = "Cellular and Wi-Fi strength; the link in use is highlighted. Opacity sets the background."
+_signal["note"] = "Cellular and Wi-Fi strength plus Bluetooth status and device name; the active data link is highlighted. Opacity sets the background."
 PROFILES["large"]["widgets"][SIGNAL_WIDGET] = _signal
 # Restore the Dom road graphic in the gap between the speed card and main speed.
 # Center the road gauge above the driver monitor, below the speed-limit controls.
@@ -691,10 +692,11 @@ def validate_document(value):
         placement.setdefault('hide_mute_memory', False)
         placement.setdefault('scale', 100)
         layout[key] = placement
-      if key == SIGNAL_WIDGET and type(placement) is dict and ('size' not in placement or 'scale' not in placement):
+      if key == SIGNAL_WIDGET and type(placement) is dict and any(field not in placement for field in ('size', 'scale', 'bluetooth')):
         placement = dict(placement)
         placement.setdefault('size', 'ring')
         placement.setdefault('scale', SIGNAL_SCALE_RANGE[2])
+        placement.setdefault('bluetooth', True)
         layout[key] = placement
       bounds = widget_bounds(profile, key)
       if value['version'] < 8 and key in SPEED_LAYOUT_V7[profile]:
@@ -708,7 +710,7 @@ def validate_document(value):
       if widget.get("sizes"):
         expected.add("size")
       if key == SIGNAL_WIDGET:
-        expected.add("scale")
+        expected |= {"scale", "bluetooth"}
       if key == UNIDEN_WIDGET:
         expected |= UNIDEN_DISPLAY_FIELDS
         if type(placement) is not dict or not valid_uniden_display(placement):
@@ -725,6 +727,8 @@ def validate_document(value):
         raise ValueError("Invalid widget style")
       if key == SIGNAL_WIDGET and not valid_signal_scale(placement):
         raise ValueError("Invalid widget scale")
+      if key == SIGNAL_WIDGET and type(placement["bluetooth"]) is not bool:
+        raise ValueError("Invalid widget bluetooth setting")
       size = WHEEL_SIZES[profile][1]
       if scalable:
         minimum, _, maximum = WIDGET_SIZES[key][profile]
