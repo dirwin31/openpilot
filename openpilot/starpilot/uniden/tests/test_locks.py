@@ -327,7 +327,7 @@ def test_service_learns_from_passes_only_when_enabled(tmp_path):
 
 
 def test_config_defaults_and_validation():
-  assert normalize_config({'enabled': False, 'address': '', 'model': 'R8'}) == DEFAULT_CONFIG
+  assert normalize_config({'enabled': False, 'address': '', 'model': 'R8'}) == normalize_config(DEFAULT_CONFIG)
   assert normalize_config({**CONFIG, 'quiet_bands': ['LASER', 'X']})['quiet_bands'] == ['X', 'LASER']
   for change in ({'quiet_margin': 16}, {'quiet_margin': True}, {'quiet_bands': ['POP']}, {'border_bands': ['X']},
                  {'border_colors': {'KA': 'cyan', 'K': 'violet', 'LASER': 'white'}}, {'border_colors': {'KA': 'purple'}},
@@ -570,7 +570,8 @@ def test_unmute_needs_the_setting_and_never_undoes_the_drivers_own_mute(setup):
 def test_service_sends_the_timed_settings_and_validates_them(tmp_path):
   service, _, _ = make_service(tmp_path, {**CONFIG, 'timed_mute': True, 'timed_mute_seconds': 8, 'timed_mute_strength': 5,
                                           'timed_mute_bands': ['K'], 'unmute_on_breakthrough': False})
-  assert service.situation(service.config(), None)['timed'] == {'bands': ['K'], 'seconds': 8, 'strength': 5, 'unmute': True}, \
+  assert service.situation(service.config(), None)['timed'] == {'bands': ['K'], 'seconds': 8, 'strength': 5, 'unmute': True,
+    'settings': {band: {'seconds': 8, 'strength': 5} for band in ('X', 'K', 'KA')}}, \
     'warn again unmutes the detector; Galaxy has no switch for the old unmute setting'
   assert normalize_config({**CONFIG, 'timed_mute_strength': 0})['timed_mute_strength'] == 0, '0 is never warn again'
   assert make_service(tmp_path)[0].situation(CONFIG, None)['timed'] is None
@@ -578,3 +579,31 @@ def test_service_sends_the_timed_settings_and_validates_them(tmp_path):
                  {'timed_mute_seconds': 5.5}, {'timed_mute_bands': ['LASER']}, {'timed_mute': 1}, {'unmute_on_breakthrough': 'yes'}):
     with pytest.raises(ValueError):
       normalize_config({**CONFIG, **change})
+
+
+def test_timed_mute_uses_each_bands_delay_and_strength():
+  timed = {**TIMED, 'settings': {'K': {'seconds': 2, 'strength': 0}, 'KA': {'seconds': 10, 'strength': 5}}}
+  packet = b'1,00,K,3,0,24.150,F,1&1,00,KA,3,0,34.7,F,1'
+  _, state = timed_run(packet, None, 100., timed)
+  state = (102.9, state[1])
+  items, state = timed_run(packet, state, 103., timed)
+  by_band = {a['band']: a for a in items}
+  assert by_band['K']['timed'] and not by_band['KA']['timed']
+  items, _ = timed_run(b'1,00,K,8,0,24.150,F,1&1,00,KA,5,0,34.7,F,1', state, 103.5, timed)
+  by_band = {a['band']: a for a in items}
+  assert by_band['K']['timed'] and not by_band['K']['breakthrough']
+  assert by_band['KA']['breakthrough'] and not by_band['KA']['timed']
+
+
+def test_per_band_timed_settings_migrate_validate_and_round_trip():
+  legacy = {**CONFIG, 'timed_mute_seconds': 9, 'timed_mute_strength': 0}
+  migrated = normalize_config(legacy)
+  assert migrated['timed_mute_settings'] == {band: {'seconds': 9, 'strength': 0} for band in ('X', 'K', 'KA')}
+  migrated['timed_mute_settings']['KA'] = {'seconds': 20, 'strength': 7}
+  assert normalize_config(migrated) == migrated
+  assert migrated['timed_mute_settings']['K']['seconds'] == 9
+  for settings in (None, [], {'LASER': {'seconds': 5, 'strength': 6}}, {'K': {}},
+                   {'K': {'seconds': True, 'strength': 6}}, {'K': {'seconds': 61, 'strength': 6}},
+                   {'K': {'seconds': 5, 'strength': 1}}, {'K': {'seconds': 5, 'strength': False}}):
+    with pytest.raises(ValueError):
+      normalize_config({**legacy, 'timed_mute_settings': settings})
