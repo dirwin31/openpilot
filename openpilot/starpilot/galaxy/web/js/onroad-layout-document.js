@@ -107,8 +107,10 @@ export function overlapsReserved(profile, id, x, y, layout = null) {
       if ((id !== owner && id !== key) || !positions[key]?.enabled) return false
       const [width, height] = widgetSize(profile.widgets[key], positions[key])
       const obstacle = profile.widgets[key].confirmationObstacle || { x: 0, y: 0, width, height }
-      return overlaps(panel, { x: (id === key ? x : positions[key].x) + obstacle.x,
-        y: (id === key ? y : positions[key].y) + obstacle.y, width: obstacle.width, height: obstacle.height })
+      return overlaps(panel, {
+        x: (id === key ? x : positions[key].x) + obstacle.x,
+        y: (id === key ? y : positions[key].y) + obstacle.y, width: obstacle.width, height: obstacle.height
+      })
     })) return true
   }
   if (widget.layer === "underlay") return false
@@ -179,26 +181,27 @@ export function validDocument(document, metadata) {
       const widget = profile.widgets[id], limits = placementLimits(profile, id, layout)
       const resizable = widget.resizable, box = widget.box, opacity = widget.opacity
       return keysEqual(position, ["x", "y", "enabled", ...(resizable ? ["size"] : []), ...(box ? ["width", "height"] : []),
-        ...(widget.kind === "uniden_alerts" ? ["transparency", "hide_when_no_alert", "hide_quiet_ride", "hide_mute_memory", "scale"] : []), ...(opacity ? ["opacity"] : []), ...(widget.iconSize ? ["display"] : []), ...(widget.backgroundToggle ? ["background"] : []), ...(widget.collapseToggle ? ["collapse"] : []), ...(widget.sizes ? ["size"] : []), ...(widget.scale ? ["scale"] : [])]) &&
-        (widget.kind !== "uniden_alerts" || (Number.isInteger(position.transparency) && position.transparency >= 0 &&
-          position.transparency <= 100 && typeof position.hide_when_no_alert === "boolean" &&
-          typeof position.hide_quiet_ride === "boolean" && typeof position.hide_mute_memory === "boolean" &&
-          Number.isInteger(position.scale) && position.scale >= 50 && position.scale <= 150)) &&
-        (!widget.iconSize || ["words", "icons"].includes(position.display)) &&
-        (!widget.backgroundToggle || typeof position.background === "boolean") &&
-        (!widget.collapseToggle || typeof position.collapse === "boolean") &&
-        (!widget.sizes || Object.hasOwn(widget.sizes, position.size)) &&
-        (!widget.scale || (Number.isInteger(position.scale) && position.scale >= widget.scale.min && position.scale <= widget.scale.max)) &&
-        (!opacity || (Number.isInteger(position.opacity) && position.opacity >= opacity.min && position.opacity <= opacity.max)) &&
-        (!resizable || (Number.isInteger(position.size) && position.size >= resizable.min && position.size <= resizable.max)) &&
-        (!box || (Number.isInteger(position.width) && position.width >= box.minWidth && position.width <= box.maxWidth &&
-          Number.isInteger(position.height) && position.height >= box.minHeight && position.height <= box.maxHeight)) &&
-        typeof position.enabled === "boolean" && (!widget.required || position.enabled === true) &&
-        Number.isFinite(position.x) && Number.isFinite(position.y) &&
-        position.x >= limits.minX && position.x <= limits.maxX && position.y >= limits.minY && position.y <= limits.maxY &&
-        (!position.enabled || !overlapsReserved(profile, id, position.x, position.y, layout))
-    })
+        ...(widget.kind === "uniden_alerts" ? ["transparency", "hide_when_no_alert", "hide_quiet_ride", "hide_mute_memory", "scale"] : []), ...(opacity ? ["opacity"] : []), ...(widget.iconSize ? ["display"] : []), ...(widget.backgroundToggle ? ["background"] : []), ...(widget.collapseToggle ? ["collapse"] : []), ...(widget.bluetoothToggle ? ["bluetooth"] : []), ...(widget.sizes ? ["size"] : []), ...(widget.scale ? ["scale"] : [])]) &&
+      (widget.kind !== "uniden_alerts" || (Number.isInteger(position.transparency) && position.transparency >= 0 &&
+        position.transparency <= 100 && typeof position.hide_when_no_alert === "boolean" &&
+        typeof position.hide_quiet_ride === "boolean" && typeof position.hide_mute_memory === "boolean" &&
+        Number.isInteger(position.scale) && position.scale >= 50 && position.scale <= 150)) &&
+      (!widget.iconSize || ["words", "icons"].includes(position.display)) &&
+      (!widget.backgroundToggle || typeof position.background === "boolean") &&
+      (!widget.collapseToggle || typeof position.collapse === "boolean") &&
+      (!widget.bluetoothToggle || typeof position.bluetooth === "boolean") &&
+      (!widget.sizes || Object.hasOwn(widget.sizes, position.size)) &&
+      (!widget.scale || (Number.isInteger(position.scale) && position.scale >= widget.scale.min && position.scale <= widget.scale.max)) &&
+      (!opacity || (Number.isInteger(position.opacity) && position.opacity >= opacity.min && position.opacity <= opacity.max)) &&
+      (!resizable || (Number.isInteger(position.size) && position.size >= resizable.min && position.size <= resizable.max)) &&
+      (!box || (Number.isInteger(position.width) && position.width >= box.minWidth && position.width <= box.maxWidth &&
+        Number.isInteger(position.height) && position.height >= box.minHeight && position.height <= box.maxHeight)) &&
+      typeof position.enabled === "boolean" && (!widget.required || position.enabled === true) &&
+      Number.isFinite(position.x) && Number.isFinite(position.y) &&
+      position.x >= limits.minX && position.x <= limits.maxX && position.y >= limits.minY && position.y <= limits.maxY &&
+      (!position.enabled || !overlapsReserved(profile, id, position.x, position.y, layout))
   })
+})
 }
 
 export function validSnapshot(data) {
@@ -271,6 +274,7 @@ export function validSnapshot(data) {
         widget.opacity.min < 0 || widget.opacity.max > 100 || widget.opacity.min > widget.opacity.default ||
         widget.opacity.default > widget.opacity.max)) return false
       if (widget.collapseToggle != null && (!projection || widget.kind !== "now_playing" || widget.collapseToggle !== true)) return false
+      if (widget.bluetoothToggle != null && (widget.kind !== "network_signal" || widget.bluetoothToggle !== true)) return false
       if (widget.sizes != null && (!(projection && widget.kind === "now_playing" || widget.kind === "network_signal") || !object(widget.sizes) ||
         !Object.values(widget.sizes).every(size => Array.isArray(size) && size.length === 2 && size.every(positive) &&
           size[0] <= area.width && size[1] <= area.height))) return false

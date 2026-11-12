@@ -290,6 +290,7 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
     if key == SIGNAL_WIDGET and type(placement) is dict:
       placement.setdefault('size', 'ring')
       placement.setdefault('scale', SIGNAL_SCALE_RANGE[2])
+      placement.setdefault('bluetooth', True)
     if key == 'driver_monitor' and type(placement) is dict and 'size' not in placement:
       for axis in ('x', 'y'):
         if type(placement.get(axis)) in (int, float):
@@ -303,7 +304,7 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
               ({'opacity', 'background'} if key in ACTION_WIDGETS else set()) |
               ({'opacity'} if key == 'cruise_limits' or key in CARD_WIDGETS else set()) |
               ({'collapse', 'size'} if key == NOW_PLAYING_WIDGET else set()) |
-              ({'size', 'scale'} if key == SIGNAL_WIDGET else set()) |
+              ({'size', 'scale', 'bluetooth'} if key == SIGNAL_WIDGET else set()) |
               (UNIDEN_DISPLAY_FIELDS if key == UNIDEN_WIDGET else set()) |
               ({'width', 'height', 'opacity'} if key == NAV_MAP else set()))
     if type(placement) is not dict or set(placement) != fields or type(placement['enabled']) is not bool:
@@ -330,6 +331,8 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
       raise ValueError('Invalid signal style')
     if key == SIGNAL_WIDGET and not valid_signal_scale(placement):
       raise ValueError('Invalid signal scale')
+    if key == SIGNAL_WIDGET and type(placement['bluetooth']) is not bool:
+      raise ValueError('Invalid signal bluetooth setting')
     if key == CAR_EXIT and placement['opacity'] < CAR_EXIT_MIN_OPACITY:
       raise ValueError('Exit to car opacity must be at least 25%')
     if widget.get('resizable'):

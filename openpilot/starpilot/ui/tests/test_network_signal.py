@@ -9,13 +9,14 @@ from openpilot.starpilot.ui.network_signal import Signal, SignalFeed, read_signa
 from openpilot.starpilot.ui.onroad_customization import SIGNAL_WIDGET, default_document, validate_document
 
 
-def read(tmp_path, modem, rssi, iface):
+def read(tmp_path, modem, rssi, iface, bt=('off', ())):
   path = tmp_path / 'modem'
   if modem is not None:
     path.write_text(json.dumps(modem))
   poll = {'RSSI': str(rssi)} if rssi is not None else {}
   with patch.object(hardware, 'MODEM_STATE_PATH', str(path)), patch.object(hardware, 'wpa_supplicant_cmd', return_value=poll), \
-       patch.object(hardware, 'get_default_route_iface', return_value=iface):
+       patch.object(hardware, 'get_default_route_iface', return_value=iface), \
+       patch('openpilot.starpilot.ui.bluetooth_status.read_bluetooth_details', return_value=bt):
     return read_signal()
 
 
@@ -25,8 +26,8 @@ def test_steps_match_device_strength_bands():
 
 def test_reads_both_radios_and_the_link_in_use(tmp_path):
   modem = {'connected': True, 'signal_quality': 60, 'network_type': 'nr'}
-  assert read(tmp_path, modem, -45, 'wlan0') == Signal(3, 4, 'wifi', '5G')
-  assert read(tmp_path, modem, None, 'ppp0') == Signal(3, None, 'cell', '5G')
+  assert read(tmp_path, modem, -45, 'wlan0', ('connected', ('iPhone 15',))) == Signal(3, 4, 'wifi', '5G', 'connected', ('iPhone 15',))
+  assert read(tmp_path, modem, None, 'ppp0', ('on', ())) == Signal(3, None, 'cell', '5G', 'on', ())
   assert read(tmp_path, {'connected': False, 'signal_quality': 60}, -88, 'wlan0') == Signal(None, 2, 'wifi')
   assert read(tmp_path, None, None, None) == Signal()
 
@@ -118,15 +119,123 @@ def test_signal_draws_at_its_size_percentage():
   from types import SimpleNamespace as NS
   from unittest.mock import MagicMock
   from openpilot.starpilot.ui.onroad_customization import SIGNAL_SCALE
-  from openpilot.starpilot.ui.onroad_signal import SignalWidget
+  from openpilot.starpilot.ui import onroad_signal
   fonts = MagicMock()
   fonts.vertical_ink.return_value = (0, 10)
   fonts.measure.return_value = NS(width=20)
-  widget = SignalWidget(fonts)
-  widget.preview = Signal(2, 4, 'wifi')
+  widget = onroad_signal.SignalWidget(fonts)
+  widget.preview = Signal(2, 4, 'wifi', 'LTE', 'connected', ('iPhone 15',))
   document = default_document()
   document['layouts']['large'][SIGNAL_WIDGET].update(enabled=True, scale=30)
-  with patch('openpilot.starpilot.ui.onroad_signal.rl') as rl:
+  with patch.object(onroad_signal, 'rl') as rl:
+    rl.Rectangle = lambda *args: args
     widget.render(NS(customization=document, alert=NS(size='none')))
-  assert rl.draw_circle_v.call_args_list[0].args[1] == pytest.approx(44 * SIGNAL_SCALE * .3)
-  assert all(call.args[2] == pytest.approx(14 * SIGNAL_SCALE * .3) for call in fonts.draw.call_args_list)
+  assert rl.draw_rectangle_rounded.call_args_list[0].args[0][2:] == pytest.approx((112 * SIGNAL_SCALE * .3, 128 * SIGNAL_SCALE * .3))
+  assert all(call.args[2] in (pytest.approx(12 * SIGNAL_SCALE * .3), pytest.approx(11 * SIGNAL_SCALE * .3))
+             for call in fonts.draw.call_args_list)
+
+
+@pytest.mark.parametrize('style', ['ring', 'horizontal', 'vertical'])
+def test_all_styles_render_bluetooth_status_and_device_name(style):
+  from types import SimpleNamespace as NS
+  from unittest.mock import MagicMock
+  from openpilot.starpilot.ui import onroad_signal
+  fonts = MagicMock()
+  fonts.vertical_ink.return_value = (0, 10)
+  fonts.measure.side_effect = lambda text, _role, size: NS(width=len(text) * size * 0.5)
+  widget = onroad_signal.SignalWidget(fonts)
+  widget.preview = Signal(2, 4, 'wifi', '5G', 'connected', ('iPhone 15',))
+  document = default_document()
+  document['layouts']['large'][SIGNAL_WIDGET].update(enabled=True, size=style)
+  with patch.object(onroad_signal, 'rl'):
+    widget.render(NS(customization=document, alert=NS(size='none')))
+  drawn = [call.args[0] for call in fonts.draw.call_args_list]
+  assert 'iPhone 15' in drawn
+  if style == 'horizontal':
+    assert 'Connected' in drawn
+
+  fonts.draw.reset_mock()
+  widget.preview = Signal(2, 4, 'wifi', '5G', 'connected', ('iPhone 15', 'AirPods'))
+  with patch.object(onroad_signal, 'rl'):
+    widget.render(NS(customization=document, alert=NS(size='none')))
+  drawn_multi = [call.args[0] for call in fonts.draw.call_args_list]
+  assert any('iPhone' in text and ('AirPods' in text or '+1' in text) for text in drawn_multi) or ('iPhone 15' in drawn_multi and 'AirPods' in drawn_multi)
+
+
+def test_bluetooth_toggle_defaults_on_and_hides_bluetooth_when_off():
+  from types import SimpleNamespace as NS
+  from unittest.mock import MagicMock
+  from openpilot.starpilot.system.starport.projection_layout import default_layout_for_viewport, validate_layout_for_viewport
+  from openpilot.starpilot.ui import onroad_signal
+  document = default_document()
+  assert document['layouts']['large'][SIGNAL_WIDGET]['bluetooth'] is True
+  del document['layouts']['large'][SIGNAL_WIDGET]['bluetooth']
+  assert validate_document(document)['layouts']['large'][SIGNAL_WIDGET]['bluetooth'] is True
+  document['layouts']['large'][SIGNAL_WIDGET]['bluetooth'] = 'yes'
+  with pytest.raises(ValueError):
+    validate_document(document)
+
+  layout = default_layout_for_viewport((1920, 1080))
+  assert layout['widgets'][SIGNAL_WIDGET]['bluetooth'] is True
+  del layout['widgets'][SIGNAL_WIDGET]['bluetooth']
+  assert validate_layout_for_viewport(layout, (1920, 1080))['widgets'][SIGNAL_WIDGET]['bluetooth'] is True
+
+  fonts = MagicMock()
+  fonts.vertical_ink.return_value = (0, 10)
+  fonts.measure.side_effect = lambda text, _role, size: NS(width=len(text) * size * 0.5)
+  widget = onroad_signal.SignalWidget(fonts)
+  widget.preview = Signal(2, 4, 'wifi', '5G', 'connected', ('iPhone 15',))
+  for style in ('ring', 'horizontal', 'vertical'):
+    fonts.draw.reset_mock()
+    doc = default_document()
+    doc['layouts']['large'][SIGNAL_WIDGET].update(enabled=True, size=style, bluetooth=False)
+    with patch.object(onroad_signal, 'rl'):
+      widget.render(NS(customization=doc, alert=NS(size='none')))
+    drawn = [call.args[0] for call in fonts.draw.call_args_list]
+    assert 'iPhone 15' not in drawn
+    assert 'Connected' not in drawn
+
+
+@pytest.mark.parametrize('style,grid', [('ring', (88, 88)), ('horizontal', (268, 84)), ('vertical', (96, 160))])
+@pytest.mark.parametrize('scale', [30, 100])
+def test_legacy_signal_at_screen_edge_migrates_without_losing_layout(style, grid, scale):
+  from openpilot.starpilot.ui.onroad_customization import SIGNAL_SCALE, signal_size, widget_bounds
+  document = default_document()
+  placed = document['layouts']['large'][SIGNAL_WIDGET]
+  del placed['bluetooth']
+  bounds = widget_bounds('large', SIGNAL_WIDGET)
+  old_size = [round(round(d * SIGNAL_SCALE) * scale / 100) for d in grid]
+  placed.update(size=style, scale=scale, enabled=True,
+                x=bounds['x'] + bounds['width'] - old_size[0], y=bounds['y'] + bounds['height'] - old_size[1])
+  migrated = validate_document(document)
+  saved = migrated['layouts']['large'][SIGNAL_WIDGET]
+  width, height = signal_size(saved)
+  assert saved['x'] == bounds['x'] + bounds['width'] - width
+  assert saved['y'] == bounds['y'] + bounds['height'] - height
+  assert saved['enabled'] and saved['bluetooth']
+  assert migrated['layouts']['compact'] == document['layouts']['compact']
+  assert validate_document(migrated) == migrated
+  placed['x'] += 1
+  with pytest.raises(ValueError):
+    validate_document(document)
+
+
+def test_horizontal_bluetooth_name_does_not_overlap_status():
+  from types import SimpleNamespace as NS
+  from unittest.mock import MagicMock
+  from openpilot.starpilot.ui import onroad_signal
+  fonts = MagicMock()
+  fonts.vertical_ink.return_value = (0, 10)
+  fonts.measure.side_effect = lambda text, _role, size: NS(width=len(text) * size * .6)
+  widget = onroad_signal.SignalWidget(fonts)
+  widget.preview = Signal(2, 4, 'wifi', 'LTE', 'connected', ('A very long phone name', 'Headphones'))
+  document = default_document()
+  placed = document['layouts']['large'][SIGNAL_WIDGET]
+  placed.update(enabled=True, size='horizontal')
+  with patch.object(onroad_signal, 'rl'):
+    widget.render(NS(customization=document, alert=NS(size='none')))
+  drawn = [call.args for call in fonts.draw.call_args_list]
+  name = next(args for args in drawn if '+1' in args[0])
+  status = next(args for args in drawn if args[0] == 'Connected')
+  name_right = name[3] + fonts.measure(name[0], name[1], name[2]).width
+  assert name_right <= status[3] - 24 * widget.s

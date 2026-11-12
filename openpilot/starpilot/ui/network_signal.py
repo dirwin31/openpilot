@@ -14,6 +14,8 @@ class Signal(NamedTuple):
   wifi: int | None = None
   active: str | None = None  # 'cell' or 'wifi': the link carrying data
   tech: str = 'LTE'
+  bt: str = 'off'  # 'off', 'on', or 'connected'
+  bt_devices: tuple[str, ...] = ()
 
 
 def steps(percent: float) -> int:
@@ -22,8 +24,10 @@ def steps(percent: float) -> int:
 
 def read_signal() -> Signal:
   from openpilot.common.hardware.comma.hardware import MODEM_STATE_PATH, get_default_route_iface, wpa_supplicant_cmd
+  from openpilot.starpilot.ui.bluetooth_status import read_bluetooth_details
   cell = wifi = active = iface = None
   tech = 'LTE'
+  bt, bt_devices = 'off', ()
   try:
     with open(MODEM_STATE_PATH) as f:
       modem = json.load(f)
@@ -42,11 +46,15 @@ def read_signal() -> Signal:
     iface = get_default_route_iface()
   except Exception:
     pass
+  try:
+    bt, bt_devices = read_bluetooth_details()
+  except Exception:
+    pass
   if iface and iface.startswith('wlan'):
     active = 'wifi' if wifi else None
   elif cell and not (iface and iface.startswith('eth')):
     active = 'cell'
-  return Signal(cell, wifi, active, tech)
+  return Signal(cell, wifi, active, tech, bt, bt_devices)
 
 
 class SignalFeed:
