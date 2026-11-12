@@ -130,7 +130,8 @@ def test_one_row_per_threat_overflow_arrows_and_touch_bounds():
     fonts.reset_mock()
     widget.render(state)
     labels = [call.args[0] for call in fonts.draw.call_args_list]
-    assert '3 Manual mute  •  +2 more' in labels
+    assert any(label.startswith('3 Manual mute') for label in labels)
+    assert '3 MUTED' in labels
     assert labels.count('35.500 GHz') == 2
     assert card_size(data['alerts']) == (460, 256)
     data['model'] = 'R4'
@@ -150,13 +151,13 @@ def test_all_muted_says_so_in_the_outline(outline_guard):
        patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_triangle'):
     widget.render(state)
     assert 'Manual mute' in [call.args[0] for call in fonts.draw.call_args_list]
-    gap = outline_guard.call_args.args[5]
+    gap = outline_guard.call_args.args[5][1]
     assert gap[0] < 30 + 24 < gap[1], 'the outline opens around the note'
     data['alerts'] = parse_alerts(b'1,00,KA,3,0,33.785,R,1')
     fonts.reset_mock()
     widget.render(state)
-    assert 'Muted' not in [call.args[0] for call in fonts.draw.call_args_list]
-    assert outline_guard.call_args.args[5:] == (None,)
+    assert 'MUTED' not in [call.args[0] for call in fonts.draw.call_args_list]
+    assert outline_guard.call_args.args[5] == []
 
 
 def test_theme_display_settings_override_legacy_bluetooth_settings():
@@ -424,6 +425,31 @@ def test_card_note_names_timed_mute_and_strong_signals():
        patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_triangle'):
     assert 'Timed mute' in notes(timed=True)
     assert 'Strong signal' in notes(breakthrough=True, timed=False)
+
+
+@pytest.mark.parametrize('flags', [{}, {'breakthrough': True}, {'quiet': True, 'muted': False},
+                                  {'timed': True, 'muted': False}, {'locked': True}, {'filtered': True}])
+def test_mute_status_stays_red_on_the_right_with_strength_notices_and_long_notes(flags, outline_guard):
+  fonts, feed = fonts_mock(), Mock()
+  alerts = [{**parse_alerts(b'1,00,K,8,0,24.150,F,2')[0], **flags}]
+  data = {'connected': True, 'model': 'R8', 'alerts': alerts}
+  widget = UnidenWidget(fonts, feed)
+  state = NS(customization={})
+  with patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle_rounded'), \
+       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_rectangle'), \
+       patch('openpilot.starpilot.ui.onroad_uniden.rl.draw_triangle'):
+    for notice in ('', 'Locked out here (1)', 'A very long notice that must leave room for mute status'):
+      fonts.reset_mock()
+      widget._card(state, {**data, 'notice': notice}, alerts, {}, 30, 50)
+      draws = {call.args[0]: call.args for call in fonts.draw.call_args_list}
+      status = draws['MUTED']
+      assert status[3] > 30 + 460 / 2
+      assert (status[-1].r, status[-1].g, status[-1].b, status[-1].a) == (255, 91, 101, 255)
+      if flags.get('breakthrough') and not notice:
+        assert 'Strong signal' in draws
+      gaps = sorted(outline_guard.call_args.args[5])
+      assert len(gaps) == 2 and gaps[0][1] + 12 <= gaps[1][0]
+      assert gaps[1][0] < status[3] < gaps[1][1]
 
 
 def edge_run(packet, *, parts=None, muted_percent=50, moments=(5.,), model='R8', speed_x=640, reduce_motion=False,
