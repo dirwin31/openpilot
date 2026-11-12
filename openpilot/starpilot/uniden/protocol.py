@@ -30,7 +30,7 @@ DEFAULT_CONFIG = {'enabled': False, 'address': '', 'model': 'R8', 'transparency'
                   'border_edge': {'line': True, 'dashes': True, 'glow': False, 'veil': False, 'chevrons': True},
                   'border_muted_percent': 50,
                   'timed_mute': False, 'timed_mute_seconds': 5, 'timed_mute_strength': 6, 'timed_mute_bands': ['X', 'K', 'KA'],
-                  'unmute_on_breakthrough': False}
+                  'timed_mute_settings': {}, 'unmute_on_breakthrough': False}
 OPTIONAL_KEYS = set(DEFAULT_CONFIG) - {'enabled', 'address', 'model'}
 # Field 7 per PROTOCOL.md; only 1 and 2 are confirmed on hardware, the rest are documented but untested.
 MUTE_MODES = {'1': '', '2': 'manual', '3': 'memory', '4': 'auto_memory', '5': 'blocked', '6': 'quiet_ride'}
@@ -72,6 +72,20 @@ def normalize_config(value):
     # 0 for the strength means never warn again.
     if type(config[key]) is not int or not (low <= config[key] <= high or (key == 'timed_mute_strength' and config[key] == 0)):
       raise ValueError(message)
+  settings = config['timed_mute_settings']
+  if type(settings) is not dict or set(settings) - set(TIMED_BANDS):
+    raise ValueError('Choose timed mute settings for X, K or Ka')
+  normalized = {}
+  for band in TIMED_BANDS:
+    item = settings.get(band, {'seconds': config['timed_mute_seconds'], 'strength': config['timed_mute_strength']})
+    if type(item) is not dict or set(item) != {'seconds', 'strength'}:
+      raise ValueError('Each band needs a mute delay and warning strength')
+    if type(item['seconds']) is not int or not 1 <= item['seconds'] <= 60:
+      raise ValueError('Mute delay must be 1–60 seconds')
+    if type(item['strength']) is not int or item['strength'] not in (0, 2, 3, 4, 5, 6, 7, 8):
+      raise ValueError('Warn again at strength 2–8, or never')
+    normalized[band] = dict(item)
+  config['timed_mute_settings'] = normalized
   for key, allowed in (('quiet_bands', LOCK_BANDS), ('learn_bands', LOCK_BANDS), ('border_bands', BORDER_BANDS),
                        ('timed_mute_bands', TIMED_BANDS)):
     config[key] = normalize_bands(config[key], allowed)
