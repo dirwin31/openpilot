@@ -147,10 +147,14 @@ def card_size(alerts):
   return (SIZE[0], PAD * 2 + ROW * min(len(alerts), MAX_ROWS)) if alerts else SIZE
 
 
-def outline(x, y, width, height, color, gap=None):
-  """Rounded card edge; gap=(left, right) leaves the top edge open there for an inline label."""
+def outline(x, y, width, height, color, gaps=()):
+  """Rounded card edge, with openings for inline labels on the top edge."""
   r, t = RADIUS, BORDER
-  top = [(x + r, x + width - r)] if gap is None else [(x + r, gap[0]), (gap[1], x + width - r)]
+  top, start = [], x + r
+  for left, right in sorted(gaps):
+    top.append((start, left))
+    start = max(start, right)
+  top.append((start, x + width - r))
   for left, right in top:
     if right > left:
       rl.draw_rectangle_rec(rl.Rectangle(left, y, right - left, t), color)
@@ -419,20 +423,37 @@ class UnidenWidget:
         label('No active alerts', 20, 24, 105, dim)
       return
 
-    # The mute state rides in the top edge of the card rather than taking a row of its own.
+    # Mute status has its own right-hand label so strength and notices cannot hide it.
     muted = sum(bool(item['muted']) for item in alerts)
+    quieted = sum(bool(mute_reason(item)) for item in alerts)
+    gaps = []
+    note_right = x + width - 20
+    if quieted:
+      status = 'MUTED' if quieted == len(alerts) else f'{quieted} MUTED'
+      measured = self.fonts.measure(status, FontRole.SEMI_BOLD, NOTE_SIZE)
+      mute_gap = (x + width - 20 - measured.width - 16, x + width - 20)
+      gaps.append(mute_gap)
+      self.fonts.draw(status, FontRole.SEMI_BOLD, NOTE_SIZE, mute_gap[0] + 8,
+                      y + BORDER / 2 - measured.height / 2, rl.Color(255, 91, 101, 255))
+      note_right = mute_gap[0] - 12
     notes = [data.get('notice') or ('Strong signal' if any(a.get('breakthrough') for a in alerts) else
                                     mute_note(alerts) or ('Mute sent' if data.get('command') and muted < len(alerts) else ''))]
     if len(alerts) > MAX_ROWS:
       notes.append(f'+{len(alerts) - MAX_ROWS} more')
     note = '  •  '.join(n for n in notes if n)
-    gap = None
     if note:
       size = NOTE_SIZE
+      available = note_right - (x + 20) - 16
+      original = note
+      while note and self.fonts.measure(note, FontRole.SEMI_BOLD, size).width > available:
+        original = original[:-1].rstrip()
+        note = original + '…' if original else ''
       measured = self.fonts.measure(note, FontRole.SEMI_BOLD, size)
-      gap = (x + 20, x + 20 + measured.width + 16)
-      self.fonts.draw(note, FontRole.SEMI_BOLD, size, gap[0] + 8, y + BORDER / 2 - measured.height / 2, border)
-    outline(x, y, width, height, border, gap)
+      if note:
+        gap = (x + 20, x + 20 + measured.width + 16)
+        gaps.append(gap)
+        self.fonts.draw(note, FontRole.SEMI_BOLD, size, gap[0] + 8, y + BORDER / 2 - measured.height / 2, border)
+    outline(x, y, width, height, border, gaps)
 
     shown = alerts[:MAX_ROWS]
     band_size, frequency_size = 36, 28

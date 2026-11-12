@@ -159,7 +159,16 @@ function paintRoad(canvas) {
 function drawCard(ctx, alert, font) {
   const x = 700, y = 560, w = 460, h = 76
   roundRect(ctx, x, y, w, h, 14); ctx.fillStyle = 'rgba(0,0,0,.62)'; ctx.fill()
+  ctx.font = `600 23px ${font}`
+  const muteWidth = alert.muted ? ctx.measureText('MUTED').width : 0
+  ctx.save()
+  if (alert.muted) {
+    ctx.beginPath(); ctx.rect(x - 2, y - 2, w + 4, h + 4)
+    ctx.rect(x + w - 36 - muteWidth, y - 2, muteWidth + 16, 4); ctx.clip('evenodd')
+  }
+  roundRect(ctx, x, y, w, h, 14)
   ctx.lineWidth = 2; ctx.strokeStyle = '#9D72FF'; ctx.stroke()
+  ctx.restore()
   const tone = alert.band === 'K' ? '#FFBA4E' : '#FF5B65'
   ctx.textBaseline = 'middle'
   ctx.fillStyle = tone; ctx.font = `600 36px ${font}`; ctx.fillText({ K: 'K', KA: 'Ka', LASER: 'Laser' }[alert.band], x + 24, y + h / 2)
@@ -171,7 +180,7 @@ function drawCard(ctx, alert, font) {
     ctx.fillRect(barsX + i * 11, y + h / 2 + 15 - bh, 8, bh)
   }
   if (alert.muted) {
-    ctx.font = `600 23px ${font}`; ctx.fillStyle = '#9D72FF'; ctx.fillText('Muted', x + 28, y + 2)
+    ctx.font = `600 23px ${font}`; ctx.fillStyle = '#FF5B65'; ctx.fillText('MUTED', x + w - 28 - muteWidth, y + 1)
   }
 }
 
