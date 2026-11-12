@@ -27,12 +27,13 @@ def apply(alerts, rules, situation, previous, now):
       entry = {'instant': known is not None and alert['band'] in FREQUENCY_BANDS and alert['strength'] >= INSTANT_STRENGTH,
                'since': now, 'loud': False}
     chosen = bool(timed and alert['band'] in timed['bands'])
+    timing = timed.get('settings', {}).get(alert['band'], timed) if timed else None
     # Once a signal reaches the strength it stays loud until it clears, so it cannot flap at the threshold.
     # A strength of 0 means never warn again: the signal stays muted however strong it gets.
-    seen[key] = entry = {**entry, 'loud': entry['loud'] or (chosen and timed['strength'] > 0 and alert['strength'] >= timed['strength'])}
+    seen[key] = entry = {**entry, 'loud': entry['loud'] or (chosen and timing['strength'] > 0 and alert['strength'] >= timing['strength'])}
     instant = entry['instant']
     alert['instant_on'] = instant
-    alert['timed'] = chosen and not instant and not entry['loud'] and now - entry['since'] >= timed['seconds']
+    alert['timed'] = chosen and not instant and not entry['loud'] and now - entry['since'] >= timing['seconds']
     alert['breakthrough'] = chosen and entry['loud']
     alert['ruled'] = matches_rule(alert, rules)
     alert['locked'] = any(matches_lock(alert, lock, context) for lock in locks)

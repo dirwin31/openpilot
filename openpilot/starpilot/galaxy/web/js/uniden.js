@@ -15,6 +15,12 @@ export function detectorStatus(state) {
 }
 
 const LEARNING_ROWS = 5
+export const detectorConfig = (value = {}) => {
+  const config = { ...defaults(), ...value }
+  config.timed_mute_settings = Object.fromEntries(['X', 'K', 'KA'].map(band => [band,
+    { seconds: config.timed_mute_seconds, strength: config.timed_mute_strength, ...value.timed_mute_settings?.[band] }]))
+  return config
+}
 const defaults = () => ({ enabled: false, address: '', model: 'R8', transparency: 8, hide_when_no_alert: true,
   auto_mute: false, hide_filtered: false, hide_below_limit: false, hide_q_ride: false, hide_mute_memory: false, frequency_rules: [], quiet_ride: false, quiet_margin: 0, quiet_bands: ['X', 'K'],
   auto_learn: false, learn_bands: ['X', 'K'], border_bands: ['KA', 'LASER'], border_colors: { KA: 'coral', K: 'amber', LASER: 'coral' },
@@ -44,7 +50,7 @@ const copy = value => JSON.parse(JSON.stringify(value))
 export const UnidenPanel = {
   components: { EdgePreview, GalaxySelect, GxDialog },
   props: { devices: { type: Array, default: () => [] }, parked: Boolean, unauthorized: Function, settings: Boolean },
-  data: () => ({ config: defaults(), saved: null, loaded: false, busy: false, error: '', state: null, editing: false,
+  data: () => ({ config: detectorConfig(), saved: null, loaded: false, busy: false, error: '', state: null, editing: false,
     locks: [], candidates: 0, learning: [], metric: false, swatches: ALL_SWATCHES, edgeParts: EDGE_PARTS, bands: BANDS,
     scenarios: PREVIEW_SCENARIOS, scenario: 'drive', panel: 'alerts',
     sections: { alerts: 'Preferences', warning: 'Colors', frequencies: 'Rules', lockouts: 'Lockouts' }, replay: 0, leaveAction: null, leaveModal: false, confirmLearn: null, learnWarnings: LEARN_WARNINGS }),
@@ -101,7 +107,7 @@ export const UnidenPanel = {
         this.state = value
         if (!this.locksLoaded) { this.locksLoaded = true; this.loadLocks() }
         if (!this.loaded || !this.dirty && !this.editing) {
-          this.config = copy({ ...defaults(), ...value.config }); this.saved = copy(this.config)
+          this.config = copy(detectorConfig(value.config)); this.saved = copy(this.config)
           if (!this.loaded) this.error = ''
           this.loaded = true
         }
@@ -327,12 +333,13 @@ export const UnidenPanel = {
             <div class="gx-row gx-uniden__preference"><div class="gx-row__info"><span class="gx-row__label">Mute after a few seconds</span><span class="gx-row__desc">Let each new signal beep for a moment, then mute it. The alert stays on screen. If it reaches the chosen strength, the detector is unmuted, the card says Strong signal and the warning flashes. Choose Never to keep it quiet. Laser is never muted this way.</span></div>
               <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Mute after a few seconds" v-model="config.timed_mute" /><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
             <div v-if="config.timed_mute" class="gx-uniden__sub">
-              <div class="gx-uniden__pair">
-                <label class="gx-uniden__field">Mute after (seconds) <input class="gx-field" type="number" min="1" max="60" step="1" inputmode="numeric" v-model.number="config.timed_mute_seconds" /></label>
-                <label class="gx-uniden__field">Warn again at strength <select class="gx-field" v-model.number="config.timed_mute_strength"><option :value="0">Never</option><option v-for="n in [2, 3, 4, 5, 6, 7, 8]" :key="n" :value="n">{{ n }} of 8</option></select></label>
+              <div v-for="band in ['X', 'K', 'KA']" :key="band">
+                <label class="gx-uniden__field"><span><input type="checkbox" :value="band" v-model="config.timed_mute_bands" /> {{ bands[band] }}</span></label>
+                <div v-if="config.timed_mute_bands.includes(band)" class="gx-uniden__pair">
+                  <label class="gx-uniden__field">{{ bands[band] }} mute after (seconds) <input class="gx-field" type="number" min="1" max="60" step="1" inputmode="numeric" v-model.number="config.timed_mute_settings[band].seconds" /></label>
+                  <label class="gx-uniden__field">{{ bands[band] }} warn again at strength <select class="gx-field" v-model.number="config.timed_mute_settings[band].strength"><option :value="0">Never</option><option v-for="n in [2, 3, 4, 5, 6, 7, 8]" :key="n" :value="n">{{ n }} of 8</option></select></label>
+                </div>
               </div>
-              <div class="gx-uniden__choices" role="group" aria-label="Bands to mute after a delay"><span class="gx-note">Mute</span>
-                <button v-for="band in ['X', 'K', 'KA']" :key="band" type="button" class="gx-chip gx-uniden__choice" :class="{ 'gx-chip--selected': config.timed_mute_bands.includes(band) }" :aria-pressed="config.timed_mute_bands.includes(band)" @click="toggleBand('timed_mute_bands', band)">{{ bands[band] }}</button></div>
             </div>
             <div class="gx-row gx-uniden__preference"><div class="gx-row__info"><span class="gx-row__label">Learn lockouts automatically</span><span class="gx-row__desc">After the same fixed source is passed on separate trips (three for X and K, five for Ka and Laser), lock it out at that place. A source that repeats at one spot but is missing on many drive-bys, like a patrol spot, is not learned. A signal stronger than ever seen there still alerts.</span></div>
               <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Learn lockouts automatically" v-model="config.auto_learn" /><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>

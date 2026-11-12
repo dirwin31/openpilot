@@ -61,7 +61,7 @@ class DetectorService:
     if config['timed_mute']:
       # Warn again also unmutes the detector (never, at strength 0). unmute_on_breakthrough is kept for saved configs only.
       timed = {'bands': config['timed_mute_bands'], 'seconds': config['timed_mute_seconds'],
-               'strength': config['timed_mute_strength'], 'unmute': True}
+               'strength': config['timed_mute_strength'], 'unmute': True, 'settings': config['timed_mute_settings']}
     return {'context': context, 'locks': near, 'quiet': quiet, 'timed': timed}
 
   def observe(self, result, config, context):
