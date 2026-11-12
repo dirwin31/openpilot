@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { compile } from '../web/vendor/vue/vue.esm-browser.js'
-import { UnidenPanel, SWATCHES } from '../web/js/uniden.js'
+import { UnidenPanel, SWATCHES, detectorConfig } from '../web/js/uniden.js'
 
 test('detector panel compiles and only offers bonded R4/R8 names', () => {
   assert.equal(typeof compile(UnidenPanel.template, { decodeEntities: value => value }), 'function')
@@ -183,4 +183,14 @@ test('turning on Ka or laser learning asks first; X, K and turning off do not', 
   assert.ok(!panel.config.learn_bands.includes('KA') && panel.confirmLearn === null, 'turning off is immediate')
   requestLearnBand.call(panel, 'X')
   assert.ok(!panel.config.learn_bands.includes('X'))
+})
+
+
+test('timed mute migrates shared settings and keeps band edits independent', () => {
+  const config = detectorConfig({ timed_mute_seconds: 12, timed_mute_strength: 0, timed_mute_bands: ['K'] })
+  assert.deepEqual(config.timed_mute_settings, Object.fromEntries(['X', 'K', 'KA'].map(band => [band, { seconds: 12, strength: 0 }])))
+  config.timed_mute_settings.KA.seconds = 30
+  assert.equal(config.timed_mute_settings.K.seconds, 12)
+  assert.deepEqual(detectorConfig(config), config)
+  assert.deepEqual(config.timed_mute_bands, ['K'])
 })

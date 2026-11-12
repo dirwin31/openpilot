@@ -7,7 +7,7 @@ import pytest
 
 from openpilot.starpilot.bluetooth.owner import ADAPTER, DEVICE, BluetoothOwner, BluetoothRejected
 from openpilot.starpilot.system.starport.bluetooth_bridge import SharedBluetoothOwner
-from openpilot.starpilot.uniden.protocol import ALERT_UUID, WRITE_UUID, GATT, DEFAULT_CONFIG, alert_key, parse_alerts
+from openpilot.starpilot.uniden.protocol import ALERT_UUID, WRITE_UUID, GATT, DEFAULT_CONFIG, alert_key, normalize_config, parse_alerts
 from openpilot.starpilot.uniden.transport import exchange
 from openpilot.starpilot.uniden.service import DetectorService
 from openpilot.starpilot.uniden.feed import DetectorFeed
@@ -164,7 +164,7 @@ def test_service_defaults_configure_authority_and_selected_device():
   params.get.return_value = None
   service = DetectorService(params, lambda: False)
   transport = Mock()
-  assert service.request({'operation': 'status'}, transport)['config'] == DEFAULT_CONFIG
+  assert service.request({'operation': 'status'}, transport)['config'] == normalize_config(DEFAULT_CONFIG)
   transport.assert_not_called()
   with pytest.raises(BluetoothRejected):
     service.request({'operation': 'configure', 'config': CONFIG}, transport)
@@ -174,7 +174,7 @@ def test_service_defaults_configure_authority_and_selected_device():
     service.request({'operation': 'mute', 'address': 'old', 'alerts': [], 'observed_at': 0}, transport)
   transport.side_effect = BluetoothRejected('Pairing busy')
   result = service.request({'operation': 'status'}, transport)
-  assert result['config'] == {**DEFAULT_CONFIG, **CONFIG} and not result['connected'] and result['alerts'] == []
+  assert result['config'] == normalize_config({**DEFAULT_CONFIG, **CONFIG}) and not result['connected'] and result['alerts'] == []
 
 
 def test_feed_stale_and_hidden_and_failed_mute_not_replayed():
@@ -229,7 +229,7 @@ def test_expired_session_cannot_save_detector_configuration():
 def test_older_detector_configuration_gains_display_defaults():
   from openpilot.starpilot.uniden.protocol import normalize_config
   old = {'enabled': True, 'address': ADDRESS, 'model': 'R8'}
-  assert normalize_config(old) == {**DEFAULT_CONFIG, **CONFIG}
+  assert normalize_config(old) == normalize_config({**DEFAULT_CONFIG, **CONFIG})
   assert normalize_config({**CONFIG, 'transparency': 100, 'hide_when_no_alert': False})['transparency'] == 100
 
 
