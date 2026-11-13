@@ -772,6 +772,14 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
         else:
           self.camera_video(path.removeprefix('/api/recordings/media/'))
         return
+      if path == '/api/companion/location':
+        if not self.require_session():
+          return
+        if getattr(self.server, 'remote_transport', False) or not self.direct_local():
+          self.json(403, {'error': 'Phone location requires a direct local connection'})
+          return
+        self.json(200, phone_location_source.timing())
+        return
       if path == '/api/connect/proxy':
         if not self.require_session():
           return
