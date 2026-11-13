@@ -344,11 +344,11 @@ def main():
           value = select_navigation(value, phone, now_ns=now, drive_id=drive_id, official_active=official_active,
                                     phone_enabled=phone_enabled, diagnostics=diagnostics, local_map=local_map,
                                     speed=fix[2] if fix is not None and len(fix) > 2 else None)
-          reason = diagnostics['reason'], diagnostics.get('mapStatus', '')
+          reason = diagnostics['reason'], diagnostics.get('mapStatus', ''), diagnostics.get('mapReason', '')
           if reason != last_reason:
             last_reason = reason
             # The published frame carries the junction's distance once confirmed, so keep the phone's own here.
-            cloudlog.info('notification navigation: %s %s phone=%s', *reason, diagnostics.get('detail', ''))
+            cloudlog.info('notification navigation: %s %s detail=%s phone=%s', *reason, diagnostics.get('detail', ''))
           publish_status(pm, value, phone_fix)
       except (ValidationError, OSError, ValueError):
         cloudlog.warning('navigation settings or route unavailable')
