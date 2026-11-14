@@ -234,7 +234,7 @@ PROFILES["large"]["widgets"][JETLINK_WIDGET] = _jetlink
 
 SIGNAL_WIDGET = "network_signal"
 SIGNAL_SCALE = 120 / 88  # drawn on an 88 px grid
-SIGNAL_GRIDS = {"ring": (112, 128), "horizontal": (268, 112), "vertical": (112, 196)}
+SIGNAL_GRIDS = {"ring": (112, 140), "horizontal": (268, 112), "vertical": (112, 196)}
 SIGNAL_SIZES = {style: (round(w * SIGNAL_SCALE), round(h * SIGNAL_SCALE)) for style, (w, h) in SIGNAL_GRIDS.items()}
 SIGNAL_SIZE = SIGNAL_SIZES["ring"]
 SIGNAL_OPACITY = (0, 100, 85)  # percent: min, max, default
