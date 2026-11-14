@@ -175,8 +175,9 @@ class SignalWidget:
 
   def _ring(self, signal, radios, x, y, background, show_bt=True):
     S = self.s
+    _pill(x, y, 112 * S, 140 * S, background, shadow=False)
+    y += (0 if show_bt else 6) * S
     cx, cy = x + 56 * S, y + 56 * S
-    _pill(x, y, 112 * S, 128 * S, background, shadow=False)
     radius, width = 45 * S, 7 * S
     for i in range(4):
       c_start = 150 + i * 29
@@ -196,15 +197,15 @@ class SignalWidget:
       return
 
     bt_color = _bt_color(signal)
-    _bt_icon(x + 50 * S, y + 63 * S, 1.0 * S, bt_color)
+    _bt_icon(x + 50 * S, y + 67 * S, 1.0 * S, bt_color)
     if signal.bt == 'connected':
       devices = signal.bt_devices or ('Connected',)
-      self._text(self._fit(devices[0], 12, 86), cx, y + 89 * S, 12, TEXT)
+      self._text(self._fit(devices[0], 12, 86), cx, y + 102 * S, 12, TEXT)
       if len(devices) > 1:
         second = devices[1] if len(devices) == 2 else f"{devices[1]} +{len(devices) - 2}"
-        self._text(self._fit(second, 11, 78), cx, y + 105 * S, 11, MUTED)
+        self._text(self._fit(second, 11, 74), cx, y + 119 * S, 11, MUTED)
     else:
-      self._text('BT On' if signal.bt == 'on' else 'BT Off', cx, y + 91 * S, 12, bt_color)
+      self._text('BT On' if signal.bt == 'on' else 'BT Off', cx, y + 104 * S, 12, bt_color)
 
   def _lines(self, signal, radios, x, y, show_bt=True):
     S = self.s
