@@ -76,7 +76,7 @@ def _wifi_icon(x, y, s, color):
     rl.draw_ring(rl.Vector2(cx, cy), radius * s - 1.2 * s, radius * s + 1.2 * s, 222, 318, 24, color)
 
 
-def _bt_icon(x, y, s, color):
+def _bt_icon(x, y, s, color, off=False):
   t = max(1.0, 1.8 * s)
   dy = max(1.0, 1.5 * s)
   segments = (
@@ -85,7 +85,7 @@ def _bt_icon(x, y, s, color):
     ((10.5, 4.5), (1.5, 11)),
     ((1.5, 5), (10.5, 11.5)),
     ((10.5, 11.5), (6, 15)),
-  )
+  ) + ((((-2, 0), (14, 16)),) if off else ())
   for c, off in ((SHADOW, dy), (color, 0.0)):
     for (x1, y1), (x2, y2) in segments:
       rl.draw_line_ex(rl.Vector2(x + x1 * s, y + off + y1 * s), rl.Vector2(x + x2 * s, y + off + y2 * s), t, c)
@@ -121,6 +121,15 @@ class SignalWidget:
     while len(trimmed) > 1 and self.fonts.measure(f"{trimmed}…", FontRole.SEMI_BOLD, px_size).width > limit:
       trimmed = trimmed[:-1].rstrip()
     return f"{trimmed}…" if trimmed else "…"
+
+  def _fit_count(self, text, extra, size, max_width):
+    """Shows the name with "+N" for extra devices, or just the count when both don't fit."""
+    if not extra:
+      return self._fit(text, size, max_width)
+    full = f"{text} +{extra}"
+    if self.fonts.measure(full, FontRole.SEMI_BOLD, size * self.s).width <= max_width * self.s:
+      return full
+    return f"+{extra + 1} more"
 
   def render(self, state):
     placed = state.customization['layouts']['large'].get(SIGNAL_WIDGET)
@@ -170,13 +179,14 @@ class SignalWidget:
       bt_text = 'BT On' if signal.bt == 'on' else 'BT Off'
     text_w = self.fonts.measure(bt_text, FontRole.SEMI_BOLD, 13 * S).width
     start_x = cx - (17 * S + text_w) / 2
-    _bt_icon(start_x, cy - 8 * S, 1.0 * S, bt_color)
+    _bt_icon(start_x, cy - 8 * S, 1.0 * S, bt_color, signal.bt == 'off')
     self._text(bt_text, start_x + 17 * S, cy, 13, TEXT if signal.bt == 'connected' else bt_color, 'left')
 
   def _ring(self, signal, radios, x, y, background, show_bt=True):
     S = self.s
-    _pill(x, y, 112 * S, 140 * S, background, shadow=False)
-    y += (0 if show_bt else 6) * S
+    devices = (signal.bt_devices or ('Connected',)) if signal.bt == 'connected' else ()
+    height = 140 if len(devices) > 1 else 122 if devices and show_bt else 102
+    _pill(x, y, 112 * S, height * S, background, 24 / 56, shadow=False)
     cx, cy = x + 56 * S, y + 56 * S
     radius, width = 45 * S, 7 * S
     for i in range(4):
@@ -197,15 +207,11 @@ class SignalWidget:
       return
 
     bt_color = _bt_color(signal)
-    _bt_icon(x + 50 * S, y + 67 * S, 1.0 * S, bt_color)
-    if signal.bt == 'connected':
-      devices = signal.bt_devices or ('Connected',)
-      self._text(self._fit(devices[0], 12, 86), cx, y + 102 * S, 12, TEXT)
+    _bt_icon(x + 50 * S, y + 67 * S, 1.0 * S, bt_color, signal.bt == 'off')
+    if devices:
+      self._text(self._fit(devices[0], 13, 96), cx, y + 102 * S, 13, TEXT)
       if len(devices) > 1:
-        second = devices[1] if len(devices) == 2 else f"{devices[1]} +{len(devices) - 2}"
-        self._text(self._fit(second, 11, 74), cx, y + 119 * S, 11, MUTED)
-    else:
-      self._text('BT On' if signal.bt == 'on' else 'BT Off', cx, y + 104 * S, 12, bt_color)
+        self._text(self._fit_count(devices[1], len(devices) - 2, 13, 96), cx, y + 120 * S, 13, TEXT)
 
   def _lines(self, signal, radios, x, y, show_bt=True):
     S = self.s
@@ -227,7 +233,7 @@ class SignalWidget:
       return
 
     bt_color = _bt_color(signal)
-    _bt_icon(x + 27 * S, y + 78 * S, 1.0 * S, bt_color)
+    _bt_icon(x + 27 * S, y + 78 * S, 1.0 * S, bt_color, signal.bt == 'off')
     name_color = TEXT if signal.bt == 'connected' else (MUTED if signal.bt == 'on' else GRAY)
     self._text(self._bt_device_label(signal, 18, 128), x + 50 * S, y + 86 * S, 18, name_color, 'left')
     status = 'Connected' if signal.bt == 'connected' else ('On' if signal.bt == 'on' else 'Off')

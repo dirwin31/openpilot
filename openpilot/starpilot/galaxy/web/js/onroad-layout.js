@@ -273,8 +273,8 @@ export const LayoutWidgetPreview = {
         </g>
       </g>
       <g v-else-if="widget.kind === 'network_signal' && !['horizontal', 'vertical'].includes(widget.size)" :transform="'scale(' + widget.width / 112 + ')'">
-        <rect width="112" height="140" rx="56" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
-        <g :transform="widget.bluetooth === false ? 'translate(0 6)' : null">
+        <rect width="112" :height="widget.bluetooth === false ? 102 : 140" rx="24" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
+        <g>
           <path d="M17.0 78.5A45 45 0 0 1 11.2 60.7" fill="none" stroke="#f5f2fc" stroke-width="7" />
           <path d="M95.0 78.5A45 45 0 0 0 100.8 60.7" fill="none" stroke="#c7aef7" stroke-width="7" />
           <path d="M11.0 56.8A45 45 0 0 1 14.6 38.4" fill="none" stroke="#f5f2fc" stroke-width="7" />
@@ -284,7 +284,7 @@ export const LayoutWidgetPreview = {
           <path d="M31.5 18.3A45 45 0 0 1 49.0 11.6" fill="none" stroke="#ffffff2b" stroke-width="7" />
           <path d="M80.5 18.3A45 45 0 0 0 63.0 11.6" fill="none" stroke="#c7aef7" stroke-width="7" />
         </g>
-        <g :transform="widget.bluetooth === false ? 'translate(0 14)' : null">
+        <g :transform="widget.bluetooth === false ? 'translate(0 8)' : null">
           <rect x="34.0" y="48" width="3" height="4" fill="#b8b2c8" />
           <rect x="38.5" y="44" width="3" height="8" fill="#b8b2c8" />
           <rect x="43.0" y="40" width="3" height="12" fill="#b8b2c8" />
@@ -295,10 +295,10 @@ export const LayoutWidgetPreview = {
         </g>
         <g v-if="widget.bluetooth !== false">
           <path d="M56 68V82M56 68L60.5 71.5L51.5 78M51.5 72L60.5 78.5L56 82" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-          <text x="56" y="106" text-anchor="middle" font-size="12" font-weight="600" fill="#f5f2fc">iPhone 15</text>
-          <text x="56" y="123" text-anchor="middle" font-size="11" font-weight="600" fill="#b8b2c8">AirPods</text>
+          <text x="56" y="107" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">iPhone 15</text>
+          <text x="56" y="125" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">AirPods</text>
         </g>
-        <text v-else x="56" y="90" text-anchor="middle" font-size="14" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
+        <text v-else x="56" y="84" text-anchor="middle" font-size="14" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
       </g>
       <g v-else-if="widget.kind === 'network_signal' && widget.size === 'horizontal'" :transform="'scale(' + widget.width / 268 + ')'">
         <rect width="268" height="112" rx="28" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
@@ -418,8 +418,8 @@ export const LayoutWidgetPreview = {
         </g>
       </g>
       <g v-else-if="widget.kind === 'network_signal' && !['horizontal', 'vertical'].includes(widget.size)" :transform="'scale(' + widget.width / 112 + ')'">
-        <rect width="112" height="140" rx="56" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
-        <g :transform="widget.bluetooth === false ? 'translate(0 6)' : null">
+        <rect width="112" :height="widget.bluetooth === false ? 102 : 140" rx="24" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
+        <g>
           <path d="M17.0 78.5A45 45 0 0 1 11.2 60.7" fill="none" stroke="#f5f2fc" stroke-width="7" />
           <path d="M95.0 78.5A45 45 0 0 0 100.8 60.7" fill="none" stroke="#c7aef7" stroke-width="7" />
           <path d="M11.0 56.8A45 45 0 0 1 14.6 38.4" fill="none" stroke="#f5f2fc" stroke-width="7" />
@@ -429,7 +429,7 @@ export const LayoutWidgetPreview = {
           <path d="M31.5 18.3A45 45 0 0 1 49.0 11.6" fill="none" stroke="#ffffff2b" stroke-width="7" />
           <path d="M80.5 18.3A45 45 0 0 0 63.0 11.6" fill="none" stroke="#c7aef7" stroke-width="7" />
         </g>
-        <g :transform="widget.bluetooth === false ? 'translate(0 14)' : null">
+        <g :transform="widget.bluetooth === false ? 'translate(0 8)' : null">
           <rect x="34.0" y="48" width="3" height="4" fill="#b8b2c8" />
           <rect x="38.5" y="44" width="3" height="8" fill="#b8b2c8" />
           <rect x="43.0" y="40" width="3" height="12" fill="#b8b2c8" />
@@ -440,10 +440,10 @@ export const LayoutWidgetPreview = {
         </g>
         <g v-if="widget.bluetooth !== false">
           <path d="M56 68V82M56 68L60.5 71.5L51.5 78M51.5 72L60.5 78.5L56 82" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-          <text x="56" y="106" text-anchor="middle" font-size="12" font-weight="600" fill="#f5f2fc">iPhone 15</text>
-          <text x="56" y="123" text-anchor="middle" font-size="11" font-weight="600" fill="#b8b2c8">AirPods</text>
+          <text x="56" y="107" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">iPhone 15</text>
+          <text x="56" y="125" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">AirPods</text>
         </g>
-        <text v-else x="56" y="90" text-anchor="middle" font-size="14" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
+        <text v-else x="56" y="84" text-anchor="middle" font-size="14" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
       </g>
       <g v-else-if="widget.kind === 'network_signal' && widget.size === 'horizontal'" :transform="'scale(' + widget.width / 268 + ')'">
         <rect width="268" height="112" rx="28" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />

@@ -130,8 +130,8 @@ def test_signal_draws_at_its_size_percentage():
   with patch.object(onroad_signal, 'rl') as rl:
     rl.Rectangle = lambda *args: args
     widget.render(NS(customization=document, alert=NS(size='none')))
-  assert rl.draw_rectangle_rounded.call_args_list[0].args[0][2:] == pytest.approx((112 * SIGNAL_SCALE * .3, 140 * SIGNAL_SCALE * .3))
-  assert all(call.args[2] in (pytest.approx(12 * SIGNAL_SCALE * .3), pytest.approx(11 * SIGNAL_SCALE * .3))
+  assert rl.draw_rectangle_rounded.call_args_list[0].args[0][2:] == pytest.approx((112 * SIGNAL_SCALE * .3, 122 * SIGNAL_SCALE * .3))
+  assert all(call.args[2] == pytest.approx(13 * SIGNAL_SCALE * .3)
              for call in fonts.draw.call_args_list)
 
 
