@@ -202,6 +202,10 @@ class LocalMapCorroborator:
       self.held = None
     return result
 
+  def driven_since(self, stamp_ns, *, speed, now_ns):
+    self._drive(speed, now_ns)
+    return 0. if stamp_ns >= now_ns else self._driven_since(stamp_ns)
+
   def _drive(self, speed, now_ns):
     known = speed is not None and math.isfinite(speed)
     then, metres = self.odometer[-1] if self.odometer else (now_ns, 0.)
@@ -256,10 +260,13 @@ class LocalMapCorroborator:
       if kind == 'fork' and len({row[4] for row in nearby}) < 2:
         return Resolution('mapUnverifiable', reason='forkBranchesMissing')
       fits = [row for row in nearby if self._direction(kind, side, row)]
-      if not fits:
-        return Resolution('mapDifferentDirection', reason='maneuverDirectionMismatch')
       named = [row for row in fits if same_road(row[5], roads)]
       fits, status = named or fits, 'mapAligned'
+      if not fits and kind == 'turn' and side in ('left', 'right', 'sharpLeft', 'sharpRight'):
+        # A divided road may list only its other carriageway: the named road confirms the junction, the phone its side.
+        fits, status = [row for row in nearby if 45 <= abs(row[2]) <= 150 and same_road(row[5], roads)], 'mapInferred'
+      if not fits:
+        return Resolution('mapDifferentDirection', reason='maneuverDirectionMismatch')
     if max(row[1] for row in fits) - min(row[1] for row in fits) > JUNCTION_SPAN_M:
       return Resolution('mapAmbiguous', reason='multipleJunctionsMatch')
     return Resolution(status, kind, side, min(fits, key=lambda row: abs(row[1] - distance))[1])

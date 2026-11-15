@@ -487,3 +487,16 @@ def test_runtime_reads_map_evidence_only_while_a_phone_is_guiding():
   assert local_map.held is not None
   corroborate(local_map, Master(), phone(), 9, NOW, 5)
   assert local_map.held is None and len(reads) == 4
+
+
+def test_a_side_from_the_phone_does_not_lose_a_turn_the_road_name_confirms():
+  # Only the other carriageway of the divided road is listed, so its branch points the wrong way.
+  local_map = LocalMapCorroborator()
+  update(local_map, packet([branch(88, roadName='South Oak Hill Boulevard')]))
+  assert local_map.resolve(bare()).status == 'mapInferred'
+  sided = local_map.resolve({**bare(roadName='S Oak Hill Blvd'), 'maneuverType': 'turn', 'maneuverModifier': 'left'})
+  assert (sided.status, sided.kind, sided.side, sided.distance) == ('mapInferred', 'turn', 'left', 120.)
+  # Without the road name, or onto another road, the wrong direction still refuses.
+  assert local_map.resolve(phone(maneuverModifier='left', instruction='Turn left')).status == 'mapDifferentDirection'
+  assert local_map.resolve(phone(maneuverModifier='left', instruction='Turn left onto Elm St', roadName='Elm St')).status == 'mapDifferentDirection'
+  assert local_map.resolve(phone(maneuverType='fork', maneuverModifier='slightLeft', roadName='S Oak Hill Blvd')).status != 'mapInferred'

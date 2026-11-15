@@ -15,6 +15,9 @@ from openpilot.starpilot.ui.presentation import FontRole, Profile
 FAR_TURN_M = 1500.
 THEN_MAX_GAP_M = 400.
 LANES_SHOW_M = 800.
+CUES = {'assist': ('Turn assist', (96, 214, 146)), 'ready': ('Turn ready', (178, 150, 255)), 'blindspot': ('Blind spot', (255, 112, 112)),
+        'signalLeft': ('Signal left', (255, 194, 84)), 'signalRight': ('Signal right', (255, 194, 84)),
+        'signal': ('Signal to turn', (255, 194, 84)), 'slowing': ('Slowing for turn', (178, 150, 255))}
 
 
 def _overlaps_slc_actions(rect, profile, state) -> bool:
@@ -132,7 +135,8 @@ class NavigationCard:
     nav = state.navigation
     compact = self.fonts.profile == Profile.COMPACT
     rl.draw_rectangle_rounded(rect, .2, 8, rl.Color(15, 13, 23, 255 if compact else 245))
-    rl.draw_rectangle_rounded_lines_ex(rect, .2, 8, 2, rl.Color(160, 126, 220, 190))
+    cue = CUES.get(nav.cue)
+    rl.draw_rectangle_rounded_lines_ex(rect, .2, 8, 4 if cue else 2, rl.Color(*cue[1], 255) if cue else rl.Color(160, 126, 220, 190))
     kind = 'arrive' if nav.arrived else nav.maneuver_type
     if nav.key[0].startswith(PHONE_SOURCE_PREFIX) and (not kind or not nav.modifier and kind in ('turn', 'fork', 'off ramp')):
       kind = 'invalid'
@@ -184,7 +188,10 @@ class NavigationCard:
       self._lane_strip(lanes, rect.x + padding, lane_top, right, bar_center - (8 if compact else 12) - 6 - lane_top)
     else:
       chip = 20 if compact else 28
-      self._then(nav, rect.x + padding, top + 7, chip)
+      if cue:
+        self._cue(cue, rect.x + padding, top + 7, chip)
+      else:
+        self._then(nav, rect.x + padding, top + 7, chip)
       if not compact and nav.totals_known:
         trip = f'{distance_text(nav.remaining_distance_m, state.metric)} | {max(1, round(nav.remaining_seconds / 60))} min'
         trip_size = 32
@@ -212,6 +219,12 @@ class NavigationCard:
       rl.draw_texture_pro(icon, rl.Rectangle(0, 0, icon.width, icon.height),
                           rl.Rectangle(box.x + (box.width - size) / 2, box.y + (box.height - size) / 2, size, size),
                           rl.Vector2(0, 0), 0, rl.WHITE if active else rl.Color(112, 104, 134, 255))
+
+  def _cue(self, cue, x, y, size):
+    label, color = cue
+    width = self.fonts.measure(label, FontRole.SEMI_BOLD, size - 4).width
+    rl.draw_rectangle_rounded(rl.Rectangle(x, y - 4, width + 24, size + 8), .5, 8, rl.Color(*color, 48))
+    self.fonts.draw(label, FontRole.SEMI_BOLD, size - 4, x + 12, y + 1, rl.Color(*color, 255))
 
   def _then(self, nav, x, y, size):
     """A "Then <arrow>" chip when the turn after this one comes soon after it."""
