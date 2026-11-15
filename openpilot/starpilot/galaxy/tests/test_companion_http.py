@@ -188,7 +188,7 @@ def test_phone_location_needs_local_session(tmp_path):
       connection.request('GET', '/api/auth/session')
       cookie = connection.getresponse().getheader('Set-Cookie').split(';', 1)[0]
       connection.close()
-      assert post(fix, cookie) == (200, {'ok': True})
+      assert post(fix, cookie) == (200, {'ok': True, 'driving': False})
       assert post({**fix, 'ageMs': 5000}, cookie) == (400, {'error': 'Location is too old'})
     server.remote_transport = True
     assert post(fix, cookie)[0] == 403

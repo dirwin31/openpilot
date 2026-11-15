@@ -22,6 +22,7 @@ class NavigationDisplay:
   lanes: tuple = ()
   distance_known: bool = True
   totals_known: bool = True
+  cue: str = ''
 
 
 def navigation_display(message, *, now_ns: int, drive_id: int) -> NavigationDisplay | None:

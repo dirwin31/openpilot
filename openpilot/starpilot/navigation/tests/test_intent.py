@@ -357,3 +357,51 @@ def test_arrow_only_phone_turn_takes_its_side_from_the_signal(sm):
   nav.source = ''
   sm['carState'].leftBlinker = True
   assert turn_desire(sm, NOW, log.Desire.none, supported=True) == log.Desire.none
+
+
+def engaged(sm, enabled=True, state='pid'):
+  sm.update(selfdriveState=NS(enabled=enabled), controlsState=NS(longControlState=state))
+  return sm
+
+
+def test_cue_tells_the_driver_what_the_turn_is_waiting_for(sm):
+  from openpilot.starpilot.navigation.intent import turn_cue
+  cs = engaged(sm)['carState']
+  assert turn_cue(sm, CP, NOW) == 'assist'
+  # Signalled but not yet where the turn desire acts.
+  sm['starpilotNavigation'].navigation.instruction.distanceMeters = 70.
+  assert turn_desire(sm, NOW, log.Desire.none, supported=True) == log.Desire.none
+  assert turn_cue(sm, CP, NOW) == 'ready'
+  sm['starpilotNavigation'].navigation.instruction.distanceMeters = 30.
+  cs.rightBlindspot = True
+  assert turn_cue(sm, CP, NOW) == 'blindspot'
+  cs.rightBlindspot = cs.rightBlinker = False
+  assert turn_cue(sm, CP, NOW) == 'signalRight'
+  sm['starpilotNavigation'].navigation.instruction.maneuverModifier = 'sharpLeft'
+  assert turn_cue(sm, CP, NOW) == 'signalLeft'
+  # The wrong signal is not prompted; the slowdown still shows.
+  cs.rightBlinker, cs.vEgo = True, 9.
+  assert turn_cue(sm, CP, NOW) == 'slowing'
+  for patch in ({'enabled': False}, {'state': 'off'}):
+    assert turn_cue(engaged(sm, **patch), CP, NOW) == ''
+  engaged(sm)
+  cs.vEgo = 2.
+  assert turn_cue(sm, CP, NOW) == ''
+  sm['starpilotNavigation'].navigation.controlValid = False
+  cs.vEgo, cs.rightBlinker = 5., False
+  assert turn_cue(sm, CP, NOW) == ''
+
+
+def test_cue_for_an_arrow_only_phone_turn_asks_for_either_signal(sm):
+  from openpilot.starpilot.navigation.intent import turn_cue
+  phone(engaged(sm)).instruction.maneuverModifier = ''
+  sm['carState'].rightBlinker = False
+  assert turn_cue(sm, CP, NOW) == 'signal'
+  sm['carState'].leftBlinker = True
+  assert turn_cue(sm, CP, NOW) == 'assist'
+  # Far from the turn only the slowdown is reported, and only once it binds.
+  sm['starpilotNavigation'].navigation.instruction.distanceMeters = 300.
+  sm['carState'].vEgo = 20.
+  assert turn_cue(sm, CP, NOW) == 'slowing'
+  sm['carState'].vEgo = 10.
+  assert turn_cue(sm, CP, NOW) == ''

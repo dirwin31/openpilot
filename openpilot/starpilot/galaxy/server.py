@@ -1937,7 +1937,9 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           return
         try:
           result = phone_navigation_source.publish(payload)
-          self.json(200, {**result, 'forwardingEnabled': navigation_owner().read().get('phoneNavigation', False)})
+          from openpilot.starpilot.navigation.phone import read_verdict
+          self.json(200, {**result, 'forwardingEnabled': navigation_owner().read().get('phoneNavigation', False),
+                          'verdict': read_verdict(time.monotonic_ns())})
         except ValueError as error:
           self.json(400, {'error': str(error)})
         return
@@ -1957,7 +1959,13 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           self.json(403, {'error': 'Phone location requires a direct local connection'})
           return
         try:
-          self.json(200, phone_location_source.publish(payload))
+          result = phone_location_source.publish(payload)
+          try:
+            # The phone rests its GPS receiver while the car is parked; unknown counts as driving.
+            result = {**result, 'driving': not parked()}
+          except Exception:
+            pass
+          self.json(200, result)
         except ValueError as error:
           self.json(400, {'error': str(error)})
         return
