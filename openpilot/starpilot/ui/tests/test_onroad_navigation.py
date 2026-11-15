@@ -390,3 +390,22 @@ def test_projection_navigation_resize_scales_draw_and_touch_together(scale):
   drawn = draw.call_args.args[1]
   assert drawn.width == NAV_CARD_SIZE[0]
   assert drawn.height == pytest.approx(placed['height'] / scale)
+
+
+def test_cue_replaces_the_then_chip_and_tints_the_border():
+  fonts = Mock(profile=Profile.LARGE)
+  fonts.measure.side_effect = lambda text, role, size: NS(width=len(text) * size * .48)
+  card = NavigationCard(fonts, clock=lambda: datetime(2026, 10, 7, 15, 42))
+  nav = replace(state().navigation, then_type='turn', then_modifier='right', then_distance_m=300.)
+  with patch.object(card, '_icon', return_value=NS(width=100, height=100)), \
+       patch.object(rl, 'draw_rectangle_rounded'), patch.object(rl, 'draw_rectangle_rounded_lines_ex') as border, \
+       patch.object(rl, 'draw_texture_pro'), patch.object(rl, 'draw_line_ex'), patch.object(rl, 'draw_rectangle_rec'):
+    card.render(replace(state(), navigation=replace(nav, cue='signalLeft')))
+    drawn = [call.args[0] for call in fonts.draw.call_args_list]
+    assert 'Signal left' in drawn and 'Then' not in drawn
+    assert border.call_args.args[3] == 4
+    fonts.draw.reset_mock()
+    card.render(replace(state(), navigation=nav))
+    drawn = [call.args[0] for call in fonts.draw.call_args_list]
+    assert 'Then' in drawn and 'Signal left' not in drawn
+    assert border.call_args.args[3] == 2

@@ -493,6 +493,10 @@ class RuntimeSnapshotAdapter:
         _message_at_age(sm, "navRoute", now_ns, after, 30_000_000_000),
         destination=params.get("NavDestination"), drive_id=drive_id)
       displayed_navigation = official_navigation if params.get('NavDestination') else displayed_navigation
+    if displayed_navigation is not None and not displayed_navigation.key[0].startswith('comma:'):
+      from openpilot.starpilot.navigation.intent import turn_cue
+      cue = turn_cue(sm, ui.CP, now_ns) if ui.CP is not None else ''
+      displayed_navigation = replace(displayed_navigation, cue=cue) if cue else displayed_navigation
 
 
     long_active = bool(control.longActive) if control is not None else False

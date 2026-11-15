@@ -278,3 +278,79 @@ def test_control_needs_map_agreement_known_distance_and_fresh_observation(stream
     assert not selected_for_control(stream, Aligned(status))['controlValid']
   assert not selected_for_control(stream, None)['controlValid']
   assert not selected_for_control(stream, Aligned(), distanceMeters=None)['controlValid']
+
+
+class Odometer:
+  def __init__(self, driven=0.):
+    self.driven = driven
+
+  def driven_since(self, stamp_ns, *, speed, now_ns):
+    return self.driven
+
+
+def route(distance=200., modifier='left', **values):
+  return {**base('guiding'), 'enabled': True, 'controlValid': True, **values,
+          'instruction': {'text': 'Turn left onto Main Street', 'maneuverType': 'turn', 'maneuverModifier': modifier,
+                          'distanceMeters': distance}}
+
+
+def judged(stream, agreement, value, *, now=None, driven=0., **phone):
+  publisher, path, clock = stream
+  clock[0] = now or clock[0]
+  if phone:
+    assert publisher.publish({**payload(), 'instruction': 'Main St', 'maneuverType': '', 'maneuverModifier': '', **phone})['accepted']
+  diagnostics = {}
+  selected = select_navigation(value, read_phone_navigation(clock[0], path), now_ns=clock[0], drive_id=DRIVE,
+                               diagnostics=diagnostics, local_map=Odometer(driven), speed=10., agreement=agreement)
+  return selected, diagnostics['reason']
+
+
+def test_phone_that_no_longer_announces_the_route_turn_is_reported_without_touching_control(stream):
+  from openpilot.starpilot.navigation.phone import ROUTE_CONFLICT_NS, RouteAgreement
+  agreement, value = RouteAgreement(), route()
+  selected, reason = judged(stream, agreement, value, sequence=1, distanceMeters=190)
+  assert selected is value and reason == 'routeAgreed'
+  # The phone's next step is now far beyond the route's turn: a short disagreement changes nothing.
+  selected, reason = judged(stream, agreement, value, sequence=2, distanceMeters=1900)
+  assert selected is value and reason == 'mapboxPriority'
+  selected, reason = judged(stream, agreement, value, now=NOW + ROUTE_CONFLICT_NS)
+  assert reason == 'routeConflict' and selected is value and value['controlValid']
+  # Close to the turn the verdict stands rather than being judged again.
+  near = route(distance=30.)
+  near['instruction']['text'] = value['instruction']['text']
+  assert judged(stream, agreement, near)[1] == 'routeConflict'
+  # Agreement, a new route step, or the phone going quiet each restore the route's own authority.
+  assert judged(stream, agreement, value, sequence=3, distanceMeters=210)[1] == 'routeAgreed'
+  assert judged(stream, agreement, value, sequence=4, active=False)[1] == 'mapboxPriority'
+
+
+def test_route_agreement_reads_distance_driven_side_and_freshness(stream):
+  from openpilot.starpilot.navigation.phone import ROUTE_CONFLICT_NS, RouteAgreement
+  from openpilot.starpilot.navigation.wire import PHONE_CONTROL_AGE_NS
+  agreement = RouteAgreement()
+  # 500 m reported, 300 m driven since: the same junction as the route's 200 m.
+  assert judged(stream, agreement, route(), driven=300., sequence=1, distanceMeters=500)[1] == 'routeAgreed'
+  # An earlier phone step, an unknown distance and a non-turn are no evidence either way.
+  for value, phone in ((route(), {'distanceMeters': 40}), (route(), {'distanceMeters': None}),
+                       (route(modifier='slightLeft'), {'distanceMeters': 1900}), (route(status='routing'), {'distanceMeters': 1900})):
+    agreement = RouteAgreement()
+    judged(stream, agreement, value, sequence=stream[2][0], **phone)
+    assert judged(stream, agreement, value, now=stream[2][0] + ROUTE_CONFLICT_NS)[1] == 'mapboxPriority'
+  # The opposite side at the same junction is a different turn.
+  agreement, start = RouteAgreement(), stream[2][0]
+  judged(stream, agreement, route(), sequence=start, distanceMeters=200, maneuverType='turn', maneuverModifier='right',
+         instruction='Turn right onto Main St')
+  assert judged(stream, agreement, route(), now=start + ROUTE_CONFLICT_NS)[1] == 'routeConflict'
+  # A phone reading too old for control cannot hold the conflict.
+  assert judged(stream, agreement, route(), now=start + PHONE_CONTROL_AGE_NS + 1)[1] == 'mapboxPriority'
+
+
+def test_verdict_reaches_the_phone_reply_and_expires(tmp_path):
+  from openpilot.starpilot.navigation.phone import VERDICT_NS, read_verdict, write_verdict
+  path = tmp_path / 'verdict.json'
+  assert read_verdict(NOW, path) is None
+  write_verdict('notificationGuidance', 'mapInferred', '', NOW, path)
+  assert read_verdict(NOW + VERDICT_NS, path) == {'reason': 'notificationGuidance', 'mapStatus': 'mapInferred', 'mapReason': ''}
+  assert read_verdict(NOW + VERDICT_NS + 1, path) is None
+  path.write_text('{"reason": 1}')
+  assert read_verdict(NOW, path) is None
