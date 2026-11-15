@@ -29,6 +29,36 @@ def handoff_path():
   return (shm if shm.is_dir() else Path(tempfile.gettempdir())) / 'starpilot_phone_navigation.json'
 
 
+VERDICT_NS = 15_000_000_000
+
+
+def verdict_path():
+  return handoff_path().with_name('starpilot_phone_navigation_verdict.json')
+
+
+def write_verdict(reason, map_status, map_reason, now_ns, path=None):
+  # What navigationd made of the phone's guidance, for the phone's own status screen.
+  path = path or verdict_path()
+  try:
+    temporary = path.with_name(path.name + '.tmp')
+    temporary.write_text(json.dumps({'reason': reason, 'mapStatus': map_status, 'mapReason': map_reason,
+                                     'at': now_ns, 'bootOffset': boot_offset_ns()}))
+    temporary.replace(path)
+  except OSError:
+    pass
+
+
+def read_verdict(now_ns, path=None):
+  try:
+    value = json.loads((path or verdict_path()).read_text())
+    if (abs(value['bootOffset'] - boot_offset_ns()) <= 1_000_000_000 and 0 < value['at'] <= now_ns <= value['at'] + VERDICT_NS and
+        all(isinstance(value[key], str) and len(value[key]) <= 64 for key in ('reason', 'mapStatus', 'mapReason'))):
+      return {key: value[key] for key in ('reason', 'mapStatus', 'mapReason')}
+  except (OSError, ValueError, KeyError, TypeError):
+    pass
+  return None
+
+
 def _read(path):
   try:
     value = json.loads(path.read_text())
@@ -139,8 +169,59 @@ def phone_navigation_status(now_ns=None, path=None):
           'remainingSeconds': value.get('remainingSeconds') if usable else None}
 
 
+ROUTE_CONFLICT_NS = 3_000_000_000   # the phone must disagree this long before it counts as a conflict
+ROUTE_CHECK_M = (60., 450.)         # judged while the route's turn is this far ahead; nearer, the last verdict stands
+ROUTE_TURNS = ('left', 'right', 'sharpLeft', 'sharpRight', 'uturn')
+
+
+def _side(modifier):
+  lower = (modifier or '').lower()
+  return 'left' if lower.endswith('left') else 'right' if lower.endswith('right') else ''
+
+
+class RouteAgreement:
+  """Whether the phone app's live guidance still expects the comma route's next turn. Reported only; control is unchanged."""
+  def __init__(self):
+    self.key, self.since, self.conflict = None, 0, False
+
+  def judge(self, route, phone, *, driven, now_ns):
+    instruction = route.get('instruction') or {}
+    key = (route.get('sessionId'), route.get('revision'), instruction.get('text'), instruction.get('maneuverType'),
+           instruction.get('maneuverModifier'))
+    if key != self.key:
+      self.key, self.since, self.conflict = key, 0, False
+    verdict = self._compare(route, instruction, phone, driven, now_ns)
+    if verdict == 'conflict':
+      self.since = self.since or now_ns
+      self.conflict = self.conflict or now_ns - self.since >= ROUTE_CONFLICT_NS
+    elif verdict != 'hold':
+      self.since, self.conflict = 0, False
+    return 'routeConflict' if self.conflict else 'routeAgreed' if verdict == 'agree' else 'mapboxPriority'
+
+  @staticmethod
+  def _compare(route, instruction, phone, driven, now_ns):
+    from openpilot.starpilot.navigation.wire import PHONE_CONTROL_AGE_NS, PHONE_PASSED_SLACK_M
+    ahead, reported = instruction.get('distanceMeters'), None if phone is None else phone.get('distanceMeters')
+    if (route.get('status') != 'guiding' or not route.get('controlValid') or instruction.get('maneuverType') != 'turn' or
+        instruction.get('maneuverModifier') not in ROUTE_TURNS or type(ahead) not in (int, float) or not math.isfinite(ahead) or
+        phone is None or not phone['active'] or reported is None or driven is None or
+        not 0 < phone['observed'] <= now_ns <= phone['observed'] + PHONE_CONTROL_AGE_NS or
+        driven > reported + PHONE_PASSED_SLACK_M):
+      return 'unknown'
+    if not ROUTE_CHECK_M[0] <= ahead <= ROUTE_CHECK_M[1]:
+      return 'hold'
+    reported = max(0., reported - driven)
+    tolerance = max(120., ahead * .4)
+    if reported > ahead + tolerance:
+      return 'conflict'
+    if reported < ahead - tolerance:
+      return 'hold'   # the phone announces an earlier step the route does not have
+    sides = _side(instruction.get('maneuverModifier')), _side(phone.get('maneuverModifier'))
+    return 'conflict' if all(sides) and sides[0] != sides[1] else 'agree'
+
+
 def select_navigation(mapbox, phone, *, now_ns, drive_id, official_active=False, phone_enabled=True,
-                      diagnostics=None, local_map=None, speed=None):
+                      diagnostics=None, local_map=None, speed=None, agreement=None):
   def rejected(reason):
     if diagnostics is not None:
       diagnostics['reason'] = reason
@@ -149,7 +230,12 @@ def select_navigation(mapbox, phone, *, now_ns, drive_id, official_active=False,
   if not phone_enabled:
     return rejected('disabled')
   if official_active or mapbox['status'] not in ('disabled', 'needsKey', 'noDestination'):
-    return rejected('mapboxPriority')
+    if agreement is None or official_active:
+      return rejected('mapboxPriority')
+    driven = None
+    if phone is not None and local_map is not None:
+      driven = local_map.driven_since(phone['observed'], speed=speed, now_ns=now_ns)
+    return rejected(agreement.judge(mapbox, phone, driven=driven, now_ns=now_ns))
   from openpilot.starpilot.navigation.notification import notification_instruction
   instruction, reason = notification_instruction(phone, now_ns=now_ns)
   if diagnostics is not None:

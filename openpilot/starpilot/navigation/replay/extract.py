@@ -48,7 +48,7 @@ def extract(segment):
         elif kind in ('gpsLocationExternal', 'gpsLocation'):
           gps = getattr(message, kind)
           rows.append({'k': 'gps', 't': t, 'spd': round(gps.speed, 2), 'brg': round(gps.bearingDeg, 1), 'fix': gps.hasFix})
-        elif kind == 'logMessage' and 'notification navigation' in message.logMessage:
+        elif kind == 'logMessage' and ('notification navigation' in message.logMessage or 'phone gps:' in message.logMessage):
           rows.append({'k': 'log', 't': t, 'm': message.logMessage[:600]})
       except Exception as error:
         rows.append({'k': 'error', 't': t, 'which': kind, 'e': repr(error)[:200]})

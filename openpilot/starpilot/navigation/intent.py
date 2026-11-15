@@ -148,9 +148,38 @@ def matching_turn_signal(sm, now_ns: int, *, supported: bool) -> bool:
     return False
   cs, instruction = sm['carState'], nav.instruction
   distance = instruction_distance(nav, instruction, cs.vEgo, now_ns)
-  return bool(turn_side(nav, instruction, cs) and math.isfinite(cs.vEgo) and
-              math.isfinite(distance) and
-              0 <= distance <= min(250., max(30., 15. + max(0., cs.vEgo) * 12.)))
+  return bool(turn_side(nav, instruction, cs) and in_signal_range(distance, cs.vEgo))
+
+
+def in_signal_range(distance: float, v_ego: float) -> bool:
+  return bool(math.isfinite(v_ego) and math.isfinite(distance) and
+              0 <= distance <= min(250., max(30., 15. + max(0., v_ego) * 12.)))
+
+
+def turn_cue(sm, CP, now_ns: int) -> str:
+  """Display only: what route advice is doing or waiting for. Model turn support and stop holds are not visible here."""
+  nav = current_instruction(sm, now_ns)
+  if nav is None:
+    return ''
+  try:
+    cs, cc, instruction = sm['carState'], sm['carControl'], nav.instruction
+    distance = instruction_distance(nav, instruction, cs.vEgo, now_ns)
+    if instruction.maneuverType == 'turn' and cc.latActive and not cs.standstill and in_signal_range(distance, cs.vEgo):
+      side = turn_side(nav, instruction, cs)
+      if side:
+        if cs.leftBlindspot if side == 'left' else cs.rightBlindspot:
+          return 'blindspot'
+        return 'assist' if turn_desire(sm, now_ns, log.Desire.none, supported=True) != log.Desire.none else 'ready'
+      modifier = instruction.maneuverModifier
+      if cs.leftBlinker == cs.rightBlinker and (modifier in LEFT + RIGHT or (not modifier and is_phone_navigation(nav))):
+        return 'signalLeft' if modifier in LEFT else 'signalRight' if modifier in RIGHT else 'signal'
+    # The planner applies the ceiling only while its own longitudinal control is engaged.
+    if (sm['selfdriveState'].enabled and str(sm['controlsState'].longControlState) != 'off' and math.isfinite(cs.vEgo) and
+        cruise_ceiling(sm, CP, now_ns, max(0., cs.vEgo) + .25) is not None):
+      return 'slowing'
+  except (KeyError, AttributeError, TypeError, ValueError):
+    pass
+  return ''
 
 
 class TurnIntent:

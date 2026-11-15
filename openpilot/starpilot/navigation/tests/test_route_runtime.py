@@ -594,3 +594,12 @@ def test_no_reroute_in_the_destination_garage(tmp_path, monkeypatch):
   drive(runtime, 2, 2, (.03, 0.), 15., 90.)
   assert drive(runtime, 10_000_000_000, 20, (.049, .0015), 3., 180.)['status'] in ('guiding', 'arrived')
   assert len(executor.jobs) == 1
+
+
+def test_phone_gps_log_key_changes_with_the_reason_not_the_counts():
+  from openpilot.starpilot.navigation.runtime import phone_gps_line
+  status = {'reason': 'delayed', 'usable': False, 'receivedAgeMs': 300., 'acceptedCount': 4, 'rejectedCount': 9}
+  assert phone_gps_line(None) is None
+  assert phone_gps_line(status) == phone_gps_line({**status, 'rejectedCount': 10}) == ('delayed', False)
+  assert phone_gps_line({**status, 'reason': 'accepted', 'usable': True}) == ('accepted', True)
+  assert phone_gps_line({**status, 'receivedAgeMs': 10_001.}) == ('silent', False)
