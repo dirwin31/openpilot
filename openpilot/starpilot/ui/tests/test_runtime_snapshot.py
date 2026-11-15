@@ -1312,3 +1312,27 @@ def test_home_jetlink_model_name_and_gpu_share_existing_feed(phase, label, prese
   assert home.model_label == label
   assert home.gpu_present is present
   assert home.gpu_active is (phase == 'active')
+
+
+def test_navigation_cue_reaches_the_onroad_card():
+  from openpilot.cereal import messaging
+  drive = NOW // 2
+  ui = ui_fake()
+  ui.CP = NS(openpilotLongitudinalControl=True, passive=False, dashcamOnly=False, minSteerSpeed=0., brand='', carFingerprint='')
+  ui.sm.put("deviceState", NS(started=True, startedMonoTime=drive, networkType=NS(raw=1), networkStrength=NS(raw=2),
+                              lastAthenaPingTime=NOW, maxTempC=65.6, thermalStatus=log.DeviceState.ThermalStatus.ok))
+  ui.sm.put("carState", NS(vEgoCluster=8.0, vEgo=8.0, vCruiseCluster=80.0, canValid=True, canTimeout=False, gearShifter='drive',
+                           standstill=False, leftBlinker=False, rightBlinker=False, leftBlindspot=False, rightBlindspot=False,
+                           gasPressed=False, brakePressed=False))
+  envelope = messaging.new_message('starpilotNavigation').starpilotNavigation
+  envelope.navigation = {'version': 2, 'enabled': True, 'status': 'guiding', 'controlValid': True, 'sessionId': 'session',
+                         'revision': 'one', 'startedMonoTime': drive, 'frameMonoTime': NOW, 'locationMonoTime': NOW,
+                         'instruction': {'text': 'Turn left onto Main Street', 'maneuverType': 'turn', 'maneuverModifier': 'left',
+                                         'distanceMeters': 60, 'remainingDistanceMeters': 4300, 'remainingDurationSeconds': 510}}
+  ui.sm.put("starpilotNavigation", envelope)
+  adapter = RuntimeSnapshotAdapter(ui)
+  assert adapter.build(ShellMode.ONROAD, now_ns=NOW).onroad.navigation.cue == 'signalLeft'
+  ui.sm.messages["carState"].leftBlinker = True
+  assert adapter.build(ShellMode.ONROAD, now_ns=NOW + 1).onroad.navigation.cue == 'ready'
+  envelope.navigation.controlValid = False
+  assert adapter.build(ShellMode.ONROAD, now_ns=NOW + 2).onroad.navigation.cue == ''
