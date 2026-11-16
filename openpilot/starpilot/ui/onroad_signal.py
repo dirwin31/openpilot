@@ -2,7 +2,7 @@
 from openpilot.starpilot.ui.raylib import rl
 
 from openpilot.starpilot.ui.network_signal import Signal, SignalFeed
-from openpilot.starpilot.ui.onroad_customization import SIGNAL_GRIDS, SIGNAL_SCALE, SIGNAL_WIDGET, signal_scale
+from openpilot.starpilot.ui.onroad_customization import SIGNAL_GRIDS, SIGNAL_SCALE, SIGNAL_WIDGET, SIGNAL_WIFI_NAME_GRID, signal_scale
 from openpilot.starpilot.ui.presentation import FontRole
 
 ACCENT = rl.Color(199, 174, 247, 255)
@@ -143,12 +143,27 @@ class SignalWidget:
     radios = [radio for radio in ('cell', 'wifi') if getattr(signal, radio)]
     x, y = placed['x'], placed['y']
     show_bt = placed.get('bluetooth', True)
+    header = SIGNAL_WIFI_NAME_GRID if placed.get('wifiName') is True else 0
     if style == 'ring':
-      self._ring(signal, radios, x, y, background, show_bt)
+      self._ring(signal, radios, x, y, background, show_bt, header)
       return
     width, height = SIGNAL_GRIDS[style]
-    rl.draw_rectangle_rounded(rl.Rectangle(x, y, width * S, height * S), 28 / 56 if style == 'horizontal' else 24 / 56, 24, background)
-    (self._lines if style == 'horizontal' else self._columns)(signal, radios, x, y, show_bt)
+    radius = 28 if style == 'horizontal' else 24
+    rl.draw_rectangle_rounded(rl.Rectangle(x, y, width * S, (height + header) * S), radius * 2 / min(width, height + header), 24, background)
+    if header:
+      self._wifi_name(signal, x, y, width, style == 'horizontal')
+    (self._lines if style == 'horizontal' else self._columns)(signal, radios, x, y + header * S, show_bt)
+
+  def _wifi_name(self, signal, x, y, width, left=False):
+    """The joined Wi-Fi network's name in a row above the rest of the widget."""
+    size = 16 if left else 13
+    name = signal.wifi_name if signal.wifi else ''
+    text = self._fit(name, size, width - (48 if left else 16)) if name else ('Wi-Fi' if signal.wifi else 'No Wi-Fi')
+    color = (TEXT if signal.active == 'wifi' else MUTED) if signal.wifi else GRAY
+    if left:
+      self._text(text, x + 24 * self.s, y + 17 * self.s, size, color, 'left')
+    else:
+      self._text(text, x + width / 2 * self.s, y + 16 * self.s, size, color)
 
   def _label(self, signal, radio):
     if radio == 'cell':
@@ -182,11 +197,14 @@ class SignalWidget:
     _bt_icon(start_x, cy - 8 * S, 1.0 * S, bt_color, signal.bt == 'off')
     self._text(bt_text, start_x + 17 * S, cy, 13, TEXT if signal.bt == 'connected' else bt_color, 'left')
 
-  def _ring(self, signal, radios, x, y, background, show_bt=True):
+  def _ring(self, signal, radios, x, y, background, show_bt=True, header=0):
     S = self.s
     devices = (signal.bt_devices or ('Connected',)) if signal.bt == 'connected' else ()
     height = 140 if len(devices) > 1 else 122 if devices and show_bt else 102
-    _pill(x, y, 112 * S, height * S, background, 24 / 56, shadow=False)
+    _pill(x, y, 112 * S, (height + header) * S, background, 24 / 56, shadow=False)
+    if header:
+      self._wifi_name(signal, x, y, 112)
+      y += header * S
     cx, cy = x + 56 * S, y + 56 * S
     radius, width = 45 * S, 7 * S
     for i in range(4):

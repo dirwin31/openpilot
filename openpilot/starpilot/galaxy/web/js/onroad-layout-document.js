@@ -45,7 +45,8 @@ export function widgetSize(widget, position) {
   if (widget.sizes && Array.isArray(widget.sizes[position?.size])) {
     // A widget with a size percentage (the signal widget) shrinks its chosen style.
     const scale = widget.scale && Number.isInteger(position?.scale) ? position.scale / 100 : 1
-    return widget.sizes[position.size].map(side => Math.round(side * scale))
+    const [width, height] = widget.sizes[position.size]
+    return [width, height + (widget.wifiNameHeight && position.wifiName === true ? widget.wifiNameHeight : 0)].map(side => Math.round(side * scale))
   }
   if (widget.kind === "uniden_alerts" && Number.isInteger(position?.scale)) return [Math.round(widget.width * position.scale / 100), Math.round(widget.height * position.scale / 100)]
   if (widget.box) return [position?.width ?? widget.width, position?.height ?? widget.height]
@@ -189,7 +190,7 @@ export function validDocument(document, metadata) {
       const widget = profile.widgets[id], limits = placementLimits(profile, id, layout)
       const resizable = widget.resizable, box = widget.box, opacity = widget.opacity
       return keysEqual(position, ["x", "y", "enabled", ...(resizable ? ["size"] : []), ...(box ? ["width", "height"] : []),
-        ...(widget.kind === "uniden_alerts" ? ["transparency", "hide_when_no_alert", "hide_quiet_ride", "hide_mute_memory", "scale"] : []), ...(opacity ? ["opacity"] : []), ...(widget.iconSize ? ["display"] : []), ...(widget.backgroundToggle ? ["background"] : []), ...(widget.collapseToggle ? ["collapse"] : []), ...(widget.bluetoothToggle ? ["bluetooth"] : []), ...(widget.sizes ? ["size"] : []), ...(widget.scale ? ["scale"] : [])]) &&
+        ...(widget.kind === "uniden_alerts" ? ["transparency", "hide_when_no_alert", "hide_quiet_ride", "hide_mute_memory", "scale"] : []), ...(opacity ? ["opacity"] : []), ...(widget.iconSize ? ["display"] : []), ...(widget.backgroundToggle ? ["background"] : []), ...(widget.collapseToggle ? ["collapse"] : []), ...(widget.bluetoothToggle ? ["bluetooth"] : []), ...(widget.wifiNameHeight ? ["wifiName"] : []), ...(widget.sizes ? ["size"] : []), ...(widget.scale ? ["scale"] : [])]) &&
         (widget.kind !== "uniden_alerts" || (Number.isInteger(position.transparency) && position.transparency >= 0 &&
           position.transparency <= 100 && typeof position.hide_when_no_alert === "boolean" &&
           typeof position.hide_quiet_ride === "boolean" && typeof position.hide_mute_memory === "boolean" &&
@@ -198,6 +199,7 @@ export function validDocument(document, metadata) {
         (!widget.backgroundToggle || typeof position.background === "boolean") &&
         (!widget.collapseToggle || typeof position.collapse === "boolean") &&
         (!widget.bluetoothToggle || typeof position.bluetooth === "boolean") &&
+        (!widget.wifiNameHeight || typeof position.wifiName === "boolean") &&
         (!widget.sizes || Object.hasOwn(widget.sizes, position.size)) &&
         (!widget.scale || (Number.isInteger(position.scale) && position.scale >= widget.scale.min && position.scale <= widget.scale.max)) &&
         (!opacity || (Number.isInteger(position.opacity) && position.opacity >= opacity.min && position.opacity <= opacity.max)) &&
@@ -284,6 +286,7 @@ export function validSnapshot(data) {
         widget.opacity.default > widget.opacity.max)) return false
       if (widget.collapseToggle != null && (!projection || widget.kind !== "now_playing" || widget.collapseToggle !== true)) return false
       if (widget.bluetoothToggle != null && (widget.kind !== "network_signal" || widget.bluetoothToggle !== true)) return false
+      if (widget.wifiNameHeight != null && (widget.kind !== "network_signal" || !positive(widget.wifiNameHeight))) return false
       if (widget.sizes != null && (!(projection && widget.kind === "now_playing" || widget.kind === "network_signal") || !object(widget.sizes) ||
         !Object.values(widget.sizes).every(size => Array.isArray(size) && size.length === 2 && size.every(positive) &&
           size[0] <= area.width && size[1] <= area.height))) return false
