@@ -500,3 +500,69 @@ def test_a_side_from_the_phone_does_not_lose_a_turn_the_road_name_confirms():
   assert local_map.resolve(phone(maneuverModifier='left', instruction='Turn left')).status == 'mapDifferentDirection'
   assert local_map.resolve(phone(maneuverModifier='left', instruction='Turn left onto Elm St', roadName='Elm St')).status == 'mapDifferentDirection'
   assert local_map.resolve(phone(maneuverType='fork', maneuverModifier='slightLeft', roadName='S Oak Hill Blvd')).status != 'mapInferred'
+
+
+def approach(rows, second=0):
+  # mapd's shape on unmapped ground: a 'noMatch' loss frame carrying the roads crossed straight ahead, both ways.
+  now = BOOT + int(second * 1e9)
+  event = ambiguous(roadStatus='noMatch', navigationBranches=rows, gpsMonoTime=now - 100_000_000, computedMonoTime=now)
+  event.logMonoTime = now
+  return event
+
+
+def crossing(distance=90, name='North Grand Canyon Drive'):
+  return [branch(67, distance, roadName=name), branch(-118, distance + 12, roadName=name, wayId=78)]
+
+
+def leaving(**patch):
+  # Google Maps with a learned arrow: the bare road as the instruction, the turn from the icon.
+  return phone(**{'instruction': 'N Grand Canyon Dr', 'distanceMeters': 91, **patch})
+
+
+def test_approach_frame_confirms_a_named_sided_turn():
+  local_map = LocalMapCorroborator()
+  update(local_map, approach(crossing()))
+  resolved = local_map.resolve(leaving())
+  assert (resolved.status, resolved.side, resolved.distance, resolved.reason) == ('mapInferred', 'right', 90, 'approachBranch')
+  left = local_map.resolve(leaving(maneuverModifier='left'))
+  assert left.control and left.distance == 102
+  assert local_map.resolve(phone(instruction='Turn right onto N Grand Canyon Dr', roadName='N Grand Canyon Dr', distanceMeters=91)).control
+
+
+@pytest.mark.parametrize('patch,reason', [
+    ({'instruction': 'Turn right'}, 'noNamedApproachRoad'),                       # no road name
+    ({'instruction': ''}, 'approachNeedsNamedSidedTurn'),
+    ({'instruction': 'toward N Grand Canyon Dr'}, 'approachNeedsNamedSidedTurn'),  # a road beyond the turn
+    ({'maneuverType': '', 'maneuverModifier': ''}, 'approachNeedsNamedSidedTurn'),  # arrow-only: no side
+    ({'maneuverModifier': ''}, 'approachNeedsNamedSidedTurn'),
+    ({'maneuverModifier': 'straight'}, 'approachNeedsNamedSidedTurn'),
+    ({'maneuverType': 'fork', 'maneuverModifier': 'slightRight'}, 'approachNeedsNamedSidedTurn'),
+    ({'instruction': 'W Grand Teton Dr'}, 'noNamedApproachRoad'),                 # another road
+    ({'distanceMeters': 300}, 'junctionDistanceMismatch'),
+])
+def test_approach_frame_refuses_without_a_matching_name_or_side(patch, reason):
+  local_map = LocalMapCorroborator()
+  update(local_map, approach(crossing()))
+  diagnostics = {}
+  selected = select_navigation({'status': 'noDestination'}, leaving(**patch), now_ns=NOW, drive_id=1,
+                               local_map=local_map, diagnostics=diagnostics)
+  assert diagnostics['mapReason'] == reason and not selected['controlValid']
+
+
+def test_plain_no_match_is_still_a_loss_that_keeps_a_hold():
+  local_map = LocalMapCorroborator()
+  update(local_map, approach([]))
+  assert local_map.resolve(leaving()).status == 'mapUnavailable' and local_map.map_reason == 'noRoadMatched'
+  # Confirmed on the approach rows, then carried through mapd losing them in the last metres.
+  held = LocalMapCorroborator()
+  for second in range(4):
+    update(held, approach(crossing(90 - 10 * second), second), now=BOOT + second * 1_000_000_000)
+    observed = NOW + second * 1_000_000_000
+    assert held.resolve(leaving(distanceMeters=91 - 10 * second, observed=observed), speed=10., now_ns=observed).control
+  update(held, approach([], 4), now=BOOT + 4_000_000_000)
+  carried = held.resolve(leaving(distanceMeters=51, observed=NOW + 4_000_000_000), speed=10., now_ns=NOW + 4_000_000_000)
+  assert carried.control and carried.reason == 'approachBranch' and carried.distance == pytest.approx(49)
+  # The phone moving on to the next instruction ends it.
+  update(held, approach([], 5), now=BOOT + 5_000_000_000)
+  assert not held.resolve(leaving(instruction='W Grand Teton Dr', observed=NOW + 5_000_000_000), speed=10.,
+                          now_ns=NOW + 5_000_000_000).control

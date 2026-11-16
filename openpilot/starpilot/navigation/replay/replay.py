@@ -55,6 +55,7 @@ def replay_route(rows, speed_source):
       local_map.fresh = frame is not None and row['t'] - frame['t'] < 1_200_000_000
       if frame is not None and usable_map(frame, row['t']):
         local_map.branches, local_map.frame = branch_rows(frame), SimpleNamespace(gps_mono_ns=frame['gps'])
+        local_map.approach = frame['st'] == 'noMatch'
         local_map.updated_boot_ns = frame['comp']
       else:
         local_map.branches, local_map.frame = (), None

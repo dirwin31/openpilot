@@ -257,6 +257,16 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
         evidence_source.close()
       raise
   configuration_allowed = pairing_authority.configuration_allowed if pairing_authority is not None else parked
+
+  def phone_driving():
+    """Phone GPS runs from ignition on; only confirmed offroad with ignition off rests it, and errors count as driving."""
+    try:
+      if not parked():
+        return True
+      sm = evidence_source.snapshot() if evidence_source is not None else None
+      return sm is not None and any(p.ignitionLine or p.ignitionCan for p in sm['pandaStates'])
+    except Exception:
+      return True
   def cloud_allowed():
     from openpilot.common.params import Params
     return bool(parked()) and bool(cloud_offroad() if cloud_offroad is not None else Params().get_bool('IsOffroad'))
@@ -820,7 +830,9 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
         if getattr(self.server, 'remote_transport', False) or not self.direct_local():
           self.json(403, {'error': 'Phone location requires a direct local connection'})
           return
-        self.json(200, phone_location_source.timing())
+        # Phone polls this while its GPS rests; timing is sampled last so the clock bound stays tight.
+        driving = phone_driving()
+        self.json(200, {**phone_location_source.timing(), 'driving': driving})
         return
       if path == '/api/connect/proxy':
         if not self.require_session():
@@ -1960,12 +1972,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           return
         try:
           result = phone_location_source.publish(payload)
-          try:
-            # The phone rests its GPS receiver while the car is parked; unknown counts as driving.
-            result = {**result, 'driving': not parked()}
-          except Exception:
-            pass
-          self.json(200, result)
+          self.json(200, {**result, 'driving': phone_driving()})
         except ValueError as error:
           self.json(400, {'error': str(error)})
         return

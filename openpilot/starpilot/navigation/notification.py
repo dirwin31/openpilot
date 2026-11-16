@@ -12,6 +12,7 @@ ROAD_WORDS = {'n': 'north', 's': 'south', 'e': 'east', 'w': 'west', 'st': 'stree
 CARDINALS = frozenset(('north', 'south', 'east', 'west'))
 CONFIRMED = ('mapAligned', 'mapInferred')
 VERIFIABLE = ('', 'turn', 'continue', 'off ramp', 'on ramp', 'fork')
+SIDES = ('left', 'right', 'sharpLeft', 'sharpRight', 'slightLeft', 'slightRight')
 JUNCTION_SPAN_M = 40.           # same-side branches this close together are one junction (divided roads)
 HOLD_NS = 20_000_000_000        # a confirmed junction outlives mapd losing the road just before it
 HOLD_PASSED_M = 50.
@@ -73,9 +74,10 @@ MATCHED = ('matched_limit_unqualified', 'matched_no_limit_unqualified')
 
 
 def navigation_frame(frame, now_boot_ns):
-  """mapd's neutral ambiguous output, which may carry navigation-only junctions."""
+  """mapd's neutral output, which may carry navigation-only junctions: from a road picked on an ambiguous fix
+  ('unknown'), or the mapped roads straight ahead of a car on unmapped ground ('noMatch')."""
   from openpilot.starpilot.speed_limits.map_source import COMPUTED_MAX_AGE_NS, EVENT_MAX_AGE_NS, GPS_MAX_AGE_NS
-  return (frame.version == 2 and frame.status == 'unknown' and not frame.event_valid and frame.way_id == 0 and
+  return (frame.version == 2 and frame.status in ('unknown', 'noMatch') and not frame.event_valid and frame.way_id == 0 and
           frame.speed_mps == 0 and frame.source in GPS_MAX_AGE_NS and
           0 < frame.gps_mono_ns <= frame.computed_mono_ns <= frame.event_mono_ns <= now_boot_ns and
           now_boot_ns - frame.event_mono_ns <= EVENT_MAX_AGE_NS and
@@ -91,6 +93,7 @@ class LocalMapCorroborator:
     self.frame = None
     self.branches = ()
     self.navigation_only = False
+    self.approach = False
     self.last_event_ns = 0
     self.failure_logged = False
     self.updated_boot_ns = 0
@@ -126,10 +129,10 @@ class LocalMapCorroborator:
         self.fresh = accepted is frame or navigation_admitted
         self.frame, self.branches = None, ()
         self.map_reason = 'mapFrameRejected:' + evidence.kind
-        # A matched road (speed-limit grade), or mapd's navigation-only pick on an ambiguous fix.
+        # A matched road (speed-limit grade), or mapd's navigation-only junctions (its 'noMatch' is the tracker's loss).
         if accepted is frame and evidence.kind in MATCHED:
           self._take(road, frame, navigation_only=False)
-        elif accepted is None and navigation_admitted:
+        elif navigation_admitted and (accepted is None or evidence.kind == 'loss'):
           self._take(road, frame, navigation_only=True)
       if self.frame is not None and not (navigation_frame(self.frame, now_boot_ns) if self.navigation_only else
                                          accepted is self.frame):
@@ -162,7 +165,8 @@ class LocalMapCorroborator:
         return
       branches.append((junction, distance, angle, str(row.highwayClass), way_id, str(row.roadName)))
     self.frame, self.branches, self.navigation_only = frame, tuple(branches), navigation_only
-    self.map_reason = 'noJunctionBranches' if not branches else ''
+    self.approach = frame.status == 'noMatch'
+    self.map_reason = ('noRoadMatched' if self.approach else 'noJunctionBranches') if not branches else ''
 
   def status(self, phone):
     return self.resolve(phone).status
@@ -250,7 +254,18 @@ class LocalMapCorroborator:
     nearby = [row for row in self.branches if abs(row[1] - distance) <= tolerance]
     if not nearby:
       return Resolution('mapNoNearbyJunction', reason='junctionDistanceMismatch')
-    if not kind:
+    reason = ''
+    if self.approach:
+      # Both ways of each crossing are offered: the name (never a "toward" road) confirms the junction, the phone its side.
+      text = re.split(r'\btowards?\b', phone.get('roadName') or phone.get('instruction', ''), flags=re.IGNORECASE)[0].strip()
+      if kind != 'turn' or side not in SIDES or not text:
+        return Resolution('mapUnverifiable', reason='approachNeedsNamedSidedTurn')
+      roads = instruction_roads(text)
+      fits = [row for row in nearby if same_road(row[5], roads) and self._direction(kind, side, row)]
+      if not fits:
+        return Resolution('mapUnverifiable', reason='noNamedApproachRoad')
+      status, reason = 'mapInferred', 'approachBranch'
+    elif not kind:
       # Arrow-only guidance names just the road: a turn onto it here is evidence of the turn, not of its side.
       fits = [row for row in nearby if 45 <= abs(row[2]) <= 150 and same_road(row[5], roads)]
       if not fits:
@@ -269,7 +284,7 @@ class LocalMapCorroborator:
         return Resolution('mapDifferentDirection', reason='maneuverDirectionMismatch')
     if max(row[1] for row in fits) - min(row[1] for row in fits) > JUNCTION_SPAN_M:
       return Resolution('mapAmbiguous', reason='multipleJunctionsMatch')
-    return Resolution(status, kind, side, min(fits, key=lambda row: abs(row[1] - distance))[1])
+    return Resolution(status, kind, side, min(fits, key=lambda row: abs(row[1] - distance))[1], reason=reason)
 
   @staticmethod
   def _direction(kind, side, row):
