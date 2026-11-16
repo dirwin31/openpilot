@@ -30,6 +30,28 @@ def arrival_time(remaining_seconds: float, now: datetime) -> str:
   return arrival.strftime('%I:%M %p').lstrip('0')
 
 
+SOURCE_MARK = rl.Color(160, 126, 220, 230)
+
+
+def _source_mark(phone, x, y, size):
+  """A quiet glyph for where guidance comes from: a phone for phone navigation, a folded map otherwise."""
+  thick = max(1.5, size * .09)
+  if phone:
+    width = size * .58
+    left = x + (size - width) / 2
+    rl.draw_rectangle_rounded_lines_ex(rl.Rectangle(left, y, width, size), .35, 8, thick, SOURCE_MARK)
+    rl.draw_line_ex(rl.Vector2(x + size * .42, y + size * .82), rl.Vector2(x + size * .58, y + size * .82), thick, SOURCE_MARK)
+    return
+  outline = ((0, .14), (.33, 0), (.67, .14), (1, 0), (1, .86), (.67, 1), (.33, .86), (0, 1))
+  points = [(x + px * size, y + py * size) for px, py in outline]
+  segments = list(zip(points, points[1:] + points[:1], strict=True)) + [(points[1], points[6]), (points[2], points[5])]
+  for (ax, ay), (bx, by) in segments:
+    # Overlap each stroke slightly so the corners close.
+    length = max(1e-6, ((bx - ax) ** 2 + (by - ay) ** 2) ** .5)
+    dx, dy = (bx - ax) / length * thick / 2, (by - ay) / length * thick / 2
+    rl.draw_line_ex(rl.Vector2(ax - dx, ay - dy), rl.Vector2(bx + dx, by + dy), thick, SOURCE_MARK)
+
+
 class NavigationCard:
   def __init__(self, fonts, *, clock=None):
     self.fonts = fonts
@@ -184,6 +206,10 @@ class NavigationCard:
     far = not nav.arrived and nav.distance_m > FAR_TURN_M
     y = rect.y + (8 if compact else 12)
     self.fonts.draw(distance, FontRole.BOLD, distance_size, x, y, rl.WHITE)
+    mark = 18 if compact else 30
+    mark_x, mark_y = rect.x + rect.width - padding - mark, y + (distance_size - mark) / 2
+    if x + self.fonts.measure(distance, FontRole.BOLD, distance_size).width + mark / 2 < mark_x:
+      _source_mark(nav.key[0].startswith(PHONE_SOURCE_PREFIX), mark_x, mark_y, mark)
     y += distance_size + (2 if compact else 4)
     lines = self._lines(nav.text, width, text_size, max_lines=1 if far or lanes else 2)
     for i, text in enumerate(lines):
