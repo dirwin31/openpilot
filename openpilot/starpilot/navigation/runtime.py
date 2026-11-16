@@ -32,6 +32,9 @@ UNJOINED_REROUTE_M = 300.       # before joining, only this far from where the r
 
 def location(sm, now_ns: int, phone_fix=None):
   fix = select_location(sm, now_ns, phone_fix=phone_fix)
+  if fix is not None and now_ns > fix[0] + GPS_MAX_AGE_NS:
+    # A phone fix held past the route's control age; a fresh comma or car fix keeps progress moving.
+    fix = select_location(sm, now_ns, mode="comma") or fix
   if fix is None:
     return None
   stamp, gps = fix
@@ -162,7 +165,8 @@ class RouteRuntime:
       return result
     progress = self.route.progress(coordinates, speed, bearing)
     fresh = now_ns <= stamp + GPS_MAX_AGE_NS
-    off_route = fresh and progress.off_route and self._may_reroute(coordinates, progress, selected)
+    may_reroute = self._may_reroute(coordinates, progress, selected)
+    off_route = fresh and progress.off_route and may_reroute
     self.off_route_since = (self.off_route_since or now_ns) if off_route else 0
     arriving = progress.arrived or (speed is not None and speed < 2 and
                                     distance(coordinates, (selected['longitude'], selected['latitude'])) < STOPPED_RADIUS_M)

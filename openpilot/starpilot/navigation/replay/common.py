@@ -29,9 +29,9 @@ def is_phone(row):
 
 
 def usable_map(frame, now_ns):
-  """mapd evidence navigationd would take: a matched road, or navigation-only junctions on an ambiguous fix."""
+  """mapd evidence navigationd would take: a matched road, or navigation-only junctions on an ambiguous fix or unmapped ground."""
   return (frame is not None and now_ns - frame['t'] < 1_200_000_000 and frame['ver'] == 2 and
-          (frame['st'] in MATCHED or (frame['st'] == 'unknown' and frame['way'] == 0)))
+          (frame['st'] in MATCHED or (frame['st'] in ('unknown', 'noMatch') and frame['way'] == 0)))
 
 
 def branch_rows(frame):
