@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 from collections import deque
 
@@ -43,6 +44,35 @@ MANEUVERS = {
   "DEPART": ("depart", "straight"), "NAME_CHANGE": ("new name", "straight"), "FERRY": ("notification", "straight"),
   "FERRY_TRAIN": ("notification", "straight"),
 }
+
+SIDE = re.compile(r"\b(left|right)\b")
+# Google's maneuver can disagree with its own words ("Keep right, follow signs for..." sent as TURN_RIGHT).
+NOT_A_TURN = (
+  (re.compile(r"^(?:keep|stay)\s+(?:left|right|straight|in|on)\b"), "fork"),
+  (re.compile(r"^(?:take|use)\s+(?:the\s+)?(?:left\s+|right\s+)?exit\b|^exit\s+\d"), "off ramp"),
+  (re.compile(r"^(?:take|use)\s+(?:the\s+)?(?:left\s+|right\s+)?ramp\b"), "on ramp"),
+  (re.compile(r"^merge(?:\s+(?:onto|into|left|right|with)\b|$)"), "merge"),
+  (re.compile(r"^(?:continue|head)(?:\s+(?:straight|onto|on|to|toward|towards|left|right|north|south|east|west)\b|$)"), "continue"),
+)
+SLIGHT = re.compile(r"^(?:slight|bear)\s+(?:left|right)\b")
+
+
+def worded_maneuver(kind: str, side: str, text: str) -> tuple[str, str]:
+  """A turn maneuver is kept only when the instruction itself reads as a turn."""
+  if kind != "turn":
+    return kind, side
+  lead = text.lower().split(",")[0].strip()
+  found = SIDE.search(lead)
+  for pattern, worded in NOT_A_TURN:
+    if pattern.search(lead):
+      if worded == "fork":
+        return worded, f"slight {found.group(1)}" if found else "straight"
+      if worded in ("off ramp", "on ramp"):
+        return worded, found.group(1) if found else side
+      return worded, found.group(1) if found else "straight"
+  if SLIGHT.search(lead) and found:
+    return kind, f"slight {found.group(1)}"
+  return kind, side
 
 
 MESSAGES = {
@@ -146,6 +176,7 @@ def mapbox_shape(route: dict) -> dict:
     text = str(instruction.get("instructions", ""))[:256]
     if kind == "on ramp" and "exit" in text.lower():
       kind = "off ramp"
+    kind, side = worded_maneuver(kind, side, text)
     steps.append({"distance": step.get("distanceMeters", 0), "duration": duration * scale,
                   "maneuver": {"type": kind, "modifier": side, "instruction": text}})
   steps.append({"distance": 0, "duration": 0, "maneuver": {"type": "arrive", "modifier": "straight", "instruction": "Arrive at your destination"}})

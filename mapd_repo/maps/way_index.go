@@ -133,3 +133,41 @@ func (o *Offline) WaysWithEndpoint(pos m.Position) (indices []int32, ok bool) {
 	}
 	return o.endpoints[pos], true
 }
+
+// WaysThrough returns the indices, in tile order, of ways with a node exactly
+// at pos, whether an endpoint or an interior node. OSM keeps a street as one
+// way through its junctions, so endpoints alone miss most crossings.
+func (o *Offline) WaysThrough(pos m.Position) []int {
+	candidates, indexed := o.WaysNear(pos)
+	count := len(candidates)
+	if !indexed {
+		count = o.Ways.Len()
+	}
+	found := []int{}
+	for c := range count {
+		i := c
+		if indexed {
+			i = int(candidates[c])
+		}
+		if i < len(o.wayBoxes) && !o.wayBoxes[i].PosInside(pos) {
+			continue
+		}
+		way := o.Ways.At(i)
+		for n := 0; n < way.Nodes.Len(); n++ {
+			if node := way.Nodes.At(n); node.Equals(pos) {
+				found = append(found, i)
+				break
+			}
+		}
+	}
+	return found
+}
+
+// WayBoxOverlaps is true when way i's bounding box overlaps box, or when the
+// tile has no index.
+func (o *Offline) WayBoxOverlaps(i int, box m.Box) bool {
+	if i < 0 || i >= len(o.wayBoxes) {
+		return true
+	}
+	return o.wayBoxes[i].Overlapping(box)
+}
