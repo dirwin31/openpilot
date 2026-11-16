@@ -3,7 +3,6 @@ import { GxNotice } from "./notice.js"
 import { requestJson } from "./startup.js"
 import { ANDROID_BETA_URL, InstallApp, isIosDevice } from "./install-app.js"
 import { GalaxyCompanion, newerCompanionVersion } from "./companion.js"
-import { GalaxyHotspot } from "./hotspot.js"
 import { LocalAccess } from "./local-access.js"
 import { BluetoothNotice, bluetoothConnection } from "./bluetooth-notice.js"
 
@@ -12,7 +11,7 @@ const dismissedUpdate = () => { try { return localStorage.getItem(DISMISSED_UPDA
 
 export const GalaxyPage = {
   name: "GalaxyPage",
-  components: { GxState, GxNotice, BluetoothNotice, InstallApp, GalaxyHotspot, GalaxyCompanion, LocalAccess },
+  components: { GxState, GxNotice, BluetoothNotice, InstallApp, GalaxyCompanion, LocalAccess },
   props: { mode: { type: String, required: true }, unauthorized: { type: Function, required: true } },
   data: () => ({ loading: true, paired: false, url: "", tunnelClientAvailable: false, legacyPassword: false,
     appKey: '', keyVisible: false, betaUrl: ANDROID_BETA_URL, legacyPairingAvailable: false, password: "", busy: false, error: "", companionStatus: null,
@@ -148,7 +147,9 @@ export const GalaxyPage = {
           </div>
         </li>
       </ol>
-      <GalaxyHotspot :mode="mode" :unauthorized="unauthorized" />
+      <section class="gx-card gx-panel gx-stack"><div class="gx-section__header"><i class="bi bi-wifi" aria-hidden="true"></i><span class="gx-section__title">Galaxy Wi-Fi Hotspot</span></div>
+        <p>The hotspot, preferred Wi-Fi networks and cellular data are on the Networks page.</p>
+        <div class="gx-actions"><a class="gx-btn gx-btn--tonal" href="#/networks">Open Networks</a></div></section>
       <GalaxyCompanion v-if="!ios" :mode="mode" :unauthorized="unauthorized" @status="companionStatus = $event" />
     </div>
   `,
