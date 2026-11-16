@@ -333,6 +333,22 @@ def test_location_requires_fix_accuracy_and_freshness():
   assert location(sm, 11_000_000_000) is None
 
 
+def test_held_phone_fix_gives_way_to_a_fresh_comma_fix(monkeypatch):
+  # c2: the phone stopped sending at a junction and its last fix was held 10 s while ublox was fresh.
+  from openpilot.starpilot.gps import source
+  monkeypatch.setattr(source, 'gps_mode', lambda now=None: 'phone')
+  ublox = SimpleNamespace(source='ublox', latitude=0., longitude=0., speed=7., bearingDeg=0., horizontalAccuracy=1., hasFix=True)
+  class SM(dict):
+    valid = {'gpsLocation': False, 'gpsLocationExternal': True, 'starpilotCarState': False, 'starpilotNavigation': False}
+    logMonoTime = {'gpsLocation': 0, 'gpsLocationExternal': 19_900_000_000, 'starpilotCarState': 0, 'starpilotNavigation': 0}
+  sm = SM(gpsLocationExternal=ublox)
+  held = (12_000_000_000, SimpleNamespace(latitude=1., longitude=1., speed=7., bearingDeg=0., bearingAccuracyDeg=1.))
+  assert location(sm, 20_000_000_000, held)[0] == 19_900_000_000
+  assert location(sm, 13_000_000_000, held)[0] == 12_000_000_000
+  sm.valid['gpsLocationExternal'] = False
+  assert location(sm, 20_000_000_000, held)[0] == 12_000_000_000
+
+
 def test_steps_without_banner_describe_next_maneuver_not_previous_turn():
   route = NavigationRoute({'distance': 1112., 'duration': 100.,
                            'geometry': {'coordinates': [[0., 0.], [.005, 0.], [.01, 0.]]},
@@ -578,6 +594,14 @@ def test_leaving_a_garage_before_reaching_the_route_does_not_reroute(tmp_path, m
   assert drive(runtime, 2, 30, (.0005, .0015), 3., 200.)['status'] == 'guiding', "spiral ramp 170 m from the street"
   assert len(executor.jobs) == 1
   assert drive(runtime, 40_000_000_000, 5, (-.004, .002), 12., 270.)['status'] == 'routing', "really went the other way"
+  assert len(executor.jobs) == 2
+
+
+def test_leaving_the_route_soon_after_joining_it_reroutes(tmp_path, monkeypatch):
+  # c6: the car followed the route, missed a turn 200 m from where it started, and rerouted only once 300 m away.
+  runtime, executor = garage_runtime(tmp_path, monkeypatch)
+  drive(runtime, 2, 3, (.001, 0.), 15., 90.)
+  assert drive(runtime, 10_000_000_000, 3, (.0015, .0012), 15., 0.)['status'] == 'routing'
   assert len(executor.jobs) == 2
 
 
