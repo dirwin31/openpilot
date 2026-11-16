@@ -416,6 +416,7 @@ export const LayoutWidgetPreview = {
       </g>
       <svg v-else-if="widget.kind === 'nav_card'" :width="widget.width" :height="widget.height" viewBox="0 0 560 255">
         <rect x="1" y="1" :width="560 - 2" :height="253" rx="39" fill="#0f0d17f5" stroke="#a07edcbe" stroke-width="2" />
+        <path transform="translate(506 26)" d="M0 4.2 L9.9 0 L20.1 4.2 L30 0 V25.8 L20.1 30 L9.9 25.8 L0 30 Z M9.9 0 V25.8 M20.1 4.2 V30" fill="none" stroke="#a07edce6" stroke-width="2.7" stroke-linejoin="round" />
         <text v-if="!googleRoutes" x="24" y="66" font-size="54" font-weight="700" fill="white">500 ft</text>
         <text v-if="!googleRoutes" x="24" y="100" font-size="30" font-weight="600" fill="#ded6f4">Turn right onto Las Vegas Blvd</text>
         <template v-if="!googleRoutes">
