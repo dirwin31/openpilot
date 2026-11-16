@@ -235,7 +235,7 @@ def test_compact_two_line_instruction_clears_then_chip():
                 then_type='turn', then_modifier='right', then_distance_m=300.)
   with patch.object(card, '_icon', return_value=NS(width=100, height=100)), \
        patch.object(rl, 'draw_rectangle_rounded') as rounded, patch.object(rl, 'draw_rectangle_rounded_lines_ex'), \
-       patch.object(rl, 'draw_texture_pro'):
+       patch.object(rl, 'draw_texture_pro'), patch.object(rl, 'draw_line_ex'):
     card.render(replace(state(), navigation=nav))
   instruction = [call.args for call in fonts.draw.call_args_list if call.args[1] == FontRole.SEMI_BOLD and call.args[2] == 20]
   assert len(instruction) == 2
