@@ -239,3 +239,50 @@ def test_horizontal_bluetooth_name_does_not_overlap_status():
   status = next(args for args in drawn if args[0] == 'Connected')
   name_right = name[3] + fonts.measure(name[0], name[1], name[2]).width
   assert name_right <= status[3] - 24 * widget.s
+
+
+def test_reads_the_joined_wifi_name(tmp_path):
+  replies = {'SIGNAL_POLL': {'RSSI': '-45'}, 'STATUS': {'wpa_state': 'COMPLETED', 'ssid': r'Danny\xe2\x80\x99s Caf\xc3\xa9'}}
+  with patch.object(hardware, 'MODEM_STATE_PATH', str(tmp_path / 'modem')), \
+       patch.object(hardware, 'wpa_supplicant_cmd', side_effect=lambda cmd: replies[cmd]), \
+       patch.object(hardware, 'get_default_route_iface', return_value='wlan0'), \
+       patch('openpilot.starpilot.ui.bluetooth_status.read_bluetooth_details', return_value=('off', ())):
+    assert read_signal().wifi_name == 'Danny’s Café'
+    replies['STATUS'] = {'wpa_state': 'ASSOCIATING', 'ssid': 'Home'}
+    assert read_signal().wifi_name == ''
+
+
+def test_wifi_name_toggle_defaults_off_and_adds_a_header_row():
+  from types import SimpleNamespace as NS
+  from unittest.mock import MagicMock
+  from openpilot.starpilot.system.starport.projection_layout import default_layout_for_viewport, validate_layout_for_viewport
+  from openpilot.starpilot.ui import onroad_signal
+  from openpilot.starpilot.ui.onroad_customization import SIGNAL_SIZES, SIGNAL_WIFI_NAME_HEIGHT, signal_size
+  document = default_document()
+  assert document['layouts']['large'][SIGNAL_WIDGET]['wifiName'] is False
+  del document['layouts']['large'][SIGNAL_WIDGET]['wifiName']
+  assert validate_document(document)['layouts']['large'][SIGNAL_WIDGET]['wifiName'] is False
+  document['layouts']['large'][SIGNAL_WIDGET]['wifiName'] = 'yes'
+  with pytest.raises(ValueError):
+    validate_document(document)
+  layout = default_layout_for_viewport((1920, 1080))
+  del layout['widgets'][SIGNAL_WIDGET]['wifiName']
+  assert validate_layout_for_viewport(layout, (1920, 1080))['widgets'][SIGNAL_WIDGET]['wifiName'] is False
+
+  for style, (width, height) in SIGNAL_SIZES.items():
+    assert signal_size({'size': style, 'scale': 100, 'wifiName': True}) == (width, height + SIGNAL_WIFI_NAME_HEIGHT)
+
+  fonts = MagicMock()
+  fonts.vertical_ink.return_value = (0, 10)
+  fonts.measure.side_effect = lambda text, _role, size: NS(width=len(text) * size * 0.5)
+  widget = onroad_signal.SignalWidget(fonts)
+  for style in ('ring', 'horizontal', 'vertical'):
+    for signal, shown in ((Signal(2, 4, 'wifi', 'LTE', 'on', (), 'Home Wi-Fi'), 'Home Wi-Fi'), (Signal(2, None, 'cell'), 'No Wi-Fi')):
+      widget.preview = signal
+      for enabled in (False, True):
+        fonts.draw.reset_mock()
+        doc = default_document()
+        doc['layouts']['large'][SIGNAL_WIDGET].update(enabled=True, size=style, wifiName=enabled)
+        with patch.object(onroad_signal, 'rl'):
+          widget.render(NS(customization=doc, alert=NS(size='none')))
+        assert (shown in [call.args[0] for call in fonts.draw.call_args_list]) is enabled

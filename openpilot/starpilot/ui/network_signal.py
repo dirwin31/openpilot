@@ -1,5 +1,6 @@
 """Cellular and Wi-Fi strength read together; deviceState only carries the link in use. Read-only."""
 import json
+import re
 import threading
 import time
 from typing import NamedTuple
@@ -16,16 +17,26 @@ class Signal(NamedTuple):
   tech: str = 'LTE'
   bt: str = 'off'  # 'off', 'on', or 'connected'
   bt_devices: tuple[str, ...] = ()
+  wifi_name: str = ''  # the joined network's SSID, empty when unknown
 
 
 def steps(percent: float) -> int:
   return 1 if percent < 25 else 2 if percent < 50 else 3 if percent < 75 else 4
 
 
+def ssid_text(value: str) -> str:
+  """Undoes wpa_supplicant's escaping (\\xNN, \\n, \\\\ and the like) and decodes the SSID bytes as UTF-8."""
+  def unescape(match):
+    code = match[1]
+    return bytes([int(code[1:], 16)]) if code[:1] == b'x' else {b'n': b'\n', b'r': b'\r', b't': b'\t', b'e': b'\x1b'}.get(code, code)
+  return re.sub(rb'\\(x[0-9a-fA-F]{2}|.)', unescape, value.encode('utf-8', 'replace')).decode('utf-8', 'replace').strip()
+
+
 def read_signal() -> Signal:
   from openpilot.common.hardware.comma.hardware import MODEM_STATE_PATH, get_default_route_iface, wpa_supplicant_cmd
   from openpilot.starpilot.ui.bluetooth_status import read_bluetooth_details
   cell = wifi = active = iface = None
+  wifi_name = ''
   tech = 'LTE'
   bt, bt_devices = 'off', ()
   try:
@@ -40,6 +51,9 @@ def read_signal() -> Signal:
     dbm = int(wpa_supplicant_cmd('SIGNAL_POLL')['RSSI'])
     if -100 < dbm <= 0:
       wifi = steps(120 + max(-100, min(-20, dbm)))
+      status = wpa_supplicant_cmd('STATUS')
+      if status.get('wpa_state') == 'COMPLETED':
+        wifi_name = ssid_text(status.get('ssid', ''))[:64]
   except Exception:
     pass
   try:
@@ -54,7 +68,7 @@ def read_signal() -> Signal:
     active = 'wifi' if wifi else None
   elif cell and not (iface and iface.startswith('eth')):
     active = 'cell'
-  return Signal(cell, wifi, active, tech, bt, bt_devices)
+  return Signal(cell, wifi, active, tech, bt, bt_devices, wifi_name)
 
 
 class SignalFeed:
