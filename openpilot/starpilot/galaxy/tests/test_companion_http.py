@@ -166,7 +166,7 @@ def test_phone_location_needs_local_session(tmp_path):
   aa = Mock()
   aa.enabled.return_value = False
   server = make_server(port=0, owner=access, companion=CompanionRegistry(tmp_path / 's', tmp_path / 'l', tmp_path / 't'),
-                       parked=Mock(return_value=True), starport_setup=aa, phone_location=phone)
+                       parked=(parked := Mock(return_value=True)), starport_setup=aa, phone_location=phone)
   worker = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': .01}, daemon=True)
   worker.start()
   origin = f'http://127.0.0.1:{server.server_port}'
@@ -190,9 +190,14 @@ def test_phone_location_needs_local_session(tmp_path):
       connection.close()
       assert post(fix, cookie) == (200, {'ok': True, 'driving': False})
       assert post({**fix, 'ageMs': 5000}, cookie) == (400, {'error': 'Location is too old'})
+      parked.return_value = False
+      assert post(fix, cookie) == (200, {'ok': True, 'driving': True})
+      # An unreadable drive state must keep the phone sharing.
+      parked.side_effect = RuntimeError('evidence unavailable')
+      assert post(fix, cookie) == (200, {'ok': True, 'driving': True})
     server.remote_transport = True
     assert post(fix, cookie)[0] == 403
-    assert phone.publish.call_count == 2
+    assert phone.publish.call_count == 4
   finally:
     server.shutdown()
     worker.join(timeout=2)
@@ -221,6 +226,14 @@ def test_phone_location_timing_requires_direct_local_session(companion_http):
     value = json.loads(body)
     assert status == 200 and value['ok'] and type(value['serverMonoTimeNs']) is int
     assert 'no-store' in headers['Cache-Control']
+    # The phone polls this while its GPS rests to learn that a drive started.
+    assert value['driving'] is False
+    server.test_parked.return_value = False
+    assert json.loads(request('/api/companion/location', cookie=cookie)[1])['driving'] is True
+    server.test_parked.side_effect = RuntimeError('evidence unavailable')
+    assert json.loads(request('/api/companion/location', cookie=cookie)[1])['driving'] is True
+    server.test_parked.side_effect = None
+    server.test_parked.return_value = True
   with patch('openpilot.starpilot.galaxy.server.direct_local_connection', return_value=False):
     assert request('/api/companion/location', cookie=cookie)[0] in (401, 403)
   server.remote_transport = True

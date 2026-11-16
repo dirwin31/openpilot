@@ -20,8 +20,8 @@ type navigationBranch struct {
 }
 
 // localNavigationBranches enumerates connections from the already matched road.
-// It never chooses a continuation or constructs a route. Endpoint-only local
-// topology is incomplete; absent candidates must not invalidate phone guidance.
+// It never chooses a continuation or constructs a route. Local topology is
+// incomplete; absent candidates must not invalidate phone guidance.
 func (s *State) localNavigationBranches() []navigationBranch {
 	return s.navigationBranchesFrom(s.CurrentWay)
 }
@@ -83,16 +83,21 @@ func (s *State) navigationBranchesFrom(cw CurrentWay) []navigationBranch {
 			if incoming.DistanceTo(node) < 3 {
 				continue
 			}
-			ways, err := w.MatchingWays(&s.Data, node)
-			if err != nil || len(ways) == 0 {
+			through := s.Data.WaysThrough(node)
+			if len(through) == 0 {
 				continue
 			}
 			incomingVector := incoming.VectorTo(node)
 			heading := incomingVector.Bearing()
-			seen := map[int64]bool{}
+			type branchKey struct {
+				id      int64
+				forward bool
+			}
+			seen := map[branchKey]bool{}
 			before := len(result)
 			appendBranch := func(candidate maps.Way, direction bool, start int) {
-				if len(result) >= maxNavigationBranches || seen[candidate.Id()] {
+				key := branchKey{candidate.Id(), direction}
+				if len(result) >= maxNavigationBranches || seen[key] {
 					return
 				}
 				stride := 1
@@ -114,23 +119,31 @@ func (s *State) navigationBranchesFrom(cw CurrentWay) []navigationBranch {
 				if math.IsNaN(angle) || math.IsInf(angle, 0) {
 					return
 				}
-				seen[candidate.Id()] = true
+				seen[key] = true
 				result = append(result, navigationBranch{candidate, node, along, float32(angle)})
 			}
 			// At an interior junction, continuing on the current road is also an option.
 			if index+step >= 0 && index+step < w.Nodes.Len() {
 				appendBranch(w, forward, index)
 			}
-			for _, candidate := range ways {
-				direction := candidate.IsForwardFrom(node)
-				if candidate.OneWay() && !direction {
+			for _, i := range through {
+				candidate := s.Data.Ways.At(i)
+				if candidate.Id() <= 0 || candidate.Id() == w.Id() || candidate.Nodes.Len() < 2 {
 					continue
 				}
-				start := 0
-				if !direction {
-					start = candidate.Nodes.Len() - 1
+				for k := 0; k < candidate.Nodes.Len(); k++ {
+					if at := candidate.Nodes.At(k); !at.Equals(node) {
+						continue
+					}
+					// A crossing street leaves the junction both ways unless it is one-way.
+					if k < candidate.Nodes.Len()-1 {
+						appendBranch(candidate, true, k)
+					}
+					if k > 0 && !candidate.OneWay() {
+						appendBranch(candidate, false, k)
+					}
+					break
 				}
-				appendBranch(candidate, direction, start)
 			}
 			// A lone straight-on way is a split in the road's OSM data, not a choice.
 			if len(result) == before+1 && math.Abs(float64(result[before].angle)) <= 20 && sameRoad(&w, &result[before].way) {

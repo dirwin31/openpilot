@@ -360,3 +360,81 @@ def test_cue_for_an_arrow_only_phone_turn_asks_for_either_signal(sm):
   assert turn_cue(sm, CP, NOW) == 'slowing'
   sm['carState'].vEgo = 10.
   assert turn_cue(sm, CP, NOW) == ''
+
+
+def test_routed_turn_distance_is_advanced_between_route_frames(sm):
+  # Routes publish about once a second: a frame 0.9 s old at 6.7 m/s puts a 40 m turn at 46 m, outside the window.
+  nav = sm['starpilotNavigation'].navigation
+  nav.instruction.distanceMeters, nav.frameMonoTime, nav.locationMonoTime = 45.6, NOW - 900_000_000, NOW - 2_000_000_000
+  sm['carState'].vEgo = 6.7
+  assert turn_desire(sm, NOW, log.Desire.none, supported=True) == log.Desire.turnRight
+  assert matching_turn_signal(sm, NOW, supported=True)
+  nav.frameMonoTime = NOW
+  assert turn_desire(sm, NOW, log.Desire.none, supported=True) == log.Desire.none
+  # The routed ceiling keeps its own distance handling.
+  nav.frameMonoTime = NOW - 900_000_000
+  assert cruise_ceiling(sm, CP, NOW, 20.) == pytest.approx(turn_speed(nav.instruction, 0.))
+
+
+def test_stop_cleared_one_sample_after_pulling_away_does_not_hold_the_turn(sm):
+  # c6 Grand Teton: standstill cleared while the planner still said stop, which held the turn for the whole approach.
+  from openpilot.starpilot.navigation.intent import TurnIntent
+  owner = TurnIntent()
+  sm['longitudinalPlan'] = NS(modelMonoTime=NOW, shouldStop=True)
+  sm.logMonoTime['longitudinalPlan'] = NOW
+  sm.valid['longitudinalPlan'] = sm.alive['longitudinalPlan'] = True
+  cs, plan = sm['carState'], sm['longitudinalPlan']
+  def sample(model_stop=False):
+    return owner.select(sm, NOW, log.Desire.none, supported=True, model_stop=model_stop)
+  assert sample() == log.Desire.none
+  cs.standstill, cs.vEgo = True, 0.
+  assert sample() == log.Desire.none
+  cs.standstill, cs.vEgo = False, .1
+  assert sample() == log.Desire.none
+  plan.shouldStop = False
+  assert sample() == log.Desire.turnRight
+  # It flickers back on while creeping away; each clear sample releases it again.
+  plan.shouldStop = True
+  assert sample() == log.Desire.none
+  plan.shouldStop = False
+  assert sample() == log.Desire.turnRight
+  # A signal that starts as the car pulls away is released the same way.
+  cs.rightBlinker = False
+  assert sample() == log.Desire.none
+  cs.rightBlinker = plan.shouldStop = True
+  assert sample() == log.Desire.none
+  plan.shouldStop = False
+  assert sample() == log.Desire.turnRight
+  cs.vEgo = 5.
+  assert sample() == log.Desire.turnRight
+  # Clear of the stop, a new stop request is a new approach and holds until standstill.
+  plan.shouldStop = True
+  assert sample() == log.Desire.none
+  plan.shouldStop = False
+  assert sample() == log.Desire.none
+  cs.rightBlinker = False
+  assert sample() == log.Desire.none
+  cs.rightBlinker = True
+  assert sample() == log.Desire.turnRight
+
+
+def test_ceiling_takes_the_slower_of_the_turn_and_the_next_maneuver(sm):
+  nav = sm['starpilotNavigation'].navigation
+  nav.instruction = NS(maneuverType='turn', maneuverModifier='right', distanceMeters=300.)
+  nav.nextManeuver = NS(maneuverType='turn', maneuverModifier='uturn', distanceMeters=320.)
+  assert cruise_ceiling(sm, CP, NOW, 30.) == pytest.approx(turn_speed(nav.nextManeuver, 0.))
+  nav.nextManeuver = NS(maneuverType='turn', maneuverModifier='left', distanceMeters=900.)
+  assert cruise_ceiling(sm, CP, NOW, 30.) == pytest.approx(turn_speed(nav.instruction, 0.))
+
+
+@pytest.mark.parametrize('source', ['', 'phone:googleMaps'])
+@pytest.mark.parametrize('kind,modifier', [('fork', 'slightRight'), ('fork', 'right'), ('off ramp', 'right'), ('on ramp', 'right'),
+                                           ('merge', 'right'), ('continue', 'right'), ('turn', 'slightRight')])
+def test_keep_ramp_merge_and_continue_neither_slow_nor_turn(sm, source, kind, modifier):
+  nav = sm['starpilotNavigation'].navigation
+  nav.source = source
+  nav.instruction = NS(maneuverType=kind, maneuverModifier=modifier, distanceMeters=30.)
+  nav.nextManeuver = NS(maneuverType=kind, maneuverModifier=modifier, distanceMeters=60.)
+  assert turn_desire(sm, NOW, log.Desire.none, supported=True) == log.Desire.none
+  assert not matching_turn_signal(sm, NOW, supported=True)
+  assert cruise_ceiling(sm, CP, NOW, 30.) is None

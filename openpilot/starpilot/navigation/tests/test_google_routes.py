@@ -89,6 +89,29 @@ def test_google_route_becomes_a_navigation_route_with_traffic_times():
   assert route.total_duration == 150 and route.total_distance == 1200
 
 
+@pytest.mark.parametrize("maneuver,text,expected", [
+  ("TURN_RIGHT", "Keep right, follow signs for Ann Road", ("fork", "slight right")),
+  ("TURN_LEFT", "Keep left to continue on I-15 N", ("fork", "slight left")),
+  ("TURN_RIGHT", "Take exit 91B for Ann Rd", ("off ramp", "right")),
+  ("TURN_RIGHT", "Take the ramp onto I-11 S", ("on ramp", "right")),
+  ("TURN_LEFT", "Merge onto US-95 N", ("merge", "straight")),
+  ("TURN_RIGHT", "Continue onto W Ann Rd", ("continue", "straight")),
+  ("TURN_RIGHT", "Slight right onto Oak St", ("turn", "slight right")),
+  ("TURN_RIGHT", "Turn right onto Fork Rd", ("turn", "right")),
+  ("TURN_RIGHT", "Turn right onto Keep Ave", ("turn", "right")),
+  ("TURN_LEFT", "Turn left onto Exit Rd", ("turn", "left")),
+  ("TURN_RIGHT", "Turn right to merge onto I-11 S/US-95 S", ("turn", "right")),
+  ("TURN_RIGHT", "Turn right", ("turn", "right")),
+  ("RAMP_RIGHT", "Turn right to merge onto I-11 S/US-95 S", ("on ramp", "right")),
+  ("FORK_RIGHT", "Keep right at the fork", ("fork", "right")),
+])
+def test_turns_are_kept_only_when_the_instruction_reads_as_a_turn(maneuver, text, expected):
+  route = google_route()
+  route["legs"][0]["steps"][1]["navigationInstruction"] = {"maneuver": maneuver, "instructions": text}
+  step = gr.mapbox_shape(route)["legs"][0]["steps"][1]["maneuver"]
+  assert (step["type"], step["modifier"]) == expected
+
+
 def test_moving_reroute_is_traffic_aware_with_heading_and_key_in_a_header(tmp_path):
   http = Http()
   route = engine(http, tmp_path).fetch(KEY, (-122.42, 37.77), {"latitude": 37.8, "longitude": -122.4}, 365.0, ("toll", "ferry"))
