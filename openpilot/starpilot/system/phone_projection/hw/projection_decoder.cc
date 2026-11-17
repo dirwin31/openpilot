@@ -275,6 +275,13 @@ struct Decoder {
 extern "C" {
 int projection_decoder_abi() { return 1; }
 
+void projection_decoder_nv12_layout(int width, int height, int *info) {
+  info[0] = width; info[1] = height;
+  info[2] = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
+  info[3] = info[2] * VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
+  info[4] = VENUS_BUFFER_SIZE(COLOR_FMT_NV12, width, height);
+}
+
 void *projection_decoder_create(int hevc, int width, int height, char *error, size_t size) {
   try {
     if (width < 64 || height < 64 || width > 4096 || height > 4096) throw std::runtime_error("Unsupported video size");

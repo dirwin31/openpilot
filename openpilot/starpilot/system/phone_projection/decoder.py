@@ -32,9 +32,17 @@ def _load(path: Path = LIBRARY) -> C.CDLL:
   lib.projection_decoder_pull.argtypes = [C.c_void_p, C.c_int, C.c_void_p, C.c_size_t, C.POINTER(C.c_int),
                                           C.POINTER(C.c_longlong), C.c_char_p, C.c_size_t]
   lib.projection_decoder_destroy.argtypes = [C.c_void_p]
+  lib.projection_decoder_nv12_layout.argtypes = [C.c_int, C.c_int, C.POINTER(C.c_int)]
   if lib.projection_decoder_abi() != 1:
     raise DecoderError("Unexpected projection decoder ABI")
   return lib
+
+
+def nv12_layout(width: int, height: int, lib: C.CDLL | None = None) -> FrameLayout:
+  """The Venus NV12 layout the decoder writes (and VisionIPC buffers must match)."""
+  info = (C.c_int * 5)()
+  (lib or _load()).projection_decoder_nv12_layout(width, height, info)
+  return FrameLayout(*info)
 
 
 class HardwareDecoder:
