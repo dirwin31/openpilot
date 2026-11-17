@@ -1,0 +1,6 @@
+headunit.crt and headunit.key are the public Android Auto reference head-unit identity
+("Google-Android-Reference"), as shipped by open-source head units such as DiAuto
+(https://github.com/andrerinas/DiAuto, AGPL-3.0) and aasdk.
+
+The head-unit protocol code here is an independent implementation. DiAuto's message
+definitions were used as a reference for field numbers.

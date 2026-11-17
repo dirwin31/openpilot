@@ -84,6 +84,10 @@ class Bluez:
         return str(ifaces[ADAPTER_IFACE].get("Address", "")).upper()
     raise RuntimeError("Bluetooth adapter is not available")
 
+  def connect(self, path: str) -> None:
+    """Bring up the phone's Bluetooth link so it sees our Android Auto service."""
+    self._call(path, DEVICE_IFACE, "Connect", timeout=20.0)
+
   def register_android_auto(self, on_connection: Callable[[str, socket.socket], None]) -> None:
     """Publish the Android Auto wireless service so a paired phone can open its setup channel to us."""
     from jeepney import MatchRule
