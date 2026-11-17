@@ -1,0 +1,13 @@
+This folder is a Python port of parts of the DiPlay CarPlay engine and is licensed under the
+GNU General Public License v3.0 (see LICENSE). It is kept on a test branch and is not part of
+StarPilot releases.
+
+Ported from:
+- DiPlay by shihabal3amri (GPL-3.0), https://github.com/shihabal3amri/DiPlay
+- xcertplay by shilapi (GPL-3.0), which DiPlay is based on
+- as vendored in CarLink by F-e-n-y-x (AGPL-3.0), https://github.com/F-e-n-y-x/CarLink (vendor/diplay)
+
+No Apple accessory identity is included. The device reads it at run time from
+/data/carplay-private/ (certificate.p7b, identity.pk8), which is never committed.
+
+CarPlay is a trademark of Apple Inc. This code is not affiliated with or endorsed by Apple.
