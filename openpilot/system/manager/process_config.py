@@ -104,6 +104,13 @@ def starport_enabled(started: bool, params: Params, CP: car.CarParams) -> bool:
 
 def spotify_enabled(started: bool, params: Params, CP: car.CarParams) -> bool:
   from openpilot.starpilot.soloist.paths import enabled
+  from openpilot.starpilot.system.phone_projection.audio import REQUEST_PATH
+
+  return COMMA_HARDWARE and platform.system() == "Linux" and (enabled() or REQUEST_PATH.exists())
+
+
+def phone_projection_enabled(started: bool, params: Params, CP: car.CarParams) -> bool:
+  from openpilot.starpilot.system.phone_projection.settings import enabled
 
   return COMMA_HARDWARE and platform.system() == "Linux" and enabled()
 
@@ -206,6 +213,8 @@ procs = [
     "starportd", "openpilot.starpilot.system.starport.daemon", starport_enabled, enabled=COMMA_HARDWARE, restart_on_exit=True
   ),  # boot can race bluetoothd (NoSuchUnit)
   PythonProcess("spotifyd", "openpilot.starpilot.soloist.supervisor", spotify_enabled, enabled=COMMA_HARDWARE, restart_on_exit=True),
+  PythonProcess("projectiond", "openpilot.starpilot.system.phone_projection.daemon", phone_projection_enabled, enabled=COMMA_HARDWARE,
+                restart_on_exit=True),
   # Boot can race the audio device; selfdrived blocks engagement while soundd is down.
   PythonProcess("soundd", "openpilot.selfdrive.ui.soundd", driverview, restart_on_exit=True),
   PythonProcess("locationd", "openpilot.selfdrive.locationd.locationd", only_onroad),
