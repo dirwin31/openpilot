@@ -88,6 +88,11 @@ A change is an improvement when more real turns (`did=L` or `R`) are confirmed, 
 went straight, `error_m` stays within the phone's rounding (about 80 m far out, 15 m close in), and `flaps` stays
 at zero or one.
 
+## Road matching (mapd)
+
+`mapd_dump.py` turns a drive into the input of mapd's road-matching replay harness: match rate, wrong-limit rate and
+an offline ground truth. How to run it, and how to read the report, is in `mapd_repo/MATCHING.md`, "Replaying a drive".
+
 ## What to keep in mind
 
 - `did` needs GPS bearing while moving. A turn after a long stop often shows `?`; use `peek` and the steering angle.
