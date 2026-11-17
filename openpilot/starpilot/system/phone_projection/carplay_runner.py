@@ -108,6 +108,7 @@ class CarPlayRunner:
     self.server = None
     self.server_key = None
     self.session = None
+    self.link = None
     self.pipe: VideoPipe | None = None
     self.touches = TouchTracker()
     self.lock = threading.Lock()
@@ -163,6 +164,7 @@ class CarPlayRunner:
     self._set("connecting", f"Connecting to {iphone['name']}…")
     sock = self.connect(iphone["address"])
     link = Iap2Session(sock, log=lambda m: None).start()
+    self.link = link
     bt_mac = self.local_address()
     ident = Identification(name=NAME, model="comma", manufacturer="StarPilot", serial="SP-" + self.identity.device_id.replace(":", ""),
                            bluetooth_mac=bt_mac, ssid=spot.ssid)
@@ -182,6 +184,7 @@ class CarPlayRunner:
       while self.session is not None and not self.session.closed.is_set() and not self.ctx.stop.is_set():
         time.sleep(0.5)
     finally:
+      self.link = None
       link.close()
     self._set("retrying", "CarPlay disconnected.")
     return 3.0
@@ -231,6 +234,13 @@ class CarPlayRunner:
 
   def on_iap_tunnel_data(self, data: bytes) -> None:
     pass
+
+  def on_command(self, kind: str, params) -> None:
+    if kind.lower() in ("disablebluetooth", "disable-bluetooth"):
+      link = self.link
+      if link is not None:
+        self.ctx.log("carplay: Wi-Fi took over; closing the Bluetooth link")
+        threading.Thread(target=link.close, daemon=True).start()
 
   def on_audio(self, name: str, rate: int, channels: int, pcm: bytes) -> None:
     self.ctx.audio.write(f"carplay-{name}", rate, channels, pcm)

@@ -1,8 +1,6 @@
 """The phone half of the split screen: the phone's picture (or its connection status) and its touches."""
 from __future__ import annotations
 
-import time
-
 from openpilot.cereal.visionipc import VisionStreamType
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.starpilot.system.phone_projection import settings as projection_settings
@@ -13,7 +11,6 @@ from openpilot.starpilot.ui.raylib import rl
 BACKGROUND = rl.Color(12, 12, 14, 255)
 TEXT = rl.Color(235, 235, 240, 255)
 SUBTLE = rl.Color(150, 150, 160, 255)
-STALE_FRAME_SECONDS = 2.0
 
 
 class PhoneCamera(CameraView):
@@ -23,20 +20,12 @@ class PhoneCamera(CameraView):
     super().__init__(VIPC_NAME, VisionStreamType.VISION_STREAM_NARROW_ROAD)
     self.crop: tuple[float, float, float, float] | None = None
     self.picture: Rect | None = None
-    self.received = 0.0
 
   def _update_texture_color_filtering(self):
     self._color_strength_val[0] = 0.0
     self._road_camera_val[0] = 0
     rl.set_shader_value(self.shader, self._color_strength_loc, self._color_strength_val, rl.ShaderUniformDataType.SHADER_UNIFORM_FLOAT)
     rl.set_shader_value(self.shader, self._road_camera_loc, self._road_camera_val, rl.ShaderUniformDataType.SHADER_UNIFORM_INT)
-
-  def _poll_camera(self) -> bool:
-    previous = self.frame
-    ok = super()._poll_camera()
-    if self.frame is not None and self.frame is not previous:
-      self.received = time.monotonic()
-    return ok
 
   def _render(self, rect: rl.Rectangle, *, poll_camera: bool = True):
     if (poll_camera and not self._poll_camera()) or self.frame is None:
@@ -89,7 +78,7 @@ class PhoneView:
       crop = status.get("crop")
       camera.crop = tuple(crop) if isinstance(crop, list) and len(crop) == 4 else None
       camera.render(rl.Rectangle(rect.x, rect.y, rect.width, rect.height))
-      if camera.picture is not None and time.monotonic() - camera.received < STALE_FRAME_SECONDS:
+      if camera.picture is not None:
         return
       self._message(rect, status.get("phone") or "Phone", "Starting…")
       return
