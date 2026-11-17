@@ -1,0 +1,5 @@
+Import('env', 'arch')
+
+# Hardware H.264/H.265 decode for phone projection (Qualcomm V4L2), loaded with ctypes by decoder.py.
+if arch == "comma_arm64":
+  env.SharedLibrary('hw/projection_decoder', ['hw/projection_decoder.cc'])
