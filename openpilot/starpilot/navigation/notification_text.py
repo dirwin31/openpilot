@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path
 
-from openpilot.starpilot.navigation.phone import OBSERVATION_NS, PhoneNavigationPublisher, _read
+from openpilot.starpilot.navigation.phone import OBSERVATION_NS, PhoneNavigationPublisher, _read, observation_limit
 
 # Bundle id -> navigation source. Decided here, never by a field in the payload.
 NAVIGATION_APPS = {'com.google.Maps': 'googleMaps'}
@@ -37,10 +37,15 @@ MANEUVERS = [(re.compile(pattern, re.IGNORECASE), kind, modifier) for pattern, k
   (r'\b(?:continue|head|stay on)\b', 'continue', ''),
 )]
 ROAD_END = r"\s*(?:[,.;]|\btowards?\b|\bfor\b\s*(?:\d|$)|\bin\s+\d|\bthen\b|$)"
+# Google Maps on iPhone: "Use the right 3 lanes to take exit 76B for I-15 S", "Take the Sahara Ave exit".
+LANES = re.compile(r'^use\b[^,.;]*?\blanes?\s+to\s+', re.IGNORECASE)
+ANY_LANE = re.compile(r'^use any lanes?\b', re.IGNORECASE)
+TAKE = re.compile(r"\btake the (?!exit\b|ramp\b)(.+?) (?:exit|ramp)\b", re.IGNORECASE)
 # Strongest wording first; a bare "to" is too common to trust.
 ROADS = [re.compile(lead + r"\s+(?!the (?:left|right)\b)(.+?)" + ROAD_END, re.IGNORECASE) for lead in (
-  r"\b(?:onto|on to)", r"\b(?:stay|continue|head(?: \w+)?) on", r"\btowards?", r"\bon")]
+  r"\b(?:onto|on to)", r"\b(?:stay|continue|head(?: \w+)?) on", r"\btowards?", r"\bexit\s+\w+\s+for", r"\bon")]
 RAMP = re.compile(r"^the (?:ramp|exit)(?: (?:to|onto|towards?|for))?\s*", re.IGNORECASE)
+RAMP_NAME = re.compile(r"^the (.+?) (?:ramp|exit)$", re.IGNORECASE)
 EXIT = re.compile(r'\bexit\s+(\d+\s?[A-Z]?)\b', re.IGNORECASE)
 
 
@@ -66,24 +71,28 @@ def parse(sender, text):
   if not words:
     return None
   distance, rest = _distance(words)
+  lanes = LANES.match(rest)
+  core = rest[lanes.end():] if lanes else rest
   kind = modifier = ''
   for pattern, kind_, modifier_ in MANEUVERS:
-    found = pattern.search(rest)
+    found = pattern.search(core)
     if found:
       side = (found.groupdict().get('side') or '').lower()
       kind, modifier = kind_, modifier_.format(side=side.capitalize() if modifier_.startswith(('sharp', 'slight')) else side)
       break
   road = ''
   if kind != 'arrive':
-    for pattern in ROADS:
-      found = pattern.search(rest)
+    taken = TAKE.search(core)
+    for found in [taken] if taken else (pattern.search(core) for pattern in ROADS):
       if found and RAMP.sub('', found[1]).strip():
         road = RAMP.sub('', found[1]).strip()
+        road = RAMP_NAME.sub(r'\1', road)
         break
-  exit_number = EXIT.search(rest)
+  exit_number = EXIT.search(core)
   if not kind and distance is None:
     return None
-  result = {'instruction': road or rest[:500], 'maneuverType': kind, 'maneuverModifier': modifier}
+  # Lane advice is worth reading, so a lane prompt keeps its whole sentence.
+  result = {'instruction': (rest if lanes and not ANY_LANE.match(rest) else road or rest)[:500], 'maneuverType': kind, 'maneuverModifier': modifier}
   if distance is not None and kind != 'arrive':
     result['distanceMeters'] = distance
   if road:
@@ -103,17 +112,19 @@ class NotificationNavigation:
     self.samples = Path(samples) if samples else None
     self.lock = threading.Lock()
     self.session = None
+    self.mine = None  # our last session, still in the handoff after its step expired
     self.sequence = 0
     self.current = None  # (payload without ageMs, observed ns)
 
   def offer(self, payload):
     """True when the notification belongs to directions and must not be shown as a toast."""
-    source = NAVIGATION_APPS.get(payload.get('app'))
+    source = NAVIGATION_APPS.get(payload.get('app')) if payload.get('source') == 'ios' else None
     if source is None or not self.enabled():
       return False
     sender = payload.get('sender', '')
-    # iPhone titles are often just the app's name.
-    parsed = parse('' if sender.strip().casefold() == payload.get('appName', '').strip().casefold() else sender, payload.get('text', ''))
+    # iPhone titles are often just the app's name or Google Maps' fixed "Navigation Guidance".
+    generic = sender.strip().casefold() in (payload.get('appName', '').strip().casefold(), 'navigation guidance')
+    parsed = parse('' if generic else sender, payload.get('text', ''))
     self._sample(payload, parsed)
     if parsed is None:
       # Updates and quiet prompts from a navigation app arrive here too; none of them is a message.
@@ -125,9 +136,10 @@ class NotificationNavigation:
       ended = parsed['maneuverType'] == 'arrive'
       if self.session is None or self._retired():
         self.session, self.sequence = uuid.uuid4().hex, 0
+        self.mine = self.session
       self.sequence += 1
       fields = {'session': self.session, 'sequence': self.sequence, 'active': not ended, 'source': source,
-                **({'instruction': ''} if ended else parsed)}
+                **({'instruction': ''} if ended else {**parsed, 'untilPassed': 'distanceMeters' not in parsed})}
       observed = now - int(payload['ageMs'] * 1e6)
       try:
         accepted = self.publisher.publish({**fields, 'ageMs': payload['ageMs']})['accepted']
@@ -144,7 +156,7 @@ class NotificationNavigation:
     # A companion app keeps one session per trip, goes inactive between prompts and is refused for good once
     # retired, so anything it sent within an observation counts as it guiding.
     old = _read(self.publisher.path)
-    return bool(old is not None and old['session'] != self.session and 0 <= now - old['received'] <= OBSERVATION_NS)
+    return bool(old is not None and old['session'] not in (self.session, self.mine) and 0 <= now - old['received'] <= OBSERVATION_NS)
 
   def _retired(self):
     old = _read(self.publisher.path)
@@ -163,7 +175,11 @@ class NotificationNavigation:
       fields, observed = self.current
       now = self.clock()
       age_ms = (now - observed) / 1e6
-      if age_ms * 1e6 > OBSERVATION_NS or self._foreign(now) or self._retired():
+      if age_ms * 1e6 > observation_limit(fields):
+        # Our session carries on, so the next prompt is not mistaken for another app's guidance.
+        self.current = None
+        return
+      if self._foreign(now) or self._retired():
         self.current = self.session = None
         return
       try:

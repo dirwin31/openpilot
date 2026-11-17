@@ -27,6 +27,24 @@ def test_prompt_wording(sender, text, expected):
   assert found['instruction']
 
 
+# Real Google Maps wording from an iPhone drive.
+@pytest.mark.parametrize('text, expected', [
+  ('Turn left onto N Tee Pee Ln', ('turn', 'left', 'N Tee Pee Ln', 'N Tee Pee Ln')),
+  ('Turn right onto the US-95 S ramp', ('on ramp', '', 'US-95 S', 'US-95 S')),
+  ('Use the right 3 lanes to take exit 76B for I-15 S',
+   ('off ramp', '', 'I-15 S', 'Use the right 3 lanes to take exit 76B for I-15 S')),
+  ('Take the Sahara Ave exit', ('off ramp', '', 'Sahara Ave', 'Sahara Ave')),
+  ('Use the left lane to take the Sahara Ave East ramp to Convention Ctr',
+   ('on ramp', '', 'Sahara Ave East', 'Use the left lane to take the Sahara Ave East ramp to Convention Ctr')),
+  ('Merge onto W Sahara Ave', ('merge', '', 'W Sahara Ave', 'W Sahara Ave')),
+  ('Use any lane to turn left onto S Sammy Davis Jr Dr', ('turn', 'left', 'S Sammy Davis Jr Dr', 'S Sammy Davis Jr Dr')),
+])
+def test_iphone_google_maps_wording(text, expected):
+  found = parse('', text)
+  assert (found['maneuverType'], found['maneuverModifier'], found.get('roadName', ''), found['instruction']) == expected
+  assert 'distanceMeters' not in found
+
+
 def test_exit_number_and_other_text():
   assert parse('', 'Take exit 42A toward Reno')['exitNumber'] == '42A'
   assert parse('Mom', 'Dinner at 6?') is None
@@ -80,6 +98,13 @@ def test_prompt_becomes_phone_guidance(feed):
   assert feeder.offer(prompt('Turn left onto Oak Ave'))
   live = read_phone_navigation(clock[0], publisher.path)
   assert (live['session'], live['sequence'], live['roadName']) == (first, 2, 'Oak Ave')
+
+
+def test_google_maps_fixed_title_is_not_instruction_text(feed):
+  feeder, publisher, _clock, _timers, _enabled = feed
+  assert feeder.offer(prompt('Use the right 3 lanes to take exit 76B for I-15 S', sender='Navigation Guidance'))
+  live = read_phone_navigation(NOW, publisher.path)
+  assert (live['maneuverType'], live['instruction']) == ('off ramp', 'Use the right 3 lanes to take exit 76B for I-15 S')
 
 
 def test_other_apps_plain_text_and_the_switch_fall_through(feed):
@@ -162,3 +187,26 @@ def test_hold_bridges_a_short_gap_only():
   assert hold.update(None, NOW + HOLD_NS) is phone
   assert hold.update(None, NOW + HOLD_NS + 1) is None
   assert hold.update(None, NOW) is None
+
+
+def test_iphone_steps_hold_until_passed_and_android_is_untouched(feed):
+  feeder, publisher, _clock, _timers, _enabled = feed
+  feeder.offer(prompt('Turn left onto Oak Ave', sender='Navigation Guidance'))
+  assert read_phone_navigation(NOW, publisher.path)['untilPassed'] is True
+  feeder.offer(prompt())
+  assert read_phone_navigation(NOW, publisher.path)['untilPassed'] is False
+  assert feeder.offer({**prompt(), 'source': 'android'}) is False
+
+
+def test_next_prompt_after_a_step_expires_is_not_dropped(feed):
+  feeder, publisher, clock, timers, _enabled = feed
+  feeder.offer(prompt('In 500 ft, turn right onto Main St'))
+  first = read_phone_navigation(NOW, publisher.path)['session']
+  while timers.due:
+    clock[0] += int(KEEP_ALIVE_S * 1e9)
+    timers.fire()
+  # The handoff still holds our own session with a recent receipt: it must not count as another app guiding.
+  clock[0] += 30_000_000_000
+  assert feeder.offer(prompt('Turn right onto the US-95 S ramp'))
+  live = read_phone_navigation(clock[0], publisher.path)
+  assert (live['session'], live['roadName']) == (first, 'US-95 S')

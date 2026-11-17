@@ -62,6 +62,23 @@ def navigation_display(message, *, now_ns: int, drive_id: int) -> NavigationDisp
     return None
 
 
+SIDE_WORDS = {'left': 'left', 'right': 'right', 'slightLeft': 'slight left', 'slightRight': 'slight right',
+              'sharpLeft': 'sharp left', 'sharpRight': 'sharp right', 'straight': 'straight'}
+MANEUVER_WORDS = {'turn': 'Turn', 'fork': 'Keep', 'off ramp': 'Take exit', 'on ramp': 'Take ramp', 'merge': 'Merge',
+                  'roundabout': 'Roundabout', 'continue': 'Continue'}
+
+
+def maneuver_text(kind: str, modifier: str) -> str:
+  """The headline when the distance is unknown: the maneuver itself, e.g. 'Turn left' or 'Take exit'."""
+  if modifier == 'uturn':
+    return 'Make a U-turn'
+  side = SIDE_WORDS.get(modifier, '')
+  if kind == 'turn' and side and side not in ('left', 'right'):
+    return side.capitalize()
+  word = MANEUVER_WORDS.get(kind, 'Next step')
+  return f'{word} {side}' if side and kind in ('turn', 'fork') else word
+
+
 def distance_text(meters: float, metric: bool) -> str:
   if metric:
     if meters < 1000:
