@@ -1976,6 +1976,7 @@ class StarMainLayout(MainLayout):
     from openpilot.common.hardware import HARDWARE
     if cooling_available():
       self._add_aggressive_cooling(self._large_panels[Destination.DEVICE])
+    self._add_phone_screen(self._large_panels[Destination.DEVICE])
     from openpilot.starpilot.ui.starpilot_settings_adapter_large import StarPilotSettingsAdapterLarge
     for destination, owner in self._large_panels.items():
       if destination == Destination.DEVELOPER and HARDWARE.get_device_type() in ('mici', 'tici', 'tizi'):
@@ -2014,6 +2015,34 @@ class StarMainLayout(MainLayout):
 
     def show_event():
       item.action_item.set_state(saved())
+      native_show()
+    device_panel.show_event = show_event
+
+  @staticmethod
+  def _add_phone_screen(device_panel) -> None:
+    from openpilot.starpilot.system.phone_projection import settings as projection
+    from openpilot.system.ui.widgets.list_view import multiple_button_item
+
+    def save(**changes) -> None:
+      try:
+        projection.update(**changes)
+      except OSError:
+        pass
+
+    enabled = toggle_item("Phone Screen", "Show CarPlay or Android Auto beside the driving view. Phones connect over Bluetooth "
+                          "and the Galaxy hotspot.", initial_state=projection.load().enabled,
+                          callback=lambda state: save(enabled=state))
+    side = multiple_button_item("Phone Screen Side", "Which half of the screen the phone uses.", ["Left", "Right"],
+                                projection.SIDES.index(projection.load().side),
+                                callback=lambda index: save(side=projection.SIDES[index]))
+    device_panel._scroller.add_widget(enabled)
+    device_panel._scroller.add_widget(side)
+    native_show = device_panel.show_event
+
+    def show_event():
+      current = projection.load()
+      enabled.action_item.set_state(current.enabled)
+      side.action_item.set_selected_button(projection.SIDES.index(current.side))
       native_show()
     device_panel.show_event = show_event
 
