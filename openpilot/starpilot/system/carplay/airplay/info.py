@@ -136,6 +136,7 @@ def info_plist(cfg: ReceiverConfig) -> dict:
                             {"appStateID": 3, "state": False}]},
   }
   if not cfg.disable_audio:
+    info["audioLatencies"] = _audio_latencies()
     info["audioFormats"] = _audio_formats()
   info["extendedFeatures"] = ["vocoderInfo", "enhancedRequestCarUI"]
   info["displays"] = [display_entry(cfg)]

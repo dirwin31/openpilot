@@ -17,6 +17,10 @@ TLV = "application/pairing+tlv8"
 STATUS = {200: "OK", 400: "Bad Request", 404: "Not Found", 500: "Internal Server Error"}
 NTP_EPOCH = 2208988800
 STREAM_DATA = 130
+AUDIO_STREAMS = (100, 101, 102)
+RTP_HEADER = 12
+AUDIO_NONCE = 8
+PCM_FORMATS = {0x10: (16000, 1), 0x20: (16000, 2), 0x400: (44100, 1), 0x800: (44100, 2), 0x4000: (48000, 1), 0x8000: (48000, 2)}
 IAP_DATASTREAM_UUID = "E9459FD0-BCAD-4C45-820F-1E72447EF2F2"
 
 
@@ -211,6 +215,76 @@ class IapTunnel:
       conn.close()
 
 
+def pcm_format(bits: int) -> tuple[int, int] | None:
+  for mask, fmt in PCM_FORMATS.items():
+    if bits & mask:
+      return fmt
+  return None
+
+
+def open_audio_packet(key: bytes, packet: bytes) -> bytes | None:
+  """Decrypt one realtime audio packet and return its PCM as little-endian 16-bit samples."""
+  if len(packet) < RTP_HEADER + 16 + AUDIO_NONCE:
+    return None
+  nonce = b"\0" * 4 + packet[-AUDIO_NONCE:]
+  try:
+    payload = open_(key, nonce, packet[RTP_HEADER:-AUDIO_NONCE], packet[4:RTP_HEADER])
+  except Exception:
+    return None
+  swapped = bytearray(payload[:len(payload) & ~1])
+  swapped[0::2], swapped[1::2] = payload[1:len(swapped):2], payload[0:len(swapped):2]
+  return bytes(swapped)
+
+
+class AudioStream:
+  """Realtime audio (RTP over UDP, ChaCha20-Poly1305 per packet) with a control port that is drained and ignored."""
+
+  def __init__(self, key: bytes, host: str, audio_type: str, rate: int, channels: int, on_audio, log):
+    self.key, self.audio_type, self.rate, self.channels, self.on_audio, self.log = key, audio_type, rate, channels, on_audio, log
+    self.data = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    self.data.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
+    self.data.bind((host, 0))
+    self.control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    self.control.bind((host, 0))
+    self.port, self.control_port = self.data.getsockname()[1], self.control.getsockname()[1]
+    self.closed = threading.Event()
+    self.packets = self.failures = 0
+    threading.Thread(target=self._run, name="carplay-audio", daemon=True).start()
+    threading.Thread(target=self._drain, name="carplay-rtcp", daemon=True).start()
+
+  def close(self) -> None:
+    self.closed.set()
+    for sock in (self.data, self.control):
+      try:
+        sock.close()
+      except OSError:
+        pass
+
+  def _drain(self) -> None:
+    while not self.closed.is_set():
+      try:
+        self.control.recv(2048)
+      except OSError:
+        return
+
+  def _run(self) -> None:
+    while not self.closed.is_set():
+      try:
+        packet = self.data.recv(4096)
+      except OSError:
+        return
+      pcm = open_audio_packet(self.key, packet)
+      if pcm is None:
+        self.failures += 1
+        if self.failures == 1:
+          self.log(f"carplay audio {self.audio_type}: packet failed to decrypt")
+        continue
+      self.packets += 1
+      if self.packets == 1:
+        self.log(f"carplay audio {self.audio_type}: first packet {len(pcm)} bytes at {self.rate} Hz x{self.channels}")
+      self.on_audio(self.audio_type, self.rate, self.channels, pcm)
+
+
 class Timing:
   def __init__(self, host: str):
     self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -268,6 +342,7 @@ class AirPlaySession:
     self.timing: Timing | None = None
     self.screen: ScreenStream | None = None
     self.iap_tunnel: IapTunnel | None = None
+    self.audio: dict[tuple[int, str], AudioStream] = {}
     self.closed = threading.Event()
 
   def run(self) -> None:
@@ -295,9 +370,10 @@ class AirPlaySession:
     if self.closed.is_set():
       return
     self.closed.set()
-    for item in (self.screen, self.timing, self.iap_tunnel):
+    for item in (self.screen, self.timing, self.iap_tunnel, *self.audio.values()):
       if item:
         item.close()
+    self.audio.clear()
     for s in (self.event_sock, self.conn):
       try:
         if s:
@@ -365,6 +441,10 @@ class AirPlaySession:
           if "streamConnectionID" in stream:
             entry["streamConnectionID"] = unsigned(stream["streamConnectionID"])
           result.append(entry)
+        elif kind in AUDIO_STREAMS and self.pair_verify.shared and not self.cfg.disable_audio:
+          entry = self._setup_audio(kind, stream)
+          if entry:
+            result.append(entry)
       return 200, plistlib.dumps({"streams": result}, fmt=plistlib.FMT_BINARY), PLIST
     self.log(f"airplay SETUP session name={body.get('name')!r} model={body.get('model')!r} "
              f"features={body.get('features')}")
@@ -378,6 +458,35 @@ class AirPlaySession:
                 "enabledFeatures": ["iAPChannel", "viewAreas"]}
     return 200, plistlib.dumps(response, fmt=plistlib.FMT_BINARY), PLIST
 
+  def _setup_audio(self, kind: int, stream: dict) -> dict | None:
+    audio_type = str(stream.get("audioType", "default"))
+    fmt = pcm_format(int(stream.get("audioFormat", 0) or 0))
+    if fmt is None:
+      self.log(f"carplay audio {audio_type}: unsupported format {stream.get('audioFormat')}")
+      return None
+    connection_id = unsigned(stream.get("streamConnectionID", 0))
+    key = hkdf(self.pair_verify.shared, f"DataStream-Salt{connection_id}".encode(), b"DataStream-Output-Encryption-Key")
+    previous = self.audio.pop((kind, audio_type), None)
+    if previous:
+      previous.close()
+    audio = AudioStream(key, self.host, audio_type, *fmt, self._on_audio, self.log)
+    self.audio[(kind, audio_type)] = audio
+    self.log(f"carplay audio {audio_type}: setup type={kind} {fmt[0]} Hz x{fmt[1]}")
+    return {"type": kind, "dataPort": audio.port, "controlPort": audio.control_port, "streamConnectionID": connection_id}
+
+  def _on_audio(self, audio_type: str, rate: int, channels: int, pcm: bytes) -> None:
+    handler = getattr(self.sink, "on_audio", None)
+    if handler:
+      handler(audio_type, rate, channels, pcm)
+
+  def _close_audio(self, types: list[int]) -> None:
+    for key in [k for k in self.audio if not types or k[0] in types]:
+      stream = self.audio.pop(key)
+      stream.close()
+      handler = getattr(self.sink, "on_audio_stopped", None)
+      if handler:
+        handler(key[1])
+
   def _teardown(self, req: Request) -> None:
     try:
       body = plistlib.loads(req.body) if req.body else {}
@@ -388,6 +497,7 @@ class AirPlaySession:
     if (not types or STREAM_MAIN_SCREEN in types) and self.screen:
       self.screen.close()
       self.screen = None
+    self._close_audio(types)
 
   def _command(self, req: Request) -> None:
     try:

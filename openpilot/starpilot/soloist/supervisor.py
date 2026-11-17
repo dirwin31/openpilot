@@ -176,6 +176,7 @@ class Supervisor:
     self.phone_prefs = None
     self.phone_track = None
     self.phone_profile = False
+    self.projection_server = False
     self.pairing_profile_until = 0.0
     self.pull_at = 0.0
     self.output_available = True
@@ -392,8 +393,42 @@ class Supervisor:
       return 'audio_unavailable', 'This build is missing the Spotify audio component.', None
     return 'running', '', (target, key, prefs)
 
+  def tick_projection(self, prefs: preferences.Preferences) -> bool:
+    """Phone screen audio keeps the audio server up when nothing else runs it; True while it owns the server."""
+    if not projection_audio_requested():
+      if self.projection_server:
+        self.stop_children(release_phone=False)
+        self.projection_server = False
+      return False
+    running = self.server is not None and self.server.poll() is None
+    if not self.projection_server and running:
+      return False  # Spotify or the phone relay already runs it, and the phone's streams mix in
+    if self.projection_server and running:
+      return True
+    self.stop_children(release_phone=False)
+    self.projection_server = False
+    if not backend.bundle_ready() or prefs.output == 'bluetooth' and not prefs.output_address:
+      self._set('projection_waiting', 'Choose where music plays to hear audio from the phone screen.')
+      return True
+    if self.clock() < self.retry_at:
+      return True
+    try:
+      if prefs.output == 'bluetooth' and not self.phone_profile:
+        phone_audio.profile('acquire')
+        self.phone_profile = True
+      silent = prefs.output == 'bluetooth' and not self._output_ready(prefs.output_address)
+      self.server = self._start(backend.server_launch(self.layout, prefs, silent=silent), 'audio')
+      self.projection_server = True
+      self._set('projection', 'Playing audio from the phone screen.')
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+      self.retry_at = self.clock() + OUTPUT_RETRY_SECONDS
+      self._set('projection_waiting', str(error))
+    return True
+
   def tick(self) -> None:
     prefs = preferences.load(self.layout)
+    if self.tick_projection(prefs):
+      return
     if prefs.source == 'phone':
       self.tick_phone(prefs)
       return
@@ -611,6 +646,19 @@ class Supervisor:
         shutil.rmtree(self.layout.cache, ignore_errors=True)
       return {'ok': True}
     return {'ok': False, 'error': 'Unknown command'}
+
+
+def projection_audio_requested(path: Path | None = None) -> bool:
+  """projectiond holds this file (its pid) while a phone screen wants the music output."""
+  from openpilot.starpilot.system.phone_projection.audio import REQUEST_PATH
+  try:
+    pid = int((path or REQUEST_PATH).read_text().strip())
+    os.kill(pid, 0)
+    return True
+  except PermissionError:
+    return True
+  except (OSError, ValueError):
+    return False
 
 
 def serve(supervisor: Supervisor, path: str = CONTROL_SOCKET, stop: threading.Event | None = None) -> None:
