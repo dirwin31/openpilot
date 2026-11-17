@@ -54,12 +54,12 @@ class Resolution(NamedTuple):
 
 def notification_instruction(phone, *, now_ns):
   """Use available notification fields without requiring a route or vehicle fix."""
-  from openpilot.starpilot.navigation.phone import LEASE_NS, OBSERVATION_NS
+  from openpilot.starpilot.navigation.phone import LEASE_NS, observation_limit
   if phone is None:
     return None, 'noNotification'
   if not phone['active']:
     return None, 'inactiveNotification'
-  if not 0 < phone['observed'] <= now_ns <= phone['observed'] + OBSERVATION_NS:
+  if not 0 < phone['observed'] <= now_ns <= phone['observed'] + observation_limit(phone):
     return None, 'staleObservation'
   if not 0 < phone['received'] <= now_ns <= phone['received'] + LEASE_NS:
     return None, 'expiredLease'
@@ -93,12 +93,14 @@ class LocalMapCorroborator:
     self.frame = None
     self.branches = ()
     self.navigation_only = False
+    self.current_roads = ()
     self.approach = False
     self.last_event_ns = 0
     self.failure_logged = False
     self.updated_boot_ns = 0
     self.fresh = False
     self.held = None
+    self.step = None    # (session, sequence, junction metres, anchor ns, passed) for an iPhone step
     self.drive = 0
     self.speed = 0.
     self.speed_ns = 0
@@ -108,7 +110,7 @@ class LocalMapCorroborator:
   def reset(self):
     self.tracker.reset()
     self.odometer.clear()
-    self.frame, self.branches, self.last_event_ns, self.held = None, (), 0, None
+    self.frame, self.branches, self.last_event_ns, self.held, self.step = None, (), 0, None, None
     self.map_reason = 'noMapFrame'
 
   def update(self, road, *, valid, event_boot_ns, received, alive, now_boot_ns):
@@ -165,6 +167,7 @@ class LocalMapCorroborator:
         return
       branches.append((junction, distance, angle, str(row.highwayClass), way_id, str(row.roadName)))
     self.frame, self.branches, self.navigation_only = frame, tuple(branches), navigation_only
+    self.current_roads = tuple(name for name in (str(road.roadName), str(road.wayName)) if name)
     self.approach = frame.status == 'noMatch'
     self.map_reason = ('noRoadMatched' if self.approach else 'noJunctionBranches') if not branches else ''
 
@@ -178,6 +181,9 @@ class LocalMapCorroborator:
     key = (phone.get('session'), phone.get('source'), phone.get('instruction', ''), phone.get('roadName', ''), kind, side)
     now_ns = phone['observed'] if now_ns is None else now_ns
     self._drive(speed, now_ns)
+    until_passed = distance is None and phone.get('untilPassed') is True
+    if until_passed and self._step_passed(phone, now_ns):
+      return Resolution('mapUnverifiable', reason='stepPassed')
     driven = 0. if phone['observed'] >= now_ns else self._driven_since(phone['observed'])
     passed = False
     if distance is not None and driven is not None:
@@ -185,26 +191,58 @@ class LocalMapCorroborator:
       passed = driven > distance + PHONE_PASSED_SLACK_M
       distance = max(0., distance - driven)
     result = self._match(phone, kind, side, distance)
+    if until_passed and result.control and not self._step_consistent(phone, result, now_ns):
+      result = Resolution('mapUnverifiable', reason='stepJunctionMoved')
     # Without the distance driven since the phone's reading, or well past it, any match may be the next junction.
-    if result.control and (driven is None or passed):
+    # A step without a phone distance is measured from the map alone, so the time since the phone's prompt does not matter.
+    if result.control and not until_passed and (driven is None or passed):
       result = Resolution('mapUnverifiable', reason='distanceDrivenUnknown' if driven is None else 'phoneJunctionPassed')
     if result.control:
       result = result._replace(anchor_ns=now_ns - max(0, self.updated_boot_ns - self.frame.gps_mono_ns))
       self.held = key, result, now_ns
+      self._note_step(phone, result, until_passed)
       return result
     if self.held is not None:
       held_key, held, since = self.held
       # A live mapd drops the road (or the junction falls behind) in the last metres of an approach it already
       # confirmed. Carry the junction forward by the distance driven while the phone still agrees with it.
       moved = 0. if held.anchor_ns >= now_ns else self._driven_since(held.anchor_ns)
-      if (self.fresh and moved is not None and driven is not None and not passed and held_key == key and distance is not None and
-          result.status in HOLD_KEEPS and 0 <= now_ns - since <= HOLD_NS):
+      if (self.fresh and moved is not None and (until_passed or driven is not None and not passed and distance is not None) and
+          held_key == key and result.status in HOLD_KEEPS and 0 <= now_ns - since <= HOLD_NS):
         left = held.distance - moved
-        if left >= -HOLD_PASSED_M and abs(left - distance) <= max(80., distance * .3):
+        if left >= -HOLD_PASSED_M and (until_passed or abs(left - distance) <= max(80., distance * .3)):
           self.held = key, held._replace(distance=left, anchor_ns=now_ns), since
-          return held._replace(distance=max(0., left), anchor_ns=now_ns)
+          carried = held._replace(distance=max(0., left), anchor_ns=now_ns)
+          self._note_step(phone, carried, until_passed)
+          return carried
       self.held = None
     return result
+
+  def _note_step(self, phone, result, until_passed):
+    if until_passed:
+      self.step = phone.get('session'), phone.get('sequence'), result.distance, result.anchor_ns, False
+
+  def _step_consistent(self, phone, result, now_ns):
+    # Once matched, a step stays on that junction; a jump means another junction with the same name.
+    if self.step is None or self.step[:2] != (phone.get('session'), phone.get('sequence')):
+      return True
+    moved = 0. if self.step[3] >= now_ns else self._driven_since(self.step[3])
+    if moved is None:
+      return True
+    expected = self.step[2] - moved
+    return abs(result.distance - expected) <= max(60., abs(expected) * .3)
+
+  def _step_passed(self, phone, now_ns):
+    """True once the comma drove past the junction this step was last matched to; stays true for that step."""
+    from openpilot.starpilot.navigation.wire import PHONE_PASSED_SLACK_M
+    if self.step is None or self.step[:2] != (phone.get('session'), phone.get('sequence')):
+      return False
+    if not self.step[4]:
+      moved = 0. if self.step[3] >= now_ns else self._driven_since(self.step[3])
+      if moved is None or moved <= self.step[2] + PHONE_PASSED_SLACK_M:
+        return False
+      self.step = (*self.step[:4], True)
+    return True
 
   def driven_since(self, stamp_ns, *, speed, now_ns):
     self._drive(speed, now_ns)
@@ -244,6 +282,8 @@ class LocalMapCorroborator:
   def _match(self, phone, kind, side, distance):
     if not self.branches:
       return Resolution('mapUnavailable', reason=self.map_reason)
+    if distance is None and phone.get('untilPassed') is True and kind in VERIFIABLE:
+      return self._match_named(phone, kind, side)
     # Stored local tiles do not retain roundabout exit identity or merge topology.
     if distance is None or kind not in VERIFIABLE:
       return Resolution('mapUnverifiable', reason='phoneDistanceUnknown' if distance is None else 'unsupportedManeuver')
@@ -285,6 +325,28 @@ class LocalMapCorroborator:
     if max(row[1] for row in fits) - min(row[1] for row in fits) > JUNCTION_SPAN_M:
       return Resolution('mapAmbiguous', reason='multipleJunctionsMatch')
     return Resolution(status, kind, side, min(fits, key=lambda row: abs(row[1] - distance))[1], reason=reason)
+
+  def _match_named(self, phone, kind, side):
+    """An iPhone step names its road but gives no distance: the one junction ahead where that road leaves on that side."""
+    roads = instruction_roads(re.split(r'\btowards?\b', phone.get('roadName', ''), flags=re.IGNORECASE)[0].strip())
+    if not roads or not kind:
+      return Resolution('mapUnverifiable', reason='phoneRoadUnknown')
+    # Already on the named road: its branches ahead are that road continuing, not the turn.
+    if any(same_road(name, roads) for name in self.current_roads):
+      return Resolution('mapUnverifiable', reason='alreadyOnRoad')
+    named = [row for row in self.branches if same_road(row[5], roads)]
+    if self.approach:
+      if kind != 'turn' or side not in SIDES:
+        return Resolution('mapUnverifiable', reason='approachNeedsNamedSidedTurn')
+      fits, status = [row for row in named if self._direction(kind, side, row)], 'mapInferred'
+    else:
+      # With no distance to cross-check, the side must agree too.
+      fits, status = [row for row in named if self._direction(kind, side, row)], 'mapAligned'
+    if not fits:
+      return Resolution('mapUnverifiable', reason='noNamedBranchAhead')
+    if max(row[1] for row in fits) - min(row[1] for row in fits) > JUNCTION_SPAN_M:
+      return Resolution('mapAmbiguous', reason='multipleJunctionsMatch')
+    return Resolution(status, kind, side, min(row[1] for row in fits))
 
   @staticmethod
   def _direction(kind, side, row):

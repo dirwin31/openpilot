@@ -409,3 +409,13 @@ def test_cue_replaces_the_then_chip_and_tints_the_border():
     drawn = [call.args[0] for call in fonts.draw.call_args_list]
     assert 'Then' in drawn and 'Signal left' not in drawn
     assert border.call_args.args[3] == 2
+
+
+@pytest.mark.parametrize('kind,modifier,text', [
+  ('turn', 'left', 'Turn left'), ('turn', 'slightRight', 'Slight right'), ('turn', 'uturn', 'Make a U-turn'),
+  ('fork', 'right', 'Keep right'), ('off ramp', '', 'Take exit'), ('on ramp', '', 'Take ramp'), ('merge', '', 'Merge'),
+  ('turn', '', 'Turn'), ('', '', 'Next step'),
+])
+def test_unknown_distance_headline_names_the_maneuver(kind, modifier, text):
+  from openpilot.starpilot.ui.navigation_state import maneuver_text
+  assert maneuver_text(kind, modifier) == text
