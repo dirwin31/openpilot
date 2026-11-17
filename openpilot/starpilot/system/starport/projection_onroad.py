@@ -525,6 +525,9 @@ class ProjectionOnroad:
     rl.draw_rectangle_rounded(panel, 0.06, 16, rl.Color(26, 16, 46, 255))
     rl.draw_rectangle_rounded_lines_ex(panel, 0.06, 16, 4, purple)
     logo = self._standby_texture(int(panel_height * 0.6))
+    if self.width < self.height * 1.4:
+      self._standby_stacked(logo, purple)
+      return
     text_x = 220
     if logo is not None:
       rl.draw_texture(logo, 200, int((self.height - logo.height) / 2), rl.WHITE)
@@ -532,6 +535,24 @@ class ProjectionOnroad:
     middle = self.height / 2
     self.fonts.draw('StarPilot', self.native.font_role.BRAND, 112, text_x, middle - 130, purple)
     self.fonts.draw('Ready when driving', self.native.font_role.MEDIUM, 55, text_x + 5, middle + 20, rl.Color(222, 204, 255, 255))
+
+  def _standby_stacked(self, logo, purple):
+    """A narrow view (beside a phone screen): logo above the text, both centred and scaled to fit."""
+    rl = self.native.rl
+    roles = self.native.font_role
+    inner = self.width - 320
+    title = min(112.0, 112.0 * inner / max(1.0, self.fonts.measure('StarPilot', roles.BRAND, 112).width))
+    subtitle = min(55.0, 55.0 * inner / max(1.0, self.fonts.measure('Ready when driving', roles.MEDIUM, 55).width))
+    logo_size = 0.0 if logo is None else min(logo.height, self.height - 280 - title - subtitle - 160)
+    top = (self.height - logo_size - title - subtitle - 40) / 2
+    if logo is not None and logo_size > 0:
+      scale = logo_size / logo.height
+      rl.draw_texture_ex(logo, rl.Vector2((self.width - logo.width * scale) / 2, top), 0.0, scale, rl.WHITE)
+    y = top + logo_size + 10
+    for text, role, size, color in (('StarPilot', roles.BRAND, title, purple),
+                                    ('Ready when driving', roles.MEDIUM, subtitle, rl.Color(222, 204, 255, 255))):
+      self.fonts.draw(text, role, size, (self.width - self.fonts.measure(text, role, size).width) / 2, y, color)
+      y += size + 30
 
   def _standby_texture(self, height):
     """Load the logo the first time standby shows; a missing logo leaves the text-only screen."""
