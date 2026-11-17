@@ -461,6 +461,7 @@ class AirPlaySession:
   def _setup_audio(self, kind: int, stream: dict) -> dict | None:
     audio_type = str(stream.get("audioType", "default"))
     fmt = pcm_format(int(stream.get("audioFormat", 0) or 0))
+    self.log(f"carplay audio {audio_type}: type={kind} format={stream.get('audioFormat')} keys={sorted(stream.keys())}")
     if fmt is None:
       self.log(f"carplay audio {audio_type}: unsupported format {stream.get('audioFormat')}")
       return None
@@ -505,6 +506,9 @@ class AirPlaySession:
     except Exception:
       return
     self.log(f"airplay command {body.get('type')} {body.get('params', {})}")
+    handler = getattr(self.sink, "on_command", None)
+    if handler:
+      handler(str(body.get("type", "")), body.get("params", {}))
 
   def _event(self, server: socket.socket) -> None:
     server.settimeout(30)

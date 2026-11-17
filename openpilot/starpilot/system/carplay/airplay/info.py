@@ -106,14 +106,23 @@ def display_entry(cfg: ReceiverConfig) -> dict:
   return entry
 
 
+PCM = 0x3FC | 0xC00 | 0xC000
+PCM_MONO = 0x154 | 0x400 | 0x4000
+OPUS = 0x70000000
+AAC_LC = 0x400000 | 0x800000
+
+
 def _audio_formats() -> list[dict]:
-  pcm = 0x3FC | 0xC000
-  pcm_mono = 0x154 | 0x4000
-  opus = 0x70000000
   fmt = lambda t, a, out: {"type": t, "audioType": a, "audioOutputFormats": out}  # noqa: E731
-  return [fmt(100, "compatibility", pcm), fmt(101, "compatibility", pcm), fmt(100, "default", pcm | opus),
-          fmt(100, "alert", pcm | opus), fmt(100, "media", pcm), fmt(100, "telephony", pcm_mono | opus),
-          fmt(100, "speechRecognition", pcm_mono | opus), fmt(101, "default", pcm | opus), fmt(102, "media", 0x800000)]
+  return [fmt(100, "compatibility", PCM), fmt(101, "compatibility", PCM), fmt(100, "default", PCM | OPUS),
+          fmt(100, "alert", PCM | OPUS), fmt(100, "media", PCM), fmt(100, "telephony", PCM_MONO | OPUS),
+          fmt(100, "speechRecognition", PCM_MONO | OPUS), fmt(101, "default", PCM | OPUS), fmt(102, "media", AAC_LC)]
+
+
+def _audio_latencies() -> list[dict]:
+  entry = lambda t, a=None: {"type": t, "inputLatencyMicros": 0, "outputLatencyMicros": 0, **({"audioType": a} if a else {})}  # noqa: E731
+  return [entry(100), entry(100, "default"), entry(100, "media"), entry(100, "telephony"), entry(100, "speechRecognition"),
+          entry(100, "alert"), entry(101), entry(101, "default"), entry(102, "default")]
 
 
 def info_plist(cfg: ReceiverConfig) -> dict:
