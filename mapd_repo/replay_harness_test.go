@@ -1,13 +1,18 @@
-// Drive replay harness, skipped unless REPLAY or REPLAY_WAYS is set. Input is
-// a JSONL dump of rlog fixes and mapdOut frames; tiles come from REPLAY_TILES.
+// Drive replay harness (see MATCHING.md, "Replaying a drive"). The drive tests
+// skip unless their environment variables are set; the logic they use is
+// covered by replay_harness_logic_test.go on synthetic tiles.
 package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +21,7 @@ import (
 
 	"capnproto.org/go/capnp/v3"
 	"pfeifer.dev/mapd/cereal"
+	"pfeifer.dev/mapd/cereal/car"
 	"pfeifer.dev/mapd/cereal/log"
 	"pfeifer.dev/mapd/maps"
 	m "pfeifer.dev/mapd/math"
@@ -23,27 +29,36 @@ import (
 )
 
 type replayRow struct {
-	K     string  `json:"k"`
-	Lm    uint64  `json:"lm"`
-	Src   uint64  `json:"src"`
-	Valid bool    `json:"valid"`
-	Fix   bool    `json:"fix"`
-	Lat   float64 `json:"lat"`
-	Lon   float64 `json:"lon"`
-	V     float32 `json:"v"`
-	B     float32 `json:"b"`
-	Ha    float32 `json:"ha"`
-	Ba    float32 `json:"ba"`
-	Sa    float32 `json:"sa"`
-	Alt   float64 `json:"alt"`
-	St    string  `json:"st"`
-	Gs    int     `json:"gs"`
-	Gm    uint64  `json:"gm"`
-	Cm    uint64  `json:"cm"`
-	Way   int64   `json:"way"`
-	Road  string  `json:"road"`
-	Lim   float32 `json:"lim"`
-	Br    []struct {
+	K      string  `json:"k"`
+	Lm     uint64  `json:"lm"`
+	Src    uint64  `json:"src"`
+	Valid  bool    `json:"valid"`
+	Fix    bool    `json:"fix"`
+	Lat    float64 `json:"lat"`
+	Lon    float64 `json:"lon"`
+	V      float32 `json:"v"`
+	B      float32 `json:"b"`
+	Ha     float32 `json:"ha"`
+	Ba     float32 `json:"ba"`
+	Sa     float32 `json:"sa"`
+	Alt    float64 `json:"alt"`
+	St     string  `json:"st"`
+	Gs     int     `json:"gs"`
+	Gm     uint64  `json:"gm"`
+	Cm     uint64  `json:"cm"`
+	Way    int64   `json:"way"`
+	Road   string  `json:"road"`
+	Lim    float32 `json:"lim"`
+	A      float32 `json:"a"`
+	Yr     float32 `json:"yr"`
+	Ss     bool    `json:"ss"`
+	Wx     float32 `json:"wx"`
+	Wy     float32 `json:"wy"`
+	Wz     float32 `json:"wz"`
+	Status string  `json:"status"`
+	Text   string  `json:"text"`
+	Dist   float32 `json:"dist"`
+	Br     []struct {
 		Id int64   `json:"id"`
 		N  string  `json:"n"`
 		D  float32 `json:"d"`
@@ -51,14 +66,86 @@ type replayRow struct {
 	} `json:"br"`
 }
 
-func replayLocation(t *testing.T, r replayRow) log.GpsLocationData {
+// replayDump is one drive's dump, split by row kind and sorted by time.
+type replayDump struct {
+	start                                  uint64
+	ext, internal, ph, frames, cs, dm, nav []replayRow
+	hash                                   string
+}
+
+func loadReplayDump(path string) (*replayDump, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	d := &replayDump{}
+	h := sha256.New()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<24)
+	for sc.Scan() {
+		h.Write(sc.Bytes())
+		var r replayRow
+		if err := json.Unmarshal(sc.Bytes(), &r); err != nil {
+			return nil, err
+		}
+		d.add(r)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	d.finish()
+	d.hash = hex.EncodeToString(h.Sum(nil))[:16]
+	return d, nil
+}
+
+func (d *replayDump) add(r replayRow) {
+	switch r.K {
+	case "ext":
+		d.ext = append(d.ext, r)
+	case "int":
+		d.internal = append(d.internal, r)
+	case "ph":
+		d.ph = append(d.ph, r)
+	case "map":
+		d.frames = append(d.frames, r)
+	case "cs":
+		d.cs = append(d.cs, r)
+	case "dm":
+		d.dm = append(d.dm, r)
+	case "nav":
+		d.nav = append(d.nav, r)
+	case "start":
+		d.start = r.Lm
+	}
+}
+
+func (d *replayDump) finish() {
+	for _, rows := range [][]replayRow{d.ext, d.internal, d.frames, d.cs, d.dm, d.nav} {
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Lm < rows[j].Lm })
+	}
+	// Phone fixes repeat in every navigation message; keep one per source time.
+	sort.SliceStable(d.ph, func(i, j int) bool { return d.ph[i].Src < d.ph[j].Src })
+	ph := d.ph[:0]
+	for _, r := range d.ph {
+		if len(ph) == 0 || ph[len(ph)-1].Src != r.Src {
+			ph = append(ph, r)
+		}
+	}
+	d.ph = ph
+	if d.start == 0 && len(d.frames) > 0 {
+		d.start = d.frames[0].Lm
+	}
+}
+
+func replayLocation(r replayRow) log.GpsLocationData {
 	_, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
 	if err != nil {
-		t.Fatal(err)
+		panic(err)
 	}
 	l, err := log.NewRootGpsLocationData(seg)
 	if err != nil {
-		t.Fatal(err)
+		panic(err)
 	}
 	l.SetHasFix(r.Fix)
 	l.SetLatitude(r.Lat)
@@ -70,6 +157,21 @@ func replayLocation(t *testing.T, r replayRow) log.GpsLocationData {
 	l.SetSpeedAccuracy(r.Sa)
 	l.SetAltitude(r.Alt)
 	return l
+}
+
+func replayCarState(r replayRow) car.CarState {
+	_, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
+	if err != nil {
+		panic(err)
+	}
+	c, err := car.NewRootCarState(seg)
+	if err != nil {
+		panic(err)
+	}
+	c.SetVEgo(r.V)
+	c.SetAEgo(r.A)
+	c.SetStandstill(r.Ss)
+	return c
 }
 
 func nearestFix(rows []replayRow, key func(replayRow) uint64, t uint64) (replayRow, bool) {
@@ -90,219 +192,369 @@ func nearestFix(rows []replayRow, key func(replayRow) uint64, t uint64) (replayR
 	return best, bestD < 2_000_000
 }
 
-func replayNavDiag(o *maps.Offline, loc log.GpsLocationData, held navigationHold) string {
-	_, r := navigationPick(o, loc, held)
-	return [...]string{"nav:ok", "nav:no-candidates", "nav:heading-gate", "nav:slow-not-held", "nav:margin", "nav:narrow-failed"}[r]
+// replayCand is one way inside the matcher's own broad envelope for a fix.
+type replayCand struct {
+	Id   int64   `json:"id"`
+	Lim  float32 `json:"lim"`
+	Key  string  `json:"key"`
+	Sin  float32 `json:"sin"`
+	D    float32 `json:"d"`
+	Nar  bool    `json:"nar"`
+	Name string  `json:"n"`
 }
 
-func replayNearest(o *maps.Offline, loc log.GpsLocationData) string {
-	pos := m.NewPosition(loc.Latitude(), loc.Longitude())
-	type c struct {
-		w    maps.Way
-		d    float32
-		fw   bool
-		sine float32
-	}
-	cs := []c{}
-	idx, ok := o.WaysNear(pos)
-	n := len(idx)
-	if !ok {
-		n = o.Ways.Len()
-	}
-	for k := range n {
-		i := k
-		if ok {
-			i = int(idx[k])
-		}
-		w := o.Ways.At(i)
-		if w.Nodes.Len() < 2 {
-			continue
-		}
-		d, err := w.DistanceFrom(pos)
-		if err != nil || d.Distance > 60 {
-			continue
-		}
-		s, _ := w.BearingAlignment(loc)
-		cs = append(cs, c{w, d.Distance, maps.IsForward(d.LineStart, d.LineEnd, float64(loc.BearingDeg())), s})
-	}
-	sort.Slice(cs, func(i, j int) bool { return cs[i].d < cs[j].d })
-	parts := []string{}
-	for i, x := range cs {
-		if i >= 4 {
-			break
-		}
-		lim := maps.MatchDistance(loc, x.w.Width(), 2)
-		parts = append(parts, fmt.Sprintf("%d:%q/%s d=%.1f env2=%.1f nar=%.1f ow=%v fw=%v sin=%.2f", x.w.Id(), x.w.Name(), x.w.HighwayClass(), x.d, lim, maps.MatchDistance(loc, x.w.Width(), x.w.DistanceMultiplier()), x.w.OneWay(), x.fw, x.sine))
-	}
-	return strings.Join(parts, " | ")
+// replayFrame is one replayed mapdOut frame: the car's output, the replayed
+// output, diagnostics, and (after truth.apply) the offline truth.
+type replayFrame struct {
+	T     float64      `json:"t"`
+	Lm    uint64       `json:"lm"`
+	Gs    int          `json:"gs"`
+	Gm    uint64       `json:"gm"`
+	Fix   bool         `json:"fix"`
+	New   bool         `json:"new"`
+	SrcCh bool         `json:"srcch,omitempty"`
+	V     float32      `json:"v"`
+	Lat   float64      `json:"lat,omitempty"`
+	Lon   float64      `json:"lon,omitempty"`
+	Spd   float32      `json:"spd,omitempty"`
+	Brg   float32      `json:"brg,omitempty"`
+	Ha    float32      `json:"ha,omitempty"`
+	Ba    float32      `json:"ba,omitempty"`
+	Sa    float32      `json:"sa,omitempty"`
+	Dev   string       `json:"dev"`
+	Dway  int64        `json:"dway"`
+	Dlim  float32      `json:"dlim"`
+	Sim   string       `json:"sim"`
+	Way   int64        `json:"way"`
+	Lim   float32      `json:"lim"`
+	Name  string       `json:"name,omitempty"`
+	Us    float64      `json:"us,omitempty"`
+	Load  bool         `json:"load,omitempty"`
+	Why   string       `json:"why,omitempty"`
+	Cands []replayCand `json:"cands,omitempty"`
+	Pick  int64        `json:"pick,omitempty"`
+	PickL float32      `json:"pickl,omitempty"`
+	Nav   string       `json:"nav,omitempty"`
+	R3    float32      `json:"r3,omitempty"`
+	R3ok  bool         `json:"r3ok,omitempty"`
+	Br    int          `json:"br"`
+	Dbr   int          `json:"dbr"`
+	// Offline truth at the frame time; Tw is the way (0 off the map, -1 none).
+	// Tfw/Tfl are the truth at the time of the fix the frame used.
+	Tw  int64   `json:"tw"`
+	Tl  float32 `json:"tl"`
+	Tn  string  `json:"tn,omitempty"`
+	Tsw bool    `json:"tsw"`
+	Tsl bool    `json:"tsl"`
+	Tfw int64   `json:"tfw"`
+	Tfl float32 `json:"tfl"`
+	Ctx string  `json:"ctx,omitempty"`
+	Jd  float32 `json:"jd,omitempty"`
 }
 
-func replayCandidates(o *maps.Offline, loc log.GpsLocationData) string {
-	parts := []string{}
+func (f *replayFrame) matched() bool {
+	return f.Sim == "matchedLimit" || f.Sim == "matchedNoLimit"
+}
+
+func replayCandidates(o *maps.Offline, loc log.GpsLocationData) []replayCand {
+	cands := []replayCand{}
 	for _, w := range plausibleLoadedWays(o, loc) {
 		ow, _ := w.OnWay(loc, 2)
 		nar, _ := w.OnWay(loc, w.DistanceMultiplier())
 		s, _ := w.BearingAlignment(loc)
-		parts = append(parts, fmt.Sprintf("%d:%q/%s d=%.1f nar=%v sin=%.2f", w.Id(), w.Name(), w.HighwayClass(), ow.Distance.Distance, nar.OnWay, s))
+		cw := CurrentWay{Way: w, OnWay: ow}
+		cands = append(cands, replayCand{Id: w.Id(), Lim: float32(cw.MaxSpeed()), Key: w.WayName() + "\x00" + w.WayRef(),
+			Sin: s, D: ow.Distance.Distance, Nar: nar.OnWay, Name: w.Name()})
 	}
-	return strings.Join(parts, " | ")
+	return cands
 }
 
-// TestReplayDrive replays a dumped drive through
-// State.ProcessGps on the real tiles and writes one JSON line per mapdOut frame.
-func TestReplayDrive(t *testing.T) {
-	path := os.Getenv("REPLAY")
-	if path == "" {
-		t.Skip("REPLAY not set")
-	}
-	ms.Settings.Default()
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	var ext, ph, frames, cs []replayRow
-	var start uint64
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<24)
-	for sc.Scan() {
-		var r replayRow
-		if err := json.Unmarshal(sc.Bytes(), &r); err != nil {
-			t.Fatal(err)
-		}
-		switch r.K {
-		case "ext":
-			ext = append(ext, r)
-		case "ph":
-			if len(ph) == 0 || ph[len(ph)-1].Src != r.Src {
-				ph = append(ph, r)
-			}
-		case "map":
-			frames = append(frames, r)
-		case "cs":
-			cs = append(cs, r)
-		case "start":
-			start = r.Lm
-		}
-	}
-	sort.Slice(ph, func(i, j int) bool { return ph[i].Src < ph[j].Src })
-	out, err := os.Create(os.Getenv("REPLAY_OUT"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer out.Close()
-	w := bufio.NewWriter(out)
-	defer w.Flush()
+var replayNavReasons = [...]string{"ok", "no-candidates", "heading-gate", "slow-not-held", "margin", "narrow-failed"}
 
+func replayTileLoader(tileDir string) MapLoader {
+	return func(p m.Position) (maps.Offline, error) { return maps.FindWaysAroundPositionIn(p, tileDir) }
+}
+
+// runReplay feeds the dump through State.ProcessGps frame by frame at the
+// logged loop times, reusing each fix and feeding carState like the car did.
+func runReplay(d *replayDump, load MapLoader, diag bool) ([]replayFrame, error) {
+	if ms.Settings.ConditionalSpeedLimitControlEnabled {
+		return nil, fmt.Errorf("conditional speed limits read the wall clock; replay needs them off")
+	}
+	unsupported := 0
+	for _, fr := range d.frames {
+		if fr.Gs == int(cereal.GpsSourceCar) || fr.Gs > int(cereal.GpsSourcePhone) {
+			unsupported++
+		}
+	}
+	if unsupported > 0 {
+		return nil, fmt.Errorf("%d frames use a GPS source the dump does not carry (car GPS)", unsupported)
+	}
 	s := &State{}
 	s.Init()
-	tileDir := os.Getenv("REPLAY_TILES")
-	load := func(p m.Position) (maps.Offline, error) { return maps.FindWaysAroundPositionIn(p, tileDir) }
 	prevGs, prevGm, gen := -1, uint64(0), uint64(0)
-	ci := 0
-	navSrc, navName := "", ""
-	durations := []time.Duration{}
-	defer func() {
-		sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-		if n := len(durations); n > 0 {
-			total := time.Duration(0)
-			for _, d := range durations {
-				total += d
-			}
-			fmt.Fprintf(os.Stderr, "PERF fixes=%d mean=%v p99=%v max=%v\n", n, total/time.Duration(n), durations[n*99/100], durations[n-1])
-		}
-	}()
-	for _, fr := range frames {
-		for ci+1 < len(cs) && cs[ci+1].Lm <= fr.Lm {
+	ci, lastCar := 0, -1
+	var last replayFrame
+	out := make([]replayFrame, 0, len(d.frames))
+	for _, fr := range d.frames {
+		for ci+1 < len(d.cs) && d.cs[ci+1].Lm <= fr.Lm {
 			ci++
 		}
 		vEgo := float32(0)
-		if len(cs) > 0 {
-			vEgo = cs[ci].V
+		if len(d.cs) > 0 && d.cs[ci].Lm <= fr.Lm {
+			vEgo = d.cs[ci].V
+			if ci != lastCar {
+				s.UpdateCarState(replayCarState(d.cs[ci]))
+				lastCar = ci
+			}
 		}
-		tsec := float64(fr.Lm-start) / 1e9
 		cm := fr.Cm
 		s.bootNow = func() uint64 { return cm }
 		now := time.Unix(0, int64(fr.Lm))
 		var fix replayRow
 		found := false
 		switch fr.Gs {
-		case 2:
-			fix, found = nearestFix(ext, func(r replayRow) uint64 { return r.Lm }, fr.Gm)
-		case 4:
-			fix, found = nearestFix(ph, func(r replayRow) uint64 { return r.Src }, fr.Gm)
+		case int(cereal.GpsSourceExternal):
+			fix, found = nearestFix(d.ext, func(r replayRow) uint64 { return r.Lm }, fr.Gm)
+		case int(cereal.GpsSourceInternal):
+			fix, found = nearestFix(d.internal, func(r replayRow) uint64 { return r.Lm }, fr.Gm)
+		case int(cereal.GpsSourcePhone):
+			fix, found = nearestFix(d.ph, func(r replayRow) uint64 { return r.Src }, fr.Gm)
 		}
 		changed := fr.Gs != prevGs
 		if changed {
 			gen++
 		}
 		newFix := fr.Gm != prevGm || changed
-		reason, cands, nav, near := "", "", "", ""
+		rec := replayFrame{T: math.Round(float64(fr.Lm-d.start)/1e7) / 100, Lm: fr.Lm, Gs: fr.Gs, Gm: fr.Gm, Fix: found,
+			New: newFix && found, SrcCh: changed, V: vEgo, Dev: fr.St, Dway: fr.Way, Dlim: fr.Lim, Dbr: len(fr.Br), Tw: -1, Tfw: -1}
 		if !found {
 			s.ProcessGps(cereal.GpsSample{Source: cereal.GpsSource(fr.Gs), SourceChanged: changed, SourceGeneration: gen}, false, load, now)
 		} else {
-			loc := replayLocation(t, fix)
-			if newFix && s.Data.Loaded {
-				held := s.navigationHold
-				_, gerr := GetCurrentWay(s.CurrentWay, s.NextWays, &s.Data, loc)
-				if gerr != nil {
-					reason = gerr.Error()
-					cands = replayCandidates(&s.Data, loc)
-					nav = replayNavDiag(&s.Data, loc, held)
-					near = replayNearest(&s.Data, loc)
-				}
-			}
+			loc := replayLocation(fix)
+			priorWay, priorNext, held, loadedAt := s.CurrentWay, s.NextWays, s.navigationHold, s.lastMapLoadAttempt
+			priorTrack := s.track
+			priorTrack.nodes, priorTrack.ahead = slices.Clone(s.track.nodes), slices.Clone(s.track.ahead)
 			began := time.Now()
 			s.ProcessGps(cereal.GpsSample{Location: loc, Source: cereal.GpsSource(fr.Gs), FixMonoTime: fr.Gm,
 				SourceGeneration: gen, SourceChanged: changed, NewFix: newFix}, true, load, now)
-			if newFix && !changed {
-				durations = append(durations, time.Since(began))
-			}
+			elapsed := time.Since(began)
 			if s.RoadMatched() {
 				s.UpdateRoadDependentCar()
 			}
+			rec.Lat, rec.Lon, rec.Spd, rec.Brg, rec.Ha, rec.Ba, rec.Sa = fix.Lat, fix.Lon, fix.V, fix.B, fix.Ha, fix.Ba, fix.Sa
 			if newFix {
-				switch {
-				case s.RoadMatched():
-					navSrc, navName = "match", s.CurrentWay.Way.WayName()+"/"+s.CurrentWay.Way.WayRef()
-				case nav == "nav:ok":
-					navSrc, navName = "pick", s.navigationHold.name+"/"+s.navigationHold.ref
-				case len(s.NavigationBranches) > 0:
-					navSrc, navName = "approach", ""
-				default:
-					navSrc, navName = "", ""
+				if !changed {
+					rec.Us = float64(elapsed.Nanoseconds()) / 1e3
+					rec.Load = s.lastMapLoadAttempt != loadedAt
 				}
+				if diag && !s.RoadMatched() && s.Data.Loaded {
+					// Diagnostics run after the timed call, from the state it started with.
+					if _, gerr := GetCurrentWay(priorWay, priorNext, &s.Data, loc, &priorTrack, fr.Gm); gerr != nil {
+						rec.Why = gerr.Error()
+					}
+					rec.Cands = replayCandidates(&s.Data, loc)
+					pick, reason := navigationPick(&s.Data, loc, held)
+					rec.Nav = replayNavReasons[reason]
+					if reason == navigationPicked {
+						rec.Pick, rec.PickL = pick.Way.Id(), float32(pick.MaxSpeed())
+					}
+				}
+			} else if diag && !s.RoadMatched() && last.Gm == fr.Gm {
+				rec.Why, rec.Cands, rec.Nav, rec.Pick, rec.PickL = last.Why, last.Cands, last.Nav, last.Pick, last.PickL
 			}
 		}
 		prevGs, prevGm = fr.Gs, fr.Gm
 		s.expireGpsEvidenceAt(cm)
-		brs := []string{}
-		for _, b := range s.NavigationBranches {
-			brs = append(brs, fmt.Sprintf("%s@%.0f/%.0f", b.way.Name(), b.distance, b.angle))
-		}
-		dbrs := []string{}
-		for _, b := range fr.Br {
-			dbrs = append(dbrs, fmt.Sprintf("%s@%.0f/%.0f", b.N, b.D, b.A))
-		}
-		way := int64(0)
-		lim := float32(0)
+		rec.Sim = s.RoadStatus.String()
+		rec.Br = len(s.NavigationBranches)
 		if s.RoadMatched() {
-			way, lim = s.CurrentWay.Way.Id(), s.MatchedLimitMps
+			rec.Way, rec.Lim, rec.Name = s.CurrentWay.Way.Id(), s.MatchedLimitMps, s.CurrentWay.Way.Name()
 		}
-		rec := map[string]any{"t": math.Round(tsec*100) / 100, "v": vEgo, "gs": fr.Gs, "new": newFix && found,
-			"dev": fr.St, "dway": fr.Way, "dlim": fr.Lim, "dbr": len(fr.Br),
-			"sim": s.RoadStatus.String(), "way": way, "lim": lim, "navway": s.navigationHold.id, "br": len(s.NavigationBranches), "src": navSrc, "name": navName}
-		if newFix && found {
-			rec["lat"], rec["lon"], rec["spd"], rec["brg"], rec["ha"], rec["ba"] = fix.Lat, fix.Lon, fix.V, fix.B, fix.Ha, fix.Ba
-			rec["brs"] = strings.Join(brs, ",")
-			rec["dbrs"] = strings.Join(dbrs, ",")
+		out = append(out, rec)
+		last = rec
+	}
+	return out, nil
+}
+
+// replayCost reruns the replay and keeps each fix's fastest ProcessGps time.
+func replayCost(d *replayDump, load MapLoader, frames []replayFrame, repeats int) ([]perfStats, error) {
+	runs := []perfStats{perfOf(frames)}
+	for range repeats - 1 {
+		again, err := runReplay(d, load, false)
+		if err != nil {
+			return nil, err
 		}
-		if reason != "" {
-			rec["why"], rec["cands"], rec["nav"], rec["near"] = reason, cands, nav, near
+		runs = append(runs, perfOf(again))
+		for i := range frames {
+			if again[i].Us > 0 && again[i].Us < frames[i].Us {
+				frames[i].Us = again[i].Us
+			}
 		}
-		b, _ := json.Marshal(rec)
-		w.Write(b)
-		w.WriteString("\n")
+	}
+	return runs, nil
+}
+
+// replayGate compares the replayed output with what the car published.
+type replayGate struct {
+	Frames     int     `json:"frames"`
+	Mismatches int     `json:"mismatches"`
+	Agree      float64 `json:"agree"`
+	MinAgree   float64 `json:"min_agree"`
+	Enforced   bool    `json:"enforced"`
+	Pass       bool    `json:"pass"`
+	First      string  `json:"first_mismatch,omitempty"`
+}
+
+func computeGate(frames []replayFrame, minAgree float64, enforced bool) replayGate {
+	g := replayGate{Frames: len(frames), MinAgree: minAgree, Enforced: enforced}
+	for _, f := range frames {
+		if f.Sim != f.Dev || f.Way != f.Dway || math.Abs(float64(f.Lim-f.Dlim)) > 0.01 {
+			g.Mismatches++
+			if g.First == "" {
+				g.First = fmt.Sprintf("t=%.2f car=%s/%d/%.2f replay=%s/%d/%.2f", f.T, f.Dev, f.Dway, f.Dlim, f.Sim, f.Way, f.Lim)
+			}
+		}
+	}
+	if g.Frames > 0 {
+		g.Agree = 1 - float64(g.Mismatches)/float64(g.Frames)
+	}
+	g.Pass = g.Frames > 0 && g.Agree >= minAgree
+	return g
+}
+
+func envFloat(name string, def float64) float64 {
+	if v, err := strconv.ParseFloat(os.Getenv(name), 64); err == nil {
+		return v
+	}
+	return def
+}
+
+func writeJSON(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o644)
+}
+
+// TestReplayDrive replays one dumped drive on real tiles, builds the offline
+// truth, and writes a frames file, a JSON summary and a printed report.
+//
+//	REPLAY        dump written by openpilot/starpilot/navigation/replay/mapd_dump.py
+//	REPLAY_TILES  offline tile root
+//	REPLAY_OUT    frames file (default: REPLAY with .frames.jsonl)
+//	REPLAY_GATE   "off" for a changed matcher: agreement with the car is reported, not enforced
+func TestReplayDrive(t *testing.T) {
+	path := os.Getenv("REPLAY")
+	if path == "" {
+		t.Skip("REPLAY not set")
+	}
+	ms.Settings.Default()
+	d, err := loadReplayDump(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tileDir := os.Getenv("REPLAY_TILES")
+	frames, err := runReplay(d, replayTileLoader(tileDir), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	costRuns, err := replayCost(d, replayTileLoader(tileDir), frames, int(envFloat("REPLAY_COST_REPEATS", 3)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	enforced := os.Getenv("REPLAY_GATE") != "off"
+	gate := computeGate(frames, envFloat("REPLAY_MIN_AGREE", 1), enforced)
+
+	tm, err := loadTruthMap(d, tileDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truth := buildTruth(d, tm, truthObservations(d, -1))
+	quality := truth.apply(frames)
+	reachabilityEstimate(tm, newOdometer(d.cs), frames)
+	quality.Robustness = truthRobustness(d, tm, frames)
+	quality.Guidance = checkGuidance(d, truth)
+	quality.Odometry = checkOdometry(truth)
+	quality.Yaw = checkYaw(d)
+
+	drive := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	hdr := replayHeader{K: "hdr", Drive: drive, Dump: d.hash, Truth: truthHash(frames), Gate: gate, Quality: quality, CostRuns: costRuns}
+	out := os.Getenv("REPLAY_OUT")
+	if out == "" {
+		out = strings.TrimSuffix(path, ".jsonl") + ".frames.jsonl"
+	}
+	if err := writeFrames(out, hdr, frames); err != nil {
+		t.Fatal(err)
+	}
+	drives := []replayDrive{{hdr, frames}}
+	summary := summarize(drives)
+	if err := writeJSON(strings.TrimSuffix(out, ".frames.jsonl")+".summary.json", summary); err != nil {
+		t.Fatal(err)
+	}
+	report := &strings.Builder{}
+	printReport(report, summary, drives)
+	fmt.Fprint(os.Stderr, report.String())
+	if enforced && !gate.Pass {
+		t.Fatalf("REPRODUCTION GATE FAILED: replay agrees with the car on %.4f of frames (%d mismatches, minimum %.4f); first %s",
+			gate.Agree, gate.Mismatches, gate.MinAgree, gate.First)
+	}
+}
+
+// TestReplayReport prints the combined report for frames files written by
+// TestReplayDrive: REPLAY_FRAMES=a.frames.jsonl,b.frames.jsonl.
+func TestReplayReport(t *testing.T) {
+	list := os.Getenv("REPLAY_FRAMES")
+	if list == "" {
+		t.Skip("REPLAY_FRAMES not set")
+	}
+	drives, err := readDrives(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := summarize(drives)
+	if out := os.Getenv("REPLAY_SUMMARY"); out != "" {
+		if err := writeJSON(out, summary); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report := &strings.Builder{}
+	printReport(report, summary, drives)
+	fmt.Fprint(os.Stderr, report.String())
+}
+
+// TestReplayCompare compares a candidate matcher with a baseline over the
+// same drives: REPLAY_BASE and REPLAY_CAND are comma-separated frames files
+// in the same drive order. It fails when a compareThresholds limit is
+// crossed; REPLAY_COMPARE_OUT receives the machine-readable verdict.
+func TestReplayCompare(t *testing.T) {
+	baseList, candList := os.Getenv("REPLAY_BASE"), os.Getenv("REPLAY_CAND")
+	if baseList == "" || candList == "" {
+		t.Skip("REPLAY_BASE and REPLAY_CAND not set")
+	}
+	base, err := readDrives(baseList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cand, err := readDrives(candList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := compareDrives(base, cand, compareThresholdsFromEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := &strings.Builder{}
+	printComparison(report, result)
+	fmt.Fprint(os.Stderr, report.String())
+	if out := os.Getenv("REPLAY_COMPARE_OUT"); out != "" {
+		if err := writeJSON(out, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !result.Pass {
+		t.Fatalf("candidate fails: %s", strings.Join(result.Failures, "; "))
 	}
 }
 

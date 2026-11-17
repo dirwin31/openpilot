@@ -330,7 +330,7 @@ func TestNavigationHoldsRoadThroughNearTie(t *testing.T) {
 	if got := fix(s, 35.148, -97.9, 10_000_000_000); got != "matchedLimit [North@1330/0]" {
 		t.Fatalf("matched Main: %s", got)
 	}
-	if got := fix(s, 35.155, -97.90003, 10_200_000_000); got != "unknown [North@560/0]" {
+	if got := fix(s, 35.155, -97.90003, 10_200_000_000); got != "matchedLimit [North@560/0]" {
 		t.Fatalf("near tie should keep Main: %s", got)
 	}
 	if got := fix(s, 35.156, -97.9001, 10_400_000_000); got != "unknown [RampEnd@440/-90]" {
