@@ -20,6 +20,7 @@ from openpilot.starpilot.system.phone_projection.video import ANDROID_STREAM, CA
 
 STATUS_INTERVAL = 1.0
 SETTINGS_INTERVAL = 2.0
+SHUTDOWN_TIMEOUT = 5.0
 
 
 def log(message: str) -> None:
@@ -116,14 +117,20 @@ def main() -> int:
     ctx.stop.set()
     for runner in runners.values():
       threading.Thread(target=runner.close, daemon=True).start()
-    ctx.audio.close()
-    touches.close()
     try:
       ipc.STATUS_PATH.unlink()
     except OSError:
       pass
-    ctx.bluez.close()
+    cleanup = threading.Thread(target=shutdown, args=(ctx, touches), daemon=True)
+    cleanup.start()
+    cleanup.join(SHUTDOWN_TIMEOUT)
   return 0
+
+
+def shutdown(ctx, touches) -> None:
+  ctx.audio.close()
+  touches.close()
+  ctx.bluez.close()
 
 
 if __name__ == "__main__":
