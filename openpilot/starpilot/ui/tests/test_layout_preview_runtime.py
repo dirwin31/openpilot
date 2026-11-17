@@ -21,7 +21,7 @@ class LayoutPreviewRuntimeTests(unittest.TestCase):
   def test_parked_loss_releases_canvas_before_transport_poll(self):
     events = []
     authority = Mock()
-    authority.parked.return_value = False
+    authority.configuration_allowed.return_value = False
     with patch("openpilot.starpilot.ui.layout_preview_runtime.LayoutPreviewRenderer") as renderer_type, \
          patch("openpilot.starpilot.ui.layout_preview_runtime.PreviewService") as service_type:
       renderer = renderer_type.return_value
@@ -35,7 +35,7 @@ class LayoutPreviewRuntimeTests(unittest.TestCase):
 
   def test_warmup_primes_fresh_source_then_stops_idle_reads(self):
     authority = Mock()
-    authority.parked.side_effect = [False, True]
+    authority.configuration_allowed.side_effect = [False, True]
     with patch("openpilot.starpilot.ui.layout_preview_runtime.LayoutPreviewRenderer") as renderer_type, \
          patch("openpilot.starpilot.ui.layout_preview_runtime.PreviewService") as service_type, \
          patch("openpilot.starpilot.ui.layout_preview_runtime.time.monotonic", side_effect=[10.0, 10.05, 10.11, 20.0]):
@@ -45,14 +45,14 @@ class LayoutPreviewRuntimeTests(unittest.TestCase):
       runtime.poll()
       runtime.poll()
       runtime.poll()
-      self.assertEqual(authority.parked.call_count, 2)
+      self.assertEqual(authority.configuration_allowed.call_count, 2)
       self.assertEqual(service_type.return_value.poll.call_count, 4)
-      service_type.assert_called_once_with(renderer_type.return_value, authority.parked, active_profile="large")
+      service_type.assert_called_once_with(renderer_type.return_value, authority.configuration_allowed, active_profile="large")
       runtime.close()
 
   def test_onroad_hint_defers_warmup_until_parked_then_restarts(self):
     authority = Mock()
-    authority.parked.return_value = True
+    authority.configuration_allowed.return_value = True
     hint = Mock(side_effect=[False, True, False, True])
     with patch("openpilot.starpilot.ui.layout_preview_runtime.LayoutPreviewRenderer") as renderer_type, \
          patch("openpilot.starpilot.ui.layout_preview_runtime.PreviewService"), \
@@ -61,7 +61,7 @@ class LayoutPreviewRuntimeTests(unittest.TestCase):
       runtime = LayoutPreviewRuntime(None, "compact", offroad_hint=hint, authority=authority)
       for _ in range(4):
         runtime.poll()
-      self.assertEqual(authority.parked.call_count, 2)
+      self.assertEqual(authority.configuration_allowed.call_count, 2)
       runtime.close()
 
 

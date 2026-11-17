@@ -250,7 +250,7 @@ export class LayoutPreviewFeed {
           body: JSON.stringify({ document: item.document, profile: item.profile, scene: item.scene, ...(this.art ? {art: true} : this.backdrop ? {art: "backdrop"} : {}) }), signal: request.signal })
         if (stale()) return
         if (response.status === 401) { this.stop(); this.unauthorized(); return }
-        if (response.status === 403) { denied = true; failure = "Turn off the vehicle to preview this layout."; throw new Error() }
+        if (response.status === 403) { denied = true; failure = "Shift into Park to preview this layout."; throw new Error() }
         if (response.status === 429) { busy = true; failure = "Preview is busy. Retrying automatically…"; throw new Error() }
         const reuse = response.status === 204 && !!saved
         if (!reuse && !response.ok) { const detail = await response.json().catch(() => null); failure = detail?.error || failure; throw new Error() }
@@ -273,7 +273,7 @@ export class LayoutPreviewFeed {
           this.latestArt.set(item.profile, cacheKey)
         }
         this.failures = 0
-        this.publish({ status: "ready", error: "", url: this.currentUrl, scene: item.scene, profile: item.profile, ...(this.art ? {sprites} : {}) })
+        this.publish({ status: "ready", error: "", denied: false, url: this.currentUrl, scene: item.scene, profile: item.profile, ...(this.art ? {sprites} : {}) })
         if (previousUrl) this.urls.revokeObjectURL(previousUrl)
       } finally {
         // Hold the queue until the device answers, so the other feed is not turned away as busy.
@@ -290,7 +290,7 @@ export class LayoutPreviewFeed {
         if (this.art && denied) this.clearImage()
         // Art and backdrop retry promptly, as does any feed turned away by a busy renderer; real outages back off.
         const recovering = (this.art || this.backdrop || busy) && this.failures < 2
-        this.publish({ status: recovering ? "updating" : "unavailable", error: recovering ? "" : failure })
+        this.publish({ status: recovering ? "updating" : "unavailable", error: recovering ? "" : failure, denied })
         this.timer = this.later(() => { this.timer = null; this.retry() }, recovering ? 600 : 5000)
       }
     } finally {
