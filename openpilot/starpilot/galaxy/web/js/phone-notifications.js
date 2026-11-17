@@ -7,7 +7,7 @@ const validApp = app => app && typeof app === 'object' && typeof app.id === 'str
   typeof app.name === 'string' && app.name.length <= 80 && ['android', 'ios'].includes(app.source) &&
   typeof app.messaging === 'boolean' && typeof app.allowed === 'boolean' && typeof app.chosen === 'boolean'
 
-const OUTCOMES = ['shown', 'appOff', 'notMessage', 'tooOld', 'disabled']
+const OUTCOMES = ['shown', 'appOff', 'notMessage', 'tooOld', 'disabled', 'navigation']
 const validRecent = row => row && typeof row === 'object' && typeof row.app === 'string' && typeof row.appName === 'string' &&
   OUTCOMES.includes(row.outcome) && Number.isFinite(row.ageSeconds)
 const validShowing = value => value === null || value === undefined || (typeof value === 'object' && typeof value.appName === 'string' &&
@@ -23,6 +23,7 @@ export function validPhoneNotifications(value) {
 export const OUTCOME_TEXT = Object.freeze({
   shown: 'Shown on screen', appOff: 'Not shown: this app is off', notMessage: 'Not shown: not a messaging app; turn it on under Apps',
   tooOld: 'Not shown: arrived too late', disabled: 'Not shown: phone notifications are off',
+  navigation: 'Used for directions',
 })
 
 export const ago = seconds => seconds < 60 ? `${seconds} s ago` : seconds < 3600 ? `${Math.floor(seconds / 60)} min ago` : `${Math.floor(seconds / 3600)} h ago`

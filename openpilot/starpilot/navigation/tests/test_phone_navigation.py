@@ -253,8 +253,12 @@ def test_arrive_flows_to_the_card(stream):
 
 
 class Aligned:
-  def __init__(self, status='mapAligned'):
+  def __init__(self, status='mapAligned', driven=None):
     self.value = status
+    self.driven = driven
+
+  def driven_since(self, stamp_ns, *, speed, now_ns):
+    return self.driven
 
   def resolve(self, phone, *, speed=None, now_ns=None):
     from openpilot.starpilot.navigation.notification import Resolution
@@ -354,3 +358,15 @@ def test_verdict_reaches_the_phone_reply_and_expires(tmp_path):
   assert read_verdict(NOW + VERDICT_NS + 1, path) is None
   path.write_text('{"reason": 1}')
   assert read_verdict(NOW, path) is None
+
+
+def test_unconfirmed_distance_counts_down_and_ends_once_passed(stream):
+  publisher, path, _clock = stream
+  publisher.publish(payload())
+  phone = read_phone_navigation(NOW, path)
+  shown = select_navigation(base(), phone, now_ns=NOW, drive_id=DRIVE, local_map=Aligned('mapNoNearbyJunction', driven=50.))
+  assert shown['controlValid'] is False and shown['instruction']['distanceMeters'] == 70
+  diagnostics = {}
+  ended = select_navigation(base(), phone, now_ns=NOW, drive_id=DRIVE, diagnostics=diagnostics,
+                            local_map=Aligned('mapNoNearbyJunction', driven=171.))
+  assert ended['status'] == 'noDestination' and diagnostics['reason'] == 'passedManeuver'
