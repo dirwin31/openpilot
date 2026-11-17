@@ -96,7 +96,7 @@ def preview_layout(self, payload, projection_layout_owner, layout_owner, layout_
     return
   try:
     if not layout_owner().parked():
-      self.json(403, {'error': 'Turn off the vehicle to preview this layout'})
+      self.json(403, {'error': 'Shift into Park to preview this layout'})
       return
     image = request_preview({'document': document, 'profile': payload['profile'], 'scene': payload['scene'],
                              **({'art': payload['art']} if 'art' in payload else {})},
@@ -104,7 +104,7 @@ def preview_layout(self, payload, projection_layout_owner, layout_owner, layout_
     if self.settings_session() != identity:
       self.json(401, {'error': 'Sign in to Galaxy'})
     elif not layout_owner().parked():
-      self.json(403, {'error': 'Turn off the vehicle to preview this layout'})
+      self.json(403, {'error': 'Shift into Park to preview this layout'})
     else:
       headers, cache = {}, None
       if payload.get('art') is True:
@@ -115,7 +115,7 @@ def preview_layout(self, payload, projection_layout_owner, layout_owner, layout_
         cache = 'no-store, no-transform'
       self.respond(200, image, 'image/png', asset_headers=headers or None, cache_control=cache)
   except PreviewDenied:
-    self.json(403, {'error': 'Turn off the vehicle to preview this layout'})
+    self.json(403, {'error': 'Shift into Park to preview this layout'})
   except PreviewBusy:
     self.json(429, {'error': 'Preview is busy; try again shortly'})
   except (PreviewInvalid, PreviewUnavailable, OSError, RuntimeError):

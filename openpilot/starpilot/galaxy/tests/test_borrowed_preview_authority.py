@@ -52,7 +52,7 @@ def test_ui_frame_observation_catches_update_between_preview_warmup_ticks():
   from openpilot.starpilot.ui.layout_preview_runtime import LayoutPreviewRuntime
   owner = source()
   owner.messages.updated['deviceState'] = False
-  owner.parked = lambda: owner.device_offset_ns is not None
+  owner.configuration_allowed = lambda: owner.device_offset_ns is not None
   runtime = LayoutPreviewRuntime.__new__(LayoutPreviewRuntime)
   runtime.authority, runtime.renderer, runtime.service = owner, Mock(), Mock()
   runtime.renderer.has_resources = False

@@ -622,7 +622,7 @@ export const OnroadLayoutPage = {
       status: "idle", data: null, draft: null, needsReload: false, error: "", notice: "",
       profile: "large", scene: "general", selected: null, layerDrag: null, drag: null, discard: null, leavePresentation: null, removeConfirm: null, pipUnlocked: {}, pipUnlockConfirm: null, colorError: "", placementError: "",
       inspectorPanel: ["widgets", "edit", "road", "display"].includes(props.initialPanel) && !props.projection ? props.initialPanel : "widgets", showFavoriteZones: false, showEditingAids: loadAidsPreference(),
-      aboutOpen: false, tipsOpen: false, moreOpen: false, widgetsHelpOpen: false, stuck: { leaveBar: false, pinned: false, sections: false }, shrunk: false, touchArmed: null, openColor: null, art: { status: "idle", error: "", url: null, sprites: null }, backdrop: { status: "idle", error: "", url: null },
+      aboutOpen: false, tipsOpen: false, moreOpen: false, widgetsHelpOpen: false, stuck: { leaveBar: false, pinned: false, sections: false }, shrunk: false, touchArmed: null, openColor: null, art: { status: "idle", error: "", denied: false, url: null, sprites: null }, backdrop: { status: "idle", error: "", denied: false, url: null },
       hiddenPreviewWidgets: loadPreviewVisibility(props.projection), sceneHiddenPreviewWidgets: {}, snapEnabled: loadSnapPreference(), snapGuides: [], history: { undo: [], redo: [], group: null }
     })
     let deferred = null
@@ -768,6 +768,7 @@ export const OnroadLayoutPage = {
         return [id, narrow]
       })) }
     },
+    previewDenied() { return [this.state.art, this.state.backdrop].some(feed => feed.status === 'unavailable' && feed.denied) },
     // The last screen for this profile stays up while the next scene renders, instead of flashing the sketch.
     nativeBackdropReady() { return !!this.state.backdrop.url && this.state.backdrop.profile === (this.projection ? "projection" : this.state.profile) },
     layout() { return this.state.draft?.layouts[this.state.profile] },
