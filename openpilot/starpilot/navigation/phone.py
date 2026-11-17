@@ -152,6 +152,22 @@ def read_phone_navigation(now_ns, path=None):
   return None
 
 
+HOLD_NS = 2_500_000_000
+
+
+class GuidanceHold:
+  """Keeps the last guidance through the short gap while the phone replaces its notification."""
+  def __init__(self):
+    self.value, self.until = None, 0
+
+  def update(self, phone, now_ns):
+    if phone is not None:
+      self.value, self.until = phone, now_ns + HOLD_NS
+    elif self.value is not None and not now_ns <= min(self.until, self.value['observed'] + OBSERVATION_NS):
+      self.value = None
+    return self.value
+
+
 def phone_navigation_status(now_ns=None, path=None):
   now_ns = time.monotonic_ns() if now_ns is None else now_ns
   value = _read(path or handoff_path())
@@ -259,6 +275,14 @@ def select_navigation(mapbox, phone, *, now_ns, drive_id, official_active=False,
     observed = resolved.anchor_ns
     instruction = {**instruction, 'maneuverType': resolved.kind, 'maneuverModifier': resolved.side,
                    'distanceMeters': resolved.distance}
+  elif local_map is not None and phone.get('distanceMeters') is not None:
+    # Unconfirmed guidance still counts down between the phone's updates, and ends once the turn is well behind.
+    from openpilot.starpilot.navigation.wire import PHONE_PASSED_SLACK_M
+    driven = local_map.driven_since(observed, speed=speed, now_ns=now_ns)
+    if driven is not None and driven > instruction['distanceMeters'] + PHONE_PASSED_SLACK_M:
+      return rejected('passedManeuver')
+    if driven is not None:
+      instruction = {**instruction, 'distanceMeters': max(0., instruction['distanceMeters'] - driven)}
   source = PHONE_SOURCE_PREFIX + phone.get('source', 'googleMaps')
   return {**mapbox, 'sessionId': source + ':' + phone['session'], 'revision': str(phone['sequence']),
           'enabled': True, 'status': 'guiding', 'source': source, 'frameMonoTime': now_ns,

@@ -24,6 +24,9 @@ CATEGORIES = {CATEGORY_SOCIAL: "message", CATEGORY_INCOMING_CALL: "call", CATEGO
 LIMITS = {"app": 128, "appName": 80, "sender": 120, "text": 500}
 MAX_AGE_MS = 60000
 BUFFER_LIMIT = 4096
+# Navigation apps: their prompts are also read when delivered quietly or updated in place.
+FOLLOWED_APPS = frozenset({"com.google.Maps"})
+FOLLOWED_LIMIT = 32
 
 Event = namedtuple("Event", "event_id flags category count uid")
 
@@ -134,6 +137,7 @@ class Client:
     self.cache_size = cache_size
     self.pending = deque(maxlen=max_pending)
     self.names = OrderedDict()
+    self.followed = OrderedDict()
     self.reassembler = Reassembler()
     self.current = None
     self.deadline = 0.0
@@ -147,10 +151,16 @@ class Client:
       return
     if event.event_id == EVENT_REMOVED:
       self.pending = deque((item for item in self.pending if item[0] != event.uid), maxlen=self.pending.maxlen)
+      self.followed.pop(event.uid, None)
     elif wanted(event):
       if len(self.pending) == self.pending.maxlen:
         self.dropped += 1
-      self.pending.append((event.uid, event.category, self.clock()))
+      self.pending.append((event.uid, event.category, self.clock(), False))
+    elif (not event.flags & FLAG_PRE_EXISTING and all(item[0] != event.uid for item in self.pending) and
+          (event.event_id == EVENT_ADDED or (event.event_id == EVENT_MODIFIED and event.uid in self.followed))):
+      # Quiet or updated: fetched to learn the app, emitted only for a followed one.
+      if len(self.pending) < self.pending.maxlen:
+        self.pending.append((event.uid, event.category, self.clock(), True))
     self.pump()
 
   def on_data_source(self, data):
@@ -167,6 +177,10 @@ class Client:
     if stage == "notification":
       notification = found
       app = clean(found[ATTR_APP_IDENTIFIER], LIMITS["app"])
+      if item[3] and app not in FOLLOWED_APPS:
+        self.current = None
+        self.pump()
+        return
       if app and app not in self.names:
         self._request("app", item, notification, COMMAND_APP_ATTRIBUTES, app, (APP_ATTR_DISPLAY_NAME,), app_attributes_command(app))
         return
@@ -222,6 +236,13 @@ class Client:
     sender = clean(notification[ATTR_TITLE], LIMITS["sender"])
     text = clean(notification[ATTR_MESSAGE], LIMITS["text"]) or clean(notification[ATTR_SUBTITLE], LIMITS["text"])
     age = self._age(item)
+    if app in FOLLOWED_APPS:
+      self.followed[item[0]] = True
+      self.followed.move_to_end(item[0])
+      while len(self.followed) > FOLLOWED_LIMIT:
+        self.followed.popitem(last=False)
+    elif item[3]:
+      return
     if not app or not (sender or text) or age > MAX_AGE_MS:
       self.dropped += 1
       return

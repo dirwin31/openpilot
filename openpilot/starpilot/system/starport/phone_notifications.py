@@ -172,6 +172,15 @@ class PhoneNotifications:
         accepted = False
     return {'ok': True, 'accepted': bool(accepted), 'enabled': True}
 
+  def divert(self, payload):
+    """A navigation prompt used for directions: listed under its app, never shown as a toast."""
+    with self.lock:
+      settings = read_settings(self.settings_path)
+      if self._record(settings, payload):
+        self._save(settings)
+      self._note(payload, 'navigation')
+    return {'ok': True, 'accepted': False, 'enabled': settings['enabled'], 'navigation': True}
+
   def _note(self, payload, outcome):
     app = payload['app']
     self.recent.appendleft({'app': app, 'appName': payload.get('appName', '').strip()[:80] or app, 'source': payload['source'],

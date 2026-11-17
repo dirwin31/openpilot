@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import threading
+import types
 import unittest
 
 from openpilot.starpilot.galaxy.access import GalaxyAccessOwner
@@ -25,7 +26,12 @@ class PhoneNotificationsHttpTest(unittest.TestCase):
     self.pairing = RemotePairing(root / 'pairing')
     self.notifications = PhoneNotifications(root / 'settings' / 'phone_notifications.json', root / 'shm.json',
                                             boot_id=lambda: 'boot', boot_offset=lambda: 0)
-    self.local = make_server(port=0, owner=self.access, remote_pairing=self.pairing, phone_notifications=self.notifications)
+    from openpilot.starpilot.navigation.phone import PhoneNavigationPublisher
+    self.phone_navigation = PhoneNavigationPublisher(root / 'navigation.json')
+    self.guidance = True
+    self.local = make_server(port=0, owner=self.access, remote_pairing=self.pairing, phone_notifications=self.notifications,
+                             phone_navigation=self.phone_navigation,
+                             navigation=types.SimpleNamespace(read=lambda: {'phoneNavigation': self.guidance}))
     self.remote = make_remote_server(self.local, port=0)
     self.servers = []
     for server in (self.local, self.remote):
@@ -77,6 +83,21 @@ class PhoneNotificationsHttpTest(unittest.TestCase):
     self.assertEqual((status, body['error']), (400, 'Unexpected notification fields'))
     status, body, _ = self.request(path, payload={**NOTE, 'category': 'email', 'app': 'com.mail'}, cookie=self.local_cookie)
     self.assertEqual((status, body['accepted']), (200, False))
+
+  def test_navigation_prompt_feeds_directions_instead_of_a_toast(self):
+    path = '/api/companion/notification'
+    prompt = {'source': 'ios', 'app': 'com.google.Maps', 'appName': 'Google Maps', 'sender': 'Google Maps',
+              'text': 'In 500 ft, turn right onto Main St', 'category': 'other', 'ageMs': 0}
+    status, body, _ = self.request(path, payload=prompt, cookie=self.local_cookie)
+    self.assertEqual((status, body), (200, {'ok': True, 'accepted': False, 'enabled': True, 'navigation': True}))
+    self.assertIsNone(self.shown())
+    guidance = json.loads(self.phone_navigation.path.read_text())
+    self.assertEqual((guidance['source'], guidance['maneuverModifier'], guidance['roadName']), ('googleMaps', 'right', 'Main St'))
+    self.assertEqual(self.notifications.snapshot()['recent'][0]['outcome'], 'navigation')
+    # With phone directions off it is an ordinary notification again.
+    self.guidance = False
+    status, body, _ = self.request(path, payload=prompt, cookie=self.local_cookie)
+    self.assertEqual((status, body.get('navigation'), body['accepted']), (200, None, False))
 
   def test_maximum_length_escaped_payload_fits(self):
     payload = {**NOTE, 'appName': '\U0001F600' * 80, 'sender': '\U0001F600' * 120, 'text': '\U0001F600' * 500, 'app': 'a' * 128}
