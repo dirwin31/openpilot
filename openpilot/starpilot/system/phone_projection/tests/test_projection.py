@@ -175,3 +175,26 @@ def test_video_pipe_decodes_and_publishes_with_config_first():
     pipe.close()
   assert pipe.published == 1 and publisher.server.sent[0][:2] == (0, FakeDecoder.layout.size)
   assert seen[0] == b"CFGPIC"
+
+
+def test_carplay_audio_stream_receives_udp_packets():
+  import socket
+  from openpilot.starpilot.system.carplay.airplay.session import AudioStream
+  key = os.urandom(32)
+  got = []
+  stream = AudioStream(key, "127.0.0.1", "media", 48000, 2, lambda *args: got.append(args), lambda m: None)
+  tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+  try:
+    for seq in range(3):
+      header = bytes([0x80, 0x60]) + struct.pack(">HII", seq, seq * 2, 1)
+      nonce8 = struct.pack(">Q", seq)
+      sealed = ChaCha20Poly1305(key).encrypt(b"\0" * 4 + nonce8, struct.pack(">2h", seq, -seq), header[4:12])
+      tx.sendto(header + sealed + nonce8, ("127.0.0.1", stream.port))
+    deadline = time.monotonic() + 2
+    while len(got) < 3 and time.monotonic() < deadline:
+      time.sleep(0.01)
+  finally:
+    tx.close()
+    stream.close()
+  assert [g[:3] for g in got] == [("media", 48000, 2)] * 3
+  assert struct.unpack("<2h", got[2][3]) == (2, -2)
