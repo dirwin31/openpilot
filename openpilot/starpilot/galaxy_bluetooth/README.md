@@ -81,8 +81,11 @@ only offers ANCS on a bonded (encrypted) LE link, so the app first asks for a sh
 3. Once bonded, iOS asks the person to allow notifications for comma (Settings →
    Bluetooth → comma → Share System Notifications). The bridge looks for the phone's
    ANCS service every few seconds, subscribes, and posts each new, non-silent
-   notification to Galaxy's `POST /api/companion/notification`. Notification text is
-   never logged.
+   notification to Galaxy's `POST /api/companion/notification`. Google Maps prompts are
+   also read when delivered quietly or updated in place, because Galaxy turns them into
+   directions when phone directions are on. Notification text is never logged; the last
+   200 Google Maps prompts are kept on the comma in `navigation_text_samples.jsonl` to
+   tune the wording parser.
 
 `/_bridge/health` reports `"notificationBond": true` when this is supported.
 

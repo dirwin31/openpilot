@@ -176,7 +176,10 @@ class ClientTests(unittest.TestCase):
     self.client.on_notification_source(event(flags=4, uid=2))
     self.client.on_notification_source(event(event_id=1, uid=3))
     self.client.on_notification_source(b"short")
-    self.assertFalse(self.writes)
+    # A quiet one is read only to learn its app; pre-existing and updated ones are not read at all.
+    self.assertEqual(self.writes, [ancs.notification_attributes_command(1)])
+    self.client.on_data_source(notification_response(uid=1))
+    self.assertEqual((len(self.writes), self.emitted), (1, []))
     self.client.on_notification_source(event(uid=10))
     self.client.on_notification_source(event(uid=11))
     self.client.on_notification_source(event(event_id=2, uid=11))
@@ -184,6 +187,23 @@ class ClientTests(unittest.TestCase):
     self.client.on_data_source(app_response())
     self.assertEqual(len(self.emitted), 1)
     self.assertIsNone(self.client.current)
+
+  def test_navigation_app_is_followed_when_quiet_or_updated(self):
+    maps = {"app": b"com.google.Maps", "title": b"Google Maps", "message": b"Turn right onto Main St"}
+    self.client.on_notification_source(event(flags=ancs.FLAG_SILENT, category=0, uid=20))
+    self.client.on_data_source(notification_response(uid=20, **maps))
+    self.client.on_data_source(app_response(b"com.google.Maps", b"Google Maps"))
+    self.client.on_notification_source(event(event_id=ancs.EVENT_MODIFIED, category=0, uid=20))
+    self.client.on_data_source(notification_response(uid=20, **{**maps, "message": b"Turn left onto Oak Ave"}))
+    self.assertEqual([row["text"] for row in self.emitted], ["Turn right onto Main St", "Turn left onto Oak Ave"])
+    # Other apps stay as before: quiet ones are read for their app only, then dropped without a name lookup.
+    self.client.on_notification_source(event(flags=ancs.FLAG_SILENT, uid=21))
+    writes = len(self.writes)
+    self.client.on_data_source(notification_response(uid=21, app=b"com.other.app"))
+    self.client.on_notification_source(event(event_id=ancs.EVENT_MODIFIED, uid=21))
+    self.client.on_notification_source(event(event_id=ancs.EVENT_REMOVED, uid=20))
+    self.client.on_notification_source(event(event_id=ancs.EVENT_MODIFIED, uid=20))
+    self.assertEqual((len(self.emitted), len(self.writes), self.client.current), (2, writes, None))
 
   def test_bounded_fifo_drops_oldest(self):
     for uid in range(1, 20):

@@ -321,11 +321,12 @@ def main():
   owner = NavigationOwner()
   runtime = RouteRuntime(owner)
   from openpilot.common.params import Params
-  from openpilot.starpilot.navigation.phone import RouteAgreement, boot_offset_ns, read_phone_navigation, select_navigation, write_verdict
+  from openpilot.starpilot.navigation.phone import GuidanceHold, RouteAgreement, boot_offset_ns, read_phone_navigation, select_navigation, write_verdict
   from openpilot.starpilot.navigation.notification import LocalMapCorroborator
   params = Params()
   local_map = LocalMapCorroborator()
   agreement = RouteAgreement()
+  hold = GuidanceHold()
   last_reason = None
   verdict_due = 0
   last_phone_gps = None
@@ -360,7 +361,9 @@ def main():
           value = runtime.update(now, fix, drive_id)
           official_active = params.get_bool('NavigationEnabled') and bool(params.get('NavDestination'))
           phone_enabled = owner.read().get('phoneNavigation', False)
-          phone = read_phone_navigation(now) if phone_enabled else None
+          if not phone_enabled:
+            hold = GuidanceHold()
+          phone = hold.update(read_phone_navigation(now), now) if phone_enabled else None
           corroborate(local_map, sm, phone, drive_id, now, boot_offset_ns() if phone is not None else 0)
           diagnostics = {}
           value = select_navigation(value, phone, now_ns=now, drive_id=drive_id, official_active=official_active,
