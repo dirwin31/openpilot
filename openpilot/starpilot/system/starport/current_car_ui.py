@@ -192,7 +192,9 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
     from openpilot.starpilot.system.starport import reconnect_notice
     from openpilot.starpilot.system.starport.identity import certificate_days_left
     from openpilot.starpilot.system.starport.projection_layout_runtime import ProjectionLayoutWatcher, comma_display_seed
-    viewport = (geometry.logical_width, geometry.logical_height)
+    from openpilot.starpilot.system.phone_projection.car_split import car_split
+    phone_split = car_split(geometry.logical_width, geometry.logical_height)
+    viewport = phone_split.viewport if phone_split else (geometry.logical_width, geometry.logical_height)
     watcher = ProjectionLayoutWatcher(viewport, display_seed=comma_display_seed)
     layout = ProjectionOnroad(viewport=viewport, customization=watcher.load(),
                               certificate_days=certificate_days_left(), layout_watcher=watcher,
@@ -227,7 +229,12 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
     resources.callback(rl.unload_render_texture, content)
     left = (geometry.width - geometry.logical_width * geometry.scale) / 2
     top = (geometry.height - geometry.logical_height * geometry.scale) / 2
-    scale_scissors(rl, geometry.scale, left, top)
+    scale_scissors(rl, geometry.scale, left + (phone_split.comma.x * geometry.scale if phone_split else 0), top)
+    phone = None
+    if phone_split:
+      from openpilot.starpilot.system.phone_projection.view import PhoneView
+      phone = PhoneView(font=gui_app.font())
+      resources.callback(phone.close)
     converter = None
     if request.flags & FLAG_NV12:
       try:
@@ -377,7 +384,15 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
         try:
           rl.rl_translatef(left, top, 0)
           rl.rl_scalef(geometry.scale, geometry.scale, 1.0)
-          layout.render()
+          if phone_split:
+            rl.rl_push_matrix()
+            rl.rl_translatef(phone_split.comma.x, 0, 0)
+            layout.render()
+            rl.rl_pop_matrix()
+            phone.refresh()
+            phone.render(phone_split.phone)
+          else:
+            layout.render()
           if now < touch_setup_until:
             layout.draw_touch_setup(*setup_dot)
           elif now < touch_done_until:
@@ -393,7 +408,8 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
           touch_done_until = now + 3.0 if event.y else 0.0
         else:
           touches.append(event)
-      layout.handle_touches(projected_touches(touches, geometry))
+      touches = projected_touches(touches, geometry)
+      layout.handle_touches(phone_split.route(touches, phone) if phone_split else touches)
       if output is not None:
         gpu_nv12.compose_rgba(content.texture, output, request.margin_w, request.margin_h,
                               content_left=request.content_left, content_top=request.content_top)

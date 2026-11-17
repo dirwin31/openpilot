@@ -2144,6 +2144,7 @@ class StarMainLayout(MainLayout):
       super()._render_main_content()  # body home, or upstream's offroad alerts / update screen
       return
     rect = self._rect
+    phone_rect = None
     if self._current_mode == MainState.ONROAD:
       self._update_layout_rects()
       if self._sidebar.is_visible:
@@ -2151,6 +2152,7 @@ class StarMainLayout(MainLayout):
         if self._current_mode != MainState.ONROAD or not self._sidebar.is_visible:
           return
         rect = self._content_rect
+      rect, phone_rect = self._phone_split(rect)
     mode = {MainState.HOME: ShellMode.HOME, MainState.SETTINGS: ShellMode.SETTINGS,
             MainState.ONROAD: ShellMode.ONROAD}[self._current_mode]
     self.page.mode = mode
@@ -2162,6 +2164,27 @@ class StarMainLayout(MainLayout):
       home._update_state()
       home._render_notifs()
       home._process_mouse_events()
+    if phone_rect is not None:
+      self._phone.render(phone_rect)
+      self._phone_touches()
+
+  def _phone_split(self, rect):
+    """Phone projection takes one half of the onroad screen while it is turned on."""
+    from openpilot.starpilot.system.phone_projection.layout import Rect
+    if getattr(self, "_phone", None) is None:
+      from openpilot.starpilot.system.phone_projection.view import PhoneView
+      self._phone = PhoneView(font=gui_app.font())
+    halves = self._phone.split(Rect(rect.x, rect.y, rect.width, rect.height))
+    if halves is None:
+      return rect, None
+    comma, phone = halves
+    return rl.Rectangle(comma.x, comma.y, comma.width, comma.height), phone
+
+  def _phone_touches(self) -> None:
+    for event in gui_app.mouse_events:
+      kind = "down" if event.left_pressed else "up" if event.left_released else "move" if event.left_down else None
+      if kind is not None:
+        self._phone.touch(kind, event.slot, event.pos.x, event.pos.y)
 
   def _on_background_tap(self) -> None:
     if self._current_mode == MainState.ONROAD:
@@ -2208,3 +2231,5 @@ class StarMainLayout(MainLayout):
     self._network_bridge.leave()
     self.star.close()
     self._native_onroad.close()
+    if getattr(self, "_phone", None) is not None:
+      self._phone.close()
