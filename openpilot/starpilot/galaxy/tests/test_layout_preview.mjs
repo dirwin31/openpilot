@@ -96,10 +96,11 @@ assert.equal(failure.updates.at(-1).status, "ready")
 failure.feed.update(document, "large", "braking"); failure.tick(); await failure.reply(2, 200, "text/html")
 assert.equal(failure.updates.at(-1).status, "unavailable")
 assert.deepEqual(failure.revoked, [])
-for (const [status, message] of [[403, /Turn off the vehicle to preview/], [429, /busy/]]) {
+for (const [status, message] of [[403, /Shift into Park to preview/], [429, /busy/]]) {
   failure.feed.update(document, "large", "engaged"); failure.tick()
   await failure.reply(failure.requests.length - 1, status)
   assert.match(failure.updates.at(-1).error, message)
+  assert.equal(failure.updates.at(-1).denied, status === 403)
 }
 
 const auth = fixture()

@@ -12,7 +12,7 @@ class LayoutPreviewRuntime:
   def __init__(self, params, active_profile: str, *, offroad_hint=lambda: True, authority=None):
     self.renderer = LayoutPreviewRenderer()
     self.authority = authority if authority is not None else LiveContextSource(params)
-    self.service = PreviewService(self.renderer, self.authority.parked, active_profile=active_profile)
+    self.service = PreviewService(self.renderer, self.authority.configuration_allowed, active_profile=active_profile)
     self._offroad_hint = offroad_hint
     self._hint_was_offroad = False
     self._warm = False
@@ -40,7 +40,7 @@ class LayoutPreviewRuntime:
       self._next_warm = now
     self._hint_was_offroad = True
     if not self._warm and now >= self._next_warm:
-      self._warm = bool(self.authority.parked())
+      self._warm = bool(self.authority.configuration_allowed())
       self._next_warm = now + (0.1 if now < self._warm_until else 1.0)
 
   def poll(self) -> None:
@@ -54,7 +54,7 @@ class LayoutPreviewRuntime:
       self._warm_authority(now)
       if self.renderer.has_resources and now >= self._next_authority_check:
         self._next_authority_check = now + 1.0
-        if not self.authority.parked():
+        if not self.authority.configuration_allowed():
           self.renderer.close()
       self.renderer.expire()
       self.service.poll()
