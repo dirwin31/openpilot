@@ -56,6 +56,8 @@ type State struct {
 	roadFixGeneration uint64
 	// Road the navigation junctions came from; held through near ties and stops.
 	navigationHold navigationHold
+	// Last matched road, kept through fixes that fit several roads.
+	track roadTrack
 }
 
 func (s *State) Init() {
@@ -103,6 +105,7 @@ func (s *State) clearRoadDerived() {
 
 func (s *State) ResetRoadEvidence() {
 	s.clearRoadDerived()
+	s.track.clear()
 	s.navigationHold = navigationHold{}
 	s.roadFixMonoTime = 0
 	s.Data = maps.Offline{}
@@ -118,6 +121,7 @@ func (s *State) ResetRoadEvidence() {
 // Tile currency is still checked every loop by invalidateChangedTile.
 func (s *State) expireRoadEvidence() {
 	s.clearRoadDerived()
+	s.track.clear()
 	s.navigationHold = navigationHold{}
 	s.roadFixMonoTime = 0
 	s.Position = m.Position{}
@@ -219,7 +223,7 @@ func (s *State) ProcessGps(sample cereal.GpsSample, success bool, load MapLoader
 	}
 
 	s.roadFixMonoTime, s.roadFixGeneration = sample.FixMonoTime, sample.SourceGeneration
-	way, err := GetCurrentWay(s.CurrentWay, s.NextWays, &s.Data, location)
+	way, err := GetCurrentWay(s.CurrentWay, s.NextWays, &s.Data, location, &s.track, sample.FixMonoTime)
 	if err != nil || way.Way.Nodes.Len() < 2 {
 		s.clearRoadDerived()
 		s.RoadStatus = custom.MapdOut_SampleStatus_noMatch
@@ -273,6 +277,12 @@ func (s *State) ProcessGps(sample cereal.GpsSample, success bool, load MapLoader
 		s.RoadStatus = custom.MapdOut_SampleStatus_matchedLimit
 	}
 	s.LimitPreview = s.previewLimit()
+	if s.track.held {
+		// A hold keeps the track's age fresh but not its distance budget.
+		s.track.held, s.track.fixMonoTime = false, sample.FixMonoTime
+	} else {
+		s.track.set(way, s.NextWays, sample.FixMonoTime)
+	}
 }
 
 func (s *State) SuggestedSpeed() float32 {
@@ -299,6 +309,7 @@ func (s *State) SuggestedSpeed() float32 {
 func (s *State) UpdateCarState(carData car.CarState) {
 	s.Car.Update(carData)
 	s.DistanceSinceLastPosition += float32(s.Car.UpdateTime.DiffMA.Estimate) * s.Car.VEgo
+	s.track.driven += float32(s.Car.UpdateTime.DiffMA.Estimate) * s.Car.VEgo
 }
 
 func (s *State) UpdateRoadDependentCar() {

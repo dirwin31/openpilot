@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"math"
 	"time"
 
 	"pfeifer.dev/mapd/cereal/custom"
@@ -102,17 +103,57 @@ func plausibleLoadedWays(offlineMaps *maps.Offline, location log.GpsLocationData
 	return ways
 }
 
-func GetCurrentWay(currentWay CurrentWay, nextWays []maps.NextWayResult, offlineMaps *maps.Offline, location log.GpsLocationData) (CurrentWay, error) {
+// GetCurrentWay matches the fix to one road. When it cannot, a car too slow
+// for its heading to count keeps the road it was tracked on while beside it.
+func GetCurrentWay(currentWay CurrentWay, nextWays []maps.NextWayResult, offlineMaps *maps.Offline, location log.GpsLocationData, track *roadTrack, fixMonoTime uint64) (CurrentWay, error) {
+	tracking := track.usable(fixMonoTime)
+	way, err := matchWay(currentWay, nextWays, offlineMaps, location, track, tracking, fixMonoTime)
+	if err == nil || !tracking {
+		return way, err
+	}
+	held, onWay, ok := track.heldWhileSlow(offlineMaps, location)
+	if !ok {
+		return way, err
+	}
+	track.held = true
+	start, end := held.GetStartEnd(onWay.IsForward)
+	selection, confidence, lastChange := custom.WaySelectionType_extended, 1, time.Now()
+	if currentWay.Way.Nodes.Len() > 1 && currentWay.Way.Id() == held.Id() {
+		selection, confidence, lastChange = custom.WaySelectionType_current, currentWay.ConfidenceCounter+1, currentWay.LastChangeTime
+	}
+	return CurrentWay{Way: held, Distance: onWay.Distance, OnWay: onWay, StartPosition: start, EndPosition: end,
+		ConfidenceCounter: confidence, LastChangeTime: lastChange, StableDistance: onWay.Distance.Distance, SelectionType: selection}, nil
+}
+
+func matchWay(currentWay CurrentWay, nextWays []maps.NextWayResult, offlineMaps *maps.Offline, location log.GpsLocationData, track *roadTrack, tracking bool, fixMonoTime uint64) (CurrentWay, error) {
 	candidates := plausibleLoadedWays(offlineMaps, location)
 	if len(candidates) == 0 {
 		return CurrentWay{SelectionType: custom.WaySelectionType_fail}, errors.New("no plausible loaded-tile way")
 	}
-	if len(candidates) > 1 {
-		return CurrentWay{SelectionType: custom.WaySelectionType_fail}, ErrAmbiguousWay
-	}
 	// Use the loaded tile's representation, even when a prior sticky way has the
 	// same ID. This prevents an old tile's geometry/limit from being republished.
 	way := candidates[0]
+	if len(candidates) > 1 {
+		resolved, limit, ok, keep := resolveWay(candidates, location, track, tracking)
+		if keep && !ok {
+			track.unsure = true
+			track.touch(fixMonoTime)
+		}
+		// A road with no history, one that changes the limit, or one after a near tie needs a second fix.
+		if !ok {
+			track.pending = 0
+		}
+		if ok && (!tracking || track.unsure || math.Abs(limit-track.limit) > trackLimitTolerance) && !track.confirmed(resolved.Id(), fixMonoTime) {
+			if tracking {
+				track.touch(fixMonoTime)
+			}
+			ok = false
+		}
+		if !ok {
+			return CurrentWay{SelectionType: custom.WaySelectionType_fail}, ErrAmbiguousWay
+		}
+		way = resolved
+	}
 	onWay, err := way.OnWay(location, 2)
 	if err != nil || !onWay.OnWay {
 		return CurrentWay{SelectionType: custom.WaySelectionType_fail}, errors.New("sole way lost geographic match")
