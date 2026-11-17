@@ -7,7 +7,7 @@ from openpilot.starpilot.ui.raylib import rl
 from openpilot.starpilot.navigation.wire import PHONE_SOURCE_PREFIX
 from openpilot.starpilot.ui.appearance_preferences import CameraViewChoice
 from openpilot.starpilot.ui.navigation_icons import ASSETS, MANIFEST, icon_name
-from openpilot.starpilot.ui.navigation_state import distance_text
+from openpilot.starpilot.ui.navigation_state import distance_text, maneuver_text
 from openpilot.starpilot.ui.onroad_customization import NAV_CARD_SIZE
 from openpilot.starpilot.ui.presentation import FontRole, Profile
 
@@ -202,7 +202,8 @@ class NavigationCard:
     x = rect.x + padding * (2 if beside else 1) + (size if beside else 0)
     width = rect.x + rect.width - padding - x
     distance_size, text_size = (32, 20) if compact else (66, 38)
-    distance = 'Arrived' if nav.arrived else distance_text(nav.distance_m, state.metric) if nav.distance_known else 'Phone navigation'
+    distance = ('Arrived' if nav.arrived else distance_text(nav.distance_m, state.metric) if nav.distance_known else
+                maneuver_text(nav.maneuver_type, nav.modifier))
     far = not nav.arrived and nav.distance_m > FAR_TURN_M
     y = rect.y + (8 if compact else 12)
     self.fonts.draw(distance, FontRole.BOLD, distance_size, x, y, rl.WHITE)

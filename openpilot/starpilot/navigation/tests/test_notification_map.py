@@ -566,3 +566,79 @@ def test_plain_no_match_is_still_a_loss_that_keeps_a_hold():
   update(held, approach([], 5), now=BOOT + 5_000_000_000)
   assert not held.resolve(leaving(instruction='W Grand Teton Dr', observed=NOW + 5_000_000_000), speed=10.,
                           now_ns=NOW + 5_000_000_000).control
+
+
+def iphone_step(**patch):
+  # Google Maps on iPhone names the road and side but never the distance.
+  step = phone(**{'instruction': 'Oak Hill Blvd', 'roadName': 'Oak Hill Blvd', 'untilPassed': True, **patch})
+  del step['distanceMeters']
+  return step
+
+
+@pytest.mark.parametrize('rows,patch,status,reason', [
+    ([named(90, 600)], {}, 'mapAligned', ''),
+    ([named(90, 600), branch(90, 200, roadName='Elm Street', wayId=78)], {}, 'mapAligned', ''),
+    ([named(-90, 600)], {}, 'mapUnverifiable', 'noNamedBranchAhead'),
+    ([branch(90, 600)], {}, 'mapUnverifiable', 'noNamedBranchAhead'),
+    ([named(90, 300), named(90, 900, wayId=78)], {}, 'mapAmbiguous', 'multipleJunctionsMatch'),
+    ([named(90, 600)], {'roadName': ''}, 'mapUnverifiable', 'phoneRoadUnknown'),
+    ([named(90, 600)], {'untilPassed': False}, 'mapUnverifiable', 'phoneDistanceUnknown'),
+])
+def test_iphone_step_finds_its_junction_by_road_name_and_side(rows, patch, status, reason):
+  local_map = LocalMapCorroborator()
+  update(local_map, packet(rows))
+  resolved = local_map.resolve(iphone_step(**patch))
+  assert (resolved.status, resolved.reason) == (status, reason)
+  if status == 'mapAligned':
+    assert resolved.distance == 600
+
+
+def test_iphone_step_holds_until_its_junction_is_passed():
+  local_map, step = LocalMapCorroborator(), iphone_step(observed=NOW)
+
+  def select(second, rows):
+    live(local_map, second, rows)
+    diagnostics = {}
+    now = NOW + int(second * 1e9)
+    selected = select_navigation({'status': 'needsKey'}, {**step, 'received': now}, now_ns=now, drive_id=1,
+                                 local_map=local_map, diagnostics=diagnostics, speed=10.)
+    return selected, diagnostics['reason']
+
+  # Well past the 90 s a prompt usually lasts, the map still has the junction ahead.
+  for second in range(100, 121):
+    selected, _ = select(second, [named(90, 200 - 10 * (second - 100))])
+    assert selected['controlValid'] and selected['distanceKnown']
+    assert selected['instruction']['distanceMeters'] == pytest.approx(200 - 10 * (second - 100), abs=2)
+  for second in range(121, 135):
+    selected, reason = select(second, None)
+  assert reason == 'passedManeuver' and 'source' not in selected
+
+
+def test_unmatched_iphone_step_keeps_the_usual_lifetime():
+  local_map, step = LocalMapCorroborator(), iphone_step(observed=NOW)
+  update(local_map, packet([branch(90, 600)]))
+  diagnostics = {}
+  selected = select_navigation({'status': 'needsKey'}, {**step, 'received': NOW + 60_000_000_000}, now_ns=NOW + 60_000_000_000, drive_id=1,
+                               local_map=local_map, diagnostics=diagnostics)
+  assert selected['source'] == 'phone:googleMaps' and not selected['distanceKnown'] and not selected['controlValid']
+  select_navigation({'status': 'needsKey'}, {**step, 'received': NOW + 91_000_000_000}, now_ns=NOW + 91_000_000_000, drive_id=1,
+                    local_map=local_map, diagnostics=diagnostics)
+  assert diagnostics['reason'] == 'staleObservation'
+
+
+def test_iphone_step_ignores_the_road_it_is_already_on():
+  local_map = LocalMapCorroborator()
+  update(local_map, packet([named(15, 600)], roadName='Oak Hill Boulevard'))
+  assert local_map.resolve(iphone_step()).reason == 'alreadyOnRoad'
+
+
+def test_iphone_step_does_not_jump_to_another_junction_with_the_same_name():
+  local_map, step = LocalMapCorroborator(), iphone_step(observed=NOW)
+  live(local_map, 0, [named(90, 300)])
+  assert local_map.resolve(step, speed=10., now_ns=NOW).control
+  live(local_map, 1, [named(90, 290)])
+  assert local_map.resolve(step, speed=10., now_ns=NOW + 1_000_000_000).control
+  live(local_map, 2, [named(90, 900, wayId=78)])
+  # The jump is refused and the junction already matched is carried on instead.
+  kept = local_map.resolve(step, speed=10., now_ns=NOW + 2_000_000_000)
+  assert kept.control and kept.distance == pytest.approx(280, abs=2)

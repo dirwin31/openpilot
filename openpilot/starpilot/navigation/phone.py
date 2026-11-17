@@ -9,13 +9,19 @@ import time
 
 OBSERVATION_NS = 90_000_000_000
 LEASE_NS = 15_000_000_000
+STEP_NS = 600_000_000_000   # an iPhone step the map confirmed lasts until its junction is passed, at most this long
 MAX_RETIRED_SESSIONS = 256
 PATH = '/api/companion/navigation'
 FIELDS = {'session', 'sequence', 'active', 'ageMs', 'instruction', 'maneuverType', 'maneuverModifier', 'distanceMeters',
-          'roadName', 'exitNumber', 'destination', 'source', 'remainingMeters', 'remainingSeconds'}
+          'roadName', 'exitNumber', 'destination', 'source', 'remainingMeters', 'remainingSeconds', 'untilPassed'}
 TOTAL_LIMITS = {'remainingMeters': 20_000_000, 'remainingSeconds': 604_800}
 TYPES = {'', 'turn', 'continue', 'on ramp', 'off ramp', 'fork', 'merge', 'roundabout', 'arrive'}
 MODIFIERS = {'', 'left', 'right', 'straight', 'slightLeft', 'slightRight', 'sharpLeft', 'sharpRight', 'uturn'}
+
+
+def observation_limit(value):
+  # iPhone notification steps carry no distance, so they hold until the map sees the junction passed.
+  return STEP_NS if value.get('untilPassed') is True else OBSERVATION_NS
 
 
 def boot_offset_ns():
@@ -87,8 +93,10 @@ def validate_payload(payload):
     raise ValueError('Invalid navigation session')
   if any(key in payload and (not isinstance(payload[key], str) or len(payload[key]) > 500) for key in ('roadName', 'exitNumber', 'destination')):
     raise ValueError('Invalid road or exit')
+  if type(payload.get('untilPassed', False)) is not bool:
+    raise ValueError('Invalid navigation step')
   age = payload.get('ageMs')
-  if type(age) not in (int, float) or not math.isfinite(age) or not 0 <= age <= OBSERVATION_NS / 1e6:
+  if type(age) not in (int, float) or not math.isfinite(age) or not 0 <= age <= observation_limit(payload) / 1e6:
     raise ValueError('Navigation observation expired')
   text = payload.get('instruction', '')
   kind, modifier = payload.get('maneuverType', ''), payload.get('maneuverModifier', '')
@@ -144,7 +152,7 @@ def read_phone_navigation(now_ns, path=None):
   value = _read(path or handoff_path())
   try:
     if (abs(value['bootOffset'] - boot_offset_ns()) <= 1_000_000_000 and value['active'] and
-        0 < value['observed'] <= now_ns <= value['observed'] + OBSERVATION_NS and
+        0 < value['observed'] <= now_ns <= value['observed'] + observation_limit(value) and
         0 < value['received'] <= now_ns <= value['received'] + LEASE_NS):
       return value
   except (TypeError, KeyError):
@@ -163,7 +171,7 @@ class GuidanceHold:
   def update(self, phone, now_ns):
     if phone is not None:
       self.value, self.until = phone, now_ns + HOLD_NS
-    elif self.value is not None and not now_ns <= min(self.until, self.value['observed'] + OBSERVATION_NS):
+    elif self.value is not None and not now_ns <= min(self.until, self.value['observed'] + observation_limit(self.value)):
       self.value = None
     return self.value
 
@@ -260,6 +268,11 @@ def select_navigation(mapbox, phone, *, now_ns, drive_id, official_active=False,
     return mapbox
   from openpilot.starpilot.navigation.notification import Resolution
   resolved = local_map.resolve(phone, speed=speed, now_ns=now_ns) if local_map is not None else Resolution('mapUnavailable')
+  until_passed = phone.get('untilPassed') is True
+  if until_passed and resolved.reason == 'stepPassed':
+    return rejected('passedManeuver')
+  if until_passed and not resolved.control and now_ns > phone['observed'] + OBSERVATION_NS:
+    return rejected('staleObservation')
   if diagnostics is not None:
     diagnostics['mapStatus'] = resolved.status
     diagnostics['mapReason'] = resolved.reason
@@ -269,7 +282,7 @@ def select_navigation(mapbox, phone, *, now_ns, drive_id, official_active=False,
   # Turn speed and turn assist need a fresh observation and a junction the map agrees on; they then run on
   # that junction's distance and fix time, not the notification's rounded one.
   controlled = bool(resolved.control and drive_id > 0 and drive_id <= resolved.anchor_ns <= now_ns and
-                    drive_id <= phone['observed'] <= now_ns <= phone['observed'] + PHONE_CONTROL_AGE_NS)
+                    drive_id <= phone['observed'] <= now_ns <= phone['observed'] + (STEP_NS if until_passed else PHONE_CONTROL_AGE_NS))
   observed = phone['observed']
   if controlled:
     observed = resolved.anchor_ns
@@ -287,7 +300,7 @@ def select_navigation(mapbox, phone, *, now_ns, drive_id, official_active=False,
   return {**mapbox, 'sessionId': source + ':' + phone['session'], 'revision': str(phone['sequence']),
           'enabled': True, 'status': 'guiding', 'source': source, 'frameMonoTime': now_ns,
           'startedMonoTime': drive_id, 'locationMonoTime': observed if controlled else 0, 'observationMonoTime': observed,
-          'distanceKnown': phone.get('distanceMeters') is not None,
+          'distanceKnown': controlled or phone.get('distanceMeters') is not None,
           'totalsKnown': phone.get('remainingMeters') is not None and phone.get('remainingSeconds') is not None,
           'destinationName': '', 'route': [], 'nextManeuver': {}, 'controlValid': controlled,
           'instruction': instruction}

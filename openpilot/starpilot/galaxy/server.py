@@ -1959,6 +1959,8 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           self.json(403, {'error': 'Phone navigation requires a direct local connection'})
           return
         try:
+          if isinstance(payload, dict) and 'untilPassed' in payload:
+            raise ValueError('Unexpected navigation fields')
           result = phone_navigation_source.publish(payload)
           from openpilot.starpilot.navigation.phone import read_verdict
           self.json(200, {**result, 'forwardingEnabled': navigation_owner().read().get('phoneNavigation', False),
