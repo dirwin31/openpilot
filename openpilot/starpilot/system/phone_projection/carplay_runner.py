@@ -22,6 +22,7 @@ from openpilot.starpilot.system.carplay.iap2.session import Iap2Session
 from openpilot.starpilot.system.carplay.mfi import MfiIdentity
 from openpilot.starpilot.system.phone_projection.bluez import IAP2_UUID, pick_iphone
 from openpilot.starpilot.system.phone_projection.ipc import Touch
+from openpilot.starpilot.system.phone_projection.layout import carplay_size
 from openpilot.starpilot.system.phone_projection.runtime import HOTSPOT_ADDRESS, STATE_DIR, Context, TouchTracker, hotspot
 from openpilot.starpilot.system.phone_projection.video import CARPLAY_STREAM, VideoPipe
 
@@ -195,7 +196,7 @@ class CarPlayRunner:
       return
     if self.server is not None:
       self.server.close()
-    width, height = self.ctx.panel
+    width, height = carplay_size(self.ctx.panel)
     cfg = ReceiverConfig(name=NAME, device_id=self.identity.device_id, bluetooth_mac=self.local_address(), width=width,
                          height=height, disable_audio=not audio)
     self.server = self.server_factory(HOTSPOT_ADDRESS, AIRPLAY_PORT, cfg, self.identity, self.pairings, mfi, self, self._log)
@@ -223,7 +224,7 @@ class CarPlayRunner:
       return
     with self.lock:
       if self.pipe is None:
-        width, height = self.ctx.panel
+        width, height = carplay_size(self.ctx.panel)
         self.pipe = VideoPipe(self.ctx.publisher, CARPLAY_STREAM, width, height, request_keyframe=self._keyframe, log=self.ctx.log)
       self.pipe.config(avcc_to_annexb(data))
 
@@ -268,7 +269,7 @@ class CarPlayRunner:
     session = self.session
     if session is None:
       return
-    width, height = self.ctx.panel
+    width, height = carplay_size(self.ctx.panel)
     for touch in touches:
       if touch.kind == "cancel":
         contacts = [(slot, x * width, y * height, False) for slot, (x, y) in self.touches.active().items()]

@@ -10,7 +10,7 @@ from openpilot.starpilot.system.phone_projection import settings
 from openpilot.starpilot.system.phone_projection.car_split import car_split
 from openpilot.starpilot.system.phone_projection.decoder import FrameLayout, access_units
 from openpilot.starpilot.system.phone_projection.ipc import StatusReader, Touch, TouchReceiver, TouchSender, write_status
-from openpilot.starpilot.system.phone_projection.layout import Rect, android_crop, android_margins, fit, split
+from openpilot.starpilot.system.phone_projection.layout import Rect, android_crop, android_margins, carplay_size, fit, split
 from openpilot.starpilot.system.phone_projection.runtime import TouchTracker
 from openpilot.starpilot.system.phone_projection.video import VideoPipe, VideoPublisher
 
@@ -31,6 +31,11 @@ def test_android_frame_leaves_a_panel_shaped_middle():
   assert android_margins((960, 1080)) == (960, 0)
   assert android_crop((960, 1080)) == (480, 0, 960, 1080)
   assert android_crop((1080, 1080)) == (420, 0, 1080, 1080)
+
+
+def test_carplay_asks_for_a_sharper_picture_of_the_same_shape():
+  assert carplay_size((960, 1080)) == (1440, 1620)
+  assert carplay_size((1080, 1080)) == (1620, 1620)
 
 
 def test_settings_round_trip_and_flag(tmp_path):

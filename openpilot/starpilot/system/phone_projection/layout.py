@@ -9,6 +9,8 @@ DEFAULT_PANEL = (1080, 1080)
 # Android Auto renders one of its fixed resolutions; the margin centres a panel-shaped picture inside it.
 ANDROID_RESOLUTION = (1920, 1080)
 ANDROID_RESOLUTION_INDEX = 3
+# CarPlay draws the same layout with more detail when asked for more pixels at the same physical size.
+CARPLAY_SCALE = 1.5
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,10 @@ class Rect:
 
 def panel_size(device_type: str) -> tuple[int, int]:
   return PANEL_SIZES.get(device_type, DEFAULT_PANEL)
+
+
+def carplay_size(panel: tuple[int, int]) -> tuple[int, int]:
+  return tuple(round(side * CARPLAY_SCALE / 2) * 2 for side in panel)
 
 
 def split(rect: Rect, side: str) -> tuple[Rect, Rect]:

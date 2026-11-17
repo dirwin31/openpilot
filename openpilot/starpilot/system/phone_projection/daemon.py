@@ -14,7 +14,7 @@ import time
 
 from openpilot.starpilot.system.phone_projection import ipc, settings as projection_settings
 from openpilot.starpilot.system.phone_projection.audio import MusicOutput, music_library_dir
-from openpilot.starpilot.system.phone_projection.layout import ANDROID_RESOLUTION, android_crop, panel_size
+from openpilot.starpilot.system.phone_projection.layout import ANDROID_RESOLUTION, android_crop, carplay_size, panel_size
 from openpilot.starpilot.system.phone_projection.runtime import Context
 from openpilot.starpilot.system.phone_projection.video import ANDROID_STREAM, CARPLAY_STREAM, VideoPublisher
 
@@ -65,7 +65,7 @@ def build_status(settings, panel, runners, active) -> dict:
   if active is not None:
     status.update(kind=active.kind, state="active", phone=active.status()["phone"])
     if active.kind == "carplay":
-      status.update(stream=CARPLAY_STREAM, frame=list(panel), crop=[0, 0, *panel], frames=active.frames())
+      status.update(stream=CARPLAY_STREAM, frame=list(carplay_size(panel)), crop=[0, 0, *carplay_size(panel)], frames=active.frames())
     else:
       status.update(stream=ANDROID_STREAM, frame=list(ANDROID_RESOLUTION), crop=list(android_crop(panel)), frames=active.frames())
   else:
@@ -81,7 +81,7 @@ def main() -> int:
   settings = SettingsCache()
   panel = panel_size(device_type())
   from openpilot.starpilot.system.phone_projection.decoder import nv12_layout
-  publisher = VideoPublisher({CARPLAY_STREAM: nv12_layout(*panel), ANDROID_STREAM: nv12_layout(*ANDROID_RESOLUTION)})
+  publisher = VideoPublisher({CARPLAY_STREAM: nv12_layout(*carplay_size(panel)), ANDROID_STREAM: nv12_layout(*ANDROID_RESOLUTION)})
   from openpilot.starpilot.system.phone_projection.bluez import Bluez
   ctx = Context(publisher=publisher, panel=panel, settings=settings, audio=MusicOutput(log=log), bluez=Bluez(), log=log)
   signal.signal(signal.SIGTERM, lambda *_: ctx.stop.set())
