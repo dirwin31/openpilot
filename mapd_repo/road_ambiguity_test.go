@@ -83,7 +83,8 @@ func ambiguitySample(t *testing.T, mono uint64, changed bool) cereal.GpsSample {
 	return syntheticSample(t, cereal.GpsSourceExternal, mono, 1, changed, true)
 }
 
-func TestPackedParallelAndCrossingRoadsPublishNeutralUnknown(t *testing.T) {
+// Stopped with no tracked road, neither a parallel nor a crossing road can be ruled out.
+func TestPackedParallelAndCrossingRoadsPublishNeutralUnknownWhileStopped(t *testing.T) {
 	local := syntheticWay{1, 8, 35.1, -97.9, 35.2, -97.9, false, 2}
 	parallel := syntheticWay{2, 30, 35.1, -97.8999, 35.2, -97.8999, false, 6}
 	crossing := syntheticWay{2, 30, 35.15, -97.95, 35.15, -97.85, false, 6}
@@ -143,7 +144,10 @@ func TestPackedStickyRoadAmbiguityAndEmptyNewTileClearState(t *testing.T) {
 	// Swap the loaded tile while preserving the old sticky current way.
 	s.Data = competing
 	boot += 100_000_000
-	s.ProcessGps(ambiguitySample(t, 10_100_000_000, false), true, nil, now.Add(100*time.Millisecond))
+	between := ambiguitySample(t, 10_100_000_000, false)
+	between.Location.SetLongitude(-97.89995)
+	between.Location.SetSpeed(20)
+	s.ProcessGps(between, true, nil, now.Add(100*time.Millisecond))
 	event, out := decodedOutput(t, &s)
 	if event.Valid() || out.RoadStatus() != custom.MapdOut_SampleStatus_unknown || out.SpeedLimit() != 0 || s.SpeedLimit.AcceptedLimit != 0 || s.NextHazard.Value != "" || s.MapCurveSpeed != 0 {
 		t.Fatalf("sticky match survived competing tile: status=%v limit=%f", out.RoadStatus(), out.SpeedLimit())
@@ -178,6 +182,17 @@ func TestPackedPredictedWayCannotBypassCompetingRoad(t *testing.T) {
 	event, out := decodedOutput(t, &s)
 	if event.Valid() || out.RoadStatus() != custom.MapdOut_SampleStatus_unknown || out.SpeedLimit() != 0 {
 		t.Fatalf("predicted way bypassed competing loaded road: status=%v limit=%f", out.RoadStatus(), out.SpeedLimit())
+	}
+	// Still none on later moving fixes: the two limits differ and the roads are a near tie.
+	for i := range uint64(3) {
+		sample := ambiguitySample(t, 11_000_000_000+i*1_000_000_000, false)
+		sample.Location.SetLongitude(-97.89995)
+		sample.Location.SetSpeed(20)
+		s.bootNow = func() uint64 { return sample.FixMonoTime + 100_000_000 }
+		s.ProcessGps(sample, true, nil, time.Unix(0, 0))
+		if _, out := decodedOutput(t, &s); s.RoadMatched() || out.SpeedLimit() != 0 {
+			t.Fatalf("near tie resolved on fix %d: limit=%f", i, out.SpeedLimit())
+		}
 	}
 }
 
