@@ -117,6 +117,17 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
   phone_navigation_source = phone_navigation if phone_navigation is not None else PhoneNavigationPublisher()
   from openpilot.starpilot.system.starport.phone_notifications import PhoneNotifications
   phone_notifications_source = phone_notifications if phone_notifications is not None else PhoneNotifications()
+  from openpilot.starpilot.navigation.notification_text import NotificationNavigation
+  from openpilot.starpilot.system.starport.identity import DATA_DIR as starport_data_dir
+
+  def phone_navigation_enabled():
+    try:
+      return bool(navigation_owner().read().get('phoneNavigation', False))
+    except Exception:
+      return False
+  notification_navigation = NotificationNavigation(
+    phone_navigation_source, enabled=phone_navigation_enabled,
+    samples=None if phone_navigation is not None else starport_data_dir / 'navigation_text_samples.jsonl')
   phone_location_source = phone_location if phone_location is not None else PhoneGpsPublisher()
   cloud = cloud_provider
   hotspot_source = hotspot
@@ -1960,7 +1971,11 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           self.json(403, {'error': 'Phone notifications require a direct local connection'})
           return
         try:
-          self.json(200, phone_notifications_source.publish(payload))
+          from openpilot.starpilot.system.starport.phone_notifications import validate_payload as validate_notification
+          if notification_navigation.offer(validate_notification(payload)):
+            self.json(200, phone_notifications_source.divert(payload))
+          else:
+            self.json(200, phone_notifications_source.publish(payload))
         except ValueError as error:
           self.json(400, {'error': str(error)})
         except OSError:
