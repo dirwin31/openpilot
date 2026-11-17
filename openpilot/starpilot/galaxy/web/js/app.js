@@ -41,6 +41,7 @@ const ControllersPage = page(() => import("./controllers.js").then((module) => m
 const BluetoothPage = page(() => import("./bluetooth.js").then((module) => module.BluetoothPage))
 const StarPortPage = page(() => import("./starport.js").then((module) => module.StarPortPage))
 const SpotifyPage = page(() => import("./spotify.js").then((module) => module.SpotifyPage))
+const PhoneScreenPage = page(() => import("./phone-screen.js").then((module) => module.PhoneScreenPage))
 const OnroadLayoutPage = page(() => import("./onroad-layout.js").then((module) => module.OnroadLayoutPage))
 const GalaxyPage = page(() => import("./galaxy.js").then((module) => module.GalaxyPage))
 const NetworksPage = page(() => import("./networks.js").then((module) => module.NetworksPage))
@@ -92,7 +93,7 @@ const auth = new LocalAuth({ publish: (update) => {
 
 
 createApp({
-  components: { AppDownloadReminder, BottomNav, Home, LocalAccess, Tools, Logs, SoftwarePage, NavigationPage, ModelsPage, SettingsPage, SettingsRecoveryPage, ToggleSearch, SaveFeedback, FlmPage, LocalRecordingsPage, CamerasPage, SentryEventsPage, VasmPage, PipPage, DrivingPage, DevicePreferencesPage, BluetoothPage, ControllersPage, StarPortPage, SpotifyPage, LongitudinalCurvesPage, OnroadLayoutPage, GalaxyPage, NetworksPage, DevicePicker, DeviceState, MenuTile },
+  components: { AppDownloadReminder, BottomNav, Home, LocalAccess, Tools, Logs, SoftwarePage, NavigationPage, ModelsPage, SettingsPage, SettingsRecoveryPage, ToggleSearch, SaveFeedback, FlmPage, LocalRecordingsPage, CamerasPage, SentryEventsPage, VasmPage, PipPage, DrivingPage, DevicePreferencesPage, BluetoothPage, ControllersPage, StarPortPage, SpotifyPage, PhoneScreenPage, LongitudinalCurvesPage, OnroadLayoutPage, GalaxyPage, NetworksPage, DevicePicker, DeviceState, MenuTile },
   data: () => ({ state, authState, authForm, route, NAV, routeDirection: 1, updateRestart, deviceRestart, nextLayoutLeavePresentation: "inline" }),
   computed: {
     visibleTools() { return state.tools.filter(tool => tool.visibility !== "authenticated" ||
@@ -268,6 +269,7 @@ createApp({
         <ControllersPage v-else-if="route.path === '/bluetooth/controllers'" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <StarPortPage v-else-if="route.path === '/starport'" :mode="state.monitorMode" :local-access="authState.localAccess" :unauthorized="sessionExpired" />
         <SpotifyPage v-else-if="['/starport/audio', '/spotify'].includes(route.path)" :mode="state.monitorMode" :unauthorized="sessionExpired" />
+        <PhoneScreenPage v-else-if="route.path === '/phone-screen'" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <SettingsPage @nested="ensureBackEntry" ref="activeSettings" v-else-if="route.path === '/settings/vehicle'" :mode="state.monitorMode" :unauthorized="sessionExpired" initial-section="vehicle" />
         <DevicePreferencesPage v-else-if="route.path === '/device-preferences'" :mode="state.monitorMode" :go="go" />
         <SettingsPage @nested="ensureBackEntry" ref="activeSettings" v-else-if="deviceSettingsPage" :key="deviceSettingsPage" :mode="state.monitorMode" :unauthorized="sessionExpired" :initial-page="deviceSettingsPage" :title="deviceSettingsPage === 'sounds' ? 'Sounds & Alerts' : 'Display'" :return-to="returnToDevice" />

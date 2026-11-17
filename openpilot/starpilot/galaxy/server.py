@@ -916,6 +916,14 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
         else:
           if self.require_session():
             self.json(200, result)
+      elif path == '/api/phone-projection':
+        if not self.require_session():
+          return
+        from openpilot.starpilot.galaxy import phone_projection
+        try:
+          self.json(200, phone_projection.snapshot())
+        except OSError:
+          self.json(503, {'error': 'Phone screen settings are unavailable.'})
       elif path == '/api/galaxy/networks':
         if not self.require_session():
           return
@@ -1794,6 +1802,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
                       '/api/replay/start', '/api/replay/control', '/api/replay/stop',
                       '/api/replay/export-start',
                       '/api/galaxy/pair', '/api/galaxy/unpair', '/api/galaxy/device-name', '/api/galaxy/hotspot', '/api/galaxy/networks',
+                      '/api/phone-projection',
                       '/api/cameras/snapshot', '/api/cameras/white-balance',
                       '/api/starport/layout', '/api/starport/enable', '/api/starport/control', '/api/starport/pairing',
                       '/api/starport/logs/send',
@@ -1967,6 +1976,21 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           self.json(400, {'error': str(error)})
         except OSError:
           self.json(503, {'error': 'Network settings are unavailable.'})
+        else:
+          self.json(200, result)
+        return
+      if path == '/api/phone-projection':
+        if self.settings_session() is None:
+          self.json(401, {'error': 'Sign in to Galaxy'})
+          return
+        from openpilot.starpilot.galaxy import phone_projection
+        try:
+          with effect_lock:
+            result = phone_projection.save(payload)
+        except ValueError as error:
+          self.json(400, {'error': str(error)})
+        except OSError:
+          self.json(503, {'error': 'Phone screen settings could not be saved.'})
         else:
           self.json(200, result)
         return
