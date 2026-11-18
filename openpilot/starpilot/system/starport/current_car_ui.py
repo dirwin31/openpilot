@@ -193,7 +193,15 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
     from openpilot.starpilot.system.starport.identity import certificate_days_left
     from openpilot.starpilot.system.starport.projection_layout_runtime import ProjectionLayoutWatcher, comma_display_seed
     from openpilot.starpilot.system.phone_projection.car_split import car_split
-    phone_split = car_split(geometry.logical_width, geometry.logical_height)
+    phone_split = car_split(geometry, (request.left, request.top))
+    if phone_split:
+      from openpilot.starpilot.system.phone_projection import ipc as projection_ipc
+      try:
+        if projection_ipc.read_target() != phone_split.target:
+          projection_ipc.write_target(phone_split.target)
+      except OSError as error:
+        print(f"car view could not publish the phone size: {error}", flush=True)
+      print(f"car view phone half: {phone_split.phone}", flush=True)
     viewport = phone_split.viewport if phone_split else (geometry.logical_width, geometry.logical_height)
     watcher = ProjectionLayoutWatcher(viewport, display_seed=comma_display_seed)
     layout = ProjectionOnroad(viewport=viewport, customization=watcher.load(),
@@ -385,20 +393,19 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
           rl.rl_translatef(left, top, 0)
           rl.rl_scalef(geometry.scale, geometry.scale, 1.0)
           if phone_split:
-            rl.rl_push_matrix()
             rl.rl_translatef(phone_split.comma.x, 0, 0)
-            layout.render()
-            rl.rl_pop_matrix()
-            phone.refresh()
-            phone.render(phone_split.phone)
-          else:
-            layout.render()
+          layout.render()
+          if phone_split:
+            rl.rl_translatef(-phone_split.comma.x, 0, 0)
           if now < touch_setup_until:
             layout.draw_touch_setup(*setup_dot)
           elif now < touch_done_until:
             layout.draw_touch_setup(*setup_dot, done=True)
         finally:
           rl.rl_pop_matrix()
+        if phone_split:
+          phone.refresh()
+          phone.render(phone_split.phone)  # output pixels, outside the scaled matrix
       finally:
         rl.end_texture_mode()
       touches = []

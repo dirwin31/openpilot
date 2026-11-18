@@ -10,8 +10,7 @@ from openpilot.starpilot.system.phone_projection.android.session import (
 from openpilot.starpilot.system.phone_projection.android.wireless import WirelessSetup
 from openpilot.starpilot.system.phone_projection.bluez import android_candidates
 from openpilot.starpilot.system.phone_projection.ipc import Touch
-from openpilot.starpilot.system.phone_projection.layout import (ANDROID_RESOLUTION, ANDROID_RESOLUTION_INDEX, android_crop,
-                                                                android_margins)
+from openpilot.starpilot.system.phone_projection.layout import android_crop, android_margins, android_mode
 from openpilot.starpilot.system.phone_projection.runtime import HOTSPOT_ADDRESS, Context, TouchTracker, hotspot
 from openpilot.starpilot.system.phone_projection.video import ANDROID_STREAM, VideoPipe
 
@@ -140,8 +139,8 @@ class AndroidAutoRunner:
 
   def _serve(self, conn: socket.socket) -> None:
     margin_w, margin_h = android_margins(self.ctx.panel)
-    width, height = ANDROID_RESOLUTION
-    cfg = HeadUnitConfig(resolution=ANDROID_RESOLUTION_INDEX, width=width, height=height, margin_width=margin_w,
+    index, (width, height) = android_mode(self.ctx.panel)
+    cfg = HeadUnitConfig(resolution=index, width=width, height=height, margin_width=margin_w,
                          margin_height=margin_h, audio=self.ctx.settings().audio == "music",
                          bluetooth_address=self.ctx.bluez.adapter_address())
     session = self.session_factory(conn, cfg, self, log=self.ctx.log)
@@ -159,7 +158,7 @@ class AndroidAutoRunner:
   def on_video_start(self, session) -> None:
     with self.lock:
       if self.pipe is None:
-        width, height = ANDROID_RESOLUTION
+        width, height = android_mode(self.ctx.panel)[1]
         self.pipe = VideoPipe(self.ctx.publisher, ANDROID_STREAM, width, height, request_keyframe=self._keyframe, log=self.ctx.log)
     self.ctx.audio.request(self.ctx.settings().audio == "music")
     self._set("active", f"{self.phone or 'Android phone'} connected")

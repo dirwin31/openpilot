@@ -7,10 +7,12 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 from openpilot.starpilot.system.carplay.airplay.session import open_audio_packet
 from openpilot.starpilot.system.phone_projection import settings
-from openpilot.starpilot.system.phone_projection.car_split import car_split
+from openpilot.starpilot.system.phone_projection.car_split import car_layout, car_split
 from openpilot.starpilot.system.phone_projection.decoder import FrameLayout, access_units
-from openpilot.starpilot.system.phone_projection.ipc import StatusReader, Touch, TouchReceiver, TouchSender, write_status
-from openpilot.starpilot.system.phone_projection.layout import Rect, android_crop, android_margins, carplay_size, fit, split
+from openpilot.starpilot.system.phone_projection.ipc import StatusReader, Touch, TouchReceiver, TouchSender, read_target, write_status, write_target
+from openpilot.starpilot.system.phone_projection.layout import (Rect, android_crop, android_margins, android_mode, carplay_size,
+                                                                carplay_width_mm, fit, snap, split)
+from openpilot.starpilot.system.starport.projection_geometry import projection_geometry
 from openpilot.starpilot.system.phone_projection.runtime import TouchTracker
 from openpilot.starpilot.system.phone_projection.video import VideoPipe, VideoPublisher
 
@@ -27,15 +29,53 @@ def test_fit_letterboxes():
   assert (r.x, r.width, r.height) == (0, 960, 960) and r.y == 60
 
 
-def test_android_frame_leaves_a_panel_shaped_middle():
-  assert android_margins((960, 1080)) == (960, 0)
-  assert android_crop((960, 1080)) == (480, 0, 960, 1080)
+def test_android_frame_holds_exactly_the_panel():
+  assert android_mode((640, 720)) == (2, (1280, 720)) and android_margins((640, 720)) == (640, 0)
+  assert android_mode((960, 1080)) == (3, (1920, 1080)) and android_crop((960, 1080)) == (480, 0, 960, 1080)
+  assert android_mode((400, 480)) == (1, (800, 480)) and android_crop((400, 480)) == (200, 0, 400, 480)
   assert android_crop((1080, 1080)) == (420, 0, 1080, 1080)
+  assert android_mode((360, 1280)) == (6, (720, 1280))
 
 
-def test_carplay_asks_for_a_sharper_picture_of_the_same_shape():
-  assert carplay_size((960, 1080)) == (1440, 1620)
-  assert carplay_size((1080, 1080)) == (1620, 1620)
+def test_carplay_asks_for_exactly_one_or_two_times_the_panel():
+  assert carplay_size((960, 1080)) == (960, 1080)
+  assert carplay_size((1080, 1080)) == (1080, 1080)
+  assert carplay_size((640, 720)) == (1280, 1440)
+  assert carplay_size((400, 480)) == (800, 960)
+  assert carplay_width_mm((960, 1080)) == 200 and carplay_width_mm((640, 720)) == 133
+
+
+def test_snap_lands_on_even_pixels():
+  assert snap(Rect(1.2, 0.9, 639.3, 719.6)) == Rect(2, 0, 638, 720)
+
+
+@pytest.mark.parametrize("size,margins,origin,phone", [
+  ((1280, 720), (0, 0), (0, 0), Rect(640, 0, 640, 720)),
+  ((1920, 1080), (0, 0), (0, 0), Rect(960, 0, 960, 1080)),
+  ((800, 480), (0, 0), (0, 0), Rect(400, 0, 400, 480)),
+  ((1280, 720), (100, 0), (51, 0), Rect(589, 0, 590, 720)),
+])
+def test_car_layout_puts_the_phone_on_whole_even_pixels(size, margins, origin, phone):
+  geometry = projection_geometry(*size, *margins)
+  right = car_layout(geometry, "right", origin)
+  left = car_layout(geometry, "left", origin)
+  if origin == (0, 0):
+    assert right.phone == phone
+  for split_ in (right, left):
+    assert split_.phone.width % 2 == 0 and split_.phone.height % 2 == 0
+    assert (split_.phone.x + origin[0]) % 2 == 0 and (split_.phone.y + origin[1]) % 2 == 0
+    assert 0 <= split_.phone.x and split_.phone.x + split_.phone.width <= geometry.width
+  assert right.target == left.target
+  assert right.comma.width * geometry.scale == pytest.approx(right.phone.x - right.left)
+
+
+def test_target_round_trip(tmp_path):
+  path = tmp_path / "target.json"
+  assert read_target(path) is None
+  write_target((640, 720), path)
+  assert read_target(path) == (640, 720)
+  path.write_text('{"width": 641, "height": 720}')
+  assert read_target(path) is None
 
 
 def test_settings_round_trip_and_flag(tmp_path):
@@ -93,16 +133,17 @@ class FakePhone:
 
 def test_car_split_routes_touches(tmp_path):
   settings.update(tmp_path, enabled=True, side="left")
-  car = car_split(1920, 720, settings.load(tmp_path))
-  assert car.viewport == (960, 720) and car.phone.x == 0 and car.comma.x == 960
-  phone = FakePhone(lambda x, y: x < 960)
+  geometry = projection_geometry(1280, 720)
+  car = car_split(geometry, settings=settings.load(tmp_path))
+  assert car.viewport == (960, 1080) and car.phone == Rect(0, 0, 640, 720) and car.comma.x == 960
+  phone = FakePhone(lambda x, y: x < 640)
   from collections import namedtuple
   TouchEvent = namedtuple("TouchEvent", "kind x y")
   routed = car.route([TouchEvent("down", 0.25, 0.5), TouchEvent("down", 0.75, 0.5), TouchEvent("up", 1.0, 0.5)], phone)
   assert [e.kind for e in routed] == ["down", "up"]
   assert routed[0].x == pytest.approx(0.5) and routed[1].x == pytest.approx(1.0)
-  assert phone.seen[0] == ("down", 480, 360)
-  assert car_split(1920, 720, settings.Settings(enabled=False)) is None
+  assert phone.seen[0] == ("down", pytest.approx(320), pytest.approx(360))
+  assert car_split(geometry, settings=settings.Settings(enabled=False)) is None
 
 
 def test_carplay_audio_packet_is_decrypted_and_swapped():

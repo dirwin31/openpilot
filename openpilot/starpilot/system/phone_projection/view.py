@@ -9,7 +9,7 @@ from openpilot.selfdrive.ui.onroad import cameraview
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.starpilot.system.phone_projection import settings as projection_settings
 from openpilot.starpilot.system.phone_projection.ipc import StatusReader, Touch, TouchSender, VIPC_NAME
-from openpilot.starpilot.system.phone_projection.layout import Rect, fit, split
+from openpilot.starpilot.system.phone_projection.layout import Rect, fit, snap, split
 from openpilot.starpilot.ui.raylib import rl
 
 BACKGROUND = rl.Color(12, 12, 14, 255)
@@ -77,7 +77,7 @@ class PhoneCamera(CameraView):
       self.picture = None
       return
     cx, cy, cw, ch = self.crop or (0, 0, self.frame.width, self.frame.height)
-    picture = fit(cw, ch, Rect(rect.x, rect.y, rect.width, rect.height))
+    picture = snap(fit(cw, ch, Rect(rect.x, rect.y, rect.width, rect.height)))
     self.picture = picture
     src = rl.Rectangle(cx, cy, cw, ch)
     dst = rl.Rectangle(picture.x, picture.y, picture.width, picture.height)

@@ -14,7 +14,7 @@ import time
 
 from openpilot.starpilot.system.phone_projection import ipc, settings as projection_settings
 from openpilot.starpilot.system.phone_projection.audio import MusicOutput, music_library_dir
-from openpilot.starpilot.system.phone_projection.layout import ANDROID_RESOLUTION, android_crop, carplay_size, panel_size
+from openpilot.starpilot.system.phone_projection.layout import android_crop, android_mode, carplay_size, panel_size
 from openpilot.starpilot.system.phone_projection.runtime import Context
 from openpilot.starpilot.system.phone_projection.video import ANDROID_STREAM, CARPLAY_STREAM, VideoPublisher
 
@@ -68,7 +68,7 @@ def build_status(settings, panel, runners, active) -> dict:
     if active.kind == "carplay":
       status.update(stream=CARPLAY_STREAM, frame=list(carplay_size(panel)), crop=[0, 0, *carplay_size(panel)], frames=active.frames())
     else:
-      status.update(stream=ANDROID_STREAM, frame=list(ANDROID_RESOLUTION), crop=list(android_crop(panel)), frames=active.frames())
+      status.update(stream=ANDROID_STREAM, frame=list(android_mode(panel)[1]), crop=list(android_crop(panel)), frames=active.frames())
   else:
     waiting = [r.status() for r in (carplay, android) if r is not None]
     connecting = next((s for s in waiting if s["state"] == "connecting"), None)
@@ -80,11 +80,13 @@ def build_status(settings, panel, runners, active) -> dict:
 def main() -> int:
   ensure_audio_libraries()
   settings = SettingsCache()
-  panel = panel_size(device_type())
+  device = device_type()
+  panel = ipc.read_target() or panel_size(device)
   from openpilot.starpilot.system.phone_projection.decoder import nv12_layout
-  publisher = VideoPublisher({CARPLAY_STREAM: nv12_layout(*carplay_size(panel)), ANDROID_STREAM: nv12_layout(*ANDROID_RESOLUTION)})
+  publisher = VideoPublisher({CARPLAY_STREAM: nv12_layout(*carplay_size(panel)), ANDROID_STREAM: nv12_layout(*android_mode(panel)[1])})
   from openpilot.starpilot.system.phone_projection.bluez import Bluez
-  ctx = Context(publisher=publisher, panel=panel, settings=settings, audio=MusicOutput(log=log), bluez=Bluez(), log=log)
+  ctx = Context(publisher=publisher, panel=panel, settings=settings, audio=MusicOutput(log=log), bluez=Bluez(), log=log,
+                fps=30 if device == "mici" else 60)
   signal.signal(signal.SIGTERM, lambda *_: ctx.stop.set())
   signal.signal(signal.SIGINT, lambda *_: ctx.stop.set())
   touches = ipc.TouchReceiver()
@@ -111,6 +113,10 @@ def main() -> int:
         ipc.write_status(build_status(settings(), panel, runners, active))
         if not settings().enabled:
           log("phone projection turned off")
+          break
+        target = ipc.read_target()
+        if target is not None and target != panel:
+          log(f"car screen shows the phone at {target[0]}x{target[1]}; restarting at that size")
           break
       ctx.stop.wait(0.01)
   finally:

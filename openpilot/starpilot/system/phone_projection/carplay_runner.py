@@ -22,7 +22,7 @@ from openpilot.starpilot.system.carplay.iap2.session import Iap2Session
 from openpilot.starpilot.system.carplay.mfi import MfiIdentity
 from openpilot.starpilot.system.phone_projection.bluez import IAP2_UUID, pick_iphone
 from openpilot.starpilot.system.phone_projection.ipc import Touch
-from openpilot.starpilot.system.phone_projection.layout import carplay_size
+from openpilot.starpilot.system.phone_projection.layout import carplay_size, carplay_width_mm
 from openpilot.starpilot.system.phone_projection.runtime import HOTSPOT_ADDRESS, STATE_DIR, Context, TouchTracker, hotspot
 from openpilot.starpilot.system.phone_projection.video import CARPLAY_STREAM, VideoPipe
 
@@ -198,7 +198,8 @@ class CarPlayRunner:
       self.server.close()
     width, height = carplay_size(self.ctx.panel)
     cfg = ReceiverConfig(name=NAME, device_id=self.identity.device_id, bluetooth_mac=self.local_address(), width=width,
-                         height=height, disable_audio=not audio)
+                         height=height, width_mm=carplay_width_mm(self.ctx.panel), fps=self.ctx.fps, disable_audio=not audio)
+    self.ctx.log(f"carplay: asking for {width}x{height} at {cfg.fps} fps, {cfg.width_mm} mm wide")
     self.server = self.server_factory(HOTSPOT_ADDRESS, AIRPLAY_PORT, cfg, self.identity, self.pairings, mfi, self, self._log)
     self.server_key = key
 

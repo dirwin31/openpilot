@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 STATUS_PATH = Path("/tmp/starpilot-projection.json")
+TARGET_PATH = Path("/tmp/starpilot-projection-target.json")  # the phone half of the car screen, in output pixels
 TOUCH_SOCKET = "/tmp/starpilot-projection-touch.sock"
 VIPC_NAME = "projectiond"
 STATUS_MAX_AGE = 5.0
@@ -20,6 +21,31 @@ def write_status(status: dict, path: Path = STATUS_PATH) -> None:
   tmp.write_text(json.dumps({**status, "updated": time.time()}, separators=(",", ":")))
   os.chmod(tmp, 0o644)
   os.replace(tmp, path)
+
+
+def write_target(size: tuple[int, int], path: Path = TARGET_PATH) -> None:
+  tmp = path.with_name(path.name + ".tmp")
+  tmp.write_text(json.dumps({"width": int(size[0]), "height": int(size[1])}))
+  os.chmod(tmp, 0o644)
+  os.replace(tmp, path)
+
+
+def read_target(path: Path = TARGET_PATH) -> tuple[int, int] | None:
+  try:
+    value = json.loads(path.read_text())
+    width, height = int(value["width"]), int(value["height"])
+  except (OSError, ValueError, KeyError, TypeError):
+    return None
+  if not (64 <= width <= 4096 and 64 <= height <= 4096) or width % 2 or height % 2:
+    return None
+  return width, height
+
+
+def clear_target(path: Path = TARGET_PATH) -> None:
+  try:
+    path.unlink()
+  except OSError:
+    pass
 
 
 class StatusReader:
