@@ -7,6 +7,7 @@ StarPort car renderer draw them in half the screen and send touches back.
 from __future__ import annotations
 
 import os
+import select
 import signal
 import sys
 import threading
@@ -118,7 +119,10 @@ def main() -> int:
         if target is not None and target != panel:
           log(f"car screen shows the phone at {target[0]}x{target[1]}; restarting at that size")
           break
-      ctx.stop.wait(0.01)
+      try:
+        select.select([touches], [], [], max(0.0, min(0.25, last_status + STATUS_INTERVAL - time.monotonic())))
+      except (OSError, ValueError):
+        ctx.stop.wait(0.01)
   finally:
     ctx.stop.set()
     for runner in runners.values():
