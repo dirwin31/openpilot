@@ -91,7 +91,7 @@ def test_prompt_becomes_phone_guidance(feed):
   feeder, publisher, clock, _timers, _enabled = feed
   assert feeder.offer(prompt(age=2000)) is True
   live = read_phone_navigation(NOW, publisher.path)
-  assert (live['source'], live['maneuverType'], live['maneuverModifier'], live['roadName']) == ('googleMaps', 'turn', 'right', 'Main St')
+  assert (live['source'], live['maneuverType'], live['maneuverModifier'], live['roadName']) == ('iphoneGoogleMaps', 'turn', 'right', 'Main St')
   assert live['observed'] == NOW - 2_000_000_000
   first = live['session']
   clock[0] += 10_000_000_000
