@@ -207,7 +207,9 @@ class LocalMapCorroborator:
       # A live mapd drops the road (or the junction falls behind) in the last metres of an approach it already
       # confirmed. Carry the junction forward by the distance driven while the phone still agrees with it.
       moved = 0. if held.anchor_ns >= now_ns else self._driven_since(held.anchor_ns)
-      if (self.fresh and moved is not None and (until_passed or driven is not None and not passed and distance is not None) and
+      # An iPhone step has no phone distance to check against, so its junction rides out mapd stalls on the odometer.
+      if ((self.fresh or until_passed) and moved is not None and
+          (until_passed or driven is not None and not passed and distance is not None) and
           held_key == key and result.status in HOLD_KEEPS and 0 <= now_ns - since <= HOLD_NS):
         left = held.distance - moved
         if left >= -HOLD_PASSED_M and (until_passed or abs(left - distance) <= max(80., distance * .3)):
