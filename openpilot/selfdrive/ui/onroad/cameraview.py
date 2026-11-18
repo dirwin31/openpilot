@@ -85,6 +85,7 @@ else:
 
 
 class CameraView(Widget):
+  VERTEX_SHADER = VERTEX_SHADER
   FRAGMENT_SHADER = FRAME_FRAGMENT_SHADER
 
   def __init__(self, name: str, stream_type: VisionStreamType):
@@ -101,7 +102,7 @@ class CameraView(Widget):
 
     self._texture_needs_update = True
     self.last_connection_attempt: float = 0.0
-    self.shader = rl.load_shader_from_memory(VERTEX_SHADER, self.FRAGMENT_SHADER)
+    self.shader = rl.load_shader_from_memory(self.VERTEX_SHADER, self.FRAGMENT_SHADER)
     self._texture1_loc: int = rl.get_shader_location(self.shader, "texture1") if not COMMA_HARDWARE else -1
     self._init_color_uniforms(stream_type)
 
@@ -170,6 +171,8 @@ class CameraView(Widget):
     return self._stream_type
 
   def close(self) -> None:
+    if self._offroad_transition in ui_state._offroad_transition_callbacks:
+      ui_state._offroad_transition_callbacks.remove(self._offroad_transition)
     self._clear_textures()
 
     # Clean up EGL texture

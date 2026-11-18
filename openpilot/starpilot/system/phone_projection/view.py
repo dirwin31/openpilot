@@ -1,7 +1,11 @@
 """The phone half of the split screen: the phone's picture (or its connection status) and its touches."""
 from __future__ import annotations
 
+from msgq.visionipc import VisionIpcClient
+
 from openpilot.cereal.visionipc import VisionStreamType
+from openpilot.common.hardware import COMMA_HARDWARE
+from openpilot.selfdrive.ui.onroad import cameraview
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.starpilot.system.phone_projection import settings as projection_settings
 from openpilot.starpilot.system.phone_projection.ipc import StatusReader, Touch, TouchSender, VIPC_NAME
@@ -13,19 +17,60 @@ TEXT = rl.Color(235, 235, 240, 255)
 SUBTLE = rl.Color(150, 150, 160, 255)
 
 
+HIGHP = "#version 330 core\n" if cameraview.platform.system() == "Darwin" else "#version 300 es\nprecision highp float;\n"
+# Full precision and no colour change: thin phone text must land on exact texels.
+PHONE_VERTEX_SHADER = HIGHP + """
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+uniform mat4 mvp;
+out vec2 fragTexCoord;
+void main() {
+  fragTexCoord = vertexTexCoord;
+  gl_Position = mvp * vec4(vertexPosition, 1.0);
+}
+"""
+if COMMA_HARDWARE:
+  PHONE_FRAGMENT_SHADER = """#version 300 es
+#extension GL_OES_EGL_image_external_essl3 : enable
+precision highp float;
+in vec2 fragTexCoord;
+uniform samplerExternalOES texture0;
+out vec4 fragColor;
+void main() {
+  fragColor = vec4(texture(texture0, fragTexCoord).rgb, 1.0);
+}
+"""
+else:
+  PHONE_FRAGMENT_SHADER = HIGHP + """
+in vec2 fragTexCoord;
+uniform sampler2D texture0;
+uniform sampler2D texture1;
+out vec4 fragColor;
+void main() {
+  float y = texture(texture0, fragTexCoord).r;
+  vec2 uv = texture(texture1, fragTexCoord).ra - 0.5;
+  fragColor = vec4(y + 1.402*uv.y, y - 0.344*uv.x - 0.714*uv.y, y + 1.772*uv.x, 1.0);
+}
+"""
+PHONE_STREAMS = (VisionStreamType.VISION_STREAM_NARROW_ROAD, VisionStreamType.VISION_STREAM_WIDE_ROAD)
+
+
 class PhoneCamera(CameraView):
-  """CameraView over projectiond's streams: no road colour grading, and only the part of the frame the phone draws."""
+  """CameraView over projectiond's streams: its own shader, and only the part of the frame the phone draws."""
+  VERTEX_SHADER = PHONE_VERTEX_SHADER
+  FRAGMENT_SHADER = PHONE_FRAGMENT_SHADER
 
   def __init__(self):
-    super().__init__(VIPC_NAME, VisionStreamType.VISION_STREAM_NARROW_ROAD)
+    super().__init__(VIPC_NAME, PHONE_STREAMS[0])
     self.crop: tuple[float, float, float, float] | None = None
     self.picture: Rect | None = None
 
+  def _init_clients(self, name: str, stream_type: VisionStreamType):
+    self._clients = {stream: VisionIpcClient(name, stream, conflate=True) for stream in PHONE_STREAMS}
+    self.client = self._clients[stream_type]
+
   def _update_texture_color_filtering(self):
-    self._color_strength_val[0] = 0.0
-    self._road_camera_val[0] = 0
-    rl.set_shader_value(self.shader, self._color_strength_loc, self._color_strength_val, rl.ShaderUniformDataType.SHADER_UNIFORM_FLOAT)
-    rl.set_shader_value(self.shader, self._road_camera_loc, self._road_camera_val, rl.ShaderUniformDataType.SHADER_UNIFORM_INT)
+    pass
 
   def _render(self, rect: rl.Rectangle, *, poll_camera: bool = True):
     if (poll_camera and not self._poll_camera()) or self.frame is None:
