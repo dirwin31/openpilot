@@ -116,7 +116,8 @@ class Card(NamedTuple):
 
   @property
   def tier(self) -> str:
-    return 'BIG' if (self.dot is GREEN or (self.dot.r, self.dot.g, self.dot.b) == (GREEN.r, GREEN.g, GREEN.b)) else 'SMALL'
+    is_green = self.dot is GREEN or (self.dot.r, self.dot.g, self.dot.b) == (GREEN.r, GREEN.g, GREEN.b)
+    return 'BIG' if is_green and self.detail in ('Jetlink', 'Chestnut') else 'SMALL'
 
 
 def big_model_card(jetlink: JetlinkStatus, gpu: str | None = None, chestnut: bool = False,
@@ -137,7 +138,7 @@ def big_model_card(jetlink: JetlinkStatus, gpu: str | None = None, chestnut: boo
       return Card(small_name, 'Jetlink building', ACCENT)
     return Card(small_name, *JETLINK_DETAIL.get(jetlink.state, JETLINK_DETAIL['unavailable']))
   if not chestnut:
-    return Card(small_name, 'Disconnected', GRAY)
+    return Card(small_name, '', GREEN)
   if gpu == 'active':
     return Card(chestnut_big, 'Chestnut', GREEN)
   if gpu == 'failed':
@@ -148,6 +149,8 @@ def big_model_card(jetlink: JetlinkStatus, gpu: str | None = None, chestnut: boo
 def gpu_inputs(ui) -> tuple[str | None, bool]:
   """(UIState.chestnut_state's value, a Chestnut is fitted) for big_model_card. Never raises."""
   try:
+    if getattr(ui, 'projection_read_only', False) and hasattr(ui, '_update_chestnut_state'):
+      ui._update_chestnut_state()
     return ui.chestnut_state.value, bool(ui.sm["deviceState"].chestnutPresent)
   except Exception:
     return None, False
@@ -188,16 +191,19 @@ class JetlinkStatusWidget:
       self.fonts.draw(value, FontRole.SEMI_BOLD, 20, right - value_w, rect.y + 11,
                       ORANGE if card.latency_ms >= SLOW_MS else TEXT)
       right -= value_w + 12
-    tier = card.tier
     tier_x = rect.x + 54
-    tier_w = self.fonts.measure(tier, FontRole.SEMI_BOLD, 15).width
-    self.fonts.draw(tier, FontRole.SEMI_BOLD, 15, tier_x, rect.y + 15, MUTED)
-    dot_x = tier_x + tier_w + 9
-    rl.draw_circle_v(rl.Vector2(dot_x, rect.y + 25), 2.2, MUTED)
-    detail_x = dot_x + 9
-    detail = card.detail.upper()
-    detail_size = self._fit(detail, FontRole.SEMI_BOLD, 15, max(40, right - detail_x))
-    self.fonts.draw(detail, FontRole.SEMI_BOLD, detail_size, detail_x, rect.y + 15, MUTED)
+    if not card.detail:
+      self.fonts.draw('DRIVING MODEL', FontRole.SEMI_BOLD, 15, tier_x, rect.y + 15, MUTED)
+    else:
+      tier = card.tier
+      tier_w = self.fonts.measure(tier, FontRole.SEMI_BOLD, 15).width
+      self.fonts.draw(tier, FontRole.SEMI_BOLD, 15, tier_x, rect.y + 15, MUTED)
+      dot_x = tier_x + tier_w + 9
+      rl.draw_circle_v(rl.Vector2(dot_x, rect.y + 25), 2.2, MUTED)
+      detail_x = dot_x + 9
+      detail = card.detail.upper()
+      detail_size = self._fit(detail, FontRole.SEMI_BOLD, 15, max(40, right - detail_x))
+      self.fonts.draw(detail, FontRole.SEMI_BOLD, detail_size, detail_x, rect.y + 15, MUTED)
     left = rect.x + 32
     width = rect.width - 64
     title_w = self.fonts.measure(card.title, FontRole.SEMI_BOLD, 27).width

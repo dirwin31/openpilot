@@ -46,8 +46,8 @@ def test_native_jetlink_polls_only_while_its_widget_is_showing_onroad():
 
 
 @pytest.mark.parametrize('jetlink,gpu,chestnut,expected', [
-  (JetlinkStatus(), None, False, ('Small model', 'Disconnected', GRAY, None)),
-  (JetlinkStatus(), 'disconnected', False, ('Small model', 'Disconnected', GRAY, None)),
+  (JetlinkStatus(), None, False, ('Small model', '', GREEN, None)),
+  (JetlinkStatus(), 'disconnected', False, ('Small model', '', GREEN, None)),
   (JetlinkStatus('Computer', 'active', 24.6), 'active', False, ('Big model', 'Jetlink', GREEN, 24.6)),
   (JetlinkStatus('Computer', 'ready', offer=True), 'loading', False, ('Small model', 'Re-engage to switch', ACCENT, None)),
   (JetlinkStatus('Computer', 'ready', offer=True), 'failed', False, ('Small model', 'Re-engage to switch', ORANGE, None)),
@@ -68,6 +68,14 @@ def test_gpu_inputs_read_uistate_and_never_raise():
   ui = NS(chestnut_state=NS(value='active'), sm={'deviceState': NS(chestnutPresent=True)})
   assert gpu_inputs(ui) == ('active', True)
   assert gpu_inputs(NS()) == (None, False)
+
+  proj_ui = NS(
+    projection_read_only=True,
+    chestnut_state=NS(value='disconnected'),
+    sm={'deviceState': NS(chestnutPresent=True)},
+    _update_chestnut_state=lambda: setattr(proj_ui, 'chestnut_state', NS(value='active')),
+  )
+  assert gpu_inputs(proj_ui) == ('active', True)
 
 
 @pytest.mark.parametrize('raw,expected', [
@@ -208,3 +216,24 @@ def test_widget_renders_option4_eyebrow_latency_and_scrolls_long_model_names():
   assert expected_offset == pytest.approx(440.0)
   assert title_draws[0][3] == pytest.approx(placed_x - expected_offset)
   assert title_draws[1][3] > title_draws[0][3]
+
+
+def test_widget_shows_driving_model_only_when_jetlink_and_chestnut_are_off():
+  fonts = _fake_fonts()
+  widget = JetlinkStatusWidget(fonts, models=lambda: ('RDF V4', ''))
+  state = _enabled_state()
+
+  card = big_model_card(JetlinkStatus(), None, False, small='Regret Driven Framework V4 👀📡')
+  assert (card.title, card.detail, card.tier, card.dot is GREEN) == ('RDF V4', '', 'SMALL', True)
+
+  with patch.object(onroad_jetlink.rl, 'draw_rectangle_rounded'), \
+       patch.object(onroad_jetlink.rl, 'draw_circle_v') as circles:
+    widget.render(state)
+
+  # Single status circle (no separator bullet) and 'DRIVING MODEL' eyebrow
+  assert len(circles.call_args_list) == 1
+  assert circles.call_args_list[0].args[1] == 6.5
+  assert circles.call_args_list[0].args[2] is GREEN
+  drawn = [(c.args[0], c.args[2], c.args[5]) for c in fonts.draw.call_args_list]
+  assert ('DRIVING MODEL', 15, onroad_jetlink.MUTED) in drawn
+  assert ('RDF V4', 27, TEXT) in drawn
