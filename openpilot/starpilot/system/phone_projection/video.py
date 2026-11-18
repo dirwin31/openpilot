@@ -15,6 +15,7 @@ ANDROID_STREAM = 2
 QUEUE_LIMIT = 120  # about two seconds; a stalled decoder is reset rather than buffering further
 RECOVER_SECONDS = 1.0
 KEYFRAME_RETRY_SECONDS = 1.0
+KEYFRAME_GIVE_UP_SECONDS = 3.0  # a phone that never sends one still gets its picture back
 OUTPUT_WAIT_MS = 10  # after a picture goes in, how long to wait for it to come out
 IDLE_WAIT = 0.5
 
@@ -63,7 +64,7 @@ class VideoPipe:
     self.pending_config = b""
     self.last_config = b""
     self.awaiting_keyframe = False
-    self.keyframe_asked = 0.0
+    self.keyframe_asked = self.keyframe_wait_since = 0.0
     self.closed = threading.Event()
     self.frames = self.published = self.mismatched = self.pushed = 0
     self.last_frame = 0.0
@@ -82,10 +83,13 @@ class VideoPipe:
     if self.queue.qsize() >= QUEUE_LIMIT:
       self._wait_for_keyframe("decoder fell behind")
     if self.awaiting_keyframe:
+      now = time.monotonic()
       if not is_keyframe(access_unit, self.hevc):
-        if time.monotonic() - self.keyframe_asked > KEYFRAME_RETRY_SECONDS:
-          self._ask_keyframe()
-        return
+        if now - self.keyframe_wait_since < KEYFRAME_GIVE_UP_SECONDS:
+          if now - self.keyframe_asked > KEYFRAME_RETRY_SECONDS:
+            self._ask_keyframe()
+          return
+        self.log("projection video: no keyframe arrived, resuming anyway")
       self.awaiting_keyframe = False
       if self.last_config and not access_unit.startswith(self.last_config):
         access_unit = self.last_config + access_unit
@@ -102,6 +106,7 @@ class VideoPipe:
       pass
     if not self.awaiting_keyframe:
       self.log(f"projection video: {reason}, waiting for a keyframe")
+      self.keyframe_wait_since = time.monotonic()
     self.awaiting_keyframe = True
     self._ask_keyframe()
 

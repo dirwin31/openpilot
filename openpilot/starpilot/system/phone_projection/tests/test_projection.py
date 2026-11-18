@@ -271,6 +271,24 @@ def test_video_pipe_waits_for_a_keyframe_after_dropping_a_backlog(monkeypatch):
     pipe.close()
 
 
+def test_video_pipe_stops_waiting_for_a_keyframe_that_never_comes(monkeypatch):
+  import openpilot.starpilot.system.phone_projection.video as video
+  monkeypatch.setattr(video, "QUEUE_LIMIT", 0)
+  publisher = VideoPublisher({0: FakeDecoder.layout}, server_factory=FakeServer)
+  pipe = VideoPipe(publisher, 0, 4, 2, decoder_factory=lambda *a, **k: FakeDecoder(*a), log=lambda m: None)
+  try:
+    pipe.config(b"\0\0\0\x01\x67a")
+    pipe.submit(b"\0\0\0\x01\x41p")
+    assert pipe.awaiting_keyframe
+    monkeypatch.setattr(video, "QUEUE_LIMIT", 120)
+    pipe.keyframe_wait_since -= video.KEYFRAME_GIVE_UP_SECONDS
+    pipe.submit(b"\0\0\0\x01\x41q")
+    assert not pipe.awaiting_keyframe
+    assert pipe.queue.get_nowait() == b"\0\0\0\x01\x67a\0\0\0\x01\x41q"
+  finally:
+    pipe.close()
+
+
 def test_video_pipe_recreates_a_failed_decoder(monkeypatch):
   import openpilot.starpilot.system.phone_projection.video as video
   from openpilot.starpilot.system.phone_projection.decoder import DecoderError
