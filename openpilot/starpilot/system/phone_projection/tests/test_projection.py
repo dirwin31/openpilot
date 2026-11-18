@@ -244,3 +244,51 @@ def test_carplay_audio_stream_receives_udp_packets():
     stream.close()
   assert [g[:3] for g in got] == [("media", 48000, 2)] * 3
   assert struct.unpack("<2h", got[2][3]) == (2, -2)
+
+
+def _wait(predicate, seconds=2.0):
+  deadline = time.monotonic() + seconds
+  while not predicate() and time.monotonic() < deadline:
+    time.sleep(0.01)
+  return predicate()
+
+
+def test_video_pipe_waits_for_a_keyframe_after_dropping_a_backlog(monkeypatch):
+  import openpilot.starpilot.system.phone_projection.video as video
+  monkeypatch.setattr(video, "QUEUE_LIMIT", 0)
+  publisher = VideoPublisher({0: FakeDecoder.layout}, server_factory=FakeServer)
+  asked = []
+  pipe = VideoPipe(publisher, 0, 4, 2, decoder_factory=lambda *a, **k: FakeDecoder(*a), request_keyframe=lambda: asked.append(1),
+                   log=lambda m: None)
+  try:
+    pipe.config(b"\0\0\0\x01\x67a")
+    pipe.submit(b"\0\0\0\x01\x41p")
+    assert pipe.awaiting_keyframe and asked and pipe.queue.empty()
+    pipe.submit(b"\0\0\0\x01\x65i")
+    assert not pipe.awaiting_keyframe
+    assert pipe.queue.get_nowait() == b"\0\0\0\x01\x67a\0\0\0\x01\x65i"
+  finally:
+    pipe.close()
+
+
+def test_video_pipe_recreates_a_failed_decoder(monkeypatch):
+  import openpilot.starpilot.system.phone_projection.video as video
+  from openpilot.starpilot.system.phone_projection.decoder import DecoderError
+  monkeypatch.setattr(video, "RECOVER_SECONDS", 0.01)
+  publisher = VideoPublisher({0: FakeDecoder.layout}, server_factory=FakeServer)
+  attempts = []
+
+  def factory(*args, **kwargs):
+    attempts.append(1)
+    if len(attempts) == 1:
+      raise DecoderError("busy")
+    return FakeDecoder(*args)
+
+  pipe = VideoPipe(publisher, 0, 4, 2, decoder_factory=factory, log=lambda m: None)
+  try:
+    assert _wait(lambda: len(attempts) >= 2)
+    assert pipe.awaiting_keyframe
+    pipe.submit(b"\0\0\0\x01\x65i")
+    assert _wait(lambda: pipe.published == 1) and pipe.error == ""
+  finally:
+    pipe.close()

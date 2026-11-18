@@ -237,6 +237,10 @@ class AndroidAutoRunner:
     pipe = self.pipe
     return pipe.published if pipe is not None else 0
 
+  def problem(self) -> str:
+    pipe = self.pipe
+    return pipe.error if pipe is not None else ""
+
   def close(self) -> None:
     session = self.session
     if session is not None:

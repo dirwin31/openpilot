@@ -64,7 +64,7 @@ def build_status(settings, panel, runners, active) -> dict:
     if runner is not None:
       status[f"{runner.kind}"] = runner.status()
   if active is not None:
-    status.update(kind=active.kind, state="active", phone=active.status()["phone"])
+    status.update(kind=active.kind, state="active", phone=active.status()["phone"], message=active.problem())
     if active.kind == "carplay":
       status.update(stream=CARPLAY_STREAM, frame=list(carplay_size(panel)), crop=[0, 0, *carplay_size(panel)], frames=active.frames())
     else:

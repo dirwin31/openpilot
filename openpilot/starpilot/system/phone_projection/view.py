@@ -123,7 +123,7 @@ class PhoneView:
       camera.render(rl.Rectangle(rect.x, rect.y, rect.width, rect.height))
       if camera.picture is not None:
         return
-      self._message(rect, status.get("phone") or "Phone", "Starting…")
+      self._message(rect, status.get("phone") or "Phone", status.get("message") or "Starting…")
       return
     if self.camera is not None:
       self.camera.picture = None
