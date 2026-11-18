@@ -7,7 +7,6 @@ from openpilot.cereal.visionipc import VisionStreamType
 from openpilot.common.hardware import COMMA_HARDWARE
 from openpilot.selfdrive.ui.onroad import cameraview
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
-from openpilot.starpilot.system.phone_projection import settings as projection_settings
 from openpilot.starpilot.system.phone_projection.ipc import StatusReader, Touch, TouchSender, VIPC_NAME
 from openpilot.starpilot.system.phone_projection.layout import Rect, fit, snap, split
 from openpilot.starpilot.ui.raylib import rl
@@ -105,12 +104,11 @@ class PhoneView:
     return self.status
 
   def split(self, rect: Rect) -> tuple[Rect, Rect] | None:
-    """(comma rect, phone rect) while projection is on, else None and the comma keeps the whole screen."""
+    """(comma rect, phone rect) while a phone is showing, else None and the comma keeps the whole screen."""
     self.refresh()
-    if not self.status.get("enabled") and not projection_settings.enabled():
+    if self.status.get("state") != "active":
       return None
-    side = self.status.get("side") or projection_settings.load().side
-    return split(rect, side)
+    return split(rect, self.status.get("side") or "right")
 
   # ---- drawing -------------------------------------------------------------------------------------------
   def render(self, rect: Rect) -> None:
