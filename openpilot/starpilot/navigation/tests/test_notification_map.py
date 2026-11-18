@@ -614,16 +614,36 @@ def test_iphone_step_holds_until_its_junction_is_passed():
   assert reason == 'passedManeuver' and 'source' not in selected
 
 
-def test_unmatched_iphone_step_keeps_the_usual_lifetime():
+def test_unmatched_iphone_step_shows_until_the_next_prompt_up_to_a_cap():
   local_map, step = LocalMapCorroborator(), iphone_step(observed=NOW)
   update(local_map, packet([branch(90, 600)]))
   diagnostics = {}
-  selected = select_navigation({'status': 'needsKey'}, {**step, 'received': NOW + 60_000_000_000}, now_ns=NOW + 60_000_000_000, drive_id=1,
+  # Ramps and exits never match the map; the card must outlast the 90 s gap before the exit.
+  selected = select_navigation({'status': 'needsKey'}, {**step, 'received': NOW + 150_000_000_000}, now_ns=NOW + 150_000_000_000, drive_id=1,
                                local_map=local_map, diagnostics=diagnostics)
   assert selected['source'] == 'phone:googleMaps' and not selected['distanceKnown'] and not selected['controlValid']
-  select_navigation({'status': 'needsKey'}, {**step, 'received': NOW + 91_000_000_000}, now_ns=NOW + 91_000_000_000, drive_id=1,
+  select_navigation({'status': 'needsKey'}, {**step, 'received': NOW + 301_000_000_000}, now_ns=NOW + 301_000_000_000, drive_id=1,
                     local_map=local_map, diagnostics=diagnostics)
   assert diagnostics['reason'] == 'staleObservation'
+
+
+def test_matched_iphone_step_counts_down_through_a_mapd_stall():
+  local_map, step = LocalMapCorroborator(), iphone_step(observed=NOW)
+  for second in range(3):
+    live(local_map, second, [named(90, 300 - 10 * second)])
+    assert local_map.resolve(step, speed=10., now_ns=NOW + second * 1_000_000_000).control
+  # mapd misses its 0.5 s deadline for a few ticks: the subscriber reports it dead.
+  for second in range(3, 8):
+    now = BOOT + second * 1_000_000_000
+    update(local_map, packet([], gpsMonoTime=now - 100_000_000, computedMonoTime=now), now=now, alive=False)
+    held = local_map.resolve(step, speed=10., now_ns=NOW + second * 1_000_000_000)
+    assert held.control and held.distance == pytest.approx(300 - 10 * second, abs=2)
+  # A map that stays dead past the hold no longer steers on dead reckoning alone.
+  for second in range(8, 26):
+    now = BOOT + second * 1_000_000_000
+    update(local_map, packet([], gpsMonoTime=now - 100_000_000, computedMonoTime=now), now=now, alive=False)
+    held = local_map.resolve(step, speed=1., now_ns=NOW + second * 1_000_000_000)
+  assert not held.control
 
 
 def test_iphone_step_ignores_the_road_it_is_already_on():

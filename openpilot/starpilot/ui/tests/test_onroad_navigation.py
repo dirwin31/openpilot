@@ -439,3 +439,13 @@ def test_cue_replaces_the_then_chip_and_tints_the_border():
 def test_unknown_distance_headline_names_the_maneuver(kind, modifier, text):
   from openpilot.starpilot.ui.navigation_state import maneuver_text
   assert maneuver_text(kind, modifier) == text
+
+
+def test_unmatched_iphone_step_outlasts_the_usual_prompt_lifetime():
+  nav = message()
+  nav.source, nav.distanceKnown, nav.controlValid = 'phone:iphoneGoogleMaps', False, False
+  later = NOW + 200_000_000_000
+  nav.frameMonoTime, nav.observationMonoTime = later, later - 150_000_000_000
+  assert navigation_display(nav, now_ns=later, drive_id=DRIVE).text == 'Turn left onto Main Street'
+  nav.source = 'phone:googleMaps'
+  assert navigation_display(nav, now_ns=later, drive_id=DRIVE) is None

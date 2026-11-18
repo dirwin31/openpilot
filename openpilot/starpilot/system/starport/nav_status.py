@@ -204,7 +204,7 @@ class NavFeed:
     if state is None or state.status not in ('guiding', 'routing'):
       return None
     phone = is_phone_navigation(state)
-    if phone and (state.status != 'guiding' or not state.distanceKnown):
+    if phone and state.status != 'guiding':
       return None
     from openpilot.common.params import Params
     snapshot = {'state': state.status, 'metric': Params().get_bool('IsMetric')}
@@ -215,7 +215,9 @@ class NavFeed:
                       duration=float(instruction.remainingDurationSeconds))
       if phone and not state.totalsKnown:
         snapshot.update(remaining=0., duration=0.)
-      if phone:
+      if phone and not state.distanceKnown:
+        snapshot['distance'] = None  # ramps and exits the map cannot place: show the turn without a distance
+      elif phone:
         # Phone distances only change when the notification does, so count down between updates.
         speed = float(self._sm['carState'].vEgo) if self._sm.alive['carState'] else 0.
         age = max(0., (time.monotonic_ns() - state.observationMonoTime) * 1e-9)
@@ -335,6 +337,8 @@ class NavStatus:
       self._send(NAV_NOTIFICATION, notification_message(snap['road'], event))
       self.log('nav_guidance_sent', maneuver=event, legacy=True, modern=True, image=image is not None)
       self.shown_turn, self.shown_distance = turn, None
+    if snap['distance'] is None:
+      return
     metric = bool(snap.get('metric'))
     shown = display_distance(snap['distance'], metric)
     if shown != self.shown_distance and (self.shown_distance is None or now >= self.next_distance):

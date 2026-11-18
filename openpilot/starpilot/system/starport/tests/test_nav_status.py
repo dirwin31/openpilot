@@ -348,9 +348,18 @@ def test_phone_guidance_reaches_the_car_display_and_counts_down(monkeypatch):
   assert 155 < snapshot['distance'] < 165
 
 
-def test_phone_guidance_without_distance_or_past_the_turn_is_not_shown(monkeypatch):
-  assert phone_feed(monkeypatch, observed_age_s=1., speed=10., known=False)._read_cereal() is None
+def test_phone_guidance_past_the_turn_is_not_shown(monkeypatch):
   assert phone_feed(monkeypatch, observed_age_s=20., speed=15., distance=30.)._read_cereal() is None
+
+
+def test_phone_guidance_without_distance_shows_the_turn_only(monkeypatch):
+  snapshot = phone_feed(monkeypatch, observed_age_s=100., speed=30., known=False)._read_cereal()
+  assert snapshot['road'] == 'Turn right onto Main St' and snapshot['distance'] is None
+  sent = []
+  from types import SimpleNamespace as NS
+  stream = ns.NavStatus(NS(send=lambda _channel, kind, body: sent.append(kind)), {'id': 3}, None, lambda *a, **k: None)
+  stream._update(snapshot, 0.)
+  assert ns.NAV_TURN in sent and ns.NAV_DISTANCE not in sent and ns.NAV_CURRENT_POSITION not in sent
 
 
 def test_phone_trip_totals_pace_the_car_display_only_when_known(monkeypatch):

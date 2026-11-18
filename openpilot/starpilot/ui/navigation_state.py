@@ -40,8 +40,9 @@ def navigation_display(message, *, now_ns: int, drive_id: int, v_ego: float | No
   try:
     phone = is_phone_navigation(message)
     if phone:
-      from openpilot.starpilot.navigation.phone import OBSERVATION_NS
-      if not 0 < message.observationMonoTime <= now_ns <= message.observationMonoTime + OBSERVATION_NS:
+      from openpilot.starpilot.navigation.phone import OBSERVATION_NS, STEP_NS
+      limit = STEP_NS if is_iphone_navigation(message) else OBSERVATION_NS
+      if not 0 < message.observationMonoTime <= now_ns <= message.observationMonoTime + limit:
         return None
     if (not message.enabled or message.status not in ('guiding', 'arrived') or
         message.startedMonoTime != drive_id or not message.sessionId or

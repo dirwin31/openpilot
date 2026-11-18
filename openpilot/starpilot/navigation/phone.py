@@ -10,6 +10,7 @@ import time
 OBSERVATION_NS = 90_000_000_000
 LEASE_NS = 15_000_000_000
 STEP_NS = 600_000_000_000   # an iPhone step the map confirmed lasts until its junction is passed, at most this long
+UNMATCHED_STEP_NS = 300_000_000_000   # an iPhone step the map cannot place (ramps, exits) shows until the next prompt, at most this long
 MAX_RETIRED_SESSIONS = 256
 PATH = '/api/companion/navigation'
 FIELDS = {'session', 'sequence', 'active', 'ageMs', 'instruction', 'maneuverType', 'maneuverModifier', 'distanceMeters',
@@ -271,7 +272,7 @@ def select_navigation(mapbox, phone, *, now_ns, drive_id, official_active=False,
   until_passed = phone.get('untilPassed') is True
   if until_passed and resolved.reason == 'stepPassed':
     return rejected('passedManeuver')
-  if until_passed and not resolved.control and now_ns > phone['observed'] + OBSERVATION_NS:
+  if until_passed and not resolved.control and now_ns > phone['observed'] + UNMATCHED_STEP_NS:
     return rejected('staleObservation')
   if diagnostics is not None:
     diagnostics['mapStatus'] = resolved.status
