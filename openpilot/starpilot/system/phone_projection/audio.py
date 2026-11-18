@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes as C
 import os
+import queue
 import threading
 import time
 from collections.abc import Callable
@@ -16,6 +17,8 @@ from pathlib import Path
 
 REQUEST_PATH = Path("/tmp/starpilot-projection-audio")
 RETRY_SECONDS = 3.0
+QUEUE_PACKETS = 50  # about half a second; when the output stalls the oldest audio is dropped
+STOP = object()
 SAMPLE_S16LE = 3
 
 
@@ -67,12 +70,74 @@ class PulseStream:
       self.stream = None
 
 
+class StreamWriter:
+  """One audio type on its own thread, so a slow output never holds up packet receive or the other types."""
+
+  def __init__(self, output: MusicOutput, name: str):
+    self.output, self.name = output, name
+    self.queue: queue.Queue = queue.Queue(QUEUE_PACKETS)
+    self.stream = None
+    self.retry_at = 0.0
+    self.thread = threading.Thread(target=self._run, name=f"projection-audio-{name}", daemon=True)
+    self.thread.start()
+
+  def put(self, item) -> None:
+    while True:
+      try:
+        self.queue.put_nowait(item)
+        return
+      except queue.Full:
+        try:
+          self.queue.get_nowait()
+        except queue.Empty:
+          pass
+
+  def _run(self) -> None:
+    while True:
+      item = self.queue.get()
+      if item is None or item is STOP:
+        self._close()
+        if item is None:
+          return
+        continue
+      self._write(*item)
+
+  def _close(self) -> None:
+    if self.stream is not None:
+      self.stream.close()
+      self.stream = None
+
+  def _write(self, rate: int, channels: int, pcm: bytes) -> None:
+    out = self.output
+    if self.stream is not None and self.stream.format != (rate, channels):
+      self._close()
+    if self.stream is None:
+      if time.monotonic() < self.retry_at:
+        return
+      server = out.socket_path()
+      if not server.exists():
+        self.retry_at = time.monotonic() + RETRY_SECONDS
+        return
+      try:
+        self.stream = out.stream_factory(str(server), self.name, rate, channels, out.sink)
+        out.log(f"projection audio: {self.name} playing through the music output")
+      except OSError as error:
+        self.retry_at = time.monotonic() + RETRY_SECONDS
+        out.log(f"projection audio: {self.name} unavailable: {error}")
+        return
+    try:
+      self.stream.write(pcm)
+    except OSError as error:
+      out.log(f"projection audio: {self.name} stopped: {error}")
+      self._close()
+      self.retry_at = time.monotonic() + RETRY_SECONDS
+
+
 class MusicOutput:
   def __init__(self, log: Callable[[str], None] = print, socket_path: Callable[[], Path] = music_socket,
                stream_factory=PulseStream, request_path: Path = REQUEST_PATH, sink: str = "spotify"):
     self.log, self.socket_path, self.stream_factory, self.request_path, self.sink = log, socket_path, stream_factory, request_path, sink
-    self.streams: dict[str, PulseStream] = {}
-    self.retry_at: dict[str, float] = {}
+    self.writers: dict[str, StreamWriter] = {}
     self.lock = threading.Lock()
     self.wanted = False
 
@@ -95,46 +160,29 @@ class MusicOutput:
     if not self.wanted:
       return False
     with self.lock:
-      stream = self.streams.get(name)
-      if stream is not None and stream.format != (rate, channels):
-        self.streams.pop(name).close()
-        stream = None
-      if stream is None:
-        if time.monotonic() < self.retry_at.get(name, 0.0):
-          return False
-        server = self.socket_path()
-        if not server.exists():
-          self.retry_at[name] = time.monotonic() + RETRY_SECONDS
-          return False
-        try:
-          stream = self.streams[name] = self.stream_factory(str(server), name, rate, channels, self.sink)
-          self.log(f"projection audio: {name} playing through the music output")
-        except OSError as error:
-          self.retry_at[name] = time.monotonic() + RETRY_SECONDS
-          self.log(f"projection audio: {name} unavailable: {error}")
-          return False
-      try:
-        stream.write(pcm)
-        return True
-      except OSError as error:
-        self.log(f"projection audio: {name} stopped: {error}")
-        stream.close()
-        self.streams.pop(name, None)
-        self.retry_at[name] = time.monotonic() + RETRY_SECONDS
-        return False
+      writer = self.writers.get(name)
+      if writer is None:
+        writer = self.writers[name] = StreamWriter(self, name)
+    writer.put((rate, channels, pcm))
+    return True
 
   def stop(self, name: str) -> None:
     with self.lock:
-      stream = self.streams.pop(name, None)
-      if stream is not None:
-        stream.close()
+      writer = self.writers.get(name)
+    if writer is not None:
+      writer.put(STOP)
 
   def stop_all(self) -> None:
     with self.lock:
-      for stream in self.streams.values():
-        stream.close()
-      self.streams.clear()
+      writers = list(self.writers.values())
+    for writer in writers:
+      writer.put(STOP)
 
   def close(self) -> None:
     self.request(False)
-    self.stop_all()
+    with self.lock:
+      writers, self.writers = list(self.writers.values()), {}
+    for writer in writers:
+      writer.put(None)
+    for writer in writers:
+      writer.thread.join(timeout=1.0)

@@ -292,3 +292,36 @@ def test_video_pipe_recreates_a_failed_decoder(monkeypatch):
     assert _wait(lambda: pipe.published == 1) and pipe.error == ""
   finally:
     pipe.close()
+
+
+def test_a_stalled_audio_stream_does_not_hold_up_the_others(tmp_path):
+  import threading
+  from openpilot.starpilot.system.phone_projection.audio import MusicOutput
+  server = tmp_path / "pulse.sock"
+  server.touch()
+  stall = threading.Event()
+  written = []
+
+  class FakeStream:
+    def __init__(self, server, name, rate, channels, sink):
+      self.name, self.format = name, (rate, channels)
+
+    def write(self, pcm):
+      if self.name == "media":
+        stall.wait(2)
+      written.append((self.name, pcm))
+
+    def close(self):
+      pass
+
+  output = MusicOutput(log=lambda m: None, socket_path=lambda: server, stream_factory=FakeStream, request_path=tmp_path / "req")
+  output.request(True)
+  try:
+    for i in range(100):
+      assert output.write("media", 48000, 2, b"m%d" % i)
+    assert output.write("alert", 48000, 2, b"a")
+    assert _wait(lambda: ("alert", b"a") in written)
+    assert not any(name == "media" for name, _ in written)
+  finally:
+    stall.set()
+    output.close()
