@@ -486,7 +486,8 @@ class RuntimeSnapshotAdapter:
 
     from openpilot.starpilot.navigation.wire import is_phone_navigation, navigation_state
     navigation = navigation_state(_message_at_age(sm, "starpilotNavigation", now_ns, after, 3_000_000_000)) if started else None
-    displayed_navigation = navigation_display(navigation, now_ns=now_ns, drive_id=drive_id)
+    displayed_navigation = navigation_display(navigation, now_ns=now_ns, drive_id=drive_id,
+                                              v_ego=display_car.vEgo if display_car is not None else None)
     if (displayed_navigation is None or is_phone_navigation(navigation)) and started and self._navigation_enabled:
       official_navigation = official_navigation_display(
         _message_at_age(sm, "navInstruction", now_ns, after, 3_000_000_000),

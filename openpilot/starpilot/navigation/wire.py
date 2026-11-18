@@ -1,11 +1,16 @@
 VERSION = 2
 PHONE_SOURCE_PREFIX = 'phone:'
+IPHONE_SOURCE = 'iphoneGoogleMaps'
 PHONE_CONTROL_AGE_NS = 25_000_000_000
 PHONE_PASSED_SLACK_M = 50.
 
 
 def is_phone_navigation(state):
   return getattr(state, 'source', '').startswith(PHONE_SOURCE_PREFIX)
+
+
+def is_iphone_navigation(state):
+  return getattr(state, 'source', '') == PHONE_SOURCE_PREFIX + IPHONE_SOURCE
 
 
 def navigation_state(envelope):

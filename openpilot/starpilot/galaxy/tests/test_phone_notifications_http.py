@@ -92,7 +92,7 @@ class PhoneNotificationsHttpTest(unittest.TestCase):
     self.assertEqual((status, body), (200, {'ok': True, 'accepted': False, 'enabled': True, 'navigation': True}))
     self.assertIsNone(self.shown())
     guidance = json.loads(self.phone_navigation.path.read_text())
-    self.assertEqual((guidance['source'], guidance['maneuverModifier'], guidance['roadName']), ('googleMaps', 'right', 'Main St'))
+    self.assertEqual((guidance['source'], guidance['maneuverModifier'], guidance['roadName']), ('iphoneGoogleMaps', 'right', 'Main St'))
     self.assertEqual(self.notifications.snapshot()['recent'][0]['outcome'], 'navigation')
     # With phone directions off it is an ordinary notification again.
     self.guidance = False

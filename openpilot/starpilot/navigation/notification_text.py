@@ -10,9 +10,10 @@ import uuid
 from pathlib import Path
 
 from openpilot.starpilot.navigation.phone import OBSERVATION_NS, PhoneNavigationPublisher, _read, observation_limit
+from openpilot.starpilot.navigation.wire import IPHONE_SOURCE
 
 # Bundle id -> navigation source. Decided here, never by a field in the payload.
-NAVIGATION_APPS = {'com.google.Maps': 'googleMaps'}
+NAVIGATION_APPS = {'com.google.Maps': IPHONE_SOURCE}
 KEEP_ALIVE_S = 5.
 SAMPLE_LIMIT = 200
 
