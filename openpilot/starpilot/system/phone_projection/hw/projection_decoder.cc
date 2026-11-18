@@ -68,9 +68,10 @@ struct Buffer {
     addr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     check(addr != MAP_FAILED, "ION mmap");
   }
-  void sync(bool from_device) {
+  void sync(bool from_device, size_t length = 0) {
     ion_flush_data flush = {};
-    flush.handle = handle; flush.vaddr = addr; flush.length = size;
+    flush.handle = handle; flush.vaddr = addr;
+    flush.length = length ? std::min(size, (length + 63) & ~size_t(63)) : size;
     ion_custom_data custom = {};
     custom.cmd = from_device ? ION_IOC_INV_CACHES : ION_IOC_CLEAN_CACHES;
     custom.arg = reinterpret_cast<unsigned long>(&flush);
@@ -223,7 +224,7 @@ struct Decoder {
     Buffer &b = inputs[index];
     if (length > b.size) throw std::runtime_error("Access unit larger than the stream buffer");
     memcpy(b.addr, data, length);
-    b.sync(false);
+    b.sync(false, length);
     v4l2_plane plane = {};
     plane.m.userptr = reinterpret_cast<unsigned long>(b.addr);
     plane.length = b.size; plane.bytesused = length;
@@ -238,15 +239,16 @@ struct Decoder {
     return 1;
   }
 
-  // Copies the newest decoded frame into out and returns how many were decoded; older ones go back to the driver.
+  // Copies only the newest decoded frame into out and returns how many were decoded; older ones go straight back.
   int pull(int timeout_ms, unsigned char *out, size_t capacity, int *info, int64_t *timestamp) {
-    pollfd p = {fd, POLLIN | POLLRDNORM | POLLPRI | POLLOUT, 0};
+    pollfd p = {fd, POLLIN | POLLRDNORM | POLLPRI, 0};
     int rc;
     do { rc = poll(&p, 1, timeout_ms); } while (rc < 0 && errno == EINTR);
     check(rc >= 0, "poll decoder");
     handle_events();
     reclaim_inputs();
-    int copied = 0;
+    int decoded = 0, newest = -1;
+    timeval newest_time = {};
     while (!reconfiguring && output_on) {
       v4l2_plane plane = {};
       v4l2_buffer buf = {};
@@ -257,17 +259,23 @@ struct Decoder {
         check(false, "dequeue frame");
       }
       if (plane.bytesused && buf.index < outputs.size()) {
-        Buffer &b = *outputs[buf.index];
-        if (capacity < frame_size) throw std::runtime_error("Frame buffer too small");
-        b.sync(true);
-        memcpy(out, b.addr, frame_size);
-        info[0] = width; info[1] = height; info[2] = stride; info[3] = uv_offset; info[4] = frame_size;
-        *timestamp = int64_t(buf.timestamp.tv_sec) * 1000000 + buf.timestamp.tv_usec;
-        copied++;
+        if (newest >= 0) requeue_output(newest);
+        newest = buf.index; newest_time = buf.timestamp;
+        decoded++;
+      } else {
+        requeue_output(buf.index);
       }
-      requeue_output(buf.index);
     }
-    return copied;
+    if (newest >= 0) {
+      Buffer &b = *outputs[newest];
+      if (capacity < frame_size) { requeue_output(newest); throw std::runtime_error("Frame buffer too small"); }
+      b.sync(true, frame_size);
+      memcpy(out, b.addr, frame_size);
+      info[0] = width; info[1] = height; info[2] = stride; info[3] = uv_offset; info[4] = frame_size;
+      *timestamp = int64_t(newest_time.tv_sec) * 1000000 + newest_time.tv_usec;
+      requeue_output(newest);
+    }
+    return decoded;
   }
 };
 }  // namespace
