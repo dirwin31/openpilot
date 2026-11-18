@@ -237,7 +237,7 @@ class _Canvas:
         self.view.map_layer = self._render_map
         from openpilot.starpilot.models.jetlink_status import JetlinkStatus
         from openpilot.starpilot.ui.onroad_jetlink import JetlinkStatusWidget
-        cast(JetlinkStatusWidget, self.view.jetlink_status).status = JetlinkStatus('iPhone', 'active', 24.6, 'connected')
+        cast(JetlinkStatusWidget, self.view.jetlink_status).status = JetlinkStatus('iPhone', 'active', 24.6, 'connected', model='Cinque v3')
         from openpilot.starpilot.ui.network_signal import Signal
         self.view.network_signal.preview = Signal(2, 4, 'wifi', 'LTE', 'connected', ('iPhone 15',), 'Home Wi-Fi')
         self.view.uniden.preview_data = {'config': {'enabled': True}, 'connected': True, 'model': 'R8', 'can_mute': True,

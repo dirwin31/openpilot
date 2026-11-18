@@ -25,6 +25,7 @@ class JetlinkStatus:
   port: str | None = None  # jetlink's port_state: 'connected' (host on the link), 'device' (plugged in), else None
   offer: bool = False  # joined in modeld and ready: re-engage to switch
   building: bool = False  # the picked model is downloading or building
+  model: str = ''  # active or selected big model name on the link
 
 
 def _write_latency(model, path) -> None:
@@ -74,15 +75,18 @@ def read_status() -> JetlinkStatus:
     return JetlinkStatus()  # a Chestnut is fitted
   device = 'iPhone' if status.mode == 'ios' else 'Computer'
   port = status.port_state if status.port_state in ('connected', 'device') else None
+  raw_model = getattr(status, 'active_model', None) or getattr(status, 'model', None)
+  model = raw_model if isinstance(raw_model, str) else ''
   if not status.present:
-    return JetlinkStatus(device, 'disconnected', port=port)
+    return JetlinkStatus(device, 'disconnected', port=port, model=model)
   if status.active:
-    return JetlinkStatus(device, 'active', read_latency(), port)
+    return JetlinkStatus(device, 'active', read_latency(), port, model=model)
   if status.reason:
-    return JetlinkStatus(device, 'unavailable', port=port)
+    return JetlinkStatus(device, 'unavailable', port=port, model=model)
   progress = status.progress if isinstance(status.progress, dict) else {}  # only while provisioning or joining
   return JetlinkStatus(device, RUNNING.get(status.running, 'ready' if status.ready else 'connected'), port=port,
-                       offer=status.running == 'ready', building=not status.ready and progress.get('code') in BUILDING)
+                       offer=status.running == 'ready', building=not status.ready and progress.get('code') in BUILDING,
+                       model=model)
 
 
 class JetlinkStatusFeed:
