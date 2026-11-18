@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import math
 
-from openpilot.starpilot.navigation.wire import is_phone_navigation
+from openpilot.starpilot.navigation.wire import is_iphone_navigation, is_phone_navigation
 
 ARRIVED_DISPLAY_M = 10.0   # this close to the final "arrive" maneuver, the card reads "Arrived"
 
@@ -25,7 +25,16 @@ class NavigationDisplay:
   cue: str = ''
 
 
-def navigation_display(message, *, now_ns: int, drive_id: int) -> NavigationDisplay | None:
+def iphone_distance(message, v_ego: float | None, now_ns: int) -> float:
+  # iPhone steps take their distance from a GPS fix over a second old; count down to now so the card matches the road.
+  distance = message.instruction.distanceMeters
+  anchor = message.locationMonoTime if message.controlValid and message.locationMonoTime > 0 else message.frameMonoTime
+  if v_ego is None or not math.isfinite(v_ego) or not math.isfinite(distance) or not 0 < anchor <= now_ns:
+    return distance
+  return max(0., distance - max(0., v_ego) * (now_ns - anchor) * 1e-9)
+
+
+def navigation_display(message, *, now_ns: int, drive_id: int, v_ego: float | None = None) -> NavigationDisplay | None:
   if message is None or drive_id <= 0:
     return None
   try:
@@ -40,11 +49,12 @@ def navigation_display(message, *, now_ns: int, drive_id: int) -> NavigationDisp
         (not phone and not drive_id <= message.locationMonoTime <= now_ns <= message.locationMonoTime + 3_000_000_000)):
       return None
     instruction = message.instruction
-    distances = (instruction.distanceMeters, instruction.remainingDistanceMeters, instruction.remainingDurationSeconds)
+    distances = (iphone_distance(message, v_ego, now_ns) if is_iphone_navigation(message) else instruction.distanceMeters,
+                 instruction.remainingDistanceMeters, instruction.remainingDurationSeconds)
     if not all(math.isfinite(value) and value >= 0 for value in distances):
       return None
     arrived = message.status == 'arrived' or (
-      instruction.maneuverType == 'arrive' and instruction.distanceMeters <= ARRIVED_DISPLAY_M and
+      instruction.maneuverType == 'arrive' and distances[0] <= ARRIVED_DISPLAY_M and
       (not phone or message.distanceKnown))
     text = 'You have arrived' if arrived else ' '.join(instruction.text.split())[:240]
     if not text:

@@ -49,6 +49,26 @@ def test_large_navigation_optional_widget_controls_draw_and_touch_bounds():
   assert not card.press(920, 670, observed)
 
 
+def test_iphone_distance_counts_down_from_its_fix():
+  nav = message()
+  nav.source, nav.distanceKnown, nav.controlValid = 'phone:iphoneGoogleMaps', True, True
+  nav.locationMonoTime = nav.observationMonoTime = NOW - 1_300_000_000
+  later = NOW + 800_000_000
+  assert navigation_display(nav, now_ns=later, drive_id=DRIVE, v_ego=15.).distance_m == pytest.approx(120 - 15 * 2.1)
+  assert navigation_display(nav, now_ns=later, drive_id=DRIVE).distance_m == 120.
+  assert navigation_display(nav, now_ns=later, drive_id=DRIVE, v_ego=80.).distance_m == 0.
+  nav.controlValid = False
+  assert navigation_display(nav, now_ns=later, drive_id=DRIVE, v_ego=15.).distance_m == pytest.approx(120 - 15 * .8)
+
+
+@pytest.mark.parametrize('source', ['', 'phone:googleMaps'])
+def test_routed_and_android_distance_is_shown_as_published(source):
+  nav = message()
+  nav.source, nav.distanceKnown, nav.controlValid = source, True, True
+  nav.locationMonoTime = nav.observationMonoTime = NOW - 1_300_000_000
+  assert navigation_display(nav, now_ns=NOW + 800_000_000, drive_id=DRIVE, v_ego=15.).distance_m == 120.
+
+
 def test_actual_instruction_does_not_require_control_authority():
   nav = message()
   nav.controlValid = False
