@@ -279,31 +279,31 @@ export const LayoutWidgetPreview = {
       </g>
       <g v-else-if="widget.kind === 'network_signal' && !['horizontal', 'vertical'].includes(widget.size)" :transform="'scale(' + widget.width / 112 + ')'">
         <rect width="112" :height="(widget.bluetooth === false ? 102 : 140) + (widget.wifiName ? 22 : 0)" rx="24" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
-        <text v-if="widget.wifiName" x="56" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">Home Wi-Fi</text>
+        <text v-if="widget.wifiName" x="56" y="21" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">Home Wi-Fi</text>
         <g :transform="widget.wifiName ? 'translate(0 22)' : null">
           <g>
             <path d="M17.0 78.5A45 45 0 0 1 11.2 60.7" fill="none" stroke="#f5f2fc" stroke-width="7" />
-            <path d="M95.0 78.5A45 45 0 0 0 100.8 60.7" fill="none" stroke="#c7aef7" stroke-width="7" />
+            <path d="M95.0 78.5A45 45 0 0 0 100.8 60.7" fill="none" stroke="#a480f2" stroke-width="7" />
             <path d="M11.0 56.8A45 45 0 0 1 14.6 38.4" fill="none" stroke="#f5f2fc" stroke-width="7" />
-            <path d="M101.0 56.8A45 45 0 0 0 97.4 38.4" fill="none" stroke="#c7aef7" stroke-width="7" />
+            <path d="M101.0 56.8A45 45 0 0 0 97.4 38.4" fill="none" stroke="#a480f2" stroke-width="7" />
             <path d="M16.3 34.9A45 45 0 0 1 28.3 20.5" fill="none" stroke="#ffffff2b" stroke-width="7" />
-            <path d="M95.7 34.9A45 45 0 0 0 83.7 20.5" fill="none" stroke="#c7aef7" stroke-width="7" />
+            <path d="M95.7 34.9A45 45 0 0 0 83.7 20.5" fill="none" stroke="#a480f2" stroke-width="7" />
             <path d="M31.5 18.3A45 45 0 0 1 49.0 11.6" fill="none" stroke="#ffffff2b" stroke-width="7" />
-            <path d="M80.5 18.3A45 45 0 0 0 63.0 11.6" fill="none" stroke="#c7aef7" stroke-width="7" />
+            <path d="M80.5 18.3A45 45 0 0 0 63.0 11.6" fill="none" stroke="#a480f2" stroke-width="7" />
           </g>
           <g :transform="widget.bluetooth === false ? 'translate(0 8)' : null">
             <rect x="34.0" y="48" width="3" height="4" fill="#b8b2c8" />
             <rect x="38.5" y="44" width="3" height="8" fill="#b8b2c8" />
             <rect x="43.0" y="40" width="3" height="12" fill="#b8b2c8" />
             <rect x="47.5" y="36" width="3" height="16" fill="#b8b2c8" />
-            <circle cx="69" cy="50" r="2" fill="#c7aef7" />
-            <path d="M64.2 45.7A6.5 6.5 0 0 1 73.8 45.7" fill="none" stroke="#c7aef7" stroke-width="2.4" />
-            <path d="M60.5 42.3A11.5 11.5 0 0 1 77.5 42.3" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+            <circle cx="69" cy="50" r="2" fill="#a480f2" />
+            <path d="M64.2 45.7A6.5 6.5 0 0 1 73.8 45.7" fill="none" stroke="#a480f2" stroke-width="2.4" />
+            <path d="M60.5 42.3A11.5 11.5 0 0 1 77.5 42.3" fill="none" stroke="#a480f2" stroke-width="2.4" />
           </g>
           <g v-if="widget.bluetooth !== false">
-            <path d="M56 68V82M56 68L60.5 71.5L51.5 78M51.5 72L60.5 78.5L56 82" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-            <text x="56" y="107" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">iPhone 15</text>
-            <text x="56" y="125" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">AirPods</text>
+            <path d="M56 66V80M56 66L60.5 69.5L51.5 76M51.5 70L60.5 76.5L56 80" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            <text x="56" y="106" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">iPhone 15</text>
+            <text x="56" y="126" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">AirPods</text>
           </g>
           <text v-else x="56" y="84" text-anchor="middle" font-size="14" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
         </g>
@@ -317,57 +317,52 @@ export const LayoutWidgetPreview = {
             <rect x="28.5" y="25" width="3" height="8" fill="#b8b2c8" />
             <rect x="33" y="21" width="3" height="12" fill="#b8b2c8" />
             <rect x="37.5" y="17" width="3" height="16" fill="#b8b2c8" />
-            <text x="50" y="33" font-size="20" font-weight="600" fill="#b8b2c8">LTE</text>
-            <rect x="122" y="22" width="27" height="8" rx="4" fill="#f5f2fc" />
-            <rect x="154" y="22" width="27" height="8" rx="4" fill="#f5f2fc" />
-            <rect x="186" y="22" width="27" height="8" rx="4" fill="#ffffff2b" />
-            <rect x="218" y="22" width="27" height="8" rx="4" fill="#ffffff2b" />
+            <rect x="56" y="22" width="41" height="8" rx="4" fill="#f5f2fc" />
+            <rect x="105" y="22" width="41" height="8" rx="4" fill="#f5f2fc" />
+            <rect x="154" y="22" width="41" height="8" rx="4" fill="#ffffff2b" />
+            <rect x="203" y="22" width="41" height="8" rx="4" fill="#ffffff2b" />
           </g>
           <g :transform="widget.bluetooth === false ? 'translate(0 19)' : null">
-            <circle cx="33" cy="61" r="2" fill="#c7aef7" />
-            <path d="M28.17 56.65A6.5 6.5 0 0 1 37.83 56.65" fill="none" stroke="#c7aef7" stroke-width="2.4" />
-            <path d="M24.45 53.30A11.5 11.5 0 0 1 41.55 53.30" fill="none" stroke="#c7aef7" stroke-width="2.4" />
-            <text x="50" y="63" font-size="20" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
-            <rect x="122" y="52" width="27" height="8" rx="4" fill="#c7aef7" />
-            <rect x="154" y="52" width="27" height="8" rx="4" fill="#c7aef7" />
-            <rect x="186" y="52" width="27" height="8" rx="4" fill="#c7aef7" />
-            <rect x="218" y="52" width="27" height="8" rx="4" fill="#c7aef7" />
+            <circle cx="33" cy="61" r="2" fill="#a480f2" />
+            <path d="M28.17 56.65A6.5 6.5 0 0 1 37.83 56.65" fill="none" stroke="#a480f2" stroke-width="2.4" />
+            <path d="M24.45 53.30A11.5 11.5 0 0 1 41.55 53.30" fill="none" stroke="#a480f2" stroke-width="2.4" />
+            <rect x="56" y="52" width="41" height="8" rx="4" fill="#a480f2" />
+            <rect x="105" y="52" width="41" height="8" rx="4" fill="#a480f2" />
+            <rect x="154" y="52" width="41" height="8" rx="4" fill="#a480f2" />
+            <rect x="203" y="52" width="41" height="8" rx="4" fill="#a480f2" />
           </g>
           <g v-if="widget.bluetooth !== false">
             <path d="M33 79V93M33 79L37.5 82.5L28.5 89M28.5 83L37.5 89.5L33 93" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-            <text x="50" y="92" font-size="18" font-weight="600" fill="#f5f2fc">iPhone 15</text>
-            <circle cx="155" cy="86" r="4" fill="#6eafff" />
-            <text x="245" y="91" text-anchor="end" font-size="16" font-weight="600" fill="#6eafff">Connected</text>
+            <text x="56" y="92" font-size="16" font-weight="600" fill="#f5f2fc">iPhone 15, AirPods</text>
           </g>
         </g>
       </g>
       <g v-else-if="widget.kind === 'network_signal' && widget.size === 'vertical'" :transform="'scale(' + widget.width / 112 + ')'">
         <rect width="112" :height="196 + (widget.wifiName ? 22 : 0)" rx="24" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
-        <text v-if="widget.wifiName" x="56" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">Home Wi-Fi</text>
+        <text v-if="widget.wifiName" x="56" y="21" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">Home Wi-Fi</text>
         <g :transform="widget.wifiName ? 'translate(0 22)' : null">
-          <g :transform="widget.bluetooth === false ? 'translate(0 14)' : null">
-            <circle cx="34" cy="90" r="8" fill="#f5f2fc" />
-            <circle cx="34" cy="68" r="8" fill="#f5f2fc" />
-            <circle cx="34" cy="46" r="8" fill="#ffffff2b" />
-            <circle cx="34" cy="24" r="8" fill="#ffffff2b" />
-            <rect x="25.75" y="122" width="3" height="4" fill="#b8b2c8" />
-            <rect x="30.25" y="118" width="3" height="8" fill="#b8b2c8" />
-            <rect x="34.75" y="114" width="3" height="12" fill="#b8b2c8" />
-            <rect x="39.25" y="110" width="3" height="16" fill="#b8b2c8" />
-            <text x="34" y="147" text-anchor="middle" font-size="13" font-weight="600" fill="#b8b2c8">LTE</text>
-            <circle cx="78" cy="90" r="8" fill="#c7aef7" />
-            <circle cx="78" cy="68" r="8" fill="#c7aef7" />
-            <circle cx="78" cy="46" r="8" fill="#c7aef7" />
-            <circle cx="78" cy="24" r="8" fill="#c7aef7" />
-            <circle cx="78" cy="124" r="2" fill="#c7aef7" />
-            <path d="M73.17 119.65A6.5 6.5 0 0 1 82.83 119.65" fill="none" stroke="#c7aef7" stroke-width="2.4" />
-            <path d="M69.45 116.30A11.5 11.5 0 0 1 86.55 116.30" fill="none" stroke="#c7aef7" stroke-width="2.4" />
-            <text x="78" y="147" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
+          <g :transform="widget.bluetooth === false ? 'translate(0 32)' : null">
+            <circle cx="34" cy="85" r="8" fill="#f5f2fc" />
+            <circle cx="34" cy="64" r="8" fill="#f5f2fc" />
+            <circle cx="34" cy="43" r="8" fill="#ffffff2b" />
+            <circle cx="34" cy="22" r="8" fill="#ffffff2b" />
+            <rect x="25.75" y="114" width="3" height="4" fill="#b8b2c8" />
+            <rect x="30.25" y="110" width="3" height="8" fill="#b8b2c8" />
+            <rect x="34.75" y="106" width="3" height="12" fill="#b8b2c8" />
+            <rect x="39.25" y="102" width="3" height="16" fill="#b8b2c8" />
+            <circle cx="78" cy="85" r="8" fill="#a480f2" />
+            <circle cx="78" cy="64" r="8" fill="#a480f2" />
+            <circle cx="78" cy="43" r="8" fill="#a480f2" />
+            <circle cx="78" cy="22" r="8" fill="#a480f2" />
+            <circle cx="78" cy="116" r="2" fill="#a480f2" />
+            <path d="M73.17 111.65A6.5 6.5 0 0 1 82.83 111.65" fill="none" stroke="#a480f2" stroke-width="2.4" />
+            <path d="M69.45 108.30A11.5 11.5 0 0 1 86.55 108.30" fill="none" stroke="#a480f2" stroke-width="2.4" />
           </g>
           <g v-if="widget.bluetooth !== false">
-            <line x1="14" y1="156" x2="98" y2="156" stroke="#ffffff2b" stroke-width="1.5" />
-            <path d="M24 169V183M24 169L28.5 172.5L19.5 179M19.5 173L28.5 179.5L24 183" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-            <text x="35" y="181" font-size="13" font-weight="600" fill="#f5f2fc">iPhone 15</text>
+            <line x1="14" y1="128" x2="98" y2="128" stroke="#ffffff2b" stroke-width="1.5" />
+            <path d="M56 135V149M56 135L60.5 138.5L51.5 145M51.5 139L60.5 145.5L56 149" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            <text x="56" y="167" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">iPhone 15</text>
+            <text x="56" y="186" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">AirPods</text>
           </g>
         </g>
       </g>
@@ -433,31 +428,31 @@ export const LayoutWidgetPreview = {
       </g>
       <g v-else-if="widget.kind === 'network_signal' && !['horizontal', 'vertical'].includes(widget.size)" :transform="'scale(' + widget.width / 112 + ')'">
         <rect width="112" :height="(widget.bluetooth === false ? 102 : 140) + (widget.wifiName ? 22 : 0)" rx="24" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
-        <text v-if="widget.wifiName" x="56" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">Home Wi-Fi</text>
+        <text v-if="widget.wifiName" x="56" y="21" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">Home Wi-Fi</text>
         <g :transform="widget.wifiName ? 'translate(0 22)' : null">
           <g>
             <path d="M17.0 78.5A45 45 0 0 1 11.2 60.7" fill="none" stroke="#f5f2fc" stroke-width="7" />
-            <path d="M95.0 78.5A45 45 0 0 0 100.8 60.7" fill="none" stroke="#c7aef7" stroke-width="7" />
+            <path d="M95.0 78.5A45 45 0 0 0 100.8 60.7" fill="none" stroke="#a480f2" stroke-width="7" />
             <path d="M11.0 56.8A45 45 0 0 1 14.6 38.4" fill="none" stroke="#f5f2fc" stroke-width="7" />
-            <path d="M101.0 56.8A45 45 0 0 0 97.4 38.4" fill="none" stroke="#c7aef7" stroke-width="7" />
+            <path d="M101.0 56.8A45 45 0 0 0 97.4 38.4" fill="none" stroke="#a480f2" stroke-width="7" />
             <path d="M16.3 34.9A45 45 0 0 1 28.3 20.5" fill="none" stroke="#ffffff2b" stroke-width="7" />
-            <path d="M95.7 34.9A45 45 0 0 0 83.7 20.5" fill="none" stroke="#c7aef7" stroke-width="7" />
+            <path d="M95.7 34.9A45 45 0 0 0 83.7 20.5" fill="none" stroke="#a480f2" stroke-width="7" />
             <path d="M31.5 18.3A45 45 0 0 1 49.0 11.6" fill="none" stroke="#ffffff2b" stroke-width="7" />
-            <path d="M80.5 18.3A45 45 0 0 0 63.0 11.6" fill="none" stroke="#c7aef7" stroke-width="7" />
+            <path d="M80.5 18.3A45 45 0 0 0 63.0 11.6" fill="none" stroke="#a480f2" stroke-width="7" />
           </g>
           <g :transform="widget.bluetooth === false ? 'translate(0 8)' : null">
             <rect x="34.0" y="48" width="3" height="4" fill="#b8b2c8" />
             <rect x="38.5" y="44" width="3" height="8" fill="#b8b2c8" />
             <rect x="43.0" y="40" width="3" height="12" fill="#b8b2c8" />
             <rect x="47.5" y="36" width="3" height="16" fill="#b8b2c8" />
-            <circle cx="69" cy="50" r="2" fill="#c7aef7" />
-            <path d="M64.2 45.7A6.5 6.5 0 0 1 73.8 45.7" fill="none" stroke="#c7aef7" stroke-width="2.4" />
-            <path d="M60.5 42.3A11.5 11.5 0 0 1 77.5 42.3" fill="none" stroke="#c7aef7" stroke-width="2.4" />
+            <circle cx="69" cy="50" r="2" fill="#a480f2" />
+            <path d="M64.2 45.7A6.5 6.5 0 0 1 73.8 45.7" fill="none" stroke="#a480f2" stroke-width="2.4" />
+            <path d="M60.5 42.3A11.5 11.5 0 0 1 77.5 42.3" fill="none" stroke="#a480f2" stroke-width="2.4" />
           </g>
           <g v-if="widget.bluetooth !== false">
-            <path d="M56 68V82M56 68L60.5 71.5L51.5 78M51.5 72L60.5 78.5L56 82" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-            <text x="56" y="107" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">iPhone 15</text>
-            <text x="56" y="125" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">AirPods</text>
+            <path d="M56 66V80M56 66L60.5 69.5L51.5 76M51.5 70L60.5 76.5L56 80" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            <text x="56" y="106" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">iPhone 15</text>
+            <text x="56" y="126" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">AirPods</text>
           </g>
           <text v-else x="56" y="84" text-anchor="middle" font-size="14" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
         </g>
@@ -471,57 +466,52 @@ export const LayoutWidgetPreview = {
             <rect x="28.5" y="25" width="3" height="8" fill="#b8b2c8" />
             <rect x="33" y="21" width="3" height="12" fill="#b8b2c8" />
             <rect x="37.5" y="17" width="3" height="16" fill="#b8b2c8" />
-            <text x="50" y="33" font-size="20" font-weight="600" fill="#b8b2c8">LTE</text>
-            <rect x="122" y="22" width="27" height="8" rx="4" fill="#f5f2fc" />
-            <rect x="154" y="22" width="27" height="8" rx="4" fill="#f5f2fc" />
-            <rect x="186" y="22" width="27" height="8" rx="4" fill="#ffffff2b" />
-            <rect x="218" y="22" width="27" height="8" rx="4" fill="#ffffff2b" />
+            <rect x="56" y="22" width="41" height="8" rx="4" fill="#f5f2fc" />
+            <rect x="105" y="22" width="41" height="8" rx="4" fill="#f5f2fc" />
+            <rect x="154" y="22" width="41" height="8" rx="4" fill="#ffffff2b" />
+            <rect x="203" y="22" width="41" height="8" rx="4" fill="#ffffff2b" />
           </g>
           <g :transform="widget.bluetooth === false ? 'translate(0 19)' : null">
-            <circle cx="33" cy="61" r="2" fill="#c7aef7" />
-            <path d="M28.17 56.65A6.5 6.5 0 0 1 37.83 56.65" fill="none" stroke="#c7aef7" stroke-width="2.4" />
-            <path d="M24.45 53.30A11.5 11.5 0 0 1 41.55 53.30" fill="none" stroke="#c7aef7" stroke-width="2.4" />
-            <text x="50" y="63" font-size="20" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
-            <rect x="122" y="52" width="27" height="8" rx="4" fill="#c7aef7" />
-            <rect x="154" y="52" width="27" height="8" rx="4" fill="#c7aef7" />
-            <rect x="186" y="52" width="27" height="8" rx="4" fill="#c7aef7" />
-            <rect x="218" y="52" width="27" height="8" rx="4" fill="#c7aef7" />
+            <circle cx="33" cy="61" r="2" fill="#a480f2" />
+            <path d="M28.17 56.65A6.5 6.5 0 0 1 37.83 56.65" fill="none" stroke="#a480f2" stroke-width="2.4" />
+            <path d="M24.45 53.30A11.5 11.5 0 0 1 41.55 53.30" fill="none" stroke="#a480f2" stroke-width="2.4" />
+            <rect x="56" y="52" width="41" height="8" rx="4" fill="#a480f2" />
+            <rect x="105" y="52" width="41" height="8" rx="4" fill="#a480f2" />
+            <rect x="154" y="52" width="41" height="8" rx="4" fill="#a480f2" />
+            <rect x="203" y="52" width="41" height="8" rx="4" fill="#a480f2" />
           </g>
           <g v-if="widget.bluetooth !== false">
             <path d="M33 79V93M33 79L37.5 82.5L28.5 89M28.5 83L37.5 89.5L33 93" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-            <text x="50" y="92" font-size="18" font-weight="600" fill="#f5f2fc">iPhone 15</text>
-            <circle cx="155" cy="86" r="4" fill="#6eafff" />
-            <text x="245" y="91" text-anchor="end" font-size="16" font-weight="600" fill="#6eafff">Connected</text>
+            <text x="56" y="92" font-size="16" font-weight="600" fill="#f5f2fc">iPhone 15, AirPods</text>
           </g>
         </g>
       </g>
       <g v-else-if="widget.kind === 'network_signal' && widget.size === 'vertical'" :transform="'scale(' + widget.width / 112 + ')'">
         <rect width="112" :height="196 + (widget.wifiName ? 22 : 0)" rx="24" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
-        <text v-if="widget.wifiName" x="56" y="21" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">Home Wi-Fi</text>
+        <text v-if="widget.wifiName" x="56" y="21" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">Home Wi-Fi</text>
         <g :transform="widget.wifiName ? 'translate(0 22)' : null">
-          <g :transform="widget.bluetooth === false ? 'translate(0 14)' : null">
-            <circle cx="34" cy="90" r="8" fill="#f5f2fc" />
-            <circle cx="34" cy="68" r="8" fill="#f5f2fc" />
-            <circle cx="34" cy="46" r="8" fill="#ffffff2b" />
-            <circle cx="34" cy="24" r="8" fill="#ffffff2b" />
-            <rect x="25.75" y="122" width="3" height="4" fill="#b8b2c8" />
-            <rect x="30.25" y="118" width="3" height="8" fill="#b8b2c8" />
-            <rect x="34.75" y="114" width="3" height="12" fill="#b8b2c8" />
-            <rect x="39.25" y="110" width="3" height="16" fill="#b8b2c8" />
-            <text x="34" y="147" text-anchor="middle" font-size="13" font-weight="600" fill="#b8b2c8">LTE</text>
-            <circle cx="78" cy="90" r="8" fill="#c7aef7" />
-            <circle cx="78" cy="68" r="8" fill="#c7aef7" />
-            <circle cx="78" cy="46" r="8" fill="#c7aef7" />
-            <circle cx="78" cy="24" r="8" fill="#c7aef7" />
-            <circle cx="78" cy="124" r="2" fill="#c7aef7" />
-            <path d="M73.17 119.65A6.5 6.5 0 0 1 82.83 119.65" fill="none" stroke="#c7aef7" stroke-width="2.4" />
-            <path d="M69.45 116.30A11.5 11.5 0 0 1 86.55 116.30" fill="none" stroke="#c7aef7" stroke-width="2.4" />
-            <text x="78" y="147" text-anchor="middle" font-size="13" font-weight="600" fill="#f5f2fc">Wi-Fi</text>
+          <g :transform="widget.bluetooth === false ? 'translate(0 32)' : null">
+            <circle cx="34" cy="85" r="8" fill="#f5f2fc" />
+            <circle cx="34" cy="64" r="8" fill="#f5f2fc" />
+            <circle cx="34" cy="43" r="8" fill="#ffffff2b" />
+            <circle cx="34" cy="22" r="8" fill="#ffffff2b" />
+            <rect x="25.75" y="114" width="3" height="4" fill="#b8b2c8" />
+            <rect x="30.25" y="110" width="3" height="8" fill="#b8b2c8" />
+            <rect x="34.75" y="106" width="3" height="12" fill="#b8b2c8" />
+            <rect x="39.25" y="102" width="3" height="16" fill="#b8b2c8" />
+            <circle cx="78" cy="85" r="8" fill="#a480f2" />
+            <circle cx="78" cy="64" r="8" fill="#a480f2" />
+            <circle cx="78" cy="43" r="8" fill="#a480f2" />
+            <circle cx="78" cy="22" r="8" fill="#a480f2" />
+            <circle cx="78" cy="116" r="2" fill="#a480f2" />
+            <path d="M73.17 111.65A6.5 6.5 0 0 1 82.83 111.65" fill="none" stroke="#a480f2" stroke-width="2.4" />
+            <path d="M69.45 108.30A11.5 11.5 0 0 1 86.55 108.30" fill="none" stroke="#a480f2" stroke-width="2.4" />
           </g>
           <g v-if="widget.bluetooth !== false">
-            <line x1="14" y1="156" x2="98" y2="156" stroke="#ffffff2b" stroke-width="1.5" />
-            <path d="M24 169V183M24 169L28.5 172.5L19.5 179M19.5 173L28.5 179.5L24 183" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-            <text x="35" y="181" font-size="13" font-weight="600" fill="#f5f2fc">iPhone 15</text>
+            <line x1="14" y1="128" x2="98" y2="128" stroke="#ffffff2b" stroke-width="1.5" />
+            <path d="M56 135V149M56 135L60.5 138.5L51.5 145M51.5 139L60.5 145.5L56 149" fill="none" stroke="#6eafff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            <text x="56" y="167" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">iPhone 15</text>
+            <text x="56" y="186" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f2fc">AirPods</text>
           </g>
         </g>
       </g>

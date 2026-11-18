@@ -131,7 +131,7 @@ def test_signal_draws_at_its_size_percentage():
     rl.Rectangle = lambda *args: args
     widget.render(NS(customization=document, alert=NS(size='none')))
   assert rl.draw_rectangle_rounded.call_args_list[0].args[0][2:] == pytest.approx((112 * SIGNAL_SCALE * .3, 122 * SIGNAL_SCALE * .3))
-  assert all(call.args[2] == pytest.approx(13 * SIGNAL_SCALE * .3)
+  assert all(call.args[2] == pytest.approx(15 * SIGNAL_SCALE * .3)
              for call in fonts.draw.call_args_list)
 
 
@@ -151,8 +151,7 @@ def test_all_styles_render_bluetooth_status_and_device_name(style):
     widget.render(NS(customization=document, alert=NS(size='none')))
   drawn = [call.args[0] for call in fonts.draw.call_args_list]
   assert 'iPhone 15' in drawn
-  if style == 'horizontal':
-    assert 'Connected' in drawn
+  assert 'Connected' not in drawn
 
   fonts.draw.reset_mock()
   widget.preview = Signal(2, 4, 'wifi', '5G', 'connected', ('iPhone 15', 'AirPods'))
@@ -235,10 +234,10 @@ def test_horizontal_bluetooth_name_does_not_overlap_status():
   with patch.object(onroad_signal, 'rl'):
     widget.render(NS(customization=document, alert=NS(size='none')))
   drawn = [call.args for call in fonts.draw.call_args_list]
+  assert 'Connected' not in [args[0] for args in drawn]
   name = next(args for args in drawn if '+1' in args[0])
-  status = next(args for args in drawn if args[0] == 'Connected')
   name_right = name[3] + fonts.measure(name[0], name[1], name[2]).width
-  assert name_right <= status[3] - 24 * widget.s
+  assert name_right <= placed['x'] + 244 * widget.s
 
 
 def test_reads_the_joined_wifi_name(tmp_path):

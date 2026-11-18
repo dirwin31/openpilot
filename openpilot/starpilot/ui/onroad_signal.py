@@ -5,7 +5,7 @@ from openpilot.starpilot.ui.network_signal import Signal, SignalFeed
 from openpilot.starpilot.ui.onroad_customization import SIGNAL_GRIDS, SIGNAL_SCALE, SIGNAL_WIDGET, SIGNAL_WIFI_NAME_GRID, signal_scale
 from openpilot.starpilot.ui.presentation import FontRole
 
-ACCENT = rl.Color(199, 174, 247, 255)
+ACCENT = rl.Color(164, 128, 242, 255)
 BT_BLUE = rl.Color(110, 175, 255, 255)
 ORANGE = rl.Color(255, 150, 60, 255)
 GRAY = rl.Color(140, 136, 152, 255)
@@ -156,9 +156,9 @@ class SignalWidget:
 
   def _wifi_name(self, signal, x, y, width, left=False):
     """The joined Wi-Fi network's name in a row above the rest of the widget."""
-    size = 16 if left else 13
+    size = 16 if left else 15
     name = signal.wifi_name if signal.wifi else ''
-    text = self._fit(name, size, width - (48 if left else 16)) if name else ('Wi-Fi' if signal.wifi else 'No Wi-Fi')
+    text = self._fit(name, size, width - (48 if left else 12)) if name else ('Wi-Fi' if signal.wifi else 'No Wi-Fi')
     color = (TEXT if signal.active == 'wifi' else MUTED) if signal.wifi else GRAY
     if left:
       self._text(text, x + 24 * self.s, y + 17 * self.s, size, color, 'left')
@@ -185,17 +185,18 @@ class SignalWidget:
       return 'Connected'
     return 'Bluetooth'
 
-  def _draw_bt_footer(self, signal, cx, cy, max_width):
+  def _draw_bt_stack(self, signal, cx, icon_y, single_y, y1, y2, *, status_y=None):
+    """Draws the centered Bluetooth icon and up to two device rows below it."""
     S = self.s
     bt_color = _bt_color(signal)
-    if signal.bt == 'connected':
-      bt_text = self._bt_device_label(signal, 13, max_width)
-    else:
-      bt_text = 'BT On' if signal.bt == 'on' else 'BT Off'
-    text_w = self.fonts.measure(bt_text, FontRole.SEMI_BOLD, 13 * S).width
-    start_x = cx - (17 * S + text_w) / 2
-    _bt_icon(start_x, cy - 8 * S, 1.0 * S, bt_color, signal.bt == 'off')
-    self._text(bt_text, start_x + 17 * S, cy, 13, TEXT if signal.bt == 'connected' else bt_color, 'left')
+    _bt_icon(cx - 6 * S, icon_y, 1.0 * S, bt_color, signal.bt == 'off')
+    devices = (signal.bt_devices or ('Connected',)) if signal.bt == 'connected' else ()
+    if devices:
+      self._text(self._fit(devices[0], 15, 100), cx, y1 if len(devices) > 1 else single_y, 15, TEXT)
+      if len(devices) > 1:
+        self._text(self._fit_count(devices[1], len(devices) - 2, 15, 100), cx, y2, 15, TEXT)
+    elif status_y is not None:
+      self._text('BT On' if signal.bt == 'on' else 'BT Off', cx, status_y, 15, bt_color)
 
   def _ring(self, signal, radios, x, y, background, show_bt=True, header=0):
     S = self.s
@@ -224,12 +225,7 @@ class SignalWidget:
       self._text(self._label(signal, primary) if primary else 'No link', cx, y + 80 * S, 14, TEXT if primary else GRAY)
       return
 
-    bt_color = _bt_color(signal)
-    _bt_icon(x + 50 * S, y + 67 * S, 1.0 * S, bt_color, signal.bt == 'off')
-    if devices:
-      self._text(self._fit(devices[0], 13, 96), cx, y + 102 * S, 13, TEXT)
-      if len(devices) > 1:
-        self._text(self._fit_count(devices[1], len(devices) - 2, 13, 96), cx, y + 120 * S, 13, TEXT)
+    self._draw_bt_stack(signal, cx, y + 65 * S, y + 100 * S, y + 100 * S, y + 120 * S)
 
   def _lines(self, signal, radios, x, y, show_bt=True):
     S = self.s
@@ -239,11 +235,9 @@ class SignalWidget:
       active = signal.active == radio
       color = lit(signal, radio)
       icon_color = color if active else (MUTED if strength else GRAY)
-      text_color = TEXT if active else (MUTED if strength else GRAY)
       _icon(radio, x + 24 * S, y + (cy - 9) * S, 1.0 * S, icon_color)
-      self._text(self._label(signal, radio), x + 50 * S, y + cy * S, 20, text_color, 'left')
       for i in range(4):
-        _pill(x + (122 + i * 32) * S, y + (cy - 4) * S, 27 * S, 8 * S, color if i < strength else DIM, s=S)
+        _pill(x + (56 + i * 49) * S, y + (cy - 4) * S, 41 * S, 8 * S, color if i < strength else DIM, s=S)
 
     row('cell', 26 if show_bt else 37)
     row('wifi', 56 if show_bt else 75)
@@ -253,15 +247,11 @@ class SignalWidget:
     bt_color = _bt_color(signal)
     _bt_icon(x + 27 * S, y + 78 * S, 1.0 * S, bt_color, signal.bt == 'off')
     name_color = TEXT if signal.bt == 'connected' else (MUTED if signal.bt == 'on' else GRAY)
-    self._text(self._bt_device_label(signal, 18, 128), x + 50 * S, y + 86 * S, 18, name_color, 'left')
-    status = 'Connected' if signal.bt == 'connected' else ('On' if signal.bt == 'on' else 'Off')
-    status_w = self.fonts.measure(status, FontRole.SEMI_BOLD, 16 * S).width
-    self._text(status, x + 245 * S - status_w, y + 86 * S, 16, bt_color, 'left')
-    _dot(x + 245 * S - status_w - 10 * S, y + 86 * S, 4 * S, bt_color, S)
+    self._text(self._bt_device_label(signal, 16, 188), x + 56 * S, y + 86 * S, 16, name_color, 'left')
 
   def _columns(self, signal, radios, x, y, show_bt=True):
     S = self.s
-    top_off = 0 if show_bt else 14
+    top_off = 0 if show_bt else 32
 
     def column(radio, cx):
       strength = getattr(signal, radio) or 0
@@ -269,14 +259,13 @@ class SignalWidget:
       active = on and signal.active == radio
       color = lit(signal, radio)
       for i in range(4):
-        _dot(x + cx * S, y + (24 + top_off + (3 - i) * 22) * S, 8 * S, color if i < strength else DIM, S)
+        _dot(x + cx * S, y + (22 + top_off + (3 - i) * 21) * S, 8 * S, color if i < strength else DIM, S)
       icon_w = 16.5 if radio == 'cell' else 18
-      _icon(radio, x + (cx - icon_w / 2) * S, y + (110 + top_off) * S, 1.0 * S, color if active else (MUTED if on else GRAY))
-      self._text(self._label(signal, radio), x + cx * S, y + (142 + top_off) * S, 13, TEXT if active else (MUTED if on else GRAY))
+      _icon(radio, x + (cx - icon_w / 2) * S, y + (102 + top_off) * S, 1.0 * S, color if active else (MUTED if on else GRAY))
 
     column('cell', 34)
     column('wifi', 78)
     if not show_bt:
       return
-    rl.draw_line_ex(rl.Vector2(x + 14 * S, y + 156 * S), rl.Vector2(x + 98 * S, y + 156 * S), max(1.0, 1.5 * S), DIM)
-    self._draw_bt_footer(signal, x + 56 * S, y + 176 * S, 70)
+    rl.draw_line_ex(rl.Vector2(x + 14 * S, y + 128 * S), rl.Vector2(x + 98 * S, y + 128 * S), max(1.0, 1.5 * S), DIM)
+    self._draw_bt_stack(signal, x + 56 * S, y + 134 * S, y + 168 * S, y + 162 * S, y + 181 * S, status_y=y + 168 * S)
