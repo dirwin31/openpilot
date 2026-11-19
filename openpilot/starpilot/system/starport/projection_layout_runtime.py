@@ -3,6 +3,7 @@
 Never read on the drawing thread: a background thread stats the file once a second,
 loads it only when it changed, and the renderer just takes the finished layout.
 """
+import json
 import os
 import threading
 
@@ -18,6 +19,19 @@ def comma_display_seed():
   from openpilot.starpilot.system.starport.projection_layout import comma_display
   from openpilot.starpilot.ui.appearance_preferences import onroad_appearance
   return comma_display(onroad_appearance(Params()))
+
+
+def split_display_seed():
+  """Display choices for a first car split layout: the full car layout's, else the comma screen's."""
+  from openpilot.starpilot.system.starport.projection_layout import DISPLAY_DEFAULTS
+  raw, readable = read_saved(ProjectionLayoutSource(), DOCUMENT_KEY, MAX_BYTES)
+  try:
+    saved = json.loads(raw) if readable and raw is not None else None
+  except ValueError:
+    saved = None
+  if type(saved) is not dict:
+    return comma_display_seed()
+  return {key: saved[key] for key in DISPLAY_DEFAULTS if key in saved}
 
 
 def _unsaved_layout(viewport, display_seed):

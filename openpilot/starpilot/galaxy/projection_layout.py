@@ -10,8 +10,10 @@ from openpilot.starpilot.saved_source import read_saved
 from openpilot.starpilot.system.starport.display_profile import (
   SCREEN_PATH, MAX_BYTES as SCREEN_MAX_BYTES, record_screen, validate_screen,
 )
+from openpilot.starpilot.system.starport.display_profile import screen_geometry
 from openpilot.starpilot.system.starport.projection_layout import (
-  DOCUMENT_KEY, MAX_BYTES, ProjectionLayoutSource, comma_display, decode_layout, default_layout, layout_metadata, validate_layout,
+  DOCUMENT_KEY, MAX_BYTES, SPLIT_DOCUMENT_PATH, ProjectionLayoutSource, comma_display, decode_layout_for_viewport,
+  default_layout_for_viewport, layout_metadata_for_viewport, validate_layout_for_viewport,
 )
 from openpilot.starpilot.ui.appearance_preferences import onroad_appearance
 from openpilot.starpilot.ui.onroad_customization import read_customization
@@ -42,10 +44,35 @@ def _unique(pairs):
 
 
 class ProjectionLayoutOwner:
-  def __init__(self, params, parked, source=None, screen_path=None, require_enabled=True):
-    self.params, self.parked, self.require_enabled = params, parked, require_enabled
-    self.source = source if source is not None else ProjectionLayoutSource()
+  """The car screen layout, or with split=True the car half used beside a phone screen."""
+  def __init__(self, params, parked, source=None, screen_path=None, require_enabled=True, split=False, settings_root=None):
+    self.params, self.parked, self.require_enabled, self.split = params, parked, require_enabled, split
+    self.settings_root = settings_root
+    self.source = source if source is not None else ProjectionLayoutSource(SPLIT_DOCUMENT_PATH if split else None)
     self.screen_source = _ScreenSource(screen_path if screen_path is not None else SCREEN_PATH)
+
+  def viewport(self, screen):
+    geometry = screen_geometry(screen)
+    if not self.split:
+      return geometry.logical_width, geometry.logical_height
+    from openpilot.starpilot.system.phone_projection.car_split import layout_viewport
+    return layout_viewport(geometry)
+
+  def _phone_screen(self, screen):
+    from openpilot.starpilot.system.phone_projection import settings as projection_settings
+    current = projection_settings.load(self.settings_root or projection_settings.ROOT)
+    geometry = screen_geometry(screen)
+    width, height = self.viewport(screen)
+    return {'enabled': current.enabled, 'side': current.side, 'width': geometry.logical_width - width, 'height': height}
+
+  def _first_display(self):
+    if not self.split:
+      return comma_display(onroad_appearance(self.params))
+    from openpilot.starpilot.system.starport.projection_layout_runtime import split_display_seed
+    try:
+      return split_display_seed()
+    except Exception:
+      return comma_display(onroad_appearance(self.params))
 
   def _enabled(self):
     from openpilot.starpilot.system.starport.settings import enabled
@@ -64,15 +91,16 @@ class ProjectionLayoutOwner:
   def snapshot(self):
     screen_raw, screen_readable, screen = self._screen()
     raw, readable = read_saved(self.source, DOCUMENT_KEY, MAX_BYTES)
-    defaults = default_layout(screen) if screen is not None else None
+    viewport = self.viewport(screen) if screen is not None else None
+    defaults = default_layout_for_viewport(viewport) if viewport is not None else None
     document = defaults
-    if readable and raw is None and screen is not None:
+    if readable and raw is None and viewport is not None:
       # A first AA layout starts from the comma screen's display choices.
-      document = default_layout(screen, comma_display(onroad_appearance(self.params)))
+      document = default_layout_for_viewport(viewport, self._first_display())
     valid = False
-    if readable and raw is not None and screen is not None:
+    if readable and raw is not None and viewport is not None:
       try:
-        document = decode_layout(raw, screen)
+        document = decode_layout_for_viewport(raw, viewport)
         valid = True
       except (ValueError, TypeError, UnicodeError, RecursionError):
         pass
@@ -82,8 +110,9 @@ class ProjectionLayoutOwner:
               'Connect StarPort once to obtain the actual screen' if screen is None else
               'Saved projection layout is unavailable' if not readable else None)
     base = read_customization(self.params)
-    metadata = layout_metadata(screen) if screen is not None else None
-    return {'version': 1, 'document': document, 'defaults': defaults,
+    metadata = layout_metadata_for_viewport(viewport) if viewport is not None else None
+    return {'version': 1, 'document': document, 'defaults': defaults, 'split': self.split,
+            **({'phoneScreen': self._phone_screen(screen)} if self.split and screen is not None else {}),
             'metadata': metadata,
             'screen': screen, 'revision': _revision(screen_raw, raw),
             'available': available, 'editable': bool(available and self.parked()), 'valid': valid,
@@ -100,7 +129,7 @@ class ProjectionLayoutOwner:
       raise LayoutChanged('Projection screen or layout is unavailable; reconnect and reload')
     if payload['revision'] != _revision(screen_raw, raw):
       raise LayoutChanged('Projection screen or layout changed; reload before saving')
-    document = validate_layout(payload['document'], screen)
+    document = validate_layout_for_viewport(payload['document'], self.viewport(screen))
     encoded = json.dumps(document, separators=(',', ':'), allow_nan=False).encode()
 
     def authorized():
@@ -150,7 +179,7 @@ class ProjectionLayoutOwner:
 HOST_SCREEN = {'width': 1920, 'height': 1080, 'margin_width': 0, 'margin_height': 0, 'fps': 60, 'config_index': 0}
 
 
-def host_owner(params, parked, root=None, environ=os.environ):
+def host_owner(params, parked, root=None, environ=os.environ, split=False):
   """Return a host-runtime owner, or None on a device where the negotiated screen is authoritative."""
   if environ.get('SP_HOST_RUNTIME') != '1':
     return None
@@ -161,5 +190,5 @@ def host_owner(params, parked, root=None, environ=os.environ):
   screen_path = root / 'screen.json'
   if not screen_path.exists():
     record_screen(HOST_SCREEN, screen_path)
-  return ProjectionLayoutOwner(params, parked, ProjectionLayoutSource(root / 'layouts/document.json'), screen_path,
-                               require_enabled=False)
+  document = root / ('layouts/split.json' if split else 'layouts/document.json')
+  return ProjectionLayoutOwner(params, parked, ProjectionLayoutSource(document), screen_path, require_enabled=False, split=split)

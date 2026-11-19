@@ -173,10 +173,17 @@
       "name": "StarPort",
       "path": "/starport",
       "icon": "bi-phone",
-      "description": "Connect StarPilot directly to your car screen, customize its layout, save offline maps, and set up Spotify or phone audio",
+      "description": "Connect StarPilot directly to your car screen, add your phone's screen beside it, customize its layout, and set up Spotify or phone audio",
       "availability": "local-only",
       "visibility": "authenticated",
       "children": [
+        {
+          "name": "Phone Screen",
+          "path": "/starport/phone",
+          "icon": "bi-phone-landscape",
+          "description": "Show CarPlay or Android Auto from your phone beside StarPilot, on the comma or the car screen",
+          "availability": "local-only"
+        },
         {
           "name": "Spotify & Phone Audio",
           "path": "/starport/audio",

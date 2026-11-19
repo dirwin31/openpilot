@@ -16,10 +16,14 @@ from openpilot.starpilot.ui.onroad_torque_geometry import maximum_footprint
 from openpilot.starpilot.ui.onroad_customization import (SPEED_LAYOUT_V7, migrate_speed_layout, migrate_large_sign_layout, migrate_attached_actions_gap,
                                                         place_attached_slc_actions, migrate_confirmation_layout)
 from openpilot.starpilot.ui.large_speed_geometry import sources_extent
+from openpilot.starpilot.ui.narrow_layout import arrange_narrow
 
 MAX_BYTES = 16384
 DOCUMENT_KEY = 'projection'
 DOCUMENT_PATH = DATA_DIR / 'layouts/document.json'
+# The car half beside a phone screen has its own arrangement.
+SPLIT_DOCUMENT_PATH = DATA_DIR / 'layouts/split.json'
+MIN_WIDTH = 900
 
 # Layouts saved before these widgets existed gain them with their defaults.
 NAV_CARD, NAV_MAP = 'nav_card', 'nav_map'
@@ -68,7 +72,7 @@ def layout_metadata(screen):
 
 def layout_metadata_for_viewport(viewport):
   width, height = viewport
-  if any(type(n) is not int for n in viewport) or not 1860 <= width <= 4096 or not 1080 <= height <= 2160:
+  if any(type(n) is not int for n in viewport) or not MIN_WIDTH <= width <= 4096 or not 1080 <= height <= 2160:
     raise ValueError('Invalid projection canvas')
   profile = copy.deepcopy(customization_metadata()['profiles']['large'])
   profile.update(label='Android Auto', width=width, height=height,
@@ -151,6 +155,12 @@ def layout_metadata_for_viewport(viewport):
   cameras = ('pip_left', 'pip_right')
   profile["widgetOrder"] = [NAV_MAP, *[key for key in profile["widgetOrder"] if key not in (NAV_MAP, NAV_CARD, STOPPED_TIMER_WIDGET, *cameras)],
                             STOPPED_TIMER_WIDGET, NAV_CARD, *DISPLAY_WIDGETS, NOW_PLAYING_WIDGET, JETLINK_WIDGET, *cameras, CAR_EXIT]
+  if width < 1860:
+    def boxed(key):
+      box = widgets[key].get('box')
+      return box and {**box, 'aspect': widgets[key].get('aspectRatio', 4 / 3)}
+    arrange_narrow({key: widget['default'] for key, widget in widgets.items()},
+                   lambda key, placed: placement_size(key, widgets[key], placed), width, height, boxed)
   return profile
 
 

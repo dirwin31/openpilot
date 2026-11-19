@@ -68,6 +68,11 @@ def car_layout(geometry, side: str, origin: tuple[int, int] = (0, 0)) -> CarSpli
   return CarSplit(comma, Rect(x0, y0, phone_w, y1 - y0), geometry.logical_width, geometry.logical_height, scale, left, top)
 
 
+def layout_viewport(geometry) -> tuple[int, int]:
+  """The saved split layout's canvas: the same for either side and any frame origin."""
+  return car_layout(geometry, 'right').viewport
+
+
 def car_split(geometry, origin: tuple[int, int] = (0, 0), settings: projection_settings.Settings | None = None) -> CarSplit | None:
   """The split for this car geometry, or None while phone projection is off."""
   settings = settings or projection_settings.load()

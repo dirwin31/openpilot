@@ -62,9 +62,26 @@ def validate_preview_document(value: dict) -> dict:
     raise ValueError('Invalid preview document')
   document = value.copy()
   sidebar = document.pop('developerSidebar', False)
-  if type(sidebar) is not bool:
+  split = document.pop('phoneSplit', False)
+  if type(sidebar) is not bool or type(split) is not bool:
     raise ValueError('Invalid preview sidebar choice')
-  return {**validate_document(document), **({'developerSidebar': sidebar} if 'developerSidebar' in value else {})}
+  extra = {**({'developerSidebar': sidebar} if 'developerSidebar' in value else {}), **({'phoneSplit': True} if split else {})}
+  if split:
+    from openpilot.starpilot.system.phone_projection import comma_layout
+    from openpilot.starpilot.ui.onroad_customization import default_document
+    # The editor sends only the Big layout, in pixels of the comma half; the rest comes from the full theme.
+    base = default_document()
+    order = document.get('widgetOrder', {}).get('large') if type(document.get('widgetOrder')) is dict else None
+    layout, order = comma_layout.validate(document.get('layouts', {}).get('large'), order, document)
+    shared = {key: document[key] for key in document if key not in ('layouts', 'widgetColors', 'roadColors', 'widgetOrder')}
+    full = {**base, **shared, 'widgetColors': {**base['widgetColors'], **document.get('widgetColors', {})},
+            'roadColors': {**base['roadColors'], **document.get('roadColors', {})}}
+    result = validate_document(full)
+    result['layouts']['large'] = layout
+    if order:
+      result['widgetOrder'] = {**result.get('widgetOrder', {}), 'large': order}
+    return {**result, **extra}
+  return {**validate_document(document), **extra}
 
 
 def _payload(value: object) -> dict:

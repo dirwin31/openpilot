@@ -191,7 +191,7 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
     gui_app._load_fonts()
     from openpilot.starpilot.system.starport import reconnect_notice
     from openpilot.starpilot.system.starport.identity import certificate_days_left
-    from openpilot.starpilot.system.starport.projection_layout_runtime import ProjectionLayoutWatcher, comma_display_seed
+    from openpilot.starpilot.system.starport.projection_layout_runtime import ProjectionLayoutWatcher, comma_display_seed, split_display_seed
     from openpilot.starpilot.system.phone_projection.car_split import car_split
     phone_split = car_split(geometry, (request.left, request.top))
     if phone_split:
@@ -202,8 +202,11 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
       except OSError as error:
         print(f"car view could not publish the phone size: {error}", flush=True)
       print(f"car view phone half: {phone_split.phone}", flush=True)
-    viewport = phone_split.viewport if phone_split else (geometry.logical_width, geometry.logical_height)
-    watcher = ProjectionLayoutWatcher(viewport, display_seed=comma_display_seed)
+    from openpilot.starpilot.system.phone_projection.car_split import layout_viewport
+    viewport = layout_viewport(geometry) if phone_split else (geometry.logical_width, geometry.logical_height)
+    from openpilot.starpilot.system.starport.projection_layout import SPLIT_DOCUMENT_PATH, ProjectionLayoutSource
+    source = ProjectionLayoutSource(SPLIT_DOCUMENT_PATH) if phone_split else None
+    watcher = ProjectionLayoutWatcher(viewport, source=source, display_seed=split_display_seed if phone_split else comma_display_seed)
     layout = ProjectionOnroad(viewport=viewport, customization=watcher.load(),
                               certificate_days=certificate_days_left(), layout_watcher=watcher,
                               reconnect_notice=reconnect_notice.take())

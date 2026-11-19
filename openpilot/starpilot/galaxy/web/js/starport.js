@@ -10,6 +10,7 @@ import { BluetoothDeviceList } from "./bluetooth-devices.js"
 import { BluetoothNotice, bluetoothConnection } from "./bluetooth-notice.js"
 import { GalaxySettingRow, switchRow } from "./galaxy-setting-row.js"
 import { StarPortGuidedSetup, guidedState, handshakeResettable } from "./starport-guided.js"
+import { StarPortTabs } from "./starport-tabs.js"
 
 export function uploadTimeout(bytes) {
   return Math.max(180000, Math.ceil(bytes / (64 * 1024)) * 1000)
@@ -560,7 +561,7 @@ export function connectionProgress(runtime, { wired = false, app = "", selected 
 }
 
 export const StarPortPage = {
-  components: { WikiHelp, GxCollapse, GxState, GxIconButton, GxNotice, BluetoothNotice, GxDialog, GalaxySettingRow, StarPortGuidedSetup },
+  components: { WikiHelp, GxCollapse, GxState, GxIconButton, GxNotice, BluetoothNotice, GxDialog, GalaxySettingRow, StarPortGuidedSetup, StarPortTabs },
   props: {
     mode: { type: String, required: true }, localAccess: { type: Boolean, required: true },
     unauthorized: { type: Function, required: true }
@@ -898,6 +899,7 @@ export const StarPortPage = {
         <h2>StarPort</h2>
         <p>Show the StarPilot driving view on your car’s screen. Choose your device, follow the setup steps, then connect.</p>
       </div><WikiHelp /></header>
+      <StarPortTabs active="car" />
       <GxNotice tone="info" title="Supported setups">StarPort officially supports your car’s built-in Android Auto, the AAWireless and Motorola MA1 wireless adapters, and the Open Headunit and HeadunitPad tablet apps. Other adapters and apps may work, but they aren’t tested and may not connect reliably.</GxNotice>
       <GxNotice tone="warn" v-if="!wired && !app && runtime?.dedicated_wifi_interface === false">StarPort uses the comma’s Wi-Fi to connect to your car and disconnects it from your current Wi-Fi network. Use the Galaxy hotspot for local access during projection. Remote Galaxy access requires Internet on the comma.</GxNotice>
       <GxNotice tone="danger" v-if="error && setup">{{ error }}</GxNotice>

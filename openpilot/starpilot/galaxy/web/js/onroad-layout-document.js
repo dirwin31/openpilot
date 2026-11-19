@@ -155,7 +155,7 @@ export const PROJECTION_DISPLAY_SWITCHES = ["blindSpotBorder", "signalBorder", "
 
 export function validDocument(document, metadata) {
   if (!object(document)) return false
-  const profiles = metadata?.projection === true ? ["large"] : PROFILES
+  const profiles = metadata?.projection === true || metadata?.split === true ? ["large"] : PROFILES
   if (!keysEqual(document, ["version", "palette", "layouts", "widgetColors", "roadColors", ...(Object.hasOwn(document, "widgetOrder") ? ["widgetOrder"] : []), ...(Object.hasOwn(document, "speedSources") ? ["speedSources"] : []), ...(Object.hasOwn(document, "speedSourcesCard") ? ["speedSourcesCard"] : []), ...(Object.hasOwn(document, "speedAlign") ? ["speedAlign"] : []), ...(Object.hasOwn(document, "clock24Hour") ? ["clock24Hour"] : []), ...(metadata?.projection !== true && Object.hasOwn(document, "reduceMotion") ? ["reduceMotion"] : []), ...(Object.hasOwn(document, "showMaxSpeed") ? ["showMaxSpeed"] : []), ...(metadata?.projection !== true && Object.hasOwn(document, "speedDisplayOffset") ? ["speedDisplayOffset"] : []), ...(metadata?.projection !== true && Object.hasOwn(document, "display") ? ["display"] : []), ...(metadata?.projection === true && Object.hasOwn(document, "largeUiGammaTrial") ? ["largeUiGammaTrial"] : []), ...(metadata?.projection === true ? PROJECTION_DISPLAY_SWITCHES.filter(key => Object.hasOwn(document, key)) : []), ...(metadata?.projection === true && Object.hasOwn(document, "leadInfo") ? ["leadInfo"] : [])]) || (metadata?.projection === true ? document.version !== 8 : ![11, 12, 13, 14, 15].includes(document.version)) ||
     (Object.hasOwn(document, "speedSources") && typeof document.speedSources !== "boolean") ||
     (Object.hasOwn(document, "speedSourcesCard") && typeof document.speedSourcesCard !== "boolean") ||
@@ -218,7 +218,7 @@ export function validDocument(document, metadata) {
 export function validSnapshot(data) {
   const projection = data?.projection === true && data?.metadata?.projection === true
   if ((data?.projection === true) !== (data?.metadata?.projection === true)) return false
-  const profiles = projection ? ["large"] : PROFILES
+  const profiles = projection || data?.metadata?.split === true ? ["large"] : PROFILES
   if (!data || typeof data.revision !== "string" || !data.revision || typeof data.editable !== "boolean" ||
     typeof data.valid !== "boolean" || !keysEqual(data.metadata?.profiles, profiles) ||
     !Array.isArray(data.metadata.paletteFields) || data.metadata.paletteFields.length !== COLORS.length ||

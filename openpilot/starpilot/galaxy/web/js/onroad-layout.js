@@ -58,11 +58,13 @@ const DRAG_SLOP = 6
 const CAMERA_IDS = ["pip_left", "pip_right"]
 // Let swipes scroll before an unarmed widget grabs.
 const HOLD_MS = 220
+// Where the editor can switch to: the comma or StarPort screen, alone or beside a phone screen.
+export const LAYOUT_TARGETS = ["device", "projection", "device-phone", "projection-phone"]
 
 export class OnroadLayoutFeed {
-  constructor({ publish, projection = false, unauthorized = () => { }, fetcher = (...args) => fetch(...args),
+  constructor({ publish, projection = false, split = false, unauthorized = () => { }, fetcher = (...args) => fetch(...args),
     later = (fn, ms) => setTimeout(fn, ms), cancelTimer = (id) => clearTimeout(id) }) {
-    Object.assign(this, { publish, projection, unauthorized, fetcher, later, cancelTimer })
+    Object.assign(this, { publish, projection, split, unauthorized, fetcher, later, cancelTimer })
     this.active = false
     this.generation = 0
     this.request = this.timer = this.data = null
@@ -113,7 +115,7 @@ export class OnroadLayoutFeed {
         "Reading colors and layouts timed out. Try reloading.")
     }, 5000)
     try {
-      const response = await this.fetcher(this.projection ? "./api/starport/layout" : "./api/ui/layout", {
+      const response = await this.fetcher((this.projection ? "./api/starport/layout" : "./api/ui/layout") + (this.split ? "/split" : ""), {
         credentials: "same-origin", cache: "no-store", signal: request.signal,
         ...(saving ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(this.projection ? projectionPayload(body, this.data.metadata) : body) } : {})
       })
@@ -135,9 +137,9 @@ export class OnroadLayoutFeed {
       this.needsReload = false
       this.publish({
         status: "ready", data, ...((saving || initial || !background) ? { draft: clone(data.document) } : {}), error: "", needsReload: false,
-        notice: saving ? (this.projection ? "StarPort layout saved." : data.failed?.length ?
+        notice: saving ? (this.split ? "Phone screen layout saved." : this.projection ? "StarPort layout saved." : data.failed?.length ?
           "Layout saved, but these display options did not change: " + data.failed.join(", ") + ". Reload and try again." :
-          "Colors and both layouts saved.") + (mapMoved ? " The map overlay is now off in the " + (this.projection ? "Big screen" : "StarPort") + " layout." : "") :
+          "Colors and both layouts saved.") + (mapMoved ? " The map overlay is now off in the " + (this.projection ? "comma screen" : "StarPort") + " layouts." : "") :
           !background && !initial ? "Reloaded the saved layout." : ""
       })
       return true
@@ -603,7 +605,7 @@ export const LayoutWidgetPreview = {
 export const OnroadLayoutPage = {
   components: { WikiHelp, GxCollapse, GxState, LayoutWidgetPreview, GalaxySelect, GxNotice, GxDialog, GalaxySettingRow },
   props: {
-    projection: { type: Boolean, default: false }, mode: { type: String, required: true }, unauthorized: { type: Function, required: true },
+    projection: { type: Boolean, default: false }, split: { type: Boolean, default: false }, mode: { type: String, required: true }, unauthorized: { type: Function, required: true },
     initialPanel: { type: String, default: "widgets" }
   },
   emits: ["close", "target"],
@@ -611,9 +613,9 @@ export const OnroadLayoutPage = {
     const state = reactive({
       status: "idle", data: null, draft: null, needsReload: false, error: "", notice: "",
       profile: "large", scene: "general", selected: null, layerDrag: null, drag: null, discard: null, leavePresentation: null, removeConfirm: null, pipUnlocked: {}, pipUnlockConfirm: null, colorError: "", placementError: "",
-      inspectorPanel: ["widgets", "edit", "road", "display"].includes(props.initialPanel) && !props.projection ? props.initialPanel : "widgets", showFavoriteZones: false, showEditingAids: loadAidsPreference(),
+      inspectorPanel: ["widgets", "edit", "road", "display"].includes(props.initialPanel) && !props.projection && !props.split ? props.initialPanel : "widgets", showFavoriteZones: false, showEditingAids: loadAidsPreference(),
       aboutOpen: false, tipsOpen: false, moreOpen: false, widgetsHelpOpen: false, stuck: { leaveBar: false, pinned: false, sections: false }, shrunk: false, touchArmed: null, openColor: null, art: { status: "idle", error: "", denied: false, url: null, sprites: null }, backdrop: { status: "idle", error: "", denied: false, url: null },
-      hiddenPreviewWidgets: loadPreviewVisibility(props.projection), sceneHiddenPreviewWidgets: {}, snapEnabled: loadSnapPreference(), snapGuides: [], history: { undo: [], redo: [], group: null }
+      phoneSideBusy: false, hiddenPreviewWidgets: loadPreviewVisibility(props.projection), sceneHiddenPreviewWidgets: {}, snapEnabled: loadSnapPreference(), snapGuides: [], history: { undo: [], redo: [], group: null }
     })
     let deferred = null
     const apply = (update) => {
@@ -654,9 +656,9 @@ export const OnroadLayoutPage = {
       for (const [key, value] of Object.entries(update)) {
         if (JSON.stringify(state[key]) !== JSON.stringify(value)) state[key] = value
       }
-      if (draftChanged || ["Colors and both layouts saved.", "StarPort layout saved."].some(saved => update.notice?.startsWith(saved))) state.history = { undo: [], redo: [], group: null }
+      if (draftChanged || ["Colors and both layouts saved.", "StarPort layout saved.", "Phone screen layout saved."].some(saved => update.notice?.startsWith(saved))) state.history = { undo: [], redo: [], group: null }
     }
-    const feed = new OnroadLayoutFeed({ projection: props.projection, unauthorized: props.unauthorized, publish: apply })
+    const feed = new OnroadLayoutFeed({ projection: props.projection, split: props.split, unauthorized: props.unauthorized, publish: apply })
     watch(() => !!state.drag || !!state.layerDrag, (dragging) => { if (!dragging && deferred) apply({}) }, { flush: "sync" })
     const queue = new PreviewQueue()
     const backdropFeed = new LayoutPreviewFeed({ backdrop: true, unauthorized: props.unauthorized, queue,
@@ -670,7 +672,8 @@ export const OnroadLayoutPage = {
         return
       }
       if (!artFeed.active) artFeed.start()
-      const document = props.projection ? projectionPayload({document: state.draft}, state.data.metadata).document : layoutDocument(state.draft)
+      const document = props.projection ? projectionPayload({document: state.draft}, state.data.metadata).document :
+        props.split ? { ...layoutDocument(state.draft), phoneSplit: true } : layoutDocument(state.draft)
       artFeed.update(document, props.projection ? "projection" : state.profile, state.scene, !!state.drag || !!state.layerDrag)
     }, {flush: "sync"})
     // The real screen behind the arrangement: status border, road, alerts and sidebar, without the movable widgets.
@@ -681,7 +684,8 @@ export const OnroadLayoutPage = {
         return
       }
       if (!backdropFeed.active) backdropFeed.start()
-      const document = props.projection ? projectionPayload({document: state.draft}, state.data.metadata).document : previewDocument(state.draft)
+      const document = props.projection ? projectionPayload({document: state.draft}, state.data.metadata).document :
+        props.split ? { ...previewDocument(state.draft), phoneSplit: true } : previewDocument(state.draft)
       backdropFeed.update(document, props.projection ? "projection" : state.profile, state.scene, false, backdropKey(state.draft))
     }, {flush: "sync"})
     watch(() => props.mode, (mode) => {
@@ -707,7 +711,7 @@ export const OnroadLayoutPage = {
     stockChanged() { return !!this.state.draft && JSON.stringify(this.state.draft) !== JSON.stringify(this.state.data.defaults) },
     canUndo() { return this.state.history.undo.length > 0 },
     canRedo() { return this.state.history.redo.length > 0 },
-    pendingLeave() { return typeof this.state.discard === "function" || ["back", "device", "projection"].includes(this.state.discard) },
+    pendingLeave() { return typeof this.state.discard === "function" || ["back", ...LAYOUT_TARGETS].includes(this.state.discard) },
     inlineLeavePrompt() { return (this.pendingLeave || this.state.discard === "reload") && this.state.leavePresentation !== "modal" },
     modalLeavePrompt() { return this.pendingLeave && this.state.leavePresentation === "modal" },
     saveAvailable() { return !!this.state.data?.editable && !this.state.error && !this.state.needsReload && this.dirty && !this.state.drag && !this.state.layerDrag },
@@ -729,7 +733,15 @@ export const OnroadLayoutPage = {
         ["Speed limit", scene => scene.id.startsWith("slc_")]].map(([label, test]) => ({ label, scenes: this.availableScenes.filter(test) }))
     },
     sceneBorder() { return previewScene(this.state.scene).border },
-    expandedRoad() { return !this.projection && this.state.profile === "large" && this.displayValue("DeveloperSidebar") !== "On" },
+    expandedRoad() { return !this.projection && !this.split && this.state.profile === "large" && this.displayValue("DeveloperSidebar") !== "On" },
+    // The phone half drawn beside the editable comma half while editing the phone screen layout.
+    phoneScreen() {
+      const phone = this.split ? this.state.data?.phoneScreen : null
+      return phone && Number.isFinite(phone.width) && phone.width > 0 ? phone : null
+    },
+    stageRatio() { return (this.profile.width + (this.phoneScreen?.width || 0)) / this.profile.height },
+    // Theme-wide choices (colors, clock, speed card options) live in the full-screen comma layout.
+    sharedThemeControls() { return !this.split || this.projection },
     roadBounds() { return this.expandedRoad ? { ...this.profile.bounds, width: this.profile.bounds.width + 300 } : this.profile.bounds },
     favoriteZones() {
       const zones = this.profile?.inputZones || []
@@ -1810,7 +1822,7 @@ export const OnroadLayoutPage = {
       this.state.removeConfirm = null
       if (this.dirty) {
         this.state.discard = action
-        this.state.leavePresentation = (typeof action === "function" || ["back", "device", "projection"].includes(action)) ? presentation : "inline"
+        this.state.leavePresentation = (typeof action === "function" || ["back", ...LAYOUT_TARGETS].includes(action)) ? presentation : "inline"
       }
       else this.leave(action)
     },
@@ -1824,10 +1836,26 @@ export const OnroadLayoutPage = {
       this.state.leavePresentation = null
       if (typeof action === "function") action()
       else if (action === "back") this.$emit("close")
-      else if (["projection", "device"].includes(action)) this.$emit("target", action)
+      else if (LAYOUT_TARGETS.includes(action)) this.$emit("target", action)
       else this.feed.load()
     },
     save() { if (this.editable && this.dirty && !this.state.drag && !this.state.layerDrag) return this.feed.save(this.state.draft) },
+    async setPhoneSide(side) {
+      if (!this.phoneScreen || this.state.phoneSideBusy || !["left", "right"].includes(side)) return
+      this.state.phoneSideBusy = true
+      try {
+        const response = await fetch("./api/phone-projection", { method: "POST", credentials: "same-origin", cache: "no-store",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ side }) })
+        if (response.status === 401) { this.unauthorized(); return }
+        const value = await response.json().catch(() => null)
+        if (!response.ok || value?.side !== side) throw new Error(value?.error || "The phone screen side could not be changed.")
+        this.state.data = { ...this.state.data, phoneScreen: { ...this.state.data.phoneScreen, side } }
+        this.state.notice = "Phone screen moved to the " + side + "."
+      } catch (error) {
+        this.state.notice = ""
+        this.state.placementError = error.message
+      } finally { this.state.phoneSideBusy = false }
+    },
     async saveAndLeave() {
       if (!this.canSavePending || !this.pendingLeave) return false
       const action = this.state.discard

@@ -444,13 +444,15 @@ class TileDaemon:
 # ---------------------------------------------------------------- process
 
 def _map_enabled() -> bool:
-  from openpilot.starpilot.system.starport.projection_layout import DOCUMENT_PATH
+  from openpilot.starpilot.system.starport.projection_layout import DOCUMENT_PATH, SPLIT_DOCUMENT_PATH
   from openpilot.starpilot.navigation.offline_roads import read_json
-  document = read_json(Path(DOCUMENT_PATH), 1 << 16)
-  try:
-    return bool(document["widgets"]["nav_map"]["enabled"])
-  except (TypeError, KeyError):
-    return False
+  for path in (DOCUMENT_PATH, SPLIT_DOCUMENT_PATH):
+    try:
+      if read_json(Path(path), 1 << 16)["widgets"]["nav_map"]["enabled"]:
+        return True
+    except (TypeError, KeyError):
+      pass
+  return False
 
 
 def _environment(sm, owner, map_enabled: bool, now_ns: int) -> Environment:

@@ -1,24 +1,30 @@
 export const ONROAD_LAYOUT_TEMPLATE = `
     <section class="gx-settings gx-layout" aria-label="Colors and layout" :aria-busy="busy || undefined" :class="{'is-shrunk': state.shrunk}">
-      <div class="gx-settings__header gx-page-header"><div><h2>{{ projection ? 'StarPort Layout' : 'Colors & Layout' }}</h2></div>
+      <div class="gx-settings__header gx-page-header"><div><h2>{{ split ? (projection ? 'StarPort Phone Screen Layout' : 'Phone Screen Layout') : projection ? 'StarPort Layout' : 'Colors & Layout' }}</h2></div>
         <div class="gx-actions"><WikiHelp /><button class="gx-icon-btn gx-layout__info" type="button" :aria-expanded="state.aboutOpen" aria-controls="gx-layout-about" aria-label="About this editor" title="About this editor" @click="state.aboutOpen = !state.aboutOpen"><i class="bi bi-info-circle" aria-hidden="true"></i></button></div>
       </div>
-      <GxNotice v-if="mode === 'local' && state.data && !state.data.editable && !(projection && state.data.reason)" tone="warn">Park the vehicle and reload to edit. If it stays unavailable, reload saved settings.</GxNotice>
+      <GxNotice v-if="mode === 'local' && state.data && !state.data.editable && !state.data.reason" tone="warn">Park the vehicle and reload to edit. If it stays unavailable, reload saved settings.</GxNotice>
       <div class="gx-layout__targets">
         <nav class="gx-layout__tabs gx-layout__segment" aria-label="Layout target">
-          <button class="gx-btn gx-btn--tonal" :aria-pressed="!projection" :disabled="!!state.drag" @click="$emit('target', 'device')">Comma</button>
-          <button class="gx-btn gx-btn--tonal" :aria-pressed="projection" :disabled="!!state.drag" @click="$emit('target', 'projection')">StarPort</button>
+          <button class="gx-btn gx-btn--tonal" :aria-pressed="!projection" :disabled="!!state.drag" @click="$emit('target', split ? 'device-phone' : 'device')">Comma</button>
+          <button class="gx-btn gx-btn--tonal" :aria-pressed="projection" :disabled="!!state.drag" @click="$emit('target', split ? 'projection-phone' : 'projection')">StarPort</button>
         </nav>
-        <div v-if="mode === 'local' && state.data && state.draft && !projection && availableProfiles.length" class="gx-layout__tabs gx-layout__segment" role="group" aria-label="Layout size">
+        <nav class="gx-layout__tabs gx-layout__segment" aria-label="Screen arrangement">
+          <button class="gx-btn gx-btn--tonal" :aria-pressed="!split" :disabled="!!state.drag" @click="$emit('target', projection ? 'projection' : 'device')">Full screen</button>
+          <button class="gx-btn gx-btn--tonal" :aria-pressed="split" :disabled="!!state.drag" @click="$emit('target', projection ? 'projection-phone' : 'device-phone')"><i class="bi bi-phone" aria-hidden="true"></i> With phone screen</button>
+        </nav>
+        <div v-if="mode === 'local' && state.data && state.draft && !projection && !split && availableProfiles.length" class="gx-layout__tabs gx-layout__segment" role="group" aria-label="Layout size">
           <button v-for="tab in [{id:'large',label:'Big'}, {id:'compact',label:'Small'}].filter(tab => availableProfiles.includes(tab.id))" :key="tab.id" class="gx-btn gx-btn--tonal" type="button"
             :aria-pressed="state.profile === tab.id" :disabled="!!state.drag" @click="selectProfile(tab.id)">{{ tab.label }}<span v-if="state.data.activeProfile === tab.id" class="gx-layout__active" title="Active UI on the comma"><span class="gx-sr-only"> (active UI)</span></span></button>
         </div>
       </div>
       <GxCollapse><div v-show="state.aboutOpen" id="gx-layout-about" class="gx-layout__about">
-        <p v-if="!projection" class="gx-note">Choose a widget to move it or change its colors. Edit the layout available on this comma.</p><p v-else class="gx-note">Move widgets for the last connected StarPort screen. The comma layout stays separate. Colors follow the comma theme. Changes apply on the next connection.</p>
+        <p v-if="split" class="gx-note">This layout is used while a phone screen (CarPlay or Android Auto) shows on the other half of the {{ projection ? 'car screen' : 'comma screen' }}. The full-screen layout stays separate.{{ projection ? ' Changes apply on the next connection.' : ' Colors and widget options follow the full-screen layout.' }}</p>
+        <p v-else-if="!projection" class="gx-note">Choose a widget to move it or change its colors. Edit the layout available on this comma.</p><p v-else-if="!split" class="gx-note">Move widgets for the last connected StarPort screen. The comma layout stays separate. Colors follow the comma theme. Changes apply on the next connection.</p>
         <p v-if="projection && state.data?.screen" class="gx-note">Last usable screen: {{ state.data.screen.width - state.data.screen.margin_width }} × {{ state.data.screen.height - state.data.screen.margin_height }} pixels.</p>
       </div></GxCollapse>
-      <p v-if="projection && state.data?.reason" class="gx-note">{{ state.data.reason }}</p>
+      <p v-if="state.data?.reason" class="gx-note">{{ state.data.reason }}</p>
+      <GxNotice v-if="phoneScreen && !phoneScreen.enabled" tone="info">Phone Screen is off, so this layout isn’t showing yet. <a class="gx-link" href="#/starport/phone">Turn on Phone Screen</a></GxNotice>
       <GxState v-if="mode !== 'local'">Connect to local Galaxy to edit this device’s colors and layouts.</GxState>
       <template v-else>
         <div ref="leaveBar" class="gx-layout__savebar" :class="{'gx-layout__savebar--leave': inlineLeavePrompt, 'is-stuck': state.stuck.leaveBar}" :inert="busy">
@@ -46,13 +52,13 @@ export const ONROAD_LAYOUT_TEMPLATE = `
         </div>
         <GxNotice tone="danger" v-if="state.error">{{ state.error }}</GxNotice>
         <template v-if="state.data && state.draft">
-          <p v-if="!state.data.valid" class="gx-note" role="status">{{ projection ? 'Default StarPort positions are shown. Save to keep your separate layout.' : 'The saved customization is invalid. Default colors and positions are shown; save your edits to replace it.' }}</p>
-          <GalaxySettingRow feedback="draft" v-if="!projection && state.profile === 'large'" :row="switchRow('Reduce Quick Select motion', state.draft.reduceMotion === true)" :index="0"
+          <p v-if="!state.data.valid" class="gx-note" role="status">{{ split ? 'Default phone screen positions are shown. Save to keep your layout.' : projection ? 'Default StarPort positions are shown. Save to keep your separate layout.' : 'The saved customization is invalid. Default colors and positions are shown; save your edits to replace it.' }}</p>
+          <GalaxySettingRow feedback="draft" v-if="!projection && !split && state.profile === 'large'" :row="switchRow('Reduce Quick Select motion', state.draft.reduceMotion === true)" :index="0"
             :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setReduceMotion(value === 'On')" />
           <p v-if="quickSelectBlocked" class="gx-note" role="status">Quick Select needs space. Move a speed widget clear of either shelf area. Show tap areas to see them.</p>
           <div class="gx-layout__workspace" :inert="busy">
-            <section ref="pinned" class="gx-card gx-layout__preview-card" :class="{'is-stuck': state.stuck.pinned}" aria-label="Driving screen preview" :style="{'--layout-ratio': profile.width / profile.height}">
-              <div class="gx-layout__subhead"><strong>Layout preview</strong><span>{{ state.layerDrag ? "Adjusting " + selectedWidget.label : state.art.status === 'updating' || state.backdrop.status === 'updating' ? 'Updating preview…' : profile.width + " × " + profile.height }}</span></div>
+            <section ref="pinned" class="gx-card gx-layout__preview-card" :class="{'is-stuck': state.stuck.pinned}" aria-label="Driving screen preview" :style="{'--layout-ratio': stageRatio}">
+              <div class="gx-layout__subhead"><strong>Layout preview</strong><span>{{ state.layerDrag ? "Adjusting " + selectedWidget.label : state.art.status === 'updating' || state.backdrop.status === 'updating' ? 'Updating preview…' : profile.width + " × " + profile.height + (phoneScreen ? " beside the phone" : "") }}</span></div>
               <div class="gx-layout__preview-bar">
                 <GalaxySelect class="gx-field gx-field--full" aria-label="Preview scene" :value="state.scene" :disabled="!!state.drag || !!state.layerDrag" @change="state.scene = $event.target.value">
                   <optgroup v-for="group in sceneGroups" :key="group.label" :label="group.label">
@@ -73,7 +79,8 @@ export const ONROAD_LAYOUT_TEMPLATE = `
               </template>
               <span v-if="state.showEditingAids && state.snapGuides.length && !snapInBar" class="gx-layout__stage-chip gx-layout__stage-chip--start" :class="{'gx-layout__stage-chip--with-tap-areas': !projection && state.showFavoriteZones && state.profile !== 'compact'}" aria-hidden="true">{{ snapSummary }}</span>
               <span v-if="!projection && state.showFavoriteZones && state.showEditingAids && state.profile !== 'compact'" class="gx-layout__stage-chip" aria-hidden="true"><i class="bi bi-grid-3x3-gap"></i>Tap areas</span>
-              <svg ref="preview" class="gx-layout__preview" :style="{'--layout-glow': state.profile === 'compact' ? '4px' : '14px'}" :viewBox="'0 0 ' + profile.width + ' ' + profile.height" :width="profile.width" :height="profile.height"
+              <div class="gx-layout__screen" :class="phoneScreen ? ['gx-layout__split', 'gx-layout__split--' + phoneScreen.side] : null">
+              <svg ref="preview" class="gx-layout__preview" :style="{'--layout-glow': state.profile === 'compact' ? '4px' : '14px', ...(phoneScreen ? {flexGrow: profile.width} : {})}" :viewBox="'0 0 ' + profile.width + ' ' + profile.height" :width="profile.width" :height="profile.height"
                 @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="cancelDrag" @lostpointercapture="cancelDrag" @click="previewClick"
                 role="group" :aria-label="projection ? 'StarPort layout preview' : (state.profile === 'large' ? 'Big' : 'Small') + ' layout preview'">
                 <g id="gx-layout-stage">
@@ -96,8 +103,8 @@ export const ONROAD_LAYOUT_TEMPLATE = `
                   :d="'M'+roadPoints(line).replace(' ', ' L')"
                   :stroke="state.profile === 'compact' && index < 2 ? (roadStyle.pathEdge || '#00ff40ff') : roadColors.laneLines"
                   opacity=".7" :stroke-width="state.profile === 'compact' ? 2 : 5" />
-                <rect v-if="!projection && !expandedRoad" :x="state.profile === 'large' ? 1860 : 476" y="0" :width="state.profile === 'large' ? 300 : 60" :height="profile.height" fill="#090c10" />
-                <g v-if="!projection && state.profile === 'large' && !expandedRoad" aria-hidden="true" pointer-events="none">
+                <rect v-if="!projection && !split && !expandedRoad" :x="state.profile === 'large' ? 1860 : 476" y="0" :width="state.profile === 'large' ? 300 : 60" :height="profile.height" fill="#090c10" />
+                <g v-if="!projection && !split && state.profile === 'large' && !expandedRoad" aria-hidden="true" pointer-events="none">
                   <g v-for="(sample, index) in [{label:'ACCEL',value:'1.08 ft/s²',accent:'#ffffff'}, {label:'STEER DELAY',value:'0.15000',accent:'#3b82f6'}, {label:'FRICTION',value:'0.12000',accent:'#22c55e'}, {label:'LAT ACCEL',value:'2.50000',accent:'#3b82f6'}, {label:'LATERAL %',value:'78.00%',accent:'#ffffff'}, {label:'TORQUE %',value:'42%',accent:'#ffffff'}, {label:'CHESTNUT',value:'',accent:'#ffffff'}]" :key="sample.label" :transform="'translate(1873 ' + (24 + index * 150) + ')'">
                     <rect width="275" height="126" rx="16" fill="#000000" stroke="#ffffff55" stroke-width="2" />
                     <rect x="253" y="4" width="18" height="118" rx="4" :fill="sample.accent" />
@@ -166,6 +173,12 @@ export const ONROAD_LAYOUT_TEMPLATE = `
                 <rect v-if="state.showEditingAids && selectionBox" class="gx-layout__outline" :x="selectionBox.x" :y="selectionBox.y" :width="selectionBox.width" :height="selectionBox.height" rx="4" fill="none" stroke="#d4baff" stroke-width="2" vector-effect="non-scaling-stroke" />
                 </g>
               </svg>
+              <div v-if="phoneScreen" class="gx-layout__phone" :style="{flexGrow: phoneScreen.width, aspectRatio: phoneScreen.width + ' / ' + phoneScreen.height}" role="img" aria-label="Phone screen half">
+                <i class="bi bi-phone" aria-hidden="true"></i><strong>Phone screen</strong><small>CarPlay or Android Auto</small>
+                <button class="gx-btn gx-btn--tonal" type="button" :disabled="state.phoneSideBusy || !!state.drag" @click="setPhoneSide(phoneScreen.side === 'left' ? 'right' : 'left')">
+                  <i :class="phoneScreen.side === 'left' ? 'bi bi-arrow-right' : 'bi bi-arrow-left'" aria-hidden="true"></i> Move to {{ phoneScreen.side === 'left' ? 'right' : 'left' }}</button>
+              </div>
+              </div>
               </div>
               <Teleport to="body"><div v-if="loupe" class="gx-layout__loupe" aria-hidden="true" :style="loupe.style">
                 <svg :viewBox="loupe.viewBox" preserveAspectRatio="xMidYMid meet"><use href="#gx-layout-stage" /></svg>
@@ -188,7 +201,7 @@ export const ONROAD_LAYOUT_TEMPLATE = `
               <nav ref="sections" class="gx-layout__switcher gx-layout__sections gx-settings-tabs" :class="{'is-stuck': state.stuck.sections}" aria-label="Editor sections">
                 <button class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'widgets'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'widgets'">Widgets</button>
                 <button class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'edit'" :disabled="!!state.drag || !!state.layerDrag" @click="openEditPanel()"><span>Edit<span class="gx-layout__long"> widget</span></span></button>
-                <button v-if="!projection" class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'road'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'road'"><span>Road<span class="gx-layout__long"> colors</span></span></button>
+                <button v-if="!projection && !split" class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'road'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'road'"><span>Road<span class="gx-layout__long"> colors</span></span></button>
                 <button v-if="projection || displayGroups.length" class="gx-btn gx-btn--tonal" :aria-pressed="state.inspectorPanel === 'display'" :disabled="!!state.drag || !!state.layerDrag" @click="state.inspectorPanel = 'display'">Options</button>
               </nav>
               <div v-show="state.inspectorPanel === 'widgets'" class="gx-layout__panel">
@@ -298,13 +311,13 @@ export const ONROAD_LAYOUT_TEMPLATE = `
                   :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setWidgetWifiName(value)" />
                 <p v-if="selectedWidget.defaultAnchor === 'driver_side'" class="gx-note">The default position follows the driver’s side. A moved position stays where you place it.</p>
                 <p v-if="selectedWidget.note" class="gx-note">{{ selectedWidget.note }}</p>
-                <div v-if="selectedWidget.kind === 'clock'" class="gx-row"><div class="gx-row__info"><span class="gx-row__label">Use 24-hour time</span></div>
+                <div v-if="sharedThemeControls && selectedWidget.kind === 'clock'" class="gx-row"><div class="gx-row__info"><span class="gx-row__label">Use 24-hour time</span></div>
                   <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Use 24-hour time" :checked="!!state.draft.clock24Hour" :disabled="!editAvailable || !!state.drag || !!state.layerDrag" @change="setClock24Hour"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
-                <GalaxySettingRow feedback="draft" v-if="selectedWidget.kind === 'cruise_limits'" :row="switchRow('Show Speed-Limit Sources', state.draft.speedSources === true)" :index="0"
+                <GalaxySettingRow feedback="draft" v-if="sharedThemeControls && selectedWidget.kind === 'cruise_limits'" :row="switchRow('Show Speed-Limit Sources', state.draft.speedSources === true)" :index="0"
                   :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setSpeedSources('speedSources', value === 'On')" />
-                <GalaxySettingRow feedback="draft" v-if="selectedWidget.kind === 'cruise_limits' && state.draft.speedSources === true" :row="switchRow('Show as Separate Card', state.draft.speedSourcesCard === true)" :index="1"
+                <GalaxySettingRow feedback="draft" v-if="sharedThemeControls && selectedWidget.kind === 'cruise_limits' && state.draft.speedSources === true" :row="switchRow('Show as Separate Card', state.draft.speedSourcesCard === true)" :index="1"
                   :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setSpeedSources('speedSourcesCard', value === 'On')" />
-                <div v-if="!projection && selectedWidget.kind === 'cruise_limits'" class="gx-row"><div class="gx-row__info"><span class="gx-row__label">Show set speed</span></div>
+                <div v-if="!projection && !split && selectedWidget.kind === 'cruise_limits'" class="gx-row"><div class="gx-row__info"><span class="gx-row__label">Show set speed</span></div>
                   <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Show set speed" :checked="state.draft.showMaxSpeed !== false" :disabled="!editAvailable || !!state.drag || !!state.layerDrag" @change="setShowMaxSpeed"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label></div>
                 <GalaxySettingRow feedback="draft" v-if="projection && selectedWidget.kind === 'steering_wheel'" :row="switchRow('Brake & Acceleration Colors', state.draft.wheelPedalFeedback === true)" :index="0"
                   :disabled="!editAvailable || !!state.drag || !!state.layerDrag" :save-value="(index, value) => setProjectionDisplay('wheelPedalFeedback', value)" />
@@ -344,7 +357,8 @@ export const ONROAD_LAYOUT_TEMPLATE = `
                   <span class="gx-note">Smaller sizes let more of the road show through.</span>
                 </template>
                 <span class="gx-note gx-layout__keys-note">Use arrow keys on a preview widget to move 1 pixel, or Shift + arrow for 10.</span>
-                <section v-if="!projection && colorFields.length" class="gx-layout__colors" :aria-label="selectedWidget.label + ' colors'">
+                <p v-if="!sharedThemeControls" class="gx-note">Colors and options for this widget follow the <a class="gx-link" href="#/theme_maker">full-screen layout</a>.</p>
+                <section v-if="!projection && !split && colorFields.length" class="gx-layout__colors" :aria-label="selectedWidget.label + ' colors'">
                   <div class="gx-layout__subhead"><h4>{{ selectedWidget.label }} colors</h4><button class="gx-btn gx-btn--tonal" type="button" :disabled="!editAvailable" @click="resetColors" aria-label="Reset widget colors" title="Reset widget colors">Reset</button></div>
                   <p class="gx-note">Changes this widget in the {{ state.profile === 'large' ? 'Big' : 'Small' }} layout only. Status indicators keep their meaning.</p>
                   <div class="gx-layout__palette"><div v-for="field in colorFields" :key="field.id" class="gx-layout__color" :class="{'is-open': state.openColor === 'widget:' + field.id}">
@@ -366,10 +380,10 @@ export const ONROAD_LAYOUT_TEMPLATE = `
                   </div></div>
                   <GxNotice tone="danger" v-if="state.colorError">{{ state.colorError }}</GxNotice>
                 </section>
-                <p v-if="!projection && !colorFields.length" class="gx-note">This widget uses its original status colors.</p>
+                <p v-if="!projection && !split && !colorFields.length" class="gx-note">This widget uses its original status colors.</p>
               </div>
               </div>
-              <section v-if="!projection" v-show="state.inspectorPanel === 'road'" class="gx-layout__colors" aria-label="Path and lane colors">
+              <section v-if="!projection && !split" v-show="state.inspectorPanel === 'road'" class="gx-layout__colors" aria-label="Path and lane colors">
                 <div class="gx-layout__subhead"><h4>Path &amp; Lane Colors</h4><button class="gx-btn gx-btn--tonal" type="button" :disabled="!editAvailable || !!state.drag" @click="resetRoad" aria-label="Reset road colors" title="Reset road colors">Reset</button></div>
                 <label>Path style<GalaxySelect class="gx-field gx-field--full" :value="roadMode" :disabled="!editAvailable || !!state.drag" @change="setRoadMode($event.target.value)">
                   <option value="acceleration">Acceleration colors</option>

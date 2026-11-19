@@ -16,6 +16,7 @@ from dataclasses import replace
 from openpilot.starpilot.ui.raylib import rl
 
 from openpilot.starpilot.ui.layout_preview_transport import SCENES, validate_preview_document
+from openpilot.starpilot.system.phone_projection import comma_layout
 from openpilot.starpilot.ui.developer_preview import OnroadVisualPreview
 from openpilot.starpilot.ui.onroad_customization import (CAMERA_WIDGETS, PROFILES, ROAD_BASE_WIDTH, RUNTIME_PREVIEW_WIDGETS, fit_to_road, placement,
                                                          validate_document, widget_size)
@@ -295,7 +296,7 @@ class _Canvas:
                  placement(state.customization, self.profile, "max_speed")["enabled"])
     self.monitor.render(rect, state, top_icons=top_icons, y_offset=self.viewport[1] - 1080 if self.viewport else 0)
 
-  def render(self, state: OnroadState, scene: str) -> bytes:
+  def render(self, state: OnroadState, scene: str, crop_width: int | None = None) -> bytes:
     if self.view is None or self.fonts is None or self.target is None:
       raise RuntimeError("Layout preview resources are closed")
     self._settle(state)
@@ -312,13 +313,17 @@ class _Canvas:
         # ProjectionOnroad adds this permanent brand after the shared onroad view.
         self.fonts.draw('StarPilot', FontRole.BRAND, 30, width - 210, height - 90)
       if self.profile == Profile.LARGE and self.viewport is None and state.appearance.show_developer_sidebar:
-        render_sidebar(self.fonts, rl.Rectangle(width - SIDEBAR_WIDTH, 0, SIDEBAR_WIDTH, height))
+        render_sidebar(self.fonts, rl.Rectangle((crop_width or width) - SIDEBAR_WIDTH, 0, SIDEBAR_WIDTH, height))
     finally:
       rl.end_texture_mode()
     image = rl.load_image_from_texture(self.target.texture)
     try:
       rl.image_format(image, rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
       rl.image_flip_vertical(image)
+      if crop_width is not None:
+        # Beside a phone screen only the comma half is drawn; the editor shows the phone itself.
+        rl.image_crop(image, rl.Rectangle(0, 0, crop_width, height))
+        width = crop_width
       scale = min(1.0, 2560 / width, 1440 / height)
       if scale < 1.0:
         width, height = round(width * scale), round(height * scale)
@@ -514,8 +519,11 @@ class LayoutPreviewRenderer:
     profile = Profile.LARGE if viewport else Profile(payload["profile"])
     scene = payload["scene"]
     sidebar = document.pop('developerSidebar', False)
+    split = document.pop('phoneSplit', False) is True and profile == Profile.LARGE and viewport is None
+    if split:
+      document = comma_layout.customization(document, document['layouts']['large'], document.get('widgetOrder', {}).get('large'))
     if profile == Profile.LARGE and viewport is None:
-      width = profile.size[0] - (SIDEBAR_WIDTH if sidebar else 0)
+      width = (comma_layout.WIDTH if split else profile.size[0]) - (SIDEBAR_WIDTH if sidebar else 0)
       # Widget art is cropped from the saved 1860px road, as the editor places each sprite itself.
       document = fit_to_road(document, ROAD_BASE_WIDTH if payload.get('art') is True else width)
     state = sample_state(scene, document)
@@ -536,6 +544,7 @@ class LayoutPreviewRenderer:
       self.close()
       self._canvas = _Canvas(profile, viewport)
     self._last_use = time.monotonic()
+    crop = {'crop_width': comma_layout.WIDTH} if split else {}
     if payload.get('art') is True:
       positions = payload['document']['layout']['widgets'] if viewport else document['layouts'][str(profile)]
       return self._canvas.render_widget_art(state, positions, general=scene == 'general')
@@ -543,8 +552,8 @@ class LayoutPreviewRenderer:
       # Everything the car draws except the movable widgets, which the editor places over it.
       # A non-empty order that names no widget keeps the ordered path and draws none of them.
       order = {**state.customization.get('widgetOrder', {}), str(profile): ['backdrop']}
-      return self._canvas.render(replace(state, customization={**state.customization, 'widgetOrder': order}), scene)
-    return self._canvas.render(state, scene)
+      return self._canvas.render(replace(state, customization={**state.customization, 'widgetOrder': order}), scene, **crop)
+    return self._canvas.render(state, scene, **crop)
 
   def expire(self) -> None:
     if self._canvas is not None and time.monotonic() - self._last_use >= IDLE_SECONDS:

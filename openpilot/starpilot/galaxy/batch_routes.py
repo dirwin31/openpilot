@@ -68,7 +68,7 @@ def widget_art_header(image):
   return ''
 
 
-def preview_layout(self, payload, projection_layout_owner, layout_owner, layout_preview_socket):
+def preview_layout(self, payload, projection_layout_owner, layout_owner, layout_preview_socket, projection_split_owner=None):
   identity = self.settings_session()
   if identity is None:
     self.json(401, {'error': 'Sign in to Galaxy'})
@@ -87,8 +87,15 @@ def preview_layout(self, payload, projection_layout_owner, layout_owner, layout_
       if not snapshot['available']:
         self.json(409, {'error': snapshot['reason'] or 'Connect Android Auto before previewing'})
         return
-      document = {'layout': validate_layout(payload['document'], snapshot['screen']),
-                  'base': read_customization(layout_owner().params)}
+      layout = payload['document']
+      split = projection_split_owner is not None and type(layout) is dict and layout.get('canvas') != {
+        'width': snapshot['metadata']['width'], 'height': snapshot['metadata']['height']}
+      if split:
+        from openpilot.starpilot.system.starport.projection_layout import validate_layout_for_viewport
+        layout = validate_layout_for_viewport(layout, projection_split_owner().viewport(snapshot['screen']))
+      else:
+        layout = validate_layout(layout, snapshot['screen'])
+      document = {'layout': layout, 'base': read_customization(layout_owner().params)}
     else:
       document = validate_preview_document(payload['document'])
   except (ValueError, TypeError, OverflowError, RecursionError):

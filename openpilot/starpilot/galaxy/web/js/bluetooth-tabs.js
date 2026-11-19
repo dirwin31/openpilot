@@ -7,7 +7,6 @@ export const BluetoothTabs = {
     { id: 'devices', label: 'Devices', path: '/bluetooth' },
     { id: 'audio', label: 'Phones & Audio', path: '/spotify' },
     { id: 'starport', label: 'StarPort', path: '/starport' },
-    { id: 'phone-screen', label: 'Phone Screen', path: '/phone-screen' },
     { id: 'uniden', label: 'Uniden', path: '/bluetooth/uniden' },
     { id: 'controllers', label: 'Controllers', path: '/bluetooth/controllers' },
   ] }),

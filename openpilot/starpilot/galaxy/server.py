@@ -66,6 +66,17 @@ WEB = Path(__file__).resolve().parent / 'web'
 INSTANCE = secrets.token_hex(8)
 
 
+def disable_maps(owners, session_valid) -> bool:
+  """Only one screen shows the map: turn it off in each of the other screen's layouts; True when any was on."""
+  changed = False
+  for owner in owners:
+    try:
+      changed = bool(owner().disable_map(session_valid=session_valid)) or changed
+    except (OSError, RuntimeError, ValueError, LayoutChanged):
+      pass
+  return changed
+
+
 def phone_claim_view():
   from openpilot.starpilot.galaxy_bluetooth.bridge import claim
   return claim.view(claim.CLAIM_PATH)
@@ -289,6 +300,8 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
   starport_source_lock = threading.Lock()
   starport_registry_source = None
   projection_layout_source = projection_layout
+  projection_split_source = None
+  phone_layout_source = None
   layout_source = layouts
   layout_lock = threading.Lock()
   favorites_source = favorites
@@ -404,6 +417,34 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
         params = Params()
         projection_layout_source = host_owner(params, configuration_allowed) or ProjectionLayoutOwner(params, configuration_allowed)
       return projection_layout_source
+
+  def projection_split_owner():
+    nonlocal projection_split_source
+    with layout_lock:
+      if projection_split_source is None:
+        from openpilot.common.params import Params
+        from openpilot.starpilot.galaxy.projection_layout import ProjectionLayoutOwner, host_owner
+        params = Params()
+        projection_split_source = (host_owner(params, configuration_allowed, split=True) or
+                                   ProjectionLayoutOwner(params, configuration_allowed, split=True))
+      return projection_split_source
+
+  def phone_layout_owner():
+    nonlocal phone_layout_source
+    owner = layout_owner()
+    with layout_lock:
+      if phone_layout_source is None:
+        from openpilot.common.hardware import HARDWARE
+        from openpilot.starpilot.galaxy.phone_screen_layout import PhoneScreenLayoutOwner
+        host = os.environ.get('SP_HOST_RUNTIME') == '1'
+        large = host or HARDWARE.get_device_type() in ('tici', 'tizi')
+        extra = {}
+        if host:
+          # ./dev galaxy has no writable /data; keep the layout beside its private StarPort files.
+          from openpilot.starpilot.system.starport.identity import DATA_DIR
+          extra['settings_root'] = DATA_DIR / 'phone_projection'
+        phone_layout_source = PhoneScreenLayoutOwner(owner.params, owner.parked, lambda: large, owner.vehicle_params, **extra)
+      return phone_layout_source
 
   def bluetooth_session_valid(identity):
     token, generation = identity
@@ -1649,6 +1690,22 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
             self.json(200, result)
           else:
             self.json(401, {'error': 'Sign in to Galaxy'})
+      elif path in ('/api/ui/layout/split', '/api/starport/layout/split'):
+        if not self.require_session():
+          return
+        identity = self.settings_session()
+        if identity is None:
+          self.json(401, {'error': 'Sign in to Galaxy'})
+          return
+        try:
+          result = (phone_layout_owner() if path == '/api/ui/layout/split' else projection_split_owner()).snapshot()
+        except (OSError, ValueError, RuntimeError):
+          self.json(503, {'error': 'Phone screen layout is unavailable'})
+        else:
+          if self.settings_session() == identity:
+            self.json(200, result)
+          else:
+            self.json(401, {'error': 'Sign in to Galaxy'})
       elif path == '/api/ui/layout':
         if not self.require_session():
           return
@@ -1869,7 +1926,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
                       '/api/starport/logs/send',
                       '/api/starport/pairing/response', '/api/starport/pairing/cancel', '/api/starport/pairing/select',
                       '/api/spotify/enable', '/api/spotify/key', '/api/spotify/preferences', '/api/spotify/control', '/api/spotify/maintenance',
-                      '/api/ui/layout', '/api/ui/layout/preview', '/api/favorites/slots',
+                      '/api/ui/layout', '/api/ui/layout/preview', '/api/ui/layout/split', '/api/starport/layout/split', '/api/favorites/slots',
                       '/api/maps/start', '/api/maps/cancel',
                         '/api/bluetooth/action', '/api/bluetooth/uniden', '/api/controllers/action',
                       '/api/models/active', '/api/models/preferences', '/api/models/download', '/api/models/download_all',
@@ -1897,7 +1954,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
       except ValueError:
         size = -1
       max_size = (256 * 1024 if path == '/api/settings/restore' else 66 * 1024 if path == '/api/settings/flm-backup/preview' else
-                  17408 if path in ('/api/ui/layout', '/api/ui/layout/preview') else
+                  17408 if path in ('/api/ui/layout', '/api/ui/layout/preview', '/api/ui/layout/split', '/api/starport/layout/split') else
                   16384 if path == '/api/companion/notification' else 4096)
       if not 0 < size <= max_size:
         self.json(413, {'error': 'Invalid request size'})
@@ -2549,10 +2606,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           with effect_lock:
             result = projection_layout_owner().save(payload, session_valid=lambda: self.settings_session() == identity)
             if result['document']['widgets'].get('nav_map', {}).get('enabled') is True:
-              try:
-                result['mapDisabledElsewhere'] = bool(layout_owner().disable_map(lambda: self.settings_session() == identity))
-              except (OSError, RuntimeError, ValueError, LayoutChanged):
-                result['mapDisabledElsewhere'] = False
+              result['mapDisabledElsewhere'] = disable_maps((layout_owner, phone_layout_owner), lambda: self.settings_session() == identity)
         except LayoutChanged as error:
           self.json(409, {'error': str(error)})
         except ValueError as error:
@@ -2574,10 +2628,8 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           with effect_lock:
             result = layout_owner().save(payload, session_valid=lambda: self.settings_session() == identity)
             if result['document']['layouts']['large'].get('nav_map', {}).get('enabled') is True:
-              try:
-                result['mapDisabledElsewhere'] = bool(projection_layout_owner().disable_map(session_valid=lambda: self.settings_session() == identity))
-              except (OSError, RuntimeError, ValueError, LayoutChanged):
-                result['mapDisabledElsewhere'] = False
+              result['mapDisabledElsewhere'] = disable_maps((projection_layout_owner, projection_split_owner),
+                                                            lambda: self.settings_session() == identity)
         except LayoutChanged as error:
           self.json(409, {'error': str(error)})
         except ValueError as error:
@@ -2590,8 +2642,35 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           else:
             self.json(401, {'error': 'Sign in to Galaxy'})
         return
+      if path in ('/api/ui/layout/split', '/api/starport/layout/split'):
+        identity = self.settings_session()
+        if identity is None:
+          self.json(401, {'error': 'Sign in to Galaxy'})
+          return
+        try:
+          with effect_lock:
+            comma = path == '/api/ui/layout/split'
+            result = (phone_layout_owner() if comma else projection_split_owner()).save(
+              payload, session_valid=lambda: self.settings_session() == identity)
+            document = result['document']
+            placed = (document['layouts']['large'] if comma else document['widgets']).get('nav_map', {})
+            if placed.get('enabled') is True:
+              others = (projection_layout_owner, projection_split_owner) if comma else (layout_owner, phone_layout_owner)
+              result['mapDisabledElsewhere'] = disable_maps(others, lambda: self.settings_session() == identity)
+        except LayoutChanged as error:
+          self.json(409, {'error': str(error)})
+        except ValueError as error:
+          self.json(400, {'error': str(error)})
+        except (OSError, RuntimeError):
+          self.json(503, {'error': 'Phone screen layout could not be saved'})
+        else:
+          if self.settings_session() == identity:
+            self.json(200, result)
+          else:
+            self.json(401, {'error': 'Sign in to Galaxy'})
+        return
       if path == '/api/ui/layout/preview':
-        preview_layout(self, payload, projection_layout_owner, layout_owner, layout_preview_socket)
+        preview_layout(self, payload, projection_layout_owner, layout_owner, layout_preview_socket, projection_split_owner)
         return
       if path == '/api/drive-state/action':
         change_drive_state(self, payload, effect_lock, drive_owner)

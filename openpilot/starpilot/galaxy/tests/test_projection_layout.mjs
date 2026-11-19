@@ -209,8 +209,8 @@ assert.equal(pipChanges.length, 2)
 assert.throws(() => editorSnapshot({ version: 1, screen: null, reason: "Connect StarPort once" }), /Connect StarPort once/)
 assert.equal(editorSnapshot({ ...raw, editable: false, reason: "Enable StarPort" }).editable, false)
 assert.ok(!OnroadLayoutPage.template.includes('<section class="gx-layout__colors" aria-label="Path'))
-assert.ok(OnroadLayoutPage.template.includes('v-if="!projection && colorFields.length"'))
-assert.ok(OnroadLayoutPage.template.includes('v-if="!projection && state.profile ==='))
+assert.ok(OnroadLayoutPage.template.includes('v-if="!projection && !split && colorFields.length"'))
+assert.ok(OnroadLayoutPage.template.includes('v-if="!projection && !split && state.profile ==='))
 compile(OnroadLayoutPage.template, { decodeEntities: value => value.replaceAll("&amp;", "&") }) // Actual Vue compiler, including projection conditionals.
 
 const emissions = [], leaveVm = { projection: true, busy: false, dirty: true,

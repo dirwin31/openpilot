@@ -1374,8 +1374,9 @@ class StarShellSession:
     return current_message(ui.sm, "slcState", now_ns, after_frame=ui.started_frame)
 
   def snapshot(self, mode: ShellMode) -> ShellSnapshot:
+    phone_split = mode == ShellMode.ONROAD and self.profile == Profile.LARGE and getattr(self, 'phone_split', False)
     key = (self.adapter.ui_state.sm.frame, mode, self.selected,
-           self.compact_y, self.compact_scroll_x, self.sidebar_expanded)
+           self.compact_y, self.compact_scroll_x, self.sidebar_expanded, phone_split)
     if self._snapshot_cache is not None and self._snapshot_cache[0] == key:
       return self._snapshot_cache[1]
     snapshot = self.adapter.build(mode, self.selected, compact_y=self.compact_y,
@@ -1386,6 +1387,8 @@ class StarShellSession:
     snapshot = update_rear_fog(self, snapshot, onroad=mode == ShellMode.ONROAD)
     if mode == ShellMode.ONROAD and self.profile == Profile.LARGE:
       width = getattr(self, '_onroad_page_width', 2160.0) - (SIDEBAR_WIDTH if snapshot.onroad.appearance.show_developer_sidebar else 0)
+      if phone_split:
+        snapshot = self._phone_split_snapshot(snapshot)
       snapshot = fit_road_snapshot(snapshot, width)
     if mode == ShellMode.HOME:
       now = time.monotonic()
@@ -1456,6 +1459,15 @@ class StarShellSession:
       snapshot = replace(snapshot, models=models)
     self._snapshot_cache = (key, snapshot)
     return snapshot
+
+  def _phone_split_snapshot(self, snapshot):
+    """Beside a phone screen the Big layout uses its own saved split arrangement."""
+    from openpilot.starpilot.system.phone_projection import comma_layout
+    if getattr(self, '_phone_layout', None) is None:
+      self._phone_layout = comma_layout.LayoutCache()
+    state = snapshot.onroad
+    layout, order = self._phone_layout.get(state.customization)
+    return replace(snapshot, onroad=replace(state, customization=comma_layout.customization(state.customization, layout, order)))
 
   def render(self, mode: ShellMode, rect: rl.Rectangle, parent_clip: rl.Rectangle | None = None) -> None:
     if mode != ShellMode.ONROAD and (uniden := getattr(self.view.onroad, 'uniden', None)):
@@ -2029,7 +2041,7 @@ class StarMainLayout(MainLayout):
       except OSError:
         pass
 
-    description = "Show CarPlay or Android Auto beside the driving view. Phones connect over Bluetooth and the Galaxy hotspot."
+    description = "Show your phone's screen (CarPlay or Android Auto) beside the driving view. Set it up in Galaxy under StarPort."
     enabled = toggle_item("Phone Screen", description, initial_state=projection.load().enabled,
                           callback=lambda state: save(enabled=state))
     side = multiple_button_item("Phone Screen Side", "Which half of the screen the phone uses.", ["Left", "Right"],
@@ -2190,6 +2202,8 @@ class StarMainLayout(MainLayout):
           return
         rect = self._content_rect
     self._phone_frame_rate(phone_rect is not None)
+    if getattr(self, "star", None) is not None:
+      self.star.phone_split = phone_rect is not None
     mode = {MainState.HOME: ShellMode.HOME, MainState.SETTINGS: ShellMode.SETTINGS,
             MainState.ONROAD: ShellMode.ONROAD}[self._current_mode]
     self.page.mode = mode

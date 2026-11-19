@@ -59,6 +59,10 @@ function page(loader) {
   })
 }
 
+// Colors & Layout: the comma or StarPort screen, alone or beside a phone screen.
+const LAYOUT_TARGET_PATHS = { device: "/theme_maker", projection: "/theme_maker/starport",
+  "device-phone": "/theme_maker/phone", "projection-phone": "/theme_maker/starport/phone" }
+const LAYOUT_PATHS = [...Object.values(LAYOUT_TARGET_PATHS), "/appearance"]
 const THEME_KEY = "galaxy-preview-theme"
 const PIN_KEY = "galaxy-preview-nav-pinned"
 const stored = (key) => { try { return localStorage.getItem(key) } catch { return null } }
@@ -132,6 +136,8 @@ createApp({
     toggleHaptic,
     setPageActive(element, active) { element.inert = !active; element.setAttribute("aria-hidden", String(!active)) },
     reloadPage() { location.reload() },
+    isLayoutPath(path) { return LAYOUT_PATHS.includes(path) },
+    layoutTargetPath(target) { return LAYOUT_TARGET_PATHS[target] || "/theme_maker" },
     go(path) { navigate(path, () => { state.drawerOpen = false; state.searchPage = "" }) },
     goFromMenu(path) {
       state.drawerOpen = false
@@ -257,7 +263,7 @@ createApp({
         <SettingsPage @nested="ensureBackEntry" ref="activeSettings" v-else-if="route.path === '/developer/connect'" :mode="state.monitorMode" :unauthorized="sessionExpired" initial-section="developer" />
         <GalaxyPage v-else-if="route.path === '/galaxy'" :mode="state.monitorMode" :unauthorized="sessionExpired" />
         <NetworksPage v-else-if="route.path === '/networks'" :mode="state.monitorMode" :unauthorized="sessionExpired" />
-        <OnroadLayoutPage ref="activeLayout" v-else-if="['/theme_maker', '/theme_maker/starport', '/appearance'].includes(route.path)" :key="route.path" :projection="route.path === '/theme_maker/starport'" :initial-panel="route.path === '/appearance' ? 'display' : 'widgets'" :mode="state.monitorMode" :unauthorized="sessionExpired" @target="go($event === 'projection' ? '/theme_maker/starport' : '/theme_maker')" @close="routeBack" />
+        <OnroadLayoutPage ref="activeLayout" v-else-if="isLayoutPath(route.path)" :key="route.path" :projection="route.path.startsWith('/theme_maker/starport')" :split="route.path.endsWith('/phone')" :initial-panel="route.path === '/appearance' ? 'display' : 'widgets'" :mode="state.monitorMode" :unauthorized="sessionExpired" @target="go(layoutTargetPath($event))" @close="routeBack" />
         <SettingsRecoveryPage v-else-if="route.path === '/settings/recovery'" :mode="state.monitorMode" :unauthorized="sessionExpired" />
         <Logs v-else-if="route.path === '/logs' || route.path.startsWith('/logs/') || ['/troubleshoot', '/manage_tmux'].includes(route.path)" :path="route.path === '/troubleshoot' ? '/logs/troubleshoot' : route.path === '/manage_tmux' ? '/logs/tmux' : route.path" :mode="state.monitorMode" :unauthorized="sessionExpired" :tools="currentTool?.children || []" />
         <SoftwarePage v-else-if="route.path === '/system'" :mode="state.monitorMode" :unauthorized="sessionExpired" :restarting="baseline => updateRestart.start({ ...baseline, instance: deviceRestart.instance })"
@@ -269,7 +275,7 @@ createApp({
         <ControllersPage v-else-if="route.path === '/bluetooth/controllers'" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <StarPortPage v-else-if="route.path === '/starport'" :mode="state.monitorMode" :local-access="authState.localAccess" :unauthorized="sessionExpired" />
         <SpotifyPage v-else-if="['/starport/audio', '/spotify'].includes(route.path)" :mode="state.monitorMode" :unauthorized="sessionExpired" />
-        <PhoneScreenPage v-else-if="route.path === '/phone-screen'" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
+        <PhoneScreenPage v-else-if="['/starport/phone', '/phone-screen'].includes(route.path)" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <SettingsPage @nested="ensureBackEntry" ref="activeSettings" v-else-if="route.path === '/settings/vehicle'" :mode="state.monitorMode" :unauthorized="sessionExpired" initial-section="vehicle" />
         <DevicePreferencesPage v-else-if="route.path === '/device-preferences'" :mode="state.monitorMode" :go="go" />
         <SettingsPage @nested="ensureBackEntry" ref="activeSettings" v-else-if="deviceSettingsPage" :key="deviceSettingsPage" :mode="state.monitorMode" :unauthorized="sessionExpired" :initial-page="deviceSettingsPage" :title="deviceSettingsPage === 'sounds' ? 'Sounds & Alerts' : 'Display'" :return-to="returnToDevice" />
