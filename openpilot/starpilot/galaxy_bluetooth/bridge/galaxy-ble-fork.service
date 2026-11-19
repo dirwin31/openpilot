@@ -12,6 +12,7 @@ User=comma
 WorkingDirectory=/data/openpilot/openpilot/starpilot/galaxy_bluetooth/bridge
 ExecStart=/data/openpilot/openpilot/starpilot/galaxy_bluetooth/bridge/run.sh server.py --key-file /data/galaxy-ble/pairing.json
 ExecStartPost=+/data/openpilot/openpilot/starpilot/galaxy_bluetooth/bridge/classic_gatt.sh strip $MAINPID
+ExecStartPost=+/data/openpilot/openpilot/starpilot/galaxy_bluetooth/bridge/adv_resync.sh $MAINPID
 Restart=on-failure
 RestartSec=10
 NoNewPrivileges=true
