@@ -368,11 +368,11 @@ export const LayoutWidgetPreview = {
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect x="0" y="0" :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="(widget.opacity ?? 85) / 100 * .92" />
-        <circle cx="38" cy="25" r="6.5" fill="#46c86e" />
-        <text x="54" y="30" font-size="15" font-weight="700" letter-spacing="0.6" fill="#b8b2c8">BIG • JETLINK</text>
-        <text :x="widget.width - 58" y="31" text-anchor="end" font-size="20" font-weight="700" fill="#f5f2fc">24.6</text>
-        <text :x="widget.width - 32" y="31" text-anchor="end" font-size="15" fill="#b8b2c8">ms</text>
-        <text x="32" y="63" font-size="27" font-weight="600" fill="#f5f2fc">Cinque v3</text>
+        <circle cx="40" cy="30" r="7.5" fill="#46c86e" />
+        <text x="58" y="36" font-size="20" font-weight="700" letter-spacing="0.6" fill="#d6d2e0">BIG • JETLINK</text>
+        <text :x="widget.width - 62" y="37" text-anchor="end" font-size="24" font-weight="700" fill="#f5f2fc">24.6</text>
+        <text :x="widget.width - 32" y="37" text-anchor="end" font-size="18" fill="#d6d2e0">ms</text>
+        <text x="32" y="75" font-size="28" font-weight="600" fill="#f5f2fc">Cinque v3</text>
       </g>
       <template v-else-if="widget.kind === 'speed_limit'">
         <text x="0" y="10" font-size="24" font-weight="500">LIMIT</text>
@@ -517,11 +517,11 @@ export const LayoutWidgetPreview = {
       </g>
       <g v-else-if="widget.kind === 'jetlink_status'">
         <rect :width="widget.width" :height="widget.height" :rx="widget.height / 2" fill="#0f0d17" :fill-opacity="235 / 255 * (widget.opacity ?? 85) / 100" />
-        <circle cx="38" cy="25" r="6.5" fill="#46c86e" />
-        <text x="54" y="30" font-size="15" font-weight="700" letter-spacing="0.6" fill="#b8b2c8">BIG • JETLINK</text>
-        <text :x="widget.width - 58" y="31" text-anchor="end" font-size="20" font-weight="700" fill="#f5f2fc">24.6</text>
-        <text :x="widget.width - 32" y="31" text-anchor="end" font-size="15" fill="#b8b2c8">ms</text>
-        <text x="32" y="63" font-size="27" font-weight="600" fill="#f5f2fc">Cinque v3</text>
+        <circle cx="40" cy="30" r="7.5" fill="#46c86e" />
+        <text x="58" y="36" font-size="20" font-weight="700" letter-spacing="0.6" fill="#d6d2e0">BIG • JETLINK</text>
+        <text :x="widget.width - 62" y="37" text-anchor="end" font-size="24" font-weight="700" fill="#f5f2fc">24.6</text>
+        <text :x="widget.width - 32" y="37" text-anchor="end" font-size="18" fill="#d6d2e0">ms</text>
+        <text x="32" y="75" font-size="28" font-weight="600" fill="#f5f2fc">Cinque v3</text>
       </g>
       <g v-else-if="widget.kind === 'nav_card' && profile === 'compact'">
         <rect x="1" y="1" :width="widget.width - 2" :height="widget.height - 2" rx="20" fill="#0f0d17" stroke="#a07edcbe" stroke-width="2" />

@@ -177,15 +177,15 @@ def test_widget_renders_option4_eyebrow_latency_and_scrolls_long_model_names():
        patch.object(onroad_jetlink.clip, 'end_scissor_mode') as end_scissor:
     widget.render(state)
 
-  # Two circles: status dot (6.5) and eyebrow separator dot (2.2)
-  assert [c.args[1] for c in circles.call_args_list] == [6.5, 2.2]
+  # Two circles: status dot (7.5) and eyebrow separator dot (2.8)
+  assert [c.args[1] for c in circles.call_args_list] == [7.5, 2.8]
   begin_scissor.assert_not_called()
   end_scissor.assert_not_called()
   drawn = [(c.args[0], c.args[1], c.args[2], round(c.args[3], 1), c.args[5]) for c in fonts.draw.call_args_list]
-  assert any(t == 'BIG' and sz == 15 for t, _, sz, _, _ in drawn)
+  assert any(t == 'BIG' and sz == 20 for t, _, sz, _, _ in drawn)
   assert any(t == 'JETLINK' for t, _, _, _, _ in drawn)
   assert any(t == '43.8' and col is ORANGE for t, _, _, _, col in drawn)
-  assert any(t == 'Cinque v3' and sz == 27 and col is TEXT for t, _, sz, _, col in drawn)
+  assert any(t == 'Cinque v3' and sz == 28 and col is TEXT for t, _, sz, _, col in drawn)
 
   # Long model name (> 356px) pauses then scrolls horizontally inside a scissor clip.
   fonts.draw.reset_mock()
@@ -212,7 +212,7 @@ def test_widget_renders_option4_eyebrow_latency_and_scrolls_long_model_names():
   end_scissor.assert_called()
   title_draws = [c.args for c in fonts.draw.call_args_list if c.args[0] == long_name]
   assert len(title_draws) == 2
-  expected_offset = scroll_offset(fonts.measure(long_name, FontRole.SEMI_BOLD, 27).width, 420 - 64, 13.0)
+  expected_offset = scroll_offset(fonts.measure(long_name, FontRole.SEMI_BOLD, 28).width, 420 - 64, 13.0)
   assert expected_offset == pytest.approx(440.0)
   assert title_draws[0][3] == pytest.approx(placed_x - expected_offset)
   assert title_draws[1][3] > title_draws[0][3]
@@ -232,8 +232,8 @@ def test_widget_shows_driving_model_only_when_jetlink_and_chestnut_are_off():
 
   # Single status circle (no separator bullet) and 'DRIVING MODEL' eyebrow
   assert len(circles.call_args_list) == 1
-  assert circles.call_args_list[0].args[1] == 6.5
+  assert circles.call_args_list[0].args[1] == 7.5
   assert circles.call_args_list[0].args[2] is GREEN
   drawn = [(c.args[0], c.args[2], c.args[5]) for c in fonts.draw.call_args_list]
-  assert ('DRIVING MODEL', 15, onroad_jetlink.MUTED) in drawn
-  assert ('RDF V4', 27, TEXT) in drawn
+  assert ('DRIVING MODEL', 20, onroad_jetlink.MUTED) in drawn
+  assert ('RDF V4', 28, TEXT) in drawn

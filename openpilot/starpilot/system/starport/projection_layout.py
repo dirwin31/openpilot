@@ -38,7 +38,7 @@ NOW_PLAYING_WIDGET = 'now_playing'
 NOW_PLAYING_SIZE = (520, 96)
 NOW_PLAYING_SIZES = {'small': NOW_PLAYING_SIZE, 'big': (640, 264)}
 NOW_PLAYING_OPACITY = (0, 100, 85)
-JETLINK_SIZE = (420, 84)
+JETLINK_SIZE = (420, 100)
 JETLINK_OPACITY = (0, 100, 85)
 CARD_WIDGETS = {NOW_PLAYING_WIDGET: NOW_PLAYING_OPACITY, JETLINK_WIDGET: JETLINK_OPACITY, SIGNAL_WIDGET: SIGNAL_OPACITY}
 # StarPort widgets the comma also draws as real editor sprites; the map stays a sketch.
@@ -383,7 +383,7 @@ def validate_layout_for_viewport(value, viewport, *, _legacy_geometry=False):
         type(placement[axis]) in (int, float) and math.isfinite(placement[axis]) and
         bounds[axis] <= placement[axis] <= bounds[axis] + bounds[extent] - dimension
         for (axis, extent), dimension in zip((('x', 'width'), ('y', 'height')), pair, strict=True))), dimensions)
-    if key in (UNIDEN_WIDGET, NOW_PLAYING_WIDGET, SIGNAL_WIDGET):
+    if key in (UNIDEN_WIDGET, NOW_PLAYING_WIDGET, SIGNAL_WIDGET, JETLINK_WIDGET):
       # A larger scale or card size may overhang a saved spot; pull it back in.
       for (axis, extent), dimension in zip((('x', 'width'), ('y', 'height')), dimensions, strict=True):
         if type(placement[axis]) in (int, float) and math.isfinite(placement[axis]):

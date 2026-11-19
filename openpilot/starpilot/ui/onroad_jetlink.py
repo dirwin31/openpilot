@@ -20,7 +20,7 @@ ORANGE = rl.Color(255, 150, 60, 255)
 ACCENT = rl.Color(199, 174, 247, 255)
 GRAY = rl.Color(140, 136, 152, 255)
 TEXT = rl.Color(245, 242, 252, 255)
-MUTED = rl.Color(184, 178, 200, 255)
+MUTED = rl.Color(214, 210, 224, 255)
 BIG, SMALL = 'Big model', 'Small model'  # fallback titles when no model name is available
 # 20 Hz frames: a host this close to 50 ms is about to fall behind
 SLOW_MS = 40.
@@ -180,45 +180,45 @@ class JetlinkStatusWidget:
     card = big_model_card(self.status, self.gpu, self.chestnut, small=small, big=big)
     rect = rl.Rectangle(placed['x'], placed['y'], *JETLINK_SIZE)
     rl.draw_rectangle_rounded(rect, 1.0, 16, rl.Color(15, 13, 23, round(235 * placed.get('opacity', 85) / 100)))
-    rl.draw_circle_v(rl.Vector2(rect.x + 38, rect.y + 25), 6.5, card.dot)
+    rl.draw_circle_v(rl.Vector2(rect.x + 40, rect.y + 30), 7.5, card.dot)
     right = rect.x + rect.width - 32
     if card.latency_ms is not None:
       value, unit = f'{card.latency_ms:.1f}', 'ms'
-      unit_w = self.fonts.measure(unit, FontRole.NORMAL, 15).width
-      value_w = self.fonts.measure(value, FontRole.SEMI_BOLD, 20).width
-      self.fonts.draw(unit, FontRole.NORMAL, 15, right - unit_w, rect.y + 16, MUTED)
+      unit_w = self.fonts.measure(unit, FontRole.NORMAL, 18).width
+      value_w = self.fonts.measure(value, FontRole.SEMI_BOLD, 24).width
+      self.fonts.draw(unit, FontRole.NORMAL, 18, right - unit_w, rect.y + 18, MUTED)
       right -= unit_w + 6
-      self.fonts.draw(value, FontRole.SEMI_BOLD, 20, right - value_w, rect.y + 11,
+      self.fonts.draw(value, FontRole.SEMI_BOLD, 24, right - value_w, rect.y + 13,
                       ORANGE if card.latency_ms >= SLOW_MS else TEXT)
       right -= value_w + 12
-    tier_x = rect.x + 54
+    tier_x = rect.x + 58
     if not card.detail:
-      self.fonts.draw('DRIVING MODEL', FontRole.SEMI_BOLD, 15, tier_x, rect.y + 15, MUTED)
+      self.fonts.draw('DRIVING MODEL', FontRole.SEMI_BOLD, 20, tier_x, rect.y + 17, MUTED)
     else:
       tier = card.tier
-      tier_w = self.fonts.measure(tier, FontRole.SEMI_BOLD, 15).width
-      self.fonts.draw(tier, FontRole.SEMI_BOLD, 15, tier_x, rect.y + 15, MUTED)
-      dot_x = tier_x + tier_w + 9
-      rl.draw_circle_v(rl.Vector2(dot_x, rect.y + 25), 2.2, MUTED)
-      detail_x = dot_x + 9
+      tier_w = self.fonts.measure(tier, FontRole.SEMI_BOLD, 20).width
+      self.fonts.draw(tier, FontRole.SEMI_BOLD, 20, tier_x, rect.y + 17, MUTED)
+      dot_x = tier_x + tier_w + 10
+      rl.draw_circle_v(rl.Vector2(dot_x, rect.y + 30), 2.8, MUTED)
+      detail_x = dot_x + 10
       detail = card.detail.upper()
-      detail_size = self._fit(detail, FontRole.SEMI_BOLD, 15, max(40, right - detail_x))
-      self.fonts.draw(detail, FontRole.SEMI_BOLD, detail_size, detail_x, rect.y + 15, MUTED)
+      detail_size = self._fit(detail, FontRole.SEMI_BOLD, 20, max(40, right - detail_x))
+      self.fonts.draw(detail, FontRole.SEMI_BOLD, detail_size, detail_x, rect.y + 17, MUTED)
     left = rect.x + 32
     width = rect.width - 64
-    title_w = self.fonts.measure(card.title, FontRole.SEMI_BOLD, 27).width
+    title_w = self.fonts.measure(card.title, FontRole.SEMI_BOLD, 28).width
     if title_w <= width:
       self._scroll = None
-      self.fonts.draw(card.title, FontRole.SEMI_BOLD, 27, left, rect.y + 37, TEXT)
+      self.fonts.draw(card.title, FontRole.SEMI_BOLD, 28, left, rect.y + 47, TEXT)
       return
     now = self.ticks()
     if self._scroll is None or self._scroll[0] != card.title:
       self._scroll = (card.title, now)
     offset = scroll_offset(title_w, width, now - self._scroll[1])
-    clip.begin_scissor_mode(left, rect.y + 35, width, 40)
+    clip.begin_scissor_mode(left, rect.y + 45, width, 44)
     try:
       for start in (left - offset, left - offset + title_w + SCROLL_GAP):
         if start < left + width:
-          self.fonts.draw(card.title, FontRole.SEMI_BOLD, 27, start, rect.y + 37, TEXT)
+          self.fonts.draw(card.title, FontRole.SEMI_BOLD, 28, start, rect.y + 47, TEXT)
     finally:
       clip.end_scissor_mode()
