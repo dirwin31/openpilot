@@ -18,6 +18,9 @@ HOLD_NS = 20_000_000_000        # a confirmed junction outlives mapd losing the 
 HOLD_PASSED_M = 50.
 HOLD_KEEPS = ('mapUnavailable', 'mapNoNearbyJunction', 'mapUnverifiable')   # statuses that do not contradict a hold
 ODOMETER_GAP_NS = 3_000_000_000
+STOPPED_MPS = 0.5               # a stop at a light does not use up a hold
+RAMP_LINK_M = 150.              # driven on a ramp road before it counts as the ramp, not a glance past an exit
+FREEWAY = ('motorway', 'trunk')
 
 
 @functools.lru_cache(maxsize=256)
@@ -101,6 +104,8 @@ class LocalMapCorroborator:
     self.fresh = False
     self.held = None
     self.step = None    # (session, sequence, junction metres, anchor ns, passed) for an iPhone step
+    self.leg = None     # [session, sequence, ramp metres, last ns, last road class, left the named road, passed]
+    self.current_class = ''
     self.drive = 0
     self.speed = 0.
     self.speed_ns = 0
@@ -110,7 +115,7 @@ class LocalMapCorroborator:
   def reset(self):
     self.tracker.reset()
     self.odometer.clear()
-    self.frame, self.branches, self.last_event_ns, self.held, self.step = None, (), 0, None, None
+    self.frame, self.branches, self.last_event_ns, self.held, self.step, self.leg = None, (), 0, None, None, None
     self.map_reason = 'noMapFrame'
 
   def update(self, road, *, valid, event_boot_ns, received, alive, now_boot_ns):
@@ -167,7 +172,9 @@ class LocalMapCorroborator:
         return
       branches.append((junction, distance, angle, str(row.highwayClass), way_id, str(row.roadName)))
     self.frame, self.branches, self.navigation_only = frame, tuple(branches), navigation_only
-    self.current_roads = tuple(name for name in (str(road.roadName), str(road.wayName)) if name)
+    refs = tuple(ref.strip() for ref in str(road.wayRef).split(';') if ref.strip())
+    self.current_roads = tuple(name for name in (str(road.roadName), str(road.wayName), *refs) if name)
+    self.current_class = '' if navigation_only else str(road.highwayClass)
     self.approach = frame.status == 'noMatch'
     self.map_reason = ('noRoadMatched' if self.approach else 'noJunctionBranches') if not branches else ''
 
@@ -182,8 +189,10 @@ class LocalMapCorroborator:
     now_ns = phone['observed'] if now_ns is None else now_ns
     self._drive(speed, now_ns)
     until_passed = distance is None and phone.get('untilPassed') is True
-    if until_passed and self._step_passed(phone, now_ns):
-      return Resolution('mapUnverifiable', reason='stepPassed')
+    if until_passed:
+      passed_junction = self._step_passed(phone, now_ns)
+      if self._leg_passed(phone, kind, now_ns) or passed_junction:
+        return Resolution('mapUnverifiable', reason='stepPassed')
     driven = 0. if phone['observed'] >= now_ns else self._driven_since(phone['observed'])
     passed = False
     if distance is not None and driven is not None:
@@ -213,6 +222,8 @@ class LocalMapCorroborator:
           held_key == key and result.status in HOLD_KEEPS and 0 <= now_ns - since <= HOLD_NS):
         left = held.distance - moved
         if left >= -HOLD_PASSED_M and (until_passed or abs(left - distance) <= max(80., distance * .3)):
+          if self.speed < STOPPED_MPS:
+            since = min(now_ns, since + max(0, now_ns - held.anchor_ns))
           self.held = key, held._replace(distance=left, anchor_ns=now_ns), since
           carried = held._replace(distance=max(0., left), anchor_ns=now_ns)
           self._note_step(phone, carried, until_passed)
@@ -223,6 +234,37 @@ class LocalMapCorroborator:
   def _note_step(self, phone, result, until_passed):
     if until_passed:
       self.step = phone.get('session'), phone.get('sequence'), result.distance, result.anchor_ns, False
+
+  def _leg_passed(self, phone, kind, now_ns):
+    """True once the road itself shows the step done: a ramp driven onto the freeway or off it, or the named road reached."""
+    ident = phone.get('session'), phone.get('sequence')
+    if self.leg is None or self.leg[:2] != list(ident):
+      self.leg = [*ident, 0., now_ns, '', False, False]
+    leg = self.leg
+    if leg[6]:
+      return True
+    elapsed, leg[3] = now_ns - leg[3], now_ns
+    if leg[4].endswith('Link') and 0 < elapsed <= ODOMETER_GAP_NS:
+      leg[2] += self.speed * elapsed * 1e-9
+    road_class = self.current_class if self.frame is not None else ''
+    if road_class in ('', 'unknown'):
+      return False
+    leg[4] = road_class
+    if road_class.endswith('Link'):
+      return False
+    if leg[2] >= RAMP_LINK_M and (kind == 'off ramp' or kind == 'on ramp' and road_class in FREEWAY):
+      leg[6] = True
+      return True
+    if leg[2] < RAMP_LINK_M:
+      leg[2] = 0.
+    # A matched step ends at its junction instead, so turn assist runs through the turn.
+    if self.step is not None and list(self.step[:2]) == leg[:2]:
+      return False
+    roads = instruction_roads(phone.get('roadName', ''))
+    on_road = bool(roads) and any(same_road(name, roads) for name in self.current_roads)
+    leg[5] = leg[5] or not on_road
+    leg[6] = on_road and leg[5]
+    return leg[6]
 
   def _step_consistent(self, phone, result, now_ns):
     # Once matched, a step stays on that junction; a jump means another junction with the same name.
