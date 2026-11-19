@@ -15,7 +15,7 @@ import time
 
 from openpilot.starpilot.system.phone_projection import ipc, settings as projection_settings
 from openpilot.starpilot.system.phone_projection.audio import MusicOutput, music_library_dir
-from openpilot.starpilot.system.phone_projection.layout import android_crop, android_mode, carplay_size, panel_size
+from openpilot.starpilot.system.phone_projection.layout import android_crop, android_mode, carplay_size, panel_size, phone_fps
 from openpilot.starpilot.system.phone_projection.runtime import Context
 from openpilot.starpilot.system.phone_projection.video import ANDROID_STREAM, CARPLAY_STREAM, VideoPublisher
 
@@ -87,7 +87,7 @@ def main() -> int:
   publisher = VideoPublisher({CARPLAY_STREAM: nv12_layout(*carplay_size(panel)), ANDROID_STREAM: nv12_layout(*android_mode(panel)[1])})
   from openpilot.starpilot.system.phone_projection.bluez import Bluez
   ctx = Context(publisher=publisher, panel=panel, settings=settings, audio=MusicOutput(log=log), bluez=Bluez(), log=log,
-                fps=30 if device == "mici" else 60)
+                fps=phone_fps(device))
   signal.signal(signal.SIGTERM, lambda *_: ctx.stop.set())
   signal.signal(signal.SIGINT, lambda *_: ctx.stop.set())
   touches = ipc.TouchReceiver()
@@ -115,9 +115,9 @@ def main() -> int:
         if not settings().enabled:
           log("phone projection turned off")
           break
-        target = ipc.read_target()
-        if target is not None and target != panel:
-          log(f"car screen shows the phone at {target[0]}x{target[1]}; restarting at that size")
+        target = ipc.read_target() or panel_size(device)
+        if target != panel:
+          log(f"phone half is now {target[0]}x{target[1]}; restarting at that size")
           break
       try:
         select.select([touches], [], [], max(0.0, min(0.25, last_status + STATUS_INTERVAL - time.monotonic())))

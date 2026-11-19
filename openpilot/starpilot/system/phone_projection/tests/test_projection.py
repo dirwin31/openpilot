@@ -10,8 +10,8 @@ from openpilot.starpilot.system.phone_projection import settings
 from openpilot.starpilot.system.phone_projection.car_split import car_layout, car_split
 from openpilot.starpilot.system.phone_projection.decoder import FrameLayout, access_units
 from openpilot.starpilot.system.phone_projection.ipc import StatusReader, Touch, TouchReceiver, TouchSender, read_target, write_status, write_target
-from openpilot.starpilot.system.phone_projection.layout import (Rect, android_crop, android_margins, android_mode, carplay_size,
-                                                                carplay_width_mm, fit, snap, split)
+from openpilot.starpilot.system.phone_projection.layout import (Rect, android_crop, android_density, android_margins, android_mode,
+                                                                carplay_size, carplay_width_mm, fit, phone_fps, snap, split)
 from openpilot.starpilot.system.starport.projection_geometry import projection_geometry
 from openpilot.starpilot.system.phone_projection.runtime import TouchTracker
 from openpilot.starpilot.system.phone_projection.video import VideoPipe, VideoPublisher
@@ -92,7 +92,7 @@ def test_status_expires(tmp_path):
   write_status({"state": "active"}, path)
   reader = StatusReader(path, max_age=5)
   assert reader.read()["state"] == "active"
-  assert reader.read(now=time.time() + 10) == {}
+  assert reader.read(now=time.monotonic() + 10) == {}
 
 
 def test_touches_cross_the_socket():
@@ -183,6 +183,7 @@ class FakeDecoder:
 
   def __init__(self, width, height, hevc=False):
     self.units = []
+    self.released = 0
 
   def push(self, unit, timestamp_us=0):
     self.units.append(unit)
@@ -193,6 +194,9 @@ class FakeDecoder:
       return None
     self.units.pop()
     return self.layout, bytearray(self.layout.size), 0, 1
+
+  def release(self):
+    self.released += 1
 
   def close(self):
     pass
@@ -343,3 +347,91 @@ def test_a_stalled_audio_stream_does_not_hold_up_the_others(tmp_path):
   finally:
     stall.set()
     output.close()
+
+
+def test_a_stale_target_falls_back(tmp_path):
+  path = tmp_path / "target.json"
+  write_target((640, 720), path)
+  assert read_target(path) == (640, 720)
+  old = time.time() - 120  # noqa: TID251
+  os.utime(path, (old, old))
+  assert read_target(path) is None
+
+
+def test_phone_rate_and_android_density_follow_the_screen():
+  assert phone_fps("tici") == 60 and phone_fps("tizi") == 30 and phone_fps("mici") == 30
+  assert android_density((960, 1080)) == 200
+  assert android_density((640, 720)) == 133
+  assert android_density((400, 480)) == 120
+
+
+def test_video_pipe_hands_each_frame_back_to_the_decoder():
+  publisher = VideoPublisher({0: FakeDecoder.layout}, server_factory=FakeServer)
+  decoders = []
+
+  def factory(*args, **kwargs):
+    decoders.append(FakeDecoder(*args))
+    return decoders[-1]
+
+  pipe = VideoPipe(publisher, 0, 4, 2, decoder_factory=factory, log=lambda m: None)
+  try:
+    pipe.submit(b"\0\0\0\x01\x65i")
+    assert _wait(lambda: pipe.published == 1)
+    assert decoders[0].released == 1
+  finally:
+    pipe.close()
+
+
+def test_phone_half_holds_through_a_short_drop_and_slides_in(monkeypatch):
+  import openpilot.starpilot.system.phone_projection.view as view
+
+  class Status:
+    value = {"state": "active", "side": "left"}
+
+    def read(self):
+      return self.value
+
+  class Sender:
+    def send(self, touch):
+      pass
+
+    def close(self):
+      pass
+
+  clock = [100.0]
+  monkeypatch.setattr(view.time, "monotonic", lambda: clock[0])
+  status = Status()
+  phone = view.PhoneView(status=status, sender=Sender())
+  screen = Rect(0, 0, 2160, 1080)
+  comma, half = phone.split(screen)
+  assert half == Rect(0, 0, 1080, 1080) and comma.x == 1080
+  assert phone._slide(half).x == -1080
+  clock[0] += view.SLIDE_SECONDS
+  assert phone._slide(half) == half
+  status.value = {"state": "connecting", "side": "left", "updated": 0}
+  clock[0] += view.RECONNECT_HOLD - 1
+  assert phone.split(screen) is not None
+  clock[0] += 2
+  assert phone.split(screen) is None
+
+
+def test_spotify_takes_the_audio_server_only_when_it_can_start(tmp_path, monkeypatch):
+  from openpilot.starpilot.soloist import supervisor
+  from openpilot.starpilot.soloist.paths import Layout
+  from types import SimpleNamespace
+
+  layout = Layout(tmp_path)
+  online = [False]
+  sup = supervisor.Supervisor(layout, output=object(), clock=lambda: 10.0, network=lambda: online[0])
+  monkeypatch.setattr(sup, "desired", lambda: ("running", "", ("target", "key", None)))
+  prefs = SimpleNamespace(source="spotify")
+  assert not sup._spotify_takes_over(prefs)  # Spotify is off
+  layout.enabled_flag.parent.mkdir(parents=True, exist_ok=True)
+  layout.enabled_flag.touch()
+  assert not sup._spotify_takes_over(prefs)  # no network yet: the phone keeps the server
+  online[0] = True
+  sup.retry_at = 20.0
+  assert not sup._spotify_takes_over(prefs)  # Spotify is backing off
+  sup.retry_at = 0.0
+  assert sup._spotify_takes_over(prefs)
+  assert not sup._spotify_takes_over(SimpleNamespace(source="phone"))

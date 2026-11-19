@@ -12,6 +12,12 @@ CARPLAY_MIN_WIDTH = 800
 CARPLAY_MM_PER_PIXEL = 200 / 960
 # Android Auto renders one of its fixed resolutions; margins leave exactly the panel in the middle.
 ANDROID_RESOLUTIONS = {1: (800, 480), 2: (1280, 720), 3: (1920, 1080), 6: (720, 1280), 7: (1080, 1920)}
+# Android Auto density for a 1080-pixel-tall panel; scaled with the panel so the UI keeps its size on screen.
+ANDROID_DENSITY = 200
+ANDROID_MIN_DENSITY = 120
+# The phone picture and the screens showing it run at this rate (the comma 3 UI already runs at 60).
+PHONE_UI_FPS = 30
+PHONE_FPS = {"tici": 60}
 
 
 @dataclass(frozen=True)
@@ -27,6 +33,14 @@ class Rect:
 
 def panel_size(device_type: str) -> tuple[int, int]:
   return PANEL_SIZES.get(device_type, DEFAULT_PANEL)
+
+
+def phone_fps(device_type: str) -> int:
+  return PHONE_FPS.get(device_type, PHONE_UI_FPS)
+
+
+def android_density(panel: tuple[int, int]) -> int:
+  return max(ANDROID_MIN_DENSITY, round(ANDROID_DENSITY * panel[1] / 1080))
 
 
 def carplay_scale(panel: tuple[int, int]) -> int:

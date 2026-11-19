@@ -25,6 +25,7 @@ KEY_NAME = "identity.pk8"
 CERT_NAME = "certificate.p7b"
 PROVENANCE_NAME = "provenance.json"
 MAX_FILE_BYTES = 128 * 1024 * 1024
+EXTRACTOR_AVAILABLE = False  # flip once extract_key reads the key
 IMPORT_DIR = Path("/data/starpilot/carplay-import")
 
 

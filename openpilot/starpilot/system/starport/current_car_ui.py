@@ -239,6 +239,7 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
     top = (geometry.height - geometry.logical_height * geometry.scale) / 2
     scale_scissors(rl, geometry.scale, left + (phone_split.comma.x * geometry.scale if phone_split else 0), top)
     phone = None
+    target_touched = 0.0
     if phone_split:
       from openpilot.starpilot.system.phone_projection.view import PhoneView
       phone = PhoneView(font=gui_app.font())
@@ -326,6 +327,9 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
     while not stopped and os.getppid() == parent:
       now = time.monotonic()
       placement.maintain(now)  # once a second: pins graphics-driver threads, re-pins after power saving
+      if phone_split and now - target_touched > 5.0:
+        target_touched = now  # keeps the phone size alive while the car shows its own screens too
+        projection_ipc.touch_target()
       pending = producer.pending_request(now)
       if pending is None:
         touch.drain()

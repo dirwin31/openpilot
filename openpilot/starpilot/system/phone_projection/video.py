@@ -12,7 +12,7 @@ from openpilot.starpilot.system.phone_projection.ipc import VIPC_NAME
 # VisionIPC stream slots: the UIs read the one the status file names.
 CARPLAY_STREAM = 0
 ANDROID_STREAM = 2
-QUEUE_LIMIT = 120  # about two seconds; a stalled decoder is reset rather than buffering further
+QUEUE_LIMIT = 15  # a fraction of a second; a backlog is dropped so touches never lag behind the picture
 RECOVER_SECONDS = 1.0
 KEYFRAME_RETRY_SECONDS = 1.0
 KEYFRAME_GIVE_UP_SECONDS = 3.0  # a phone that never sends one still gets its picture back
@@ -41,7 +41,7 @@ class VideoPublisher:
     self.lock = threading.Lock()
     self.frame_ids = dict.fromkeys(layouts, 0)
 
-  def send(self, stream: int, layout: FrameLayout, frame: bytearray) -> bool:
+  def send(self, stream: int, layout: FrameLayout, frame) -> bool:
     expected = self.layouts[stream]
     if (layout.stride, layout.uv_offset, layout.size) != (expected.stride, expected.uv_offset, expected.size):
       return False
@@ -153,15 +153,23 @@ class VideoPipe:
         return
       if unit:
         while not decoder.push(unit) and not self.closed.is_set():
-          self._publish(decoder.pull(5))
+          self._publish(decoder, decoder.pull(5))
         self.pushed += 1
-        self._publish(decoder.pull(OUTPUT_WAIT_MS))
+        self._publish(decoder, decoder.pull(OUTPUT_WAIT_MS))
       else:
-        self._publish(decoder.pull(0))
+        self._publish(decoder, decoder.pull(0))
 
-  def _publish(self, result) -> None:
+  def _publish(self, decoder, result) -> None:
     if result is None:
       return
+    try:
+      self._send(result)
+    finally:
+      release = getattr(decoder, "release", None)
+      if release is not None:
+        release()
+
+  def _send(self, result) -> None:
     layout, frame, _, count = result
     self.frames += count
     self.last_frame = time.monotonic()

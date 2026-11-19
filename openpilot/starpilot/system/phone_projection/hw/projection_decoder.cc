@@ -90,6 +90,7 @@ struct Decoder {
   unsigned width, height, stride = 0, uv_offset = 0, frame_size = 0;
   uint32_t codec;
   bool input_on = false, output_on = false, reconfiguring = false;
+  int held = -1;  // frame lent to the caller until release()
   Buffer inputs[INPUT_COUNT];
   bool input_busy[INPUT_COUNT] = {};
   std::vector<std::unique_ptr<Buffer>> outputs;
@@ -119,6 +120,7 @@ struct Decoder {
 
   void start_output() {
     v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    held = -1;
     if (output_on) {
       call(fd, VIDIOC_STREAMOFF, &type, "stop frames");
       v4l2_requestbuffers req = {}; req.type = type; req.memory = V4L2_MEMORY_USERPTR; req.count = 0;
@@ -239,8 +241,15 @@ struct Decoder {
     return 1;
   }
 
-  // Copies only the newest decoded frame into out and returns how many were decoded; older ones go straight back.
-  int pull(int timeout_ms, unsigned char *out, size_t capacity, int *info, int64_t *timestamp) {
+  void release() {
+    if (held >= 0 && output_on && !reconfiguring) requeue_output(held);
+    held = -1;
+  }
+
+  // Keeps only the newest decoded frame and returns how many were decoded; older ones go straight back.
+  // With out, the frame is copied and returned at once; without, it is lent through view until release().
+  int pull(int timeout_ms, unsigned char *out, size_t capacity, int *info, int64_t *timestamp, void **view = nullptr) {
+    release();
     pollfd p = {fd, POLLIN | POLLRDNORM | POLLPRI, 0};
     int rc;
     do { rc = poll(&p, 1, timeout_ms); } while (rc < 0 && errno == EINTR);
@@ -268,12 +277,17 @@ struct Decoder {
     }
     if (newest >= 0) {
       Buffer &b = *outputs[newest];
-      if (capacity < frame_size) { requeue_output(newest); throw std::runtime_error("Frame buffer too small"); }
+      if (out && capacity < frame_size) { requeue_output(newest); throw std::runtime_error("Frame buffer too small"); }
       b.sync(true, frame_size);
-      memcpy(out, b.addr, frame_size);
       info[0] = width; info[1] = height; info[2] = stride; info[3] = uv_offset; info[4] = frame_size;
       *timestamp = int64_t(newest_time.tv_sec) * 1000000 + newest_time.tv_usec;
-      requeue_output(newest);
+      if (out) {
+        memcpy(out, b.addr, frame_size);
+        requeue_output(newest);
+      } else {
+        held = newest;
+        *view = b.addr;
+      }
     }
     return decoded;
   }
@@ -281,7 +295,7 @@ struct Decoder {
 }  // namespace
 
 extern "C" {
-int projection_decoder_abi() { return 1; }
+int projection_decoder_abi() { return 2; }
 
 void projection_decoder_nv12_layout(int width, int height, int *info) {
   info[0] = width; info[1] = height;
@@ -318,6 +332,22 @@ int projection_decoder_pull(void *ptr, int timeout_ms, unsigned char *out, size_
     *timestamp = ts;
     return got;
   } catch (const std::exception &e) { error_text(error, size, e); return -1; }
+}
+
+int projection_decoder_pull_view(void *ptr, int timeout_ms, int *info, long long *timestamp, void **view,
+                                 char *error, size_t size) {
+  try {
+    int64_t ts = 0;
+    *view = nullptr;
+    int got = static_cast<Decoder *>(ptr)->pull(timeout_ms, nullptr, 0, info, &ts, view);
+    *timestamp = ts;
+    return got;
+  } catch (const std::exception &e) { error_text(error, size, e); return -1; }
+}
+
+int projection_decoder_release(void *ptr, char *error, size_t size) {
+  try { static_cast<Decoder *>(ptr)->release(); return 0; }
+  catch (const std::exception &e) { error_text(error, size, e); return -1; }
 }
 
 void projection_decoder_destroy(void *ptr) { delete static_cast<Decoder *>(ptr); }

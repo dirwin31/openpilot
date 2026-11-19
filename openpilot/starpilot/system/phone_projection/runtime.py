@@ -27,7 +27,7 @@ class Context:
   audio: MusicOutput
   bluez: object
   log: Callable[[str], None] = print
-  fps: int = 60  # what CarPlay is asked for; 30 is enough when only the car screen shows it
+  fps: int = 30  # what CarPlay is asked for: the rate of the screen that shows it
   stop: threading.Event = field(default_factory=threading.Event)
 
 

@@ -393,9 +393,14 @@ class Supervisor:
       return 'audio_unavailable', 'This build is missing the Spotify audio component.', None
     return 'running', '', (target, key, prefs)
 
+  def _spotify_takes_over(self, prefs: preferences.Preferences) -> bool:
+    """Spotify gets the audio server once it can start right away; the phone's streams then mix into its server."""
+    return (prefs.source != 'phone' and self.layout.enabled_flag.exists() and self.clock() >= self.retry_at
+            and self.network() and self.desired()[2] is not None)
+
   def tick_projection(self, prefs: preferences.Preferences) -> bool:
     """Phone screen audio keeps the audio server up when nothing else runs it; True while it owns the server."""
-    if not projection_audio_requested():
+    if not projection_audio_requested() or self._spotify_takes_over(prefs):
       if self.projection_server:
         self.stop_children(release_phone=False)
         self.projection_server = False

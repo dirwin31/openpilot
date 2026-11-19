@@ -37,6 +37,7 @@ class CarPlaySetup:
       'key': {name: key[name] for name in ('installed', 'expires', 'imported', 'app_version', 'message', 'error') if name in key},
       'import': self.job.status(),
       'maxUploadBytes': key_import.MAX_FILE_BYTES,
+      'extractorAvailable': key_import.EXTRACTOR_AVAILABLE,
       'releasesUrl': key_import.RELEASES_URL,
     }
 

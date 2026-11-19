@@ -10,7 +10,7 @@ from openpilot.starpilot.system.phone_projection.android.session import (
 from openpilot.starpilot.system.phone_projection.android.wireless import WirelessSetup
 from openpilot.starpilot.system.phone_projection.bluez import android_candidates
 from openpilot.starpilot.system.phone_projection.ipc import Touch
-from openpilot.starpilot.system.phone_projection.layout import android_crop, android_margins, android_mode
+from openpilot.starpilot.system.phone_projection.layout import android_crop, android_density, android_margins, android_mode
 from openpilot.starpilot.system.phone_projection.runtime import HOTSPOT_ADDRESS, Context, TouchTracker, hotspot
 from openpilot.starpilot.system.phone_projection.video import ANDROID_STREAM, VideoPipe
 
@@ -141,7 +141,7 @@ class AndroidAutoRunner:
     margin_w, margin_h = android_margins(self.ctx.panel)
     index, (width, height) = android_mode(self.ctx.panel)
     cfg = HeadUnitConfig(resolution=index, width=width, height=height, margin_width=margin_w,
-                         margin_height=margin_h, audio=self.ctx.settings().audio == "music",
+                         margin_height=margin_h, density=android_density(self.ctx.panel), audio=self.ctx.settings().audio == "music",
                          bluetooth_address=self.ctx.bluez.adapter_address())
     session = self.session_factory(conn, cfg, self, log=self.ctx.log)
     with self.lock:

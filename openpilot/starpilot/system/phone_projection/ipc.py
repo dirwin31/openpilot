@@ -13,12 +13,13 @@ TARGET_PATH = Path("/tmp/starpilot-projection-target.json")  # the phone half of
 TOUCH_SOCKET = "/tmp/starpilot-projection-touch.sock"
 VIPC_NAME = "projectiond"
 STATUS_MAX_AGE = 5.0
+TARGET_MAX_AGE = 60.0  # the car renderer refreshes it; longer than a renderer restart, so only a gone car expires it
 TOUCH_KINDS = ("down", "move", "up", "cancel")
 
 
 def write_status(status: dict, path: Path = STATUS_PATH) -> None:
   tmp = path.with_name(path.name + ".tmp")
-  tmp.write_text(json.dumps({**status, "updated": time.time()}, separators=(",", ":")))
+  tmp.write_text(json.dumps({**status, "updated": time.monotonic()}, separators=(",", ":")))
   os.chmod(tmp, 0o644)
   os.replace(tmp, path)
 
@@ -30,8 +31,17 @@ def write_target(size: tuple[int, int], path: Path = TARGET_PATH) -> None:
   os.replace(tmp, path)
 
 
-def read_target(path: Path = TARGET_PATH) -> tuple[int, int] | None:
+def touch_target(path: Path = TARGET_PATH) -> None:
   try:
+    os.utime(path)
+  except OSError:
+    pass
+
+
+def read_target(path: Path = TARGET_PATH, max_age: float = TARGET_MAX_AGE) -> tuple[int, int] | None:
+  try:
+    if time.time() - path.stat().st_mtime > max_age:  # noqa: TID251 file times are wall clock
+      return None
     value = json.loads(path.read_text())
     width, height = int(value["width"]), int(value["height"])
   except (OSError, ValueError, KeyError, TypeError):
@@ -58,7 +68,7 @@ class StatusReader:
     self.checked = 0.0
 
   def read(self, now: float | None = None) -> dict:
-    now = time.time() if now is None else now
+    now = time.monotonic() if now is None else now
     if now - self.checked >= 0.25:
       self.checked = now
       try:

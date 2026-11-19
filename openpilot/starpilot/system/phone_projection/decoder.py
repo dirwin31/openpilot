@@ -31,9 +31,12 @@ def _load(path: Path = LIBRARY) -> C.CDLL:
   lib.projection_decoder_push.argtypes = [C.c_void_p, C.c_char_p, C.c_size_t, C.c_longlong, C.c_char_p, C.c_size_t]
   lib.projection_decoder_pull.argtypes = [C.c_void_p, C.c_int, C.c_void_p, C.c_size_t, C.POINTER(C.c_int),
                                           C.POINTER(C.c_longlong), C.c_char_p, C.c_size_t]
+  lib.projection_decoder_pull_view.argtypes = [C.c_void_p, C.c_int, C.POINTER(C.c_int), C.POINTER(C.c_longlong),
+                                               C.POINTER(C.c_void_p), C.c_char_p, C.c_size_t]
+  lib.projection_decoder_release.argtypes = [C.c_void_p, C.c_char_p, C.c_size_t]
   lib.projection_decoder_destroy.argtypes = [C.c_void_p]
   lib.projection_decoder_nv12_layout.argtypes = [C.c_int, C.c_int, C.POINTER(C.c_int)]
-  if lib.projection_decoder_abi() != 1:
+  if lib.projection_decoder_abi() != 2:
     raise DecoderError("Unexpected projection decoder ABI")
   return lib
 
@@ -46,7 +49,7 @@ def nv12_layout(width: int, height: int, lib: C.CDLL | None = None) -> FrameLayo
 
 
 class HardwareDecoder:
-  """Single-threaded: push access units, pull the newest decoded frame."""
+  """Single-threaded: push access units, pull the newest decoded frame, release it once it is sent."""
 
   def __init__(self, width: int, height: int, hevc: bool = False, lib: C.CDLL | None = None):
     self.visible = (width, height)
@@ -57,8 +60,8 @@ class HardwareDecoder:
       raise DecoderError(self.error.value.decode(errors="replace") or "decoder unavailable")
     self.info = (C.c_int * 5)()
     self.timestamp = C.c_longlong()
+    self.view = C.c_void_p()
     self.layout = self._layout()
-    self.frame = bytearray(self.layout.size)
 
   def _layout(self) -> FrameLayout:
     self.lib.projection_decoder_layout(self.handle, self.info)
@@ -77,20 +80,24 @@ class HardwareDecoder:
       raise DecoderError(self.error.value.decode(errors="replace"))
     return rc == 1
 
-  def pull(self, timeout_ms: int = 0) -> tuple[FrameLayout, bytearray, int, int] | None:
-    """The newest decoded frame as (layout, NV12 bytes, timestamp, frames decoded since the last pull)."""
-    layout = self._layout()
-    if layout.size > len(self.frame):
-      self.frame = bytearray(layout.size)
-    buffer = (C.c_char * len(self.frame)).from_buffer(self.frame)
-    rc = self.lib.projection_decoder_pull(self.handle, timeout_ms, buffer, len(self.frame), self.info,
-                                          C.byref(self.timestamp), self.error, len(self.error))
+  def pull(self, timeout_ms: int = 0) -> tuple[FrameLayout, memoryview, int, int] | None:
+    """The newest decoded frame as (layout, NV12 view, timestamp, frames decoded since the last pull).
+
+    The view points into the decoder's own buffer and is valid only until release() or the next pull().
+    """
+    rc = self.lib.projection_decoder_pull_view(self.handle, timeout_ms, self.info, C.byref(self.timestamp), C.byref(self.view),
+                                               self.error, len(self.error))
     if rc < 0:
       raise DecoderError(self.error.value.decode(errors="replace"))
-    if rc == 0:
+    if rc == 0 or not self.view.value:
       return None
     self.layout = self._visible(*self.info)
-    return self.layout, self.frame, self.timestamp.value, rc
+    frame = memoryview((C.c_uint8 * self.layout.size).from_address(self.view.value))
+    return self.layout, frame, self.timestamp.value, rc
+
+  def release(self) -> None:
+    if self.handle and self.lib.projection_decoder_release(self.handle, self.error, len(self.error)) < 0:
+      raise DecoderError(self.error.value.decode(errors="replace"))
 
   def close(self) -> None:
     if self.handle:

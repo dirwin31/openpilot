@@ -153,12 +153,13 @@ export const CarPlayKey = {
     <p v-if="!setup && !error" class="gx-note">Loading CarPlay key…</p>
     <div v-if="setup" class="gx-starport-status">
       <span class="gx-starport-pill" :class="'gx-starport-pill--' + info.level" role="status">{{ info.label }}</span>
-      <button v-if="hasKey" type="button" class="gx-icon-btn gx-recordings__danger" aria-label="Delete CarPlay Key" :disabled="busy || running" title="Delete CarPlay Key" @click="removeOpen = true"><i class="bi bi-trash3"></i></button>
+      <button v-if="hasKey" type="button" class="gx-icon-btn gx-recordings__danger" aria-label="Delete CarPlay Key" :disabled="busy || running || setup.extractorAvailable === false" title="Delete CarPlay Key" @click="removeOpen = true"><i class="bi bi-trash3"></i></button>
       <div class="gx-actions gx-starport-status__actions">
-        <button v-if="!setup.key.installed" class="gx-btn" :disabled="busy" @click="openInstall">{{ setup.key.error ? 'Reinstall' : 'Add CarPlay key' }}</button>
-        <button v-else class="gx-btn gx-btn--tonal" :disabled="busy" @click="openInstall">Update key</button>
+        <button v-if="!setup.key.installed" class="gx-btn" :disabled="busy || setup.extractorAvailable === false" @click="openInstall">{{ setup.key.error ? 'Reinstall' : 'Add CarPlay key' }}</button>
+        <button v-else class="gx-btn gx-btn--tonal" :disabled="busy || setup.extractorAvailable === false" @click="openInstall">Update key</button>
       </div>
     </div>
+    <p v-if="setup && setup.extractorAvailable === false" class="gx-note">Adding a key from CarLink is not available in this build yet.</p>
     <p v-if="running && !installOpen" class="gx-note" role="status">Checking CarLink…</p>
     <GxNotice v-if="error && !installOpen" tone="danger">{{ error }}</GxNotice>
 

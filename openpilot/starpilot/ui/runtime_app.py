@@ -2029,8 +2029,8 @@ class StarMainLayout(MainLayout):
       except OSError:
         pass
 
-    enabled = toggle_item("Phone Screen", "Show CarPlay or Android Auto beside the driving view. Phones connect over Bluetooth "
-                          "and the Galaxy hotspot.", initial_state=projection.load().enabled,
+    description = "Show CarPlay or Android Auto beside the driving view. Phones connect over Bluetooth and the Galaxy hotspot."
+    enabled = toggle_item("Phone Screen", description, initial_state=projection.load().enabled,
                           callback=lambda state: save(enabled=state))
     side = multiple_button_item("Phone Screen Side", "Which half of the screen the phone uses.", ["Left", "Right"],
                                 projection.SIDES.index(projection.load().side),
@@ -2170,18 +2170,26 @@ class StarMainLayout(MainLayout):
     if self._current_mode == MainState.ARABESQUE or on_home and (
         ui_state.is_body or self._home_layout.current_state != HomeLayoutState.HOME):
       self._update_layout_rects()  # onroad may have left a sidebar-less content rect
+      self._phone_frame_rate(False)
       super()._render_main_content()  # body home, or upstream's offroad alerts / update screen
       return
     rect = self._rect
     phone_rect = None
     if self._current_mode == MainState.ONROAD:
       self._update_layout_rects()
+      rect, phone_rect = self._phone_split(rect)
+      if phone_rect is not None:
+        # The phone keeps its exact half; the sidebar comes out of the comma half
+        self._sidebar_rect = rl.Rectangle(rect.x, rect.y, SIDEBAR_WIDTH, rect.height)
+        if self._sidebar.is_visible:
+          self._content_rect = rl.Rectangle(rect.x + SIDEBAR_WIDTH, rect.y, rect.width - SIDEBAR_WIDTH, rect.height)
       if self._sidebar.is_visible:
         self._sidebar.render(self._sidebar_rect)
         if self._current_mode != MainState.ONROAD or not self._sidebar.is_visible:
+          self._phone_frame_rate(False)
           return
         rect = self._content_rect
-      rect, phone_rect = self._phone_split(rect)
+    self._phone_frame_rate(phone_rect is not None)
     mode = {MainState.HOME: ShellMode.HOME, MainState.SETTINGS: ShellMode.SETTINGS,
             MainState.ONROAD: ShellMode.ONROAD}[self._current_mode]
     self.page.mode = mode
@@ -2208,6 +2216,14 @@ class StarMainLayout(MainLayout):
       return rect, None
     comma, phone = halves
     return rl.Rectangle(comma.x, comma.y, comma.width, comma.height), phone
+
+  def _phone_frame_rate(self, showing: bool) -> None:
+    """A phone picture needs at least 30 fps; screens that normally run slower speed up only while it shows."""
+    from openpilot.starpilot.system.phone_projection.layout import PHONE_UI_FPS
+    if showing == getattr(self, "_phone_fast", False) or gui_app.target_fps >= PHONE_UI_FPS:
+      return
+    self._phone_fast = showing
+    rl.set_target_fps(PHONE_UI_FPS if showing else gui_app.target_fps)
 
   def _phone_touches(self) -> None:
     for event in gui_app.mouse_events:

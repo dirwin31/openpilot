@@ -1,6 +1,8 @@
 """The phone half of the split screen: the phone's picture (or its connection status) and its touches."""
 from __future__ import annotations
 
+import time
+
 from msgq.visionipc import VisionIpcClient
 
 from openpilot.cereal.visionipc import VisionStreamType
@@ -10,10 +12,13 @@ from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.starpilot.system.phone_projection.ipc import StatusReader, Touch, TouchSender, VIPC_NAME
 from openpilot.starpilot.system.phone_projection.layout import Rect, fit, snap, split
 from openpilot.starpilot.ui.raylib import rl
+from openpilot.system.ui.lib.text_measure import measure_text_cached
 
 BACKGROUND = rl.Color(12, 12, 14, 255)
 TEXT = rl.Color(235, 235, 240, 255)
 SUBTLE = rl.Color(150, 150, 160, 255)
+RECONNECT_HOLD = 6.0  # keep the phone half through a short drop instead of resizing the comma view twice
+SLIDE_SECONDS = 0.25
 
 
 HIGHP = "#version 330 core\n" if cameraview.platform.system() == "Darwin" else "#version 300 es\nprecision highp float;\n"
@@ -97,6 +102,9 @@ class PhoneView:
     self.font = font
     self.status: dict = {}
     self.pressed: set[int] = set()
+    self.shown_at: float | None = None  # set only by split(): the 3X slides the phone half in
+    self.last_active = 0.0
+    self.side = "right"
 
   # ---- layout --------------------------------------------------------------------------------------------
   def refresh(self) -> dict:
@@ -106,13 +114,31 @@ class PhoneView:
   def split(self, rect: Rect) -> tuple[Rect, Rect] | None:
     """(comma rect, phone rect) while a phone is showing, else None and the comma keeps the whole screen."""
     self.refresh()
-    if self.status.get("state") != "active":
+    now = time.monotonic()
+    if self.status.get("state") == "active":
+      if self.shown_at is None:
+        self.shown_at = now
+      self.last_active = now
+      self.side = self.status.get("side") or "right"
+    elif self.shown_at is None or now - self.last_active > RECONNECT_HOLD or not self.status:
+      self.shown_at = None
       return None
-    return split(rect, self.status.get("side") or "right")
+    return split(rect, self.side)
+
+  def _slide(self, rect: Rect) -> Rect:
+    """rect pushed toward its screen edge while the phone half slides in; whole pixels once it has."""
+    if self.shown_at is None:
+      return rect
+    t = min(1.0, (time.monotonic() - self.shown_at) / SLIDE_SECONDS)
+    if t >= 1.0:
+      return rect
+    offset = round((1.0 - t) ** 3 * rect.width) * (1 if self.side == "right" else -1)
+    return Rect(rect.x + offset, rect.y, rect.width, rect.height)
 
   # ---- drawing -------------------------------------------------------------------------------------------
   def render(self, rect: Rect) -> None:
     status = self.status
+    rect = self._slide(rect)
     rl.draw_rectangle_rec(rl.Rectangle(rect.x, rect.y, rect.width, rect.height), BACKGROUND)
     if status.get("state") == "active":
       camera = self._camera()
@@ -127,7 +153,7 @@ class PhoneView:
       return
     if self.camera is not None:
       self.camera.picture = None
-    title = "Phone Screen"
+    title = "Reconnecting…" if self.shown_at is not None else "Phone Screen"
     message = status.get("message") or ("Starting…" if status else "Waiting for the phone service…")
     self._message(rect, title, message)
 
@@ -142,7 +168,7 @@ class PhoneView:
     for text, y, color, scale in ((title, rect.y + rect.height / 2 - size, TEXT, 1.0),
                                   (message, rect.y + rect.height / 2 + size * 0.3, SUBTLE, 0.6)):
       for i, line in enumerate(_wrap(text, max(12, int(rect.width / (size * scale * 0.55))))):
-        width = rl.measure_text_ex(font, line, size * scale, 0).x
+        width = measure_text_cached(font, line, int(size * scale)).x
         rl.draw_text_ex(font, line, rl.Vector2(rect.x + (rect.width - width) / 2, y + i * size * scale * 1.2), size * scale, 0, color)
 
   # ---- input -----------------------------------------------------------------------------------------------
