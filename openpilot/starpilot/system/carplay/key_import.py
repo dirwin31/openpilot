@@ -7,6 +7,7 @@ when ``MfiIdentity.load`` can use it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -25,7 +26,7 @@ KEY_NAME = "identity.pk8"
 CERT_NAME = "certificate.p7b"
 PROVENANCE_NAME = "provenance.json"
 MAX_FILE_BYTES = 128 * 1024 * 1024
-EXTRACTOR_AVAILABLE = False  # flip once extract_key reads the key
+EXTRACTOR_AVAILABLE = True
 IMPORT_DIR = Path("/data/starpilot/carplay-import")
 
 
@@ -45,13 +46,49 @@ def extract_key(path: Path, *, progress: Callable[[str], None] = lambda stage: N
   Reports stages "reading", "extracting" and "verifying" through ``progress``; Galaxy shows them as checks.
   """
   progress("reading")
+  if not 0 < path.stat().st_size <= MAX_FILE_BYTES:
+    raise KeyImportError("Invalid CarLink package size", "NOT_PACKAGE")
   try:
     with zipfile.ZipFile(path) as archive:
-      if not any(name.endswith(".dex") for name in archive.namelist()):
-        raise KeyImportError("No app code found; choose the CarLink APK from its GitHub release", "NO_CODE")
+      entries = archive.infolist()
+      if len(entries) > 20000:
+        raise KeyImportError("Too many package entries", "CORRUPT")
+      names = [entry.filename for entry in entries]
+      if "AndroidManifest.xml" not in names or "classes.dex" not in names:
+        raise KeyImportError("No Android app found; choose the CarLink release APK", "NO_CODE")
+      progress("extracting")
+      files = {}
+      for name in (KEY_NAME, CERT_NAME):
+        asset = "assets/offline-mfi/" + name
+        if names.count(asset) == 0:
+          raise KeyImportError("This APK has no bundled CarPlay identity. Choose a CarLink release APK, not a source build.",
+                               "UNSUPPORTED_VERSION")
+        if names.count(asset) != 1:
+          raise KeyImportError("Duplicate identity assets in package", "CORRUPT")
+        entry = archive.getinfo(asset)
+        if entry.flag_bits & 1 or entry.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+          raise KeyImportError("Unsupported identity asset encoding", "CORRUPT")
+        if not 0 < entry.file_size <= mfi.MAX_FILE_BYTES:
+          raise KeyImportError("Invalid identity asset size", "INVALID")
+        with archive.open(entry) as source:
+          data = source.read(mfi.MAX_FILE_BYTES + 1)
+        if len(data) != entry.file_size or len(data) > mfi.MAX_FILE_BYTES:
+          raise KeyImportError("Invalid identity asset size", "CORRUPT")
+        files[name] = data
   except zipfile.BadZipFile as error:
-    raise KeyImportError("Not an APK file", "NOT_PACKAGE") from error
-  raise KeyImportError("Reading the key from CarLink is not available in this build yet", "NOT_AVAILABLE")
+    raise KeyImportError("Not a complete APK file", "NOT_PACKAGE") from error
+  except (EOFError, zlib.error, RuntimeError, NotImplementedError) as error:
+    if isinstance(error, KeyImportError):
+      raise
+    raise KeyImportError("The package is damaged or unsupported", "CORRUPT") from error
+  progress("verifying")
+  try:
+    mfi.MfiIdentity.from_bytes(files[KEY_NAME], files[CERT_NAME])
+  except (ValueError, TypeError) as error:
+    raise KeyImportError("The CarPlay key or certificate is invalid or does not match", "INVALID") from error
+  with path.open("rb") as source:
+    digest = hashlib.file_digest(source, "sha256").hexdigest()
+  return files, {"source": "CarLink APK", "apk_sha256": digest}
 
 
 # ------------------------------------------------------------------ install
@@ -87,7 +124,12 @@ def install_key(files: dict[str, bytes], metadata: dict, directory: Path | None 
     if directory.exists():
       shutil.rmtree(previous, ignore_errors=True)
       os.replace(directory, previous)
-    os.replace(staging, directory)
+    try:
+      os.replace(staging, directory)
+    except OSError:
+      if previous.exists() and not directory.exists():
+        os.replace(previous, directory)
+      raise
   except BaseException:
     shutil.rmtree(staging, ignore_errors=True)
     raise

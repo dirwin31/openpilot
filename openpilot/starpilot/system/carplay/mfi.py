@@ -21,11 +21,15 @@ class MfiIdentity:
 
   @classmethod
   def load(cls, directory: Path = PRIVATE_DIR) -> MfiIdentity:
-    key_bytes = _read(directory / "identity.pk8")
+    return cls.from_bytes(_read(directory / "identity.pk8"), _read(directory / "certificate.p7b"))
+
+  @classmethod
+  def from_bytes(cls, key_bytes: bytes, certificate: bytes) -> MfiIdentity:
+    if not 0 < len(key_bytes) <= MAX_FILE_BYTES or not 0 < len(certificate) <= MAX_FILE_BYTES:
+      raise ValueError("Invalid accessory identity size")
     key = serialization.load_der_private_key(key_bytes, password=None)
     if not isinstance(key, ec.EllipticCurvePrivateKey) or key.curve.name != "secp256r1":
       raise ValueError("Accessory key must be a P-256 EC key")
-    certificate = _read(directory / "certificate.p7b")
     certs = pkcs7.load_der_pkcs7_certificates(certificate)
     if len(certs) != 1:
       raise ValueError("Expected one accessory certificate")
