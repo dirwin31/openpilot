@@ -147,8 +147,9 @@ class CarPlayRunner:
     try:
       mfi = self.mfi_loader()
     except (OSError, ValueError) as error:
-      self._set("unavailable", f"CarPlay accessory key missing: {error}")
-      return 60.0
+      self._set("unavailable", "Add the CarPlay key in Galaxy under Phone Screen.")
+      self.ctx.log(f"carplay: key unavailable: {error}")
+      return 15.0
     spot = self.hotspot_source()
     if spot is None:
       self._set("waiting_hotspot", "Turn on the Galaxy hotspot so the iPhone can connect.")

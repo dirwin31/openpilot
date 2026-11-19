@@ -2,6 +2,7 @@ import { requestJson } from "./startup.js"
 import { GxNotice } from "./notice.js"
 import { BluetoothTabs } from "./bluetooth-tabs.js"
 import { beginSave, finishSave } from "./save-feedback.js"
+import { CarPlayKey } from "./carplay-key.js"
 
 const STATES = { off: "Off", starting: "Starting…", waiting: "Waiting for a phone", connecting: "Connecting…", active: "Showing" }
 
@@ -12,7 +13,7 @@ export function validPhoneScreen(value) {
 }
 
 export const PhoneScreenPage = {
-  components: { GxNotice, BluetoothTabs },
+  components: { GxNotice, BluetoothTabs, CarPlayKey },
   props: { go: { type: Function, default: path => { location.hash = path } }, mode: { type: String, required: true },
     unauthorized: { type: Function, required: true } },
   data: () => ({ status: null, busy: false, error: "", timer: null, active: false }),
@@ -79,12 +80,13 @@ export const PhoneScreenPage = {
               <nav class="gx-settings-tabs" aria-label="Phone audio">
                 <button v-for="route in [['phone', 'Phone'], ['music', 'Music output']]" :key="route[0]" type="button" class="gx-chip" :aria-pressed="status.audio === route[0]" :disabled="busy" @click="save({ audio: route[0] })">{{ route[1] }}</button>
               </nav></div>
+            <CarPlayKey :unauthorized="unauthorized" />
             <details class="gx-starport-wiki">
               <summary>How to connect a phone</summary>
               <ul class="gx-install-benefits">
                 <li><i class="bi bi-broadcast-pin" aria-hidden="true"></i><span>Turn on the <a class="gx-link" href="#/networks">Galaxy hotspot</a>. Phones join it for video.</span></li>
                 <li><i class="bi bi-bluetooth" aria-hidden="true"></i><span>Pair the phone with the comma in <a class="gx-link" href="#/bluetooth">Bluetooth</a>.</span></li>
-                <li><i class="bi bi-apple" aria-hidden="true"></i><span>iPhone: CarPlay starts by itself once paired.</span></li>
+                <li><i class="bi bi-apple" aria-hidden="true"></i><span>iPhone: add the CarPlay key above once; CarPlay then starts by itself once paired.</span></li>
                 <li><i class="bi bi-android2" aria-hidden="true"></i><span>Android: turn on wireless Android Auto on the phone; it starts once the phone sees the comma.</span></li>
                 <li><i class="bi bi-display" aria-hidden="true"></i><span>Shown while driving: on a comma 3X beside the driving view; on a comma four on the car screen through StarPort.</span></li>
               </ul>

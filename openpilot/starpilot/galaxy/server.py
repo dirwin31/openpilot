@@ -283,6 +283,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
   uniden_source = None
   uniden_lock = threading.Lock()
   starport_setup_source = starport_setup
+  carplay_setup_source = None
   spotify_setup_source = spotify_setup
   starport_client_source = starport_client
   starport_source_lock = threading.Lock()
@@ -467,6 +468,14 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
                                           enable_bluetooth=enable_bluetooth)
         server.starport_setup_source = starport_setup_source
     return starport_setup_source
+
+  def carplay_setup_owner():
+    nonlocal carplay_setup_source
+    with bluetooth_lock:
+      if carplay_setup_source is None:
+        from openpilot.starpilot.galaxy.carplay_setup import CarPlaySetup
+        carplay_setup_source = CarPlaySetup(session_valid=bluetooth_session_valid)
+    return carplay_setup_source
 
   def spotify_owner():
     nonlocal spotify_setup_source
@@ -924,6 +933,22 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           self.json(200, phone_projection.snapshot())
         except OSError:
           self.json(503, {'error': 'Phone screen settings are unavailable.'})
+      elif path == '/api/carplay/setup':
+        if not self.require_session():
+          return
+        identity = self.settings_session()
+        if identity is None:
+          self.json(401, {'error': 'Sign in to Galaxy'})
+          return
+        try:
+          result = carplay_setup_owner().status(identity)
+        except Exception:
+          self.json(503, {'error': 'CarPlay setup is unavailable'})
+        else:
+          if self.settings_session() == identity:
+            self.json(200, result)
+          else:
+            self.json(401, {'error': 'Sign in to Galaxy'})
       elif path == '/api/galaxy/networks':
         if not self.require_session():
           return
@@ -1740,6 +1765,42 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           self.json(409, {'error': str(error)})
         except (OSError, TimeoutError):
           self.json(503, {'error': 'Android Auto upload failed'})
+        else:
+          if self.settings_session() == identity:
+            self.json(202, result)
+          else:
+            self.json(401, {'error': 'Sign in to Galaxy'})
+        finally:
+          self.connection.settimeout(old_timeout)
+        return
+      if path == '/api/carplay/upload':
+        if not self.require_session():
+          return
+        identity = self.settings_session()
+        if identity is None:
+          self.json(401, {'error': 'Sign in to Galaxy'})
+          return
+        if self.headers.get('Transfer-Encoding') is not None or \
+           self.headers.get('Content-Type', '').lower() != 'application/octet-stream':
+          self.json(415, {'error': 'Binary APK upload required'})
+          return
+        try:
+          size = int(self.headers.get('Content-Length', ''))
+        except ValueError:
+          size = -1
+        from openpilot.starpilot.system.carplay.key_import import MAX_FILE_BYTES as CARPLAY_MAX_BYTES
+        if not 0 < size <= CARPLAY_MAX_BYTES:
+          self.json(413, {'error': 'CarLink package size is invalid'})
+          return
+        from openpilot.starpilot.galaxy.carplay_setup import SetupRejected as CarPlayRejected
+        old_timeout = self.connection.gettimeout()
+        try:
+          self.connection.settimeout(30.0)
+          result = carplay_setup_owner().upload(identity, self.rfile, size)
+        except CarPlayRejected as error:
+          self.json(409, {'error': str(error)})
+        except (OSError, TimeoutError):
+          self.json(503, {'error': 'CarLink upload failed'})
         else:
           if self.settings_session() == identity:
             self.json(202, result)
@@ -3275,6 +3336,26 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           self.json(409, {'error': str(error)})
         except (OSError, RuntimeError):
           self.json(503, {'error': 'Spotify data could not be removed'})
+        else:
+          if self.settings_session() == identity:
+            self.json(200, result)
+          else:
+            self.json(401, {'error': 'Sign in to Galaxy'})
+        return
+      if urlsplit(self.path).path == '/api/carplay/key':
+        if not self.require_session():
+          return
+        identity = self.settings_session()
+        if identity is None:
+          self.json(401, {'error': 'Sign in to Galaxy'})
+          return
+        from openpilot.starpilot.galaxy.carplay_setup import SetupRejected as CarPlayRejected
+        try:
+          result = carplay_setup_owner().remove(identity)
+        except CarPlayRejected as error:
+          self.json(409, {'error': str(error)})
+        except OSError:
+          self.json(503, {'error': 'The CarPlay key could not be removed'})
         else:
           if self.settings_session() == identity:
             self.json(200, result)
