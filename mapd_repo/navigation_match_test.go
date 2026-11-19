@@ -103,7 +103,7 @@ func TestNavigationJunctionsFollowSameNamedRoadThroughWaySplit(t *testing.T) {
 	for _, tc := range []struct {
 		next     string
 		branches int
-	}{{"Main", 2}, {"Other", 1}} {
+	}{{"Main", 2}, {"Other", 3}} {
 		tile := namedRoadTile(t, []namedWay{
 			{syntheticWay{1, 20, 35.14, -97.9, 35.15, -97.9, false, 2}, "Main"},
 			{syntheticWay{2, 20, 35.15, -97.9, 35.16, -97.9, false, 2}, tc.next},
@@ -118,12 +118,53 @@ func TestNavigationJunctionsFollowSameNamedRoadThroughWaySplit(t *testing.T) {
 		if len(angles) != tc.branches {
 			t.Fatalf("next=%s angles=%v", tc.next, angles)
 		}
-		if tc.next == "Other" && (angles[0] != 0 || branches.At(0).WayId() != 2) {
+		// A renamed road straight ahead is listed and then walked through to the far junction.
+		if tc.next == "Other" && (angles[0] != 0 || branches.At(0).WayId() != 2 || angles[1] != -90 || angles[2] != 90 ||
+			math.Abs(float64(branches.At(1).DistanceMeters())-1121) > 5) {
 			t.Fatalf("renamed continuation angles=%v", angles)
 		}
 		// Through the split (not itself a junction) the walk reaches the far junction, about 1.1 km ahead.
 		if tc.next == "Main" && (angles[0] != -90 || angles[1] != 90 || math.Abs(float64(branches.At(0).DistanceMeters())-1121) > 5) {
 			t.Fatalf("far junction angles=%v distance=%f", angles, branches.At(0).DistanceMeters())
+		}
+	}
+}
+
+func TestNavigationJunctionsFollowDividedRoadSplit(t *testing.T) {
+	tile := namedRoadTile(t, []namedWay{
+		{syntheticWay{1, 20, 35.14, -97.9, 35.15, -97.9, false, 2}, "Main"},
+		// The road divides: this carriageway bends right ahead, the other leaves sharply left.
+		{syntheticWay{2, 20, 35.15, -97.9, 35.16, -97.8995, false, 2}, "Main"},
+		{syntheticWay{3, 20, 35.15, -97.9, 35.1497, -97.901, false, 2}, "Main"},
+		{syntheticWay{4, 20, 35.16, -97.8995, 35.16, -97.91, false, 2}, "West"},
+	})
+	s := &State{ShadowOnly: true}
+	s.Init()
+	navigationFix(t, s, tile, 35.14992, 20, 10_000_000_000)
+	out, angles := navigationOutput(t, s)
+	branches, _ := out.NavigationBranches()
+	found := false
+	for i := 0; i < branches.Len(); i++ {
+		found = found || branches.At(i).WayId() == 4
+	}
+	if !found {
+		t.Fatalf("walk stopped at the divided split: angles=%v", angles)
+	}
+	// Two continuations both straight ahead are a real fork: the walk stops.
+	fork := namedRoadTile(t, []namedWay{
+		{syntheticWay{1, 20, 35.14, -97.9, 35.15, -97.9, false, 2}, "Main"},
+		{syntheticWay{2, 20, 35.15, -97.9, 35.16, -97.8995, false, 2}, "North"},
+		{syntheticWay{3, 20, 35.15, -97.9, 35.16, -97.9005, false, 2}, "South"},
+		{syntheticWay{4, 20, 35.16, -97.8995, 35.16, -97.89, false, 2}, "East"},
+	})
+	s = &State{ShadowOnly: true}
+	s.Init()
+	navigationFix(t, s, fork, 35.14992, 20, 10_000_000_000)
+	out, _ = navigationOutput(t, s)
+	branches, _ = out.NavigationBranches()
+	for i := 0; i < branches.Len(); i++ {
+		if branches.At(i).WayId() == 4 {
+			t.Fatal("walk chose a side of a fork")
 		}
 	}
 }

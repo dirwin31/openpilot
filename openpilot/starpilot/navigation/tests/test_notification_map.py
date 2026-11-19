@@ -662,3 +662,61 @@ def test_iphone_step_does_not_jump_to_another_junction_with_the_same_name():
   # The jump is refused and the junction already matched is carried on instead.
   kept = local_map.resolve(step, speed=10., now_ns=NOW + 2_000_000_000)
   assert kept.control and kept.distance == pytest.approx(280, abs=2)
+
+
+def drive_leg(local_map, step, frames, speed=15.):
+  # One mapd frame and one resolve a second; each frame is (road class, mapdOut fields).
+  resolved = None
+  for second, (road_class, patch) in enumerate(frames):
+    live(local_map, second, [branch(0, 900, wayId=79)], highwayClass=road_class, **patch)
+    resolved = local_map.resolve(step, speed=speed, now_ns=NOW + second * 1_000_000_000)
+  return resolved
+
+
+def ramp_step(kind, road):
+  return iphone_step(instruction=road, roadName=road, maneuverType=kind, maneuverModifier='')
+
+
+def test_on_ramp_step_ends_once_the_ramp_reaches_the_freeway():
+  step = ramp_step('on ramp', 'US-95 S')
+  local_map = LocalMapCorroborator()
+  street = [('secondary', {'roadName': 'West Skye Canyon Park Drive'})] * 5
+  assert drive_leg(local_map, step, street + [('motorwayLink', {})] * 5).reason != 'stepPassed'
+  assert drive_leg(LocalMapCorroborator(), step, street + [('motorwayLink', {})] * 15 +
+                   [('motorway', {'roadName': 'Purple Heart Highway'})]).reason == 'stepPassed'
+
+
+def test_off_ramp_step_ends_on_the_road_after_the_ramp_not_on_a_glance_past_an_exit():
+  step = ramp_step('off ramp', 'Valley View Blvd')
+  freeway = ('motorway', {'roadName': 'Purple Heart Highway'})
+  local_map = LocalMapCorroborator()
+  assert drive_leg(local_map, step, [freeway] * 3 + [('motorwayLink', {})] * 2 + [freeway] * 3).reason != 'stepPassed'
+  assert drive_leg(LocalMapCorroborator(), step, [freeway] * 3 + [('motorwayLink', {})] * 20 +
+                   [('secondary', {'roadName': 'South Decatur Boulevard'})]).reason == 'stepPassed'
+
+
+def test_unmatched_step_ends_on_reaching_its_road_by_name_or_ref():
+  local_map = LocalMapCorroborator()
+  step = ramp_step('on ramp', 'US-95 S')
+  assert drive_leg(local_map, step, [('secondary', {'roadName': 'Ann Road'}),
+                                     ('motorway', {'roadName': 'Purple Heart Highway', 'wayRef': 'I 11;US 95'})]).reason == 'stepPassed'
+  # A prompt that arrives on the road it names has not been done yet.
+  already = LocalMapCorroborator()
+  assert drive_leg(already, step, [('motorway', {'roadName': 'Purple Heart Highway', 'wayRef': 'I 11;US 95'})] * 3).reason != 'stepPassed'
+
+
+def test_matched_step_keeps_its_junction_through_a_red_light():
+  local_map, step = LocalMapCorroborator(), iphone_step(observed=NOW)
+  for second in range(3):
+    live(local_map, second, [named(90, 100 - 10 * second)])
+    assert local_map.resolve(step, speed=10., now_ns=NOW + second * 1_000_000_000).control
+  # Stopped 74 m short for 45 s while mapd, unsure of the road at a standstill, sends no junctions.
+  for second in range(3, 48):
+    live(local_map, second, None)
+    held = local_map.resolve(step, speed=0., now_ns=NOW + second * 1_000_000_000)
+    assert held.control and held.distance == pytest.approx(80, abs=2)
+  # Moving again, the hold clock runs as before.
+  for second in range(48, 70):
+    live(local_map, second, None)
+    held = local_map.resolve(step, speed=1., now_ns=NOW + second * 1_000_000_000)
+  assert not held.control
