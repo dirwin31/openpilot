@@ -158,6 +158,9 @@ func (s *State) navigationBranchesFrom(cw CurrentWay) []navigationBranch {
 		}
 		end := last
 		continuation, ok := sameRoadContinuation(&s.Data, &w, end)
+		if !ok {
+			continuation, ok = straightContinuation(&s.Data, &w, end, arrivalBearing(&w, forward))
+		}
 		if !ok || walked[continuation.Id()] {
 			break
 		}
@@ -195,6 +198,66 @@ func sameRoadContinuation(offlineMaps *maps.Offline, w *maps.Way, end m.Position
 		return maps.Way{}, false
 	}
 	return found[0], true
+}
+
+// arrivalBearing is the heading of travel into the end of w.
+func arrivalBearing(w *maps.Way, forward bool) float64 {
+	n := w.Nodes.Len()
+	end, index, step := n-1, n-2, -1
+	if !forward {
+		end, index, step = 0, 1, 1
+	}
+	last := w.Nodes.At(end)
+	from := w.Nodes.At(index)
+	for index >= 0 && index < n && from.DistanceTo(last) < 15 {
+		from = w.Nodes.At(index)
+		index += step
+	}
+	arrival := from.VectorTo(last)
+	return arrival.Bearing()
+}
+
+// straightContinuation carries the walk through a renamed road or a divided-road split: the single
+// enterable way leaving end nearly straight ahead, a same-named one allowed a wider bend.
+func straightContinuation(offlineMaps *maps.Offline, w *maps.Way, end m.Position, bearing float64) (maps.Way, bool) {
+	ways, err := w.MatchingWays(offlineMaps, end)
+	if err != nil {
+		return maps.Way{}, false
+	}
+	named, any := []maps.Way{}, []maps.Way{}
+	for _, candidate := range ways {
+		if candidate.Nodes.Len() < 2 || (candidate.OneWay() && !candidate.IsForwardFrom(end)) {
+			continue
+		}
+		forward := candidate.IsForwardFrom(end)
+		stride, j := 1, 1
+		if !forward {
+			stride, j = -1, candidate.Nodes.Len()-2
+		}
+		next := candidate.Nodes.At(j)
+		for n := 0; next.DistanceTo(end) < 15 && n < 16 && j+stride >= 0 && j+stride < candidate.Nodes.Len(); n++ {
+			j += stride
+			next = candidate.Nodes.At(j)
+		}
+		if next.DistanceTo(end) < 3 {
+			continue
+		}
+		leaving := end.VectorTo(next)
+		angle := math.Abs(math.Mod((leaving.Bearing()-bearing)*180/math.Pi+540, 360) - 180)
+		if sameRoad(w, &candidate) && angle <= 45 {
+			named = append(named, candidate)
+		}
+		if angle <= 30 {
+			any = append(any, candidate)
+		}
+	}
+	if len(named) == 1 {
+		return named[0], true
+	}
+	if len(named) == 0 && len(any) == 1 {
+		return any[0], true
+	}
+	return maps.Way{}, false
 }
 
 func (s *State) setNavigationBranches(out custom.MapdOut) error {

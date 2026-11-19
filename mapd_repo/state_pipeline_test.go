@@ -251,10 +251,38 @@ func TestSyntheticMissingLimitAndInvalidation(t *testing.T) {
 	s.NextHazard.Value = "old hazard"
 	s.SpeedLimit.AcceptedLimit = 12
 	lost := cereal.GpsSample{Source: cereal.GpsSourceNone, SourceGeneration: 2, SourceChanged: true}
+	boot = 10_000 + gpsBlipNs + 1
 	s.ProcessGps(lost, false, nil, now.Add(time.Second))
 	event, out = decodedOutput(t, &s)
 	if event.Valid() || out.RoadStatus() != custom.MapdOut_SampleStatus_noGps || out.SpeedLimit() != 0 || out.WayId() != 0 || out.GpsMonoTime() != 0 || out.SourceGeneration() != 2 || s.DistanceSinceLastPosition != 0 || s.MapCurveSpeed != 0 || s.NextHazard.Value != "" || s.SpeedLimit.AcceptedLimit != 0 || s.Data.Loaded {
 		t.Fatalf("lost source retained road evidence: status=%v speed=%f", out.RoadStatus(), out.SpeedLimit())
+	}
+}
+
+func TestShortGpsBlipKeepsTileAndNavigationHold(t *testing.T) {
+	s := State{}
+	s.Init()
+	fix := uint64(10_000_000_000)
+	boot := fix + 100_000_000
+	s.bootNow = func() uint64 { return boot }
+	tile := syntheticTile(t, 13, true)
+	loads := 0
+	loader := func(m.Position) (maps.Offline, error) { loads++; return tile, nil }
+	now := time.Unix(0, 0)
+	s.ProcessGps(syntheticSample(t, cereal.GpsSourceExternal, fix, 1, true, true), true, loader, now)
+	if !s.RoadMatched() || s.navigationHold.id == 0 {
+		t.Fatal("initial road did not match")
+	}
+	// A 0.8 s loop stall: the fix goes stale, the source drops to none, then the same receiver returns.
+	boot = fix + 800_000_000
+	s.ProcessGps(cereal.GpsSample{Source: cereal.GpsSourceNone, SourceGeneration: 2, SourceChanged: true}, false, loader, now.Add(800*time.Millisecond))
+	if !s.Data.Loaded || s.navigationHold.id == 0 || !s.track.valid {
+		t.Fatalf("stall dropped evidence: loaded=%v hold=%d track=%v", s.Data.Loaded, s.navigationHold.id, s.track.valid)
+	}
+	boot = fix + 1_000_000_000
+	s.ProcessGps(syntheticSample(t, cereal.GpsSourceExternal, fix+900_000_000, 3, true, true), true, loader, now.Add(time.Second))
+	if loads != 1 || !s.RoadMatched() || s.navigationHold.id == 0 {
+		t.Fatalf("return of the same receiver reloaded the tile or lost the road: loads=%d matched=%v", loads, s.RoadMatched())
 	}
 }
 

@@ -19,6 +19,9 @@ import (
 
 const mapLoadRetryDelay = time.Second
 
+// A loop stall can age the fix past its TTL; the same receiver back this soon is still on the same road.
+const gpsBlipNs = 3_000_000_000
+
 type MapLoader func(m.Position) (maps.Offline, error)
 
 type State struct {
@@ -58,6 +61,9 @@ type State struct {
 	navigationHold navigationHold
 	// Last matched road, kept through fixes that fit several roads.
 	track roadTrack
+	// Last fresh fix, to tell a brief stall from a real source change.
+	lastFixSource   cereal.GpsSource
+	lastFixMonoTime uint64
 }
 
 func (s *State) Init() {
@@ -104,6 +110,7 @@ func (s *State) clearRoadDerived() {
 }
 
 func (s *State) ResetRoadEvidence() {
+	s.lastFixSource, s.lastFixMonoTime = cereal.GpsSourceNone, 0
 	s.clearRoadDerived()
 	s.track.clear()
 	s.navigationHold = navigationHold{}
@@ -121,8 +128,6 @@ func (s *State) ResetRoadEvidence() {
 // Tile currency is still checked every loop by invalidateChangedTile.
 func (s *State) expireRoadEvidence() {
 	s.clearRoadDerived()
-	s.track.clear()
-	s.navigationHold = navigationHold{}
 	s.roadFixMonoTime = 0
 	s.Position = m.Position{}
 	s.DistanceSinceLastPosition = 0
@@ -168,16 +173,27 @@ func (s *State) ProcessGps(sample cereal.GpsSample, success bool, load MapLoader
 	s.GpsMonoTime = sample.FixMonoTime
 	s.SourceGeneration = sample.SourceGeneration
 	s.GpsSource = custom.MapdOut_GpsSource(sample.Source)
-	if sample.SourceChanged {
-		s.ResetRoadEvidence()
-	}
 	if !success {
-		s.ResetRoadEvidence()
+		if boot := s.bootTime(); s.lastFixMonoTime != 0 && boot >= s.lastFixMonoTime && boot-s.lastFixMonoTime <= gpsBlipNs {
+			s.expireRoadEvidence()
+		} else {
+			s.ResetRoadEvidence()
+		}
 		s.GpsSource = custom.MapdOut_GpsSource_none
 		s.GpsMonoTime = 0
 		s.RoadStatus = custom.MapdOut_SampleStatus_noGps
 		return
 	}
+	blip := sample.Source == s.lastFixSource && s.lastFixMonoTime != 0 &&
+		sample.FixMonoTime >= s.lastFixMonoTime && sample.FixMonoTime-s.lastFixMonoTime <= gpsBlipNs
+	if sample.SourceChanged && !blip {
+		s.ResetRoadEvidence()
+	} else if !blip && s.lastFixMonoTime != 0 && sample.FixMonoTime-s.lastFixMonoTime > gpsBlipNs {
+		// An outage long enough to have moved on: the old road no longer settles ties.
+		s.track.clear()
+		s.navigationHold = navigationHold{}
+	}
+	s.lastFixSource, s.lastFixMonoTime = sample.Source, sample.FixMonoTime
 	// A replaced cached tile cannot lend its old road or accepted limit to
 	// either a new fix or another loop using the same fix.
 	s.invalidateChangedTile()
