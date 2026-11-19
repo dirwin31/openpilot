@@ -59,6 +59,7 @@ class Bootstrap:
     self.restart = False
     self.registered = False
     self.discovery_registered = False
+    self.classic_gatt_off = False
     self.ready = False
     self.last_status = None
     self.last_write = 0.
@@ -119,6 +120,16 @@ class Bootstrap:
     self.registered = self.registered or UNIT in linked
     self.discovery_registered = self.discovery_registered or LAN_UNIT in linked
 
+  def keep_gatt_off_classic(self):
+    """Once per boot; iPhones send the app and notifications over classic GATT when comma offers it."""
+    if self.classic_gatt_off:
+      return
+    try:
+      self.command(['sudo', '-n', str(self.bridge / 'classic_gatt.sh'), 'apply'], timeout=60, stdout=subprocess.DEVNULL)
+      self.classic_gatt_off = True
+    except (OSError, subprocess.SubprocessError):
+      LOG.warning('Could not turn off GATT over classic Bluetooth')
+
   def step(self):
     wake = self.data / 'wake-setup.json'
     if wake.exists():
@@ -151,6 +162,7 @@ class Bootstrap:
                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.status('waiting', 'Turn Bluetooth on in comma Settings to pair your phone')
         return
+      self.keep_gatt_off_classic()
       # A newly paired phone needs no restart: the bridge reloads the phone list itself.
       if self.restart:
         LOG.info('Restarting phone bridge: retry requested')

@@ -29,6 +29,7 @@ from setup_health import write_ready, clear_ready
 
 ROOT = "/link/galaxy/ble"
 SERVICE_PATH = ROOT + "/service0"
+SERVICE_HANDLE = 0x0039
 GATT_SERVICE = "org.bluez.GattService1"
 GATT_CHAR = "org.bluez.GattCharacteristic1"
 LOG = logging.getLogger("galaxy-ble")
@@ -364,6 +365,7 @@ class Gateway:
 class GattService(ServiceInterface):
   def __init__(self):
     super().__init__(GATT_SERVICE)
+    self.handle = SERVICE_HANDLE
 
   @dbus_property(access=PropertyAccess.READ)
   def UUID(self) -> 's':
@@ -373,8 +375,17 @@ class GattService(ServiceInterface):
   def Primary(self) -> 'b':
     return True
 
+  # Fixed handle keeps iOS's cached copy valid across restarts.
+  @dbus_property()
+  def Handle(self) -> 'q':
+    return self.handle
+
+  @Handle.setter
+  def Handle(self, value: 'q'):
+    self.handle = value
+
   def props(self):
-    return {"UUID": Variant("s", self.UUID), "Primary": Variant("b", True)}
+    return {"UUID": Variant("s", self.UUID), "Primary": Variant("b", True), "Handle": Variant("q", self.handle)}
 
 
 class Characteristic(ServiceInterface):
@@ -595,7 +606,12 @@ async def serve(args):
   gatt = obj.get_interface("org.bluez.GattManager1")
   advertising = obj.get_interface("org.bluez.LEAdvertisingManager1")
   LOG.info("Registering Galaxy GATT application on %s", adapter_path)
-  await gatt.call_register_application(ROOT, {})
+  try:
+    await gatt.call_register_application(ROOT, {})
+  except DBusError:
+    LOG.warning("Fixed GATT handle unavailable; registering with an automatic handle")
+    objects[SERVICE_PATH].handle = 0
+    await gatt.call_register_application(ROOT, {})
   watcher = asyncio.create_task(gateway.watch_key())
   agent_path = ROOT + "/agent"
   bonder = BondAcceptance(BluezBond(bus, adapter_path, agent_path), claim.CLAIM_PATH)
@@ -604,9 +620,19 @@ async def serve(args):
   poster = Poster(GalaxyProxy(args.galaxy_port))
   gatt_client = BluezGatt(bus)
   notifications = asyncio.create_task(supervise(lambda: Watcher(gatt_client, adapter_path, poster.post)))
+  async def advertise():
+    try:
+      await advertising.call_register_advertisement(ad_path, {})
+      return True
+    except DBusError:
+      return False
+  advertised = False
   try:
     LOG.info("Registering Galaxy BLE advertisement")
-    await advertising.call_register_advertisement(ad_path, {})
+    advertised = await advertise()
+    if not advertised:
+      # The kernel refuses connectable advertising while a phone holds an LE link; retry until it drops.
+      LOG.warning("Galaxy advertisement refused; retrying while connected phones keep working")
     write_ready(key_path.parent)
     LOG.info("Galaxy BLE bridge ready on %s; forwarding to localhost:%s", adapter_path, args.galaxy_port)
     stopped = asyncio.Event()
@@ -614,8 +640,11 @@ async def serve(args):
     for sig in (signal.SIGINT, signal.SIGTERM):
       loop.add_signal_handler(sig, stopped.set)
     async def monitor_adapter():
+      nonlocal advertised
       while not stopped.is_set():
         await asyncio.sleep(2)
+        if not advertised and (advertised := await advertise()):
+          LOG.info("Galaxy BLE advertisement registered")
         await check_adapter(properties, advertisement)
     monitor = asyncio.create_task(monitor_adapter())
     stop_waiter = asyncio.create_task(stopped.wait())
@@ -648,7 +677,8 @@ async def serve(args):
     for state in gateway.sessions.values():
       state.close()
     try:
-      await asyncio.wait_for(advertising.call_unregister_advertisement(ad_path), timeout=5)
+      if advertised:
+        await asyncio.wait_for(advertising.call_unregister_advertisement(ad_path), timeout=5)
     except Exception:
       pass
     try:
