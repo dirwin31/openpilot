@@ -164,5 +164,37 @@ class BootstrapTest(unittest.TestCase):
     self.assertFalse(any('daemon-reload' in call or 'link' in call for call in self.calls))
     self.assertFalse(any('show' in call and RADIO_UNIT in call for call in self.calls))
 
+  def classic_gatt_calls(self):
+    return [call for call in self.calls if call[-1] == 'apply' and call[-2].endswith('classic_gatt.sh')]
+
+  def test_gatt_goes_off_classic_once_before_the_bridge_starts(self):
+    self.installed()
+    with patch('openpilot.starpilot.bluetooth.radio_preference.RadioPreference.enabled', return_value=True):
+      self.worker.step()
+      self.worker.step()
+    self.assertEqual(len(self.classic_gatt_calls()), 1)
+    first_start = next(i for i, call in enumerate(self.calls) if 'start' in call and UNIT in call)
+    self.assertLess(self.calls.index(self.classic_gatt_calls()[0]), first_start)
+
+  def test_classic_gatt_failure_still_starts_the_bridge_and_retries(self):
+    self.installed()
+    def run(args, **kwargs):
+      self.calls.append(args)
+      if args[-1] == 'apply':
+        raise subprocess.CalledProcessError(1, args)
+      return SimpleNamespace(stdout='1', returncode=0)
+    self.worker.run = run
+    with patch('openpilot.starpilot.bluetooth.radio_preference.RadioPreference.enabled', return_value=True):
+      self.worker.step()
+      self.worker.step()
+    self.assertTrue(any('start' in call and UNIT in call for call in self.calls))
+    self.assertEqual(len(self.classic_gatt_calls()), 2)
+
+  def test_radio_off_leaves_classic_gatt_alone(self):
+    self.installed()
+    with patch('openpilot.starpilot.bluetooth.radio_preference.RadioPreference.enabled', return_value=False):
+      self.worker.step()
+    self.assertEqual(self.classic_gatt_calls(), [])
+
 if __name__ == '__main__':
   unittest.main()
