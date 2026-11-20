@@ -66,6 +66,11 @@ export const JetlinkPage = {
       event.target.checked = field === "chargePhone" ? this.jetlink.chargePhone === true : this.addon(field)?.enabled === true
       return this.configure({ [field]: enabled })
     },
+    wake() { return this.configure({ wake: true }) },
+    awakeText() {
+      if (this.jetlink?.awakeUntil) return `Awake until ${new Date(this.jetlink.awakeUntil * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      return this.jetlink?.asleep ? "Asleep" : "Awake"
+    },
     timing(addon) {
       if (!addon?.connected || addon.roundTripMs == null) return ""
       return `${addon.answered} passes · ${addon.roundTripMs} ms round trip${addon.jetsonMs != null ? ` · ${addon.jetsonMs} ms on Jetson` : ""}`
@@ -99,6 +104,12 @@ export const JetlinkPage = {
               <p v-if="jetlink.progress">{{ jetlink.progress }}</p>
               <p v-if="jetlink.reason" class="gx-model-reason">{{ jetlink.reason }}</p>
               <p v-if="jetlink.chestnut" class="gx-model-reason">Chestnut is connected. JetLink stays off while Chestnut is fitted.</p>
+              <div v-if="usb" class="gx-row" :class="{disabled: !canChange}">
+                <span class="gx-row__info"><span class="gx-row__label">Jetson</span>
+                  <span class="gx-note" role="status"><span class="gx-chip">{{ awakeText() }}</span></span>
+                  <span class="gx-note">Wakes the Jetson over USB and keeps it up for 15 minutes, so it joins its Wi-Fi and you can reach it.</span></span>
+                <button type="button" class="gx-btn gx-btn--tonal" :disabled="!canChange" @click="wake"><i class="bi bi-power" aria-hidden="true"></i> Wake Jetson</button>
+              </div>
               <div v-if="jetlink.mode === 'ios'" class="gx-row" :class="{disabled: !canChange}">
                 <span class="gx-row__info gx-row__label">Charge phone over USB</span>
                 <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Charge phone over USB" :checked="jetlink.chargePhone === true" :disabled="!canChange" @change="toggle('chargePhone', $event)"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label>

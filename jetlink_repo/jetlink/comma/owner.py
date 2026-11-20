@@ -639,6 +639,7 @@ class Owner:
       'error': self.backing_off or gadget.gadget_error(),
       'net': gadget.net_status(),
       'dormant': self.dormant,
+      'awake_until': gadget.wake_until(),
       'udc': state,
       'speed': gadget.usb_speed() if configured else None,
       'present': present,
@@ -887,9 +888,14 @@ class Owner:
         return
       return self.spawn_worker(why)
 
+    # asked from the comma to wake the Jetson: present the gadget and keep it until the deadline
+    held = gadget.wake_until() is not None
+    if held:
+      self.wake()
+      self.idle_since = time.monotonic()
     # a phone never sleeps, and letting go takes the network interface it
     # dials over: for iOS the gadget stays up whatever the record says
-    sleeps = self.far_end_sleeps() and not self.built_ios
+    sleeps = self.far_end_sleeps() and not self.built_ios and not held
     if self.transport is None:
       # nothing to do and nothing presented: only worth a bind if the far end
       # stays awake for it
