@@ -1,7 +1,7 @@
 import { requestJson } from "./startup.js"
 import { GxNotice } from "./notice.js"
 import { GxDialog } from "./dialog.js"
-import { formatDate, uploadPackage, uploadTimeout } from "./starport.js"
+import { formatDate, onPhoneBrowser, uploadPackage, uploadTimeout } from "./starport.js"
 
 const STAGES = ["reading", "extracting", "verifying", "installing", "done"]
 const CHECKS = [
@@ -98,11 +98,7 @@ export const CarPlayKey = {
       return total ? Math.min(100, Math.floor(loaded * 100 / total)) : 0
     },
     checks() { return keyChecks(this.setup?.import) },
-    // Phone file pickers (iOS Files especially) grey out .apk when told to accept only it; check the name after instead
-    onPhone() {
-      return typeof navigator !== "undefined" && (navigator.userAgentData?.mobile === true ||
-        /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "") || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-    },
+    onPhone() { return onPhoneBrowser() },
     problem() { return keyProblem(this.setup?.import) },
   },
   mounted() { this.active = true; this.refresh() },

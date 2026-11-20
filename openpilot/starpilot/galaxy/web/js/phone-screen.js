@@ -6,8 +6,7 @@ import { CarPlayKey } from "./carplay-key.js"
 
 const STATES = { off: "Off", starting: "Starting…", waiting: "Waiting for a phone", connecting: "Connecting…", active: "Showing" }
 
-// The setup steps for each phone type, in the order projectiond checks them. A runner state names the first step
-// still to do; states past every step mean setup is finished and only the connection is left.
+// Setup steps in the order projectiond checks them; a runner's blocked state names the first step still to do
 const STEPS = {
   carplay: [
     { id: "key", blocked: "unavailable", title: "Add the CarPlay key", hint: "Once per comma, from the CarLink app" },

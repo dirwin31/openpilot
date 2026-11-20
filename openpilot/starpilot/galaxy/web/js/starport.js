@@ -12,6 +12,12 @@ import { GalaxySettingRow, switchRow } from "./galaxy-setting-row.js"
 import { StarPortGuidedSetup, guidedState, handshakeResettable } from "./starport-guided.js"
 import { StarPortTabs } from "./starport-tabs.js"
 
+// Phone file pickers (iOS Files especially) grey out files an accept list names, so phones get no accept list
+export function onPhoneBrowser() {
+  return typeof navigator !== "undefined" && (navigator.userAgentData?.mobile === true ||
+    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "") || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+}
+
 export function uploadTimeout(bytes) {
   return Math.max(180000, Math.ceil(bytes / (64 * 1024)) * 1000)
 }
@@ -689,10 +695,7 @@ export const StarPortPage = {
     checks() { return installChecks(this.setup?.import) },
     problem() { return importProblem(this.setup?.import, this.installFileName) },
     hasPackage() { return !!(this.setup?.identity.installed || this.setup?.identity.expired || this.setup?.identity.error) },
-    onPhone() {
-      return typeof navigator !== "undefined" && (navigator.userAgentData?.mobile === true ||
-        /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "") || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-    },
+    onPhone() { return onPhoneBrowser() },
     removeReason() {
       if (!this.setup) return "Load setup status first."
       if (this.setup.import?.state === "running") return "Wait for the current package check to finish."
