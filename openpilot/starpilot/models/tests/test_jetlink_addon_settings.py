@@ -63,6 +63,21 @@ def test_addon_choices_are_exact(owner, payload):
     owner[0].configure(payload)
 
 
+def test_wake_asks_the_owner_and_shows_the_deadline(owner, monkeypatch, tmp_path):
+  from jetlink.comma import gadget
+  settings, params = owner
+  monkeypatch.setattr(gadget, "WAKE_REQUEST", tmp_path / "wake")
+  monkeypatch.setattr(gadget, "owner_status", lambda: {"dormant": True})
+  monkeypatch.setattr(jetlink_addons, "present", lambda addon: False)
+  params.values["JetlinkMode"] = 2
+  with pytest.raises(ValueError):
+    settings.configure({"wake": True})
+  params.values["JetlinkMode"] = 1
+  assert "Waking" in settings.configure({"wake": True})["message"]
+  view = settings.snapshot()
+  assert view["asleep"] and view["awakeUntil"] is not None
+
+
 def test_unavailable_snapshot_has_addons():
   broken = JetlinkSettings(params=MemoryParams(), device_type=lambda: (_ for _ in ()).throw(OSError()))
   assert broken.snapshot()["addons"] == {}

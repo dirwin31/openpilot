@@ -160,6 +160,8 @@ CC_ORIENTATION = Path('/sys/class/power_supply/usb/typec_cc_orientation')
 DORMANT = Path("/dev/shm/jetlink-dormant")
 # hardwared's request to power the Jetson off; see request_shutdown
 SHUTDOWN_REQUEST = Path("/dev/shm/jetlink-shutdown")
+# a request to keep the gadget presented, so the Jetson wakes and stays up, until a wall-clock deadline
+WAKE_REQUEST = Path("/dev/shm/jetlink-wake")
 # the owner's status record: the owner's state in one file, rewritten whole
 # every step, which makes it the owner's heartbeat too. A clean stop removes it
 STATUS = Path("/dev/shm/jetlink/status.json")
@@ -490,3 +492,25 @@ def pending_shutdown() -> str | None:
 
 def finish_shutdown() -> None:
   _write(SHUTDOWN_REQUEST, None, "remove the shutdown request")
+
+
+def request_wake(seconds: float) -> float | None:
+  """Ask the owner to wake the Jetson and hold it awake for `seconds`. The
+  deadline, or None when the request cannot be written."""
+  until = time.time() + seconds
+  try:
+    write_record(WAKE_REQUEST, {'until': until})
+    return until
+  except OSError:
+    log.exception("jetlink: could not write the wake request")
+    return None
+
+
+def wake_until() -> float | None:
+  """The deadline of a wake request that has not run out, if any."""
+  if not WAKE_REQUEST.exists():
+    return None
+  until = (read_record(WAKE_REQUEST) or {}).get('until')
+  if type(until) not in (int, float) or until <= time.time():
+    return None
+  return float(until)

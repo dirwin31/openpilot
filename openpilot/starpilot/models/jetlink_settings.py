@@ -4,6 +4,8 @@ from __future__ import annotations
 from openpilot.starpilot.models.jetlink_adapter import UNSUPPORTED
 
 MODES = ("off", "usb", "ios")
+# how long a wake from Galaxy holds the Jetson awake
+WAKE_SECONDS = 15 * 60
 # Galaxy field to jetlink_addons key
 ADDON_FIELDS = {"vasm": "vasm", "signVision": "signs"}
 
@@ -35,7 +37,8 @@ class JetlinkSettings:
       return {"mode": "off", "supported": False, "chestnut": False, "enabled": False,
               "present": False, "prepared": False, "active": False, "runtimeState": "unavailable", "state": "unavailable",
               "reason": "Jetlink status is unavailable; the local model remains in use.",
-              "progress": "", "model": None, "transport": "USB", "chargePhone": False, "addons": {}}
+              "progress": "", "model": None, "transport": "USB", "chargePhone": False, "addons": {},
+              "asleep": False, "awakeUntil": None}
 
   def _setting(self):
     """The Jetlink setting, whether this device runs Jetlink, and whether a Chestnut is fitted."""
@@ -77,7 +80,23 @@ class JetlinkSettings:
             "state": state, "reason": reason, "progress": str(progress.get("msg", "")),
             "model": status.model if status is not None else None,
             "transport": status.transport if status is not None else "USB",
-            "chargePhone": params.get_bool("JetlinkChargePhone"), "addons": self.addons()}
+            "chargePhone": params.get_bool("JetlinkChargePhone"), "addons": self.addons(), **self.awake()}
+
+  @staticmethod
+  def awake():
+    """Whether the owner let the Jetson sleep, and the deadline of a wake asked from Galaxy."""
+    from jetlink.comma import gadget
+    record = gadget.owner_status() or {}
+    return {"asleep": bool(record.get("dormant")), "awakeUntil": gadget.wake_until()}
+
+  def wake(self):
+    view = self.snapshot()
+    if view["mode"] != "usb" or not view["supported"]:
+      raise ValueError("Waking the Jetson needs the USB computer connection")
+    from jetlink.comma import gadget
+    if gadget.request_wake(WAKE_SECONDS) is None:
+      raise ValueError("Could not ask JetLink to wake the Jetson")
+    return {"message": "Waking the Jetson. It stays awake for 15 minutes and joins its Wi-Fi."}
 
   def addons(self):
     """Each Jetson add-on: its setting, whether the gadget carries it, and its link."""
@@ -122,6 +141,8 @@ class JetlinkSettings:
       return False
 
   def configure(self, payload):
+    if payload == {"wake": True}:
+      return self.wake()
     if not payload or set(payload) - {"mode", "chargePhone", *ADDON_FIELDS}:
       raise ValueError("Invalid Jetlink settings")
     if any(field in payload and type(payload[field]) is not bool for field in ADDON_FIELDS):
