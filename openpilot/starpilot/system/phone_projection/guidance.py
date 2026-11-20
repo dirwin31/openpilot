@@ -215,7 +215,9 @@ class HeadUnitGuidance:
   def _foreign(self, now: int) -> bool:
     from openpilot.starpilot.navigation.phone import OBSERVATION_NS, _read
     old = _read(self.publisher.path)
-    return bool(old is not None and old['session'] != self.session and 0 <= now - old['received'] <= OBSERVATION_NS)
+    # Our own source is never foreign: after the phone reconnects, the last connection's session is replaced at once.
+    return bool(old is not None and old['session'] != self.session and old.get('source') != self.source and
+                0 <= now - old['received'] <= OBSERVATION_NS)
 
   def _publish(self) -> None:
     fields = self.payload()

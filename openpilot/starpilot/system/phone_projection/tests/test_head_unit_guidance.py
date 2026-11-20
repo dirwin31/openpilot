@@ -164,6 +164,16 @@ def test_a_live_companion_app_keeps_the_handoff(unit):
   assert read_phone_navigation(time.monotonic_ns(), path)['session'] == 'companion'
 
 
+def test_guidance_resumes_at_once_after_the_phone_reconnects(unit):
+  first, path = unit
+  first.handle(g.NAV_STATE, state(8, 'Elm Street'))
+  first.close()
+  second = g.HeadUnitGuidance(publisher=PhoneNavigationPublisher(path=path), log=lambda m: None, timer=Timer)
+  second.handle(g.NAV_STATE, state(7, 'Oak Street'))
+  phone = read_phone_navigation(time.monotonic_ns(), path)
+  assert phone['session'] == second.session != first.session and phone['instruction'] == 'Oak Street'
+
+
 def test_keep_alive_renews_the_lease_without_a_new_observation(unit):
   guidance, path = unit
   guidance.handle(g.NAV_STATE, state(8, 'Elm Street'))
