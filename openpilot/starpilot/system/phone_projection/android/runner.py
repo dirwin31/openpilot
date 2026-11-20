@@ -9,6 +9,7 @@ from openpilot.starpilot.system.phone_projection.android.session import (
   HeadUnitConfig, HeadUnitSession, POINTER_DOWN, POINTER_UP, TOUCH_CANCEL, TOUCH_DOWN, TOUCH_MOVE, TOUCH_UP)
 from openpilot.starpilot.system.phone_projection.android.wireless import WirelessSetup
 from openpilot.starpilot.system.phone_projection.bluez import android_candidates
+from openpilot.starpilot.system.phone_projection.guidance import HeadUnitGuidance
 from openpilot.starpilot.system.phone_projection.ipc import Touch
 from openpilot.starpilot.system.phone_projection.layout import android_crop, android_density, android_margins, android_mode
 from openpilot.starpilot.system.phone_projection.runtime import HOTSPOT_ADDRESS, Context, TouchTracker, hotspot
@@ -24,9 +25,11 @@ class AndroidAutoRunner:
   kind = "android"
 
   def __init__(self, ctx: Context, *, hotspot_source=hotspot, listen_address: str = HOTSPOT_ADDRESS, port: int = AAP_PORT,
-               session_factory=HeadUnitSession):
+               session_factory=HeadUnitSession, guidance_factory=None):
     self.ctx, self.hotspot_source, self.listen_address, self.port = ctx, hotspot_source, listen_address, port
     self.session_factory = session_factory
+    self.guidance_factory = guidance_factory or (lambda: HeadUnitGuidance(log=self.ctx.log))
+    self.guidance: HeadUnitGuidance | None = None
     self.state, self.message, self.phone = "starting", "", ""
     self.session: HeadUnitSession | None = None
     self.pipe: VideoPipe | None = None
@@ -181,11 +184,24 @@ class AndroidAutoRunner:
   def on_audio_stopped(self, name: str) -> None:
     self.ctx.audio.stop(f"android-{name}")
 
+  def on_navigation(self, session, kind: int, data: bytes) -> None:
+    """Turn-by-turn from the phone, forwarded as phone guidance (navigationd still gates it on its setting)."""
+    with self.lock:
+      if self.session is not session:
+        return
+      if self.guidance is None:
+        self.guidance = self.guidance_factory()
+      guidance = self.guidance
+    guidance.handle(kind, data)
+
   def on_session_closed(self, session) -> None:
     with self.lock:
       if self.session is not session:
         return
       pipe, self.pipe, self.session = self.pipe, None, None
+      guidance, self.guidance = self.guidance, None
+    if guidance is not None:
+      guidance.close()
     if pipe is not None:
       threading.Thread(target=pipe.close, daemon=True).start()
     self.ctx.audio.stop_all()

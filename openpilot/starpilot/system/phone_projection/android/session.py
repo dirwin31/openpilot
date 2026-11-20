@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from openpilot.starpilot.system.phone_projection import guidance
 from openpilot.starpilot.system.starport.wire import field, one, parse_fields, signed, text
 
 HERE = Path(__file__).parent
@@ -56,6 +57,7 @@ class Channels:
   speech_audio: int = 5
   system_audio: int = 6
   bluetooth: int = 7
+  navigation: int = 8
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,9 @@ def service_discovery_response(cfg: HeadUnitConfig, ch: Channels = Channels()) -
   if cfg.bluetooth_address:
     bluetooth = field(1, cfg.bluetooth_address) + field(2, 2) + field(2, 4)
     services.append(field(1, ch.bluetooth) + field(6, bluetooth))
+  # Navigation status (the car's cluster service): the phone then sends its turn-by-turn to us.
+  image = field(1, guidance.IMAGE_SIZE) + field(2, guidance.IMAGE_SIZE) + field(3, guidance.IMAGE_DEPTH)
+  services.append(field(1, ch.navigation) + field(8, field(1, guidance.MIN_INTERVAL_MS) + field(2, guidance.TYPE_ENUM) + field(3, image)))
   body = b"".join(field(1, s) for s in services)
   body += (field(2, "comma") + field(3, cfg.name) + field(4, "2026") + field(5, "starpilot") + field(6, 0) +
            field(7, "comma") + field(8, cfg.name) + field(9, "1") + field(10, "1.0") + field(11, 0) + field(12, 0) +
@@ -257,6 +262,8 @@ class HeadUnitSession:
     if kind == CHANNEL_OPEN_REQUEST and channel != 0:
       self.open_channels.add(channel)
       self.send(channel, CHANNEL_OPEN_RESPONSE, field(1, 0), control=True)
+      if channel == self.ch.navigation:
+        self.send(channel, guidance.NAV_START)  # ask for turn-by-turn, as a car's cluster does
       return
     if channel == 0:
       self._control(kind, data)
@@ -267,6 +274,10 @@ class HeadUnitSession:
     elif channel == self.ch.input:
       if kind == INPUT_BINDING_REQUEST:
         self.send(channel, INPUT_BINDING_RESPONSE, field(1, 0))
+    elif channel == self.ch.navigation:
+      handler = getattr(self.sink, "on_navigation", None)
+      if handler is not None:
+        handler(self, kind, data)
     elif channel == self.ch.sensors:
       if kind == SENSOR_START_REQUEST:
         self.send(channel, SENSOR_START_RESPONSE, field(1, 0))
