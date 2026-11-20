@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import plistlib
 import socket
+from array import array
 import struct
 import threading
 import time
@@ -108,6 +109,25 @@ def _listen_tcp(host: str) -> socket.socket:
   return server
 
 
+def _shutdown(sock: socket.socket | None) -> None:
+  """close() alone leaves a thread blocked in recv() on Linux; shutdown() wakes it so it can end."""
+  if sock is None:
+    return
+  for step in (lambda: sock.shutdown(socket.SHUT_RDWR), sock.close):
+    try:
+      step()
+    except OSError:
+      pass
+
+
+def keep_alive(sock: socket.socket) -> None:
+  """A phone that drives off the hotspot sends no FIN; probe so its session ends in seconds, not never."""
+  sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+  for name, value in (("TCP_KEEPIDLE", 5), ("TCP_KEEPINTVL", 2), ("TCP_KEEPCNT", 3)):
+    if hasattr(socket, name):
+      sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, name), value)
+
+
 def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
   buf = bytearray()
   while len(buf) < n:
@@ -126,24 +146,25 @@ class ScreenStream:
     self.server = _listen_tcp(host)
     self.port = self.server.getsockname()[1]
     self.closed = threading.Event()
+    self.conn: socket.socket | None = None
     threading.Thread(target=self._run, name="carplay-screen", daemon=True).start()
 
   def close(self) -> None:
     self.closed.set()
-    try:
-      self.server.close()
-    except OSError:
-      pass
+    _shutdown(self.server)
+    _shutdown(self.conn)
 
   def _run(self) -> None:
     try:
       conn, addr = self.server.accept()
     except OSError:
       return
-    if addr[0] != self.peer:
+    if addr[0] != self.peer or self.closed.is_set():
       conn.close()
       return
+    self.conn = conn
     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    keep_alive(conn)
     counter, frames = 0, 0
     try:
       while not self.closed.is_set():
@@ -177,24 +198,29 @@ class IapTunnel:
     self.key, self.peer, self.on_data, self.log = key, peer, on_data, log
     self.server = _listen_tcp(host)
     self.port = self.server.getsockname()[1]
+    self.closed = threading.Event()
+    self.conn: socket.socket | None = None
     threading.Thread(target=self._run, name="carplay-iap-tunnel", daemon=True).start()
 
   def close(self) -> None:
-    try:
-      self.server.close()
-    except OSError:
-      pass
+    self.closed.set()
+    _shutdown(self.server)
+    _shutdown(self.conn)
 
   def _run(self) -> None:
     try:
       conn, addr = self.server.accept()
     except OSError:
       return
+    if self.closed.is_set():
+      conn.close()
+      return
+    self.conn = conn
     self.log("airplay iAP tunnel connected")
     cipher = FrameCipher(self.key, self.key)
     plain = bytearray()
     try:
-      while True:
+      while not self.closed.is_set():
         data = conn.recv(16384)
         if not data:
           break
@@ -231,9 +257,9 @@ def open_audio_packet(key: bytes, packet: bytes) -> bytes | None:
     payload = open_(key, nonce, packet[RTP_HEADER:-AUDIO_NONCE], packet[4:RTP_HEADER])
   except Exception:
     return None
-  swapped = bytearray(payload[:len(payload) & ~1])
-  swapped[0::2], swapped[1::2] = payload[1:len(swapped):2], payload[0:len(swapped):2]
-  return bytes(swapped)
+  samples = array("h", payload[:len(payload) & ~1])
+  samples.byteswap()  # the phone sends big-endian 16-bit samples
+  return samples.tobytes()
 
 
 class AudioStream:
@@ -374,13 +400,9 @@ class AirPlaySession:
       if item:
         item.close()
     self.audio.clear()
-    for s in (self.event_sock, self.conn):
-      try:
-        if s:
-          s.close()
-      except OSError:
-        pass
-    self.sink.on_session_closed()
+    _shutdown(self.event_sock)
+    _shutdown(self.conn)
+    self.sink.on_session_closed(self)
 
   def _handle(self, req: Request) -> tuple[int, bytes, str | None]:
     path = req.path.lower()
@@ -594,6 +616,7 @@ class AirPlayServer:
       except OSError:
         return
       conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+      keep_alive(conn)
       self.log(f"airplay connection from {peer[0]}")
       session = AirPlaySession(conn, peer, self.host, self.cfg, self.identity, self.pairings, self.mfi, self.sink, self.log)
       self.session = session

@@ -105,6 +105,7 @@ def main() -> int:
   try:
     while not ctx.stop.is_set():
       active = next((r for r in runners.values() if r.active), None)
+      ctx.showing = active.kind if active is not None else ""
       pending = touches.drain()
       if pending and active is not None:
         active.touch(pending)

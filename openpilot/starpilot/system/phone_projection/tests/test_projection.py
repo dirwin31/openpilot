@@ -435,3 +435,61 @@ def test_spotify_takes_the_audio_server_only_when_it_can_start(tmp_path, monkeyp
   sup.retry_at = 0.0
   assert sup._spotify_takes_over(prefs)
   assert not sup._spotify_takes_over(SimpleNamespace(source="phone"))
+
+
+def test_video_pipe_stops_polling_for_a_picture_that_never_comes(monkeypatch):
+  import openpilot.starpilot.system.phone_projection.video as video
+  monkeypatch.setattr(video, "OUTPUT_POLL_SECONDS", 0.05)
+  pulls = []
+
+  class Silent(FakeDecoder):
+    def pull(self, timeout_ms=0):
+      pulls.append(time.monotonic())
+      return None
+
+  publisher = VideoPublisher({0: FakeDecoder.layout}, server_factory=FakeServer)
+  pipe = VideoPipe(publisher, 0, 4, 2, decoder_factory=lambda *a, **k: Silent(*a), log=lambda m: None)
+  try:
+    pipe.submit(b"\0\0\0\x01\x65i")
+    assert _wait(lambda: pipe.pushed == 1)
+    time.sleep(0.3)
+    settled = len(pulls)
+    time.sleep(0.4)
+    assert len(pulls) - settled <= 1  # idle wait (0.5 s), not the 20 ms output poll
+  finally:
+    pipe.close()
+
+
+def test_closing_the_screen_stream_frees_its_blocked_reader():
+  import socket
+  import threading
+  from openpilot.starpilot.system.carplay.airplay.session import ScreenStream
+  logs = []
+  stream = ScreenStream(os.urandom(32), "127.0.0.1", "127.0.0.1", lambda *a: None, lambda *a: None, logs.append)
+  phone = socket.create_connection(("127.0.0.1", stream.port))
+  try:
+    assert _wait(lambda: stream.conn is not None)
+    reader = next(t for t in threading.enumerate() if t.name == "carplay-screen")
+    stream.close()  # the phone never sends FIN, as when it drives off the hotspot
+    reader.join(2)
+    assert not reader.is_alive() and any("closed" in m for m in logs)
+  finally:
+    phone.close()
+
+
+def test_a_stale_carplay_session_closing_keeps_the_new_picture():
+  from openpilot.starpilot.system.phone_projection.carplay_runner import CarPlayRunner
+  from openpilot.starpilot.system.phone_projection.runtime import TouchTracker
+  import threading
+
+  class Audio:
+    def request(self, wanted):
+      self.wanted = wanted
+
+  runner = CarPlayRunner.__new__(CarPlayRunner)
+  runner.lock, runner.touches, runner.state = threading.Lock(), TouchTracker(), "active"
+  runner.ctx = type("Ctx", (), {"audio": Audio(), "log": staticmethod(lambda m: None)})()
+  old, new, pipe = object(), object(), object()
+  runner.session, runner.pipe = new, pipe
+  runner.on_session_closed(old)
+  assert runner.session is new and runner.pipe is pipe and runner.state == "active"

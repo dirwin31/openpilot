@@ -28,6 +28,7 @@ class Context:
   bluez: object
   log: Callable[[str], None] = print
   fps: int = 30  # what CarPlay is asked for: the rate of the screen that shows it
+  showing: str = ""  # the runner kind on screen right now, so the other one stops polling
   stop: threading.Event = field(default_factory=threading.Event)
 
 

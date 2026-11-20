@@ -60,6 +60,7 @@ class Bluez:
     self.router = DBusRouter(open_dbus_connection(bus="SYSTEM", enable_fds=True))
     self.lock = threading.RLock()
     self.profile_filter = None
+    self.adapter = ""
     self.on_android_connection: Callable[[str, socket.socket], None] | None = None
 
   def _call(self, path: str, interface: str, member: str, signature: str | None = None, body: tuple = (), timeout: float = 10.0):
@@ -78,10 +79,14 @@ class Bluez:
     return [describe(path, ifaces[DEVICE_IFACE]) for path, ifaces in objects.items() if DEVICE_IFACE in ifaces]
 
   def adapter_address(self) -> str:
+    """The comma's Bluetooth address; looked up once, it does not change while projectiond runs."""
+    if self.adapter:
+      return self.adapter
     objects = _unwrap(self._call("/", OBJECT_MANAGER, "GetManagedObjects")[0])
     for ifaces in objects.values():
-      if ADAPTER_IFACE in ifaces:
-        return str(ifaces[ADAPTER_IFACE].get("Address", "")).upper()
+      if ADAPTER_IFACE in ifaces and (address := str(ifaces[ADAPTER_IFACE].get("Address", "")).upper()):
+        self.adapter = address
+        return address
     raise RuntimeError("Bluetooth adapter is not available")
 
   def connect(self, path: str) -> None:

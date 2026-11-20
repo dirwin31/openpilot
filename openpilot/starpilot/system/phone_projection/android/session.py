@@ -198,10 +198,15 @@ class HeadUnitSession:
         self.fragments[channel] = bytearray(payload)
         continue
       if segment == 0:
-        self.fragments.setdefault(channel, bytearray()).extend(payload)
+        pending = self.fragments.setdefault(channel, bytearray())
+        pending += payload
+        if len(pending) > MAX_MESSAGE:
+          raise ValueError("Android Auto message too large")
         continue
       if segment == FLAG_LAST:
-        payload = bytes(self.fragments.pop(channel, bytearray()) + payload)
+        pending = self.fragments.pop(channel, bytearray())
+        pending += payload
+        payload = bytes(pending)
       if len(payload) < 2:
         raise ValueError("Android Auto message without a type")
       return channel, struct.unpack(">H", payload[:2])[0], payload[2:]

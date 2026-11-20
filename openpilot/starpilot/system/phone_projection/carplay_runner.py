@@ -144,6 +144,10 @@ class CarPlayRunner:
     self.close()
 
   def _attempt(self) -> float:
+    if self._session_alive() and self.server_key is not None and self.server_key[1] == (self.ctx.settings().audio == "music"):
+      return IDLE_SECONDS  # showing already: skip the key, hotspot and Bluetooth lookups
+    if self.ctx.showing not in ("", self.kind):
+      return RETRY_SECONDS  # Android Auto has the screen; leave the iPhone alone until it is done
     try:
       mfi = self.mfi_loader()
     except (OSError, ValueError) as error:
@@ -161,7 +165,7 @@ class CarPlayRunner:
       return RETRY_SECONDS
     self.phone = iphone["name"]
     self._ensure_server(spot, settings.audio == "music", mfi)
-    if self.session is not None and not self.session.closed.is_set():
+    if self._session_alive():
       return IDLE_SECONDS
     self._set("connecting", f"Connecting to {iphone['name']}…")
     sock = self.connect(iphone["address"])
@@ -176,20 +180,23 @@ class CarPlayRunner:
     try:
       WirelessControl(link, mfi, ident, endpoint, log=lambda m: None).run(BOOTSTRAP_TIMEOUT)
       deadline = time.monotonic() + BOOTSTRAP_TIMEOUT
-      while time.monotonic() < deadline and not self.ctx.stop.is_set():
-        if self.session is not None and not self.session.closed.is_set():
-          break
-        time.sleep(0.25)
-      if self.session is None or self.session.closed.is_set():
+      while time.monotonic() < deadline and not self.ctx.stop.is_set() and not self._session_alive():
+        self.ctx.stop.wait(0.25)
+      if not self._session_alive():
         self._set("retrying", f"{iphone['name']} did not join the hotspot.")
         return RETRY_SECONDS
-      while self.session is not None and not self.session.closed.is_set() and not self.ctx.stop.is_set():
-        time.sleep(0.5)
+      while (session := self.session) is not None and not self.ctx.stop.is_set():
+        if session.closed.wait(0.5):
+          break
     finally:
       self.link = None
       link.close()
     self._set("retrying", "CarPlay disconnected.")
     return 3.0
+
+  def _session_alive(self) -> bool:
+    session = self.session
+    return session is not None and not session.closed.is_set()
 
   def _ensure_server(self, spot, audio: bool, mfi) -> None:
     key = (spot.ssid, audio, self.ctx.panel)
@@ -251,8 +258,10 @@ class CarPlayRunner:
   def on_audio_stopped(self, name: str) -> None:
     self.ctx.audio.stop(f"carplay-{name}")
 
-  def on_session_closed(self) -> None:
+  def on_session_closed(self, session=None) -> None:
     with self.lock:
+      if session is not None and self.session is not None and self.session is not session:
+        return  # a stale connection ending; the newer session keeps its picture
       pipe, self.pipe, self.session = self.pipe, None, None
     if pipe is not None:
       threading.Thread(target=pipe.close, daemon=True).start()

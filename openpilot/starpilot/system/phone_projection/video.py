@@ -18,6 +18,8 @@ KEYFRAME_RETRY_SECONDS = 1.0
 KEYFRAME_GIVE_UP_SECONDS = 3.0  # a phone that never sends one still gets its picture back
 OUTPUT_WAIT_MS = 10  # after a picture goes in, how long to wait for it to come out
 IDLE_WAIT = 0.5
+OUTPUT_POLL = 0.02
+OUTPUT_POLL_SECONDS = 0.25  # pictures still owed this long after the last push never come; stop polling for them
 
 
 def is_keyframe(access_unit: bytes, hevc: bool = False) -> bool:
@@ -67,7 +69,7 @@ class VideoPipe:
     self.keyframe_asked = self.keyframe_wait_since = 0.0
     self.closed = threading.Event()
     self.frames = self.published = self.mismatched = self.pushed = 0
-    self.last_frame = 0.0
+    self.last_frame = self.last_push = 0.0
     self.error = ""
     self.picture_size: tuple[int, int] | None = None
     self.thread = threading.Thread(target=self._run, name="projection-video", daemon=True)
@@ -144,9 +146,10 @@ class VideoPipe:
 
   def _decode(self, decoder) -> None:
     while not self.closed.is_set():
-      waiting = self.pushed > self.frames
+      # Some units (parameter sets, skipped pictures) never produce a frame, so the count alone can stay owed forever
+      waiting = self.pushed > self.frames and time.monotonic() - self.last_push < OUTPUT_POLL_SECONDS
       try:
-        unit = self.queue.get(timeout=0.02 if waiting else IDLE_WAIT)
+        unit = self.queue.get(timeout=OUTPUT_POLL if waiting else IDLE_WAIT)
       except queue.Empty:
         unit = b""
       if unit is None:
@@ -155,6 +158,7 @@ class VideoPipe:
         while not decoder.push(unit) and not self.closed.is_set():
           self._publish(decoder, decoder.pull(5))
         self.pushed += 1
+        self.last_push = time.monotonic()
         self._publish(decoder, decoder.pull(OUTPUT_WAIT_MS))
       else:
         self._publish(decoder, decoder.pull(0))

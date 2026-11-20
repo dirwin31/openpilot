@@ -68,6 +68,8 @@ class AndroidAutoRunner:
   def _attempt(self) -> float:
     if self.session is not None and not self.session.closed.is_set():
       return 1.0
+    if self.ctx.showing not in ("", self.kind):
+      return RETRY_SECONDS  # CarPlay has the screen; stop waking Android phones until it is done
     if self.hotspot_source() is None:
       self._set("waiting_hotspot", "Turn on the Galaxy hotspot so the phone can connect.")
       return RETRY_SECONDS

@@ -85,7 +85,6 @@ class PhoneCamera(CameraView):
     self.picture = picture
     src = rl.Rectangle(cx, cy, cw, ch)
     dst = rl.Rectangle(picture.x, picture.y, picture.width, picture.height)
-    from openpilot.common.hardware import COMMA_HARDWARE
     if COMMA_HARDWARE:
       self._render_egl(src, dst)
     else:

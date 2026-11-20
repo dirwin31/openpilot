@@ -149,7 +149,7 @@ class FileSink:
   def on_event_ready(self, session) -> None:
     pass
 
-  def on_session_closed(self) -> None:
+  def on_session_closed(self, session=None) -> None:
     log(f"session closed frames={self.frames}")
     if self.file:
       self.file.flush()
