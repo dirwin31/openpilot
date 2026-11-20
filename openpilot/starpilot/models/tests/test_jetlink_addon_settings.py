@@ -63,19 +63,38 @@ def test_addon_choices_are_exact(owner, payload):
     owner[0].configure(payload)
 
 
-def test_wake_asks_the_owner_and_shows_the_deadline(owner, monkeypatch, tmp_path):
+def test_wake_starts_a_hold_and_shows_the_deadline(owner, monkeypatch, tmp_path):
+  import os
+  import time
   from jetlink.comma import gadget
+  from openpilot.starpilot.models import jetlink_wake
   settings, params = owner
-  monkeypatch.setattr(gadget, "WAKE_REQUEST", tmp_path / "wake")
+  monkeypatch.setattr(jetlink_wake, "RECORD", tmp_path / "wake.json")
   monkeypatch.setattr(gadget, "owner_status", lambda: {"dormant": True})
+  started = []
+  monkeypatch.setattr(jetlink_wake.subprocess, "Popen", lambda *a, **kw: started.append(a) or
+                      gadget.write_record(jetlink_wake.RECORD, {"pid": os.getpid(), "until": time.monotonic() + 60}))
   monkeypatch.setattr(jetlink_addons, "present", lambda addon: False)
   params.values["JetlinkMode"] = 2
   with pytest.raises(ValueError):
     settings.configure({"wake": True})
   params.values["JetlinkMode"] = 1
   assert "Waking" in settings.configure({"wake": True})["message"]
+  assert "already" in settings.configure({"wake": True})["message"] and len(started) == 1
   view = settings.snapshot()
-  assert view["asleep"] and view["awakeUntil"] is not None
+  assert view["asleep"] and 0 < view["awakeFor"] <= 60
+
+
+def test_the_hold_gives_the_gadget_back_when_driving_starts(monkeypatch, tmp_path):
+  from unittest import mock
+  from jetlink.comma import lending
+  from openpilot.starpilot.models import jetlink_wake
+  monkeypatch.setattr(jetlink_wake, "RECORD", tmp_path / "wake.json")
+  monkeypatch.setattr(lending, "hung_up", lambda conn, wait: False)
+  loan = mock.Mock()
+  jetlink_wake.hold(loan, lambda: True)
+  loan.close.assert_called_once()
+  assert not jetlink_wake.RECORD.exists() and jetlink_wake.awake_for() is None
 
 
 def test_unavailable_snapshot_has_addons():

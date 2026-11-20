@@ -68,7 +68,7 @@ export const JetlinkPage = {
     },
     wake() { return this.configure({ wake: true }) },
     awakeText() {
-      if (this.jetlink?.awakeUntil) return `Awake until ${new Date(this.jetlink.awakeUntil * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      if (this.jetlink?.awakeFor) return `Awake until ${new Date(Date.now() + this.jetlink.awakeFor * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
       return this.jetlink?.asleep ? "Asleep" : "Awake"
     },
     timing(addon) {

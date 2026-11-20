@@ -4,8 +4,6 @@ from __future__ import annotations
 from openpilot.starpilot.models.jetlink_adapter import UNSUPPORTED
 
 MODES = ("off", "usb", "ios")
-# how long a wake from Galaxy holds the Jetson awake
-WAKE_SECONDS = 15 * 60
 # Galaxy field to jetlink_addons key
 ADDON_FIELDS = {"vasm": "vasm", "signVision": "signs"}
 
@@ -38,7 +36,7 @@ class JetlinkSettings:
               "present": False, "prepared": False, "active": False, "runtimeState": "unavailable", "state": "unavailable",
               "reason": "Jetlink status is unavailable; the local model remains in use.",
               "progress": "", "model": None, "transport": "USB", "chargePhone": False, "addons": {},
-              "asleep": False, "awakeUntil": None}
+              "asleep": False, "awakeFor": None}
 
   def _setting(self):
     """The Jetlink setting, whether this device runs Jetlink, and whether a Chestnut is fitted."""
@@ -86,16 +84,17 @@ class JetlinkSettings:
   def awake():
     """Whether the owner let the Jetson sleep, and the deadline of a wake asked from Galaxy."""
     from jetlink.comma import gadget
+    from openpilot.starpilot.models import jetlink_wake
     record = gadget.owner_status() or {}
-    return {"asleep": bool(record.get("dormant")), "awakeUntil": gadget.wake_until()}
+    return {"asleep": bool(record.get("dormant")), "awakeFor": jetlink_wake.awake_for()}
 
   def wake(self):
     view = self.snapshot()
     if view["mode"] != "usb" or not view["supported"]:
       raise ValueError("Waking the Jetson needs the USB computer connection")
-    from jetlink.comma import gadget
-    if gadget.request_wake(WAKE_SECONDS) is None:
-      raise ValueError("Could not ask JetLink to wake the Jetson")
+    from openpilot.starpilot.models import jetlink_wake
+    if not jetlink_wake.start():
+      return {"message": "The Jetson is already being kept awake."}
     return {"message": "Waking the Jetson. It stays awake for 15 minutes and joins its Wi-Fi."}
 
   def addons(self):
