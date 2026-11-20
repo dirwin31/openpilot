@@ -11,22 +11,22 @@ export const JETSON_ADDONS = [
 ]
 
 export function addonState(addon, usb = true) {
-  if (!addon) return { label: "Unavailable", tone: "" }
-  if (addon.enabled && !usb) return { label: "Needs USB computer", tone: "" }
-  if (!addon.enabled) return { label: "Off", tone: "" }
-  if (!addon.present) return { label: "Waiting for JetLink", tone: "" }
-  if (!addon.running) return { label: "Idle", tone: "" }
-  if (addon.modelMismatch) return { label: "Jetson has a different model", tone: "warn" }
-  if (addon.yielding) return { label: "Yielding to driving model", tone: "warn" }
-  if (addon.connected) return { label: "On Jetson", tone: "ok" }
-  return { label: "Waiting for Jetson", tone: "" }
+  if (!addon) return "Unavailable"
+  if (addon.enabled && !usb) return "Needs USB computer"
+  if (!addon.enabled) return "Off"
+  if (!addon.present) return "Waiting for JetLink"
+  if (!addon.running) return "Idle"
+  if (addon.modelMismatch) return "Jetson has a different model"
+  if (addon.yielding) return "Yielding to driving model"
+  if (addon.connected) return "On Jetson"
+  return "Waiting for Jetson"
 }
 
 export const JetlinkPage = {
   name: "JetlinkPage",
   components: { WikiHelp, GxState, GxNotice, GalaxySelect },
   props: { mode: { type: String, required: true }, unauthorized: { type: Function, required: true } },
-  data() { return { loading: true, status: null, error: "", message: "", busy: "", pending: null, addons: JETSON_ADDONS } },
+  data() { return { loading: true, status: null, error: "", message: "", busy: "", pending: null } },
   mounted() {
     this.feed = new ModelManagerFeed({ unauthorized: this.unauthorized, publish: ({ loading, data, error }) => {
       this.loading = loading
@@ -40,9 +40,15 @@ export const JetlinkPage = {
     jetlink() { return this.status?.jetlink || null },
     canChange() { return !this.busy && modelActionAllowed(this.status, "jetlink") },
     usb() { return this.jetlink?.mode === "usb" },
+    addonRows() {
+      return JETSON_ADDONS.map(item => {
+        const addon = this.addon(item.field)
+        return { ...item, addon, label: addonState(addon, this.usb), timing: this.timing(addon), enabled: addon?.enabled === true,
+          idle: !!(addon?.enabled && addon.present && !addon.running) }
+      })
+    },
   },
   methods: {
-    addonState,
     addon(field) { return this.jetlink?.addons?.[field] || null },
     async configure(change) {
       if (!this.canChange) return
@@ -109,15 +115,15 @@ export const JetlinkPage = {
             <div class="gx-section__header"><i aria-hidden="true" class="bi bi-gpu-card"></i><span id="gx-jetlink-addons" class="gx-section__title">Jetson add-ons</span></div>
             <div class="gx-panel gx-stack">
               <p class="gx-model-reason">For a Jetson on USB. The comma keeps running each model itself whenever the Jetson is busy with the driving model or doesn't answer. Set up the add-ons on the Jetson first (tools/jetson_addons).</p>
-              <div v-for="item in addons" :key="item.field" class="gx-row" :class="{disabled: !canChange || !usb}">
+              <div v-for="item in addonRows" :key="item.field" class="gx-row" :class="{disabled: !canChange || !usb}">
                 <span class="gx-row__info">
                   <span class="gx-row__label"><i :class="['bi', item.icon]" aria-hidden="true"></i> {{ item.title }}</span>
                   <span class="gx-note">{{ item.detail }}</span>
-                  <span class="gx-note" role="status"><span class="gx-chip">{{ addonState(addon(item.field), usb).label }}</span><span v-if="timing(addon(item.field))"> · {{ timing(addon(item.field)) }}</span></span>
-                  <span v-if="addon(item.field)?.modelMismatch" class="gx-model-reason">The comma runs this model itself until the Jetson has the same file. Run tools/jetson_addons/install.sh again.</span>
-                  <span v-else-if="addon(item.field)?.enabled && addon(item.field)?.present && !addon(item.field)?.running" class="gx-note">Starts when the comma runs this model, usually once driving.</span>
+                  <span class="gx-note" role="status"><span class="gx-chip">{{ item.label }}</span><span v-if="item.timing"> · {{ item.timing }}</span></span>
+                  <span v-if="item.addon?.modelMismatch" class="gx-model-reason">The comma runs this model itself until the Jetson has the same file. Run tools/jetson_addons/install.sh again.</span>
+                  <span v-else-if="item.idle" class="gx-note">Starts when the comma runs this model, usually once driving.</span>
                 </span>
-                <label class="gx-switch"><input type="checkbox" role="switch" :aria-label="item.title" :checked="pending?.[item.field] ?? addon(item.field)?.enabled === true" :disabled="!canChange || (!usb && addon(item.field)?.enabled !== true)" @change="toggle(item.field, $event)"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label>
+                <label class="gx-switch"><input type="checkbox" role="switch" :aria-label="item.title" :checked="pending?.[item.field] ?? item.enabled" :disabled="!canChange || (!usb && !item.enabled)" @change="toggle(item.field, $event)"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label>
               </div>
               <p v-if="!usb" class="gx-model-reason">Jetson add-ons need the USB computer connection.</p>
             </div>

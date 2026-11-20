@@ -56,11 +56,7 @@ def prepare_nv12(frame: np.ndarray, *, width: int, height: int, annotation: Anno
 
 
 def with_jetson(net):
-  """The net, asking the Jetson first when Jetlink's gadget carries the V-ASM add-on (jetlink_addons)."""
-  try:
-    from openpilot.starpilot.models.jetlink_addons import with_jetson as jetson
-  except Exception:
-    return net
+  from openpilot.starpilot.models.jetlink_addons import with_jetson as jetson
   return jetson(net, "vasm", MODEL_SHA256, MODEL_OUTPUTS, scaled_u8=True)
 
 
