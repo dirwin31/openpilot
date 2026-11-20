@@ -22,6 +22,14 @@ DROP_AFTER = 2          # failures at the remembered strategy before it is forgo
 CLEAN_SECONDS = 60.0    # a session that streamed this long without ending in a handshake failure counts as working
 LONG_PATIENCE = 2 * REFUSAL_PATIENCE
 
+AGAIN = {
+  "unjudged": "That try ended before the handshake could be judged, so it does not count against this option.",
+  "video": "Video already came through with this option, so a later drop does not count against it.",
+  "counted": "This worked before, so it gets one more chance before we move on.",
+  "reverted": "The last option was refused, so we went back to the one that worked before.",
+  "wrapped": "Nothing has worked yet, so we are going through the options again.",
+}
+
 RUNGS = ("standard", "other_reply", "modern_dual", "modern_24ghz", "phone_identity", "patient", "experiments")
 LABELS = {
   "standard": "Standard handshake",
@@ -206,7 +214,7 @@ class SetupLadder:
     return removed
 
   def _live(self, address: str, rung: str) -> dict:
-    return self.live.setdefault(address.upper(), {}).setdefault(rung, {"tries": 0, "reason": ""})
+    return self.live.setdefault(address.upper(), {}).setdefault(rung, {"tries": 0, "reason": "", "again": ""})
 
   def tried(self, address: str, rung: str) -> int:
     record = self._live(address, rung)
@@ -215,6 +223,11 @@ class SetupLadder:
 
   def note(self, address: str, rung: str, reason: str) -> None:
     self._live(address, rung)["reason"] = str(reason)[:160]
+
+  def _again(self, address: str, failed_rung: str, rung: str, why: str = "") -> None:
+    self._live(address, failed_rung)["again"] = ""
+    if why:
+      self._live(address, rung)["again"] = AGAIN[why]
 
   def exhausted(self, address: str) -> bool:
     entry = self.cars.get(address.upper())
@@ -234,9 +247,12 @@ class SetupLadder:
     return resolve(entry["rung"], base_modern)
 
   def failed(self, address: str, strategy: Strategy, *, ladder_failure: bool, video_seen: bool, version_major: int,
-             adapter: bool, rejected: bool = False, unofficial: bool = False) -> str | None:
+             adapter: bool, rejected: bool = False, unofficial: bool = False, current: bool = True) -> str | None:
     """Record a qualified failure and return the ladder transition, or None."""
+    if not current:
+      return None
     if not (ladder_failure or rejected) or video_seen:
+      self._again(address, strategy.rung, strategy.rung, "video" if video_seen else "unjudged")
       return None
     entry = self._entry(address)
     entry["updated"] = self.clock()
@@ -246,18 +262,21 @@ class SetupLadder:
       if strategy.rung not in entry["rejected"]:
         entry["rejected"].append(strategy.rung)
       if self._restore_last_good(entry, strategy.rung):   # back to what this car is known to accept
+        self._again(address, strategy.rung, entry["rung"], "reverted")
         self.save()
         return "reverted"
     dropped = False
     if working and strategy.rung == working.rung:
       entry["working_failures"] += 1
       if entry["working_failures"] < DROP_AFTER:
+        self._again(address, strategy.rung, strategy.rung, "counted")
         self.save()
         return "counted"
       # Forgotten, and what just failed twice is not tried again first: carry on from the next rung.
       entry.update(working=None, working_failures=0, results={})
       dropped = True
     if entry["passes"] >= MAX_PASSES:
+      self._again(address, strategy.rung, strategy.rung)
       return None
     entry["results"][strategy.rung] = "failed"
     start = RUNGS.index(strategy.rung) if strategy.rung in RUNGS else 0
@@ -276,10 +295,13 @@ class SetupLadder:
       entry["rung"], entry["results"] = first, {}
       if entry["passes"] >= MAX_PASSES:
         outcome = "exhausted"
+    self._again(address, strategy.rung, entry["rung"], "wrapped" if outcome == "wrapped" else "")
     self.save()
     return "dropped" if dropped else outcome
 
   def worked(self, address: str, strategy: Strategy, t_ready_s: float | None = None) -> None:
+    for record in self.live.get(address.upper(), {}).values():
+      record["again"] = ""
     entry = self._entry(address)
     entry.update(working=strategy.as_dict(), last_good=strategy.as_dict(), working_failures=0, rung=strategy.rung,
                  results={strategy.rung: "worked"}, passes=0, successes=entry["successes"] + 1, updated=self.clock(),
@@ -311,7 +333,8 @@ class SetupLadder:
       state = entry["results"].get(rung) or ("current" if rung == current else "waiting")
       record = live.get(rung, {})
       steps.append({"id": rung, "label": LABELS[rung], "state": state, "description": DESCRIPTIONS[rung],
-                    "tries": record.get("tries", 0), "reason": record.get("reason", "")})
+                    "tries": record.get("tries", 0), "reason": record.get("reason", ""),
+                    "again": record.get("again", "") if rung == current else ""})
     return {"steps": steps, "current": current, "learned": bool(working), "passes": passes, "max_passes": MAX_PASSES,
             "exhausted": passes >= MAX_PASSES and not working, "successes": entry["successes"],
             "t_ready_s": entry["t_ready"][-1] if entry["t_ready"] else None}

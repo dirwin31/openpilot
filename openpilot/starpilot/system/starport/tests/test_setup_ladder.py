@@ -537,3 +537,41 @@ def test_unofficial_dongle_keeps_what_worked(ladder):
 
 def test_other_receivers_still_start_at_standard(ladder):
   assert ladder.strategy(CAR, False).rung == "standard"
+
+
+def again(ladder, rung):
+  return next(step["again"] for step in ladder.snapshot(CAR)["steps"] if step["id"] == rung)
+
+
+def test_a_repeated_option_says_why_it_is_being_tried_again(ladder):
+  strategy = ladder.strategy(CAR, False)
+  refuse(ladder, strategy, ladder_failure=False)
+  assert again(ladder, "standard") == sl.AGAIN["unjudged"]
+  refuse(ladder, strategy, video_seen=True)
+  assert again(ladder, "standard") == sl.AGAIN["video"]
+  assert refuse(ladder, strategy) == "advanced"
+  assert again(ladder, "standard") == "" and again(ladder, "other_reply") == ""   # simply moving on needs no explanation
+  for _ in range(4):
+    outcome = refuse(ladder, ladder.strategy(CAR, False))
+  assert outcome == "wrapped" and again(ladder, "standard") == sl.AGAIN["wrapped"]
+  ladder.worked(CAR, sl.resolve("modern_dual", False))
+  assert refuse(ladder, ladder.strategy(CAR, False)) == "counted" and again(ladder, "modern_dual") == sl.AGAIN["counted"]
+
+
+def test_a_counted_failure_and_a_revert_explain_the_repeat(ladder):
+  ladder.worked(CAR, sl.resolve("standard", False))
+  assert refuse(ladder, ladder.strategy(CAR, False)) == "counted" and again(ladder, "standard") == sl.AGAIN["counted"]
+  assert refuse(ladder, ladder.strategy(CAR, False)) == "dropped" and again(ladder, "standard") == ""
+  assert refuse(ladder, ladder.strategy(CAR, False), ladder_failure=False, rejected=True) == "reverted"
+  assert ladder.strategy(CAR, False).rung == "standard" and again(ladder, "standard") == sl.AGAIN["reverted"]
+
+
+def test_a_stale_attempt_explains_nothing(ladder):
+  assert refuse(ladder, ladder.strategy(CAR, False), current=False) is None
+  assert again(ladder, "standard") == "" and not ladder.live
+
+
+def test_streaming_clears_the_repeat_explanation(ladder):
+  refuse(ladder, ladder.strategy(CAR, False), ladder_failure=False)
+  ladder.worked(CAR, sl.resolve("standard", False))
+  assert again(ladder, "standard") == ""
