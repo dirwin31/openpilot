@@ -94,7 +94,7 @@ def _open_projection(ip: str, ports: list[int], advertised: int, local_ip: str, 
     try:
       sock = socket.create_connection((ip, port), timeout=5.0, source_address=(local_ip, 0) if local_ip else None)
     except OSError as failure:
-      error = failure
+      error = error or failure  # the first port's failure decides how patiently to retry
       continue
     if port != advertised:
       log("tcp_port_fallback", advertised=advertised, port=port)
@@ -2004,7 +2004,7 @@ class Supervisor:
         return self._track(sock)
       except OSError as error:
         # Some dongles advertise one port but listen on the standard one
-        if _tcp_failure_kind(error) == "refused" and STANDARD_AA_PORT not in ports:
+        if STANDARD_AA_PORT not in ports:
           ports.append(STANDARD_AA_PORT)
           try:
             sock = _open_projection(result.endpoint.ip, [STANDARD_AA_PORT], advertised, lease.local_ip, self.log)

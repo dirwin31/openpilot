@@ -70,6 +70,7 @@ def test_refused_advertised_port_falls_back_to_the_standard_port(monkeypatch):
   assert ("tcp_port_fallback", {"advertised": 1234, "port": sup.STANDARD_AA_PORT}) in logs
 
 
-def test_other_errors_do_not_try_the_standard_port(monkeypatch):
+def test_a_timed_out_advertised_port_also_falls_back(monkeypatch):
   sock, calls, logs = run(monkeypatch, False, TimeoutError("timed out"), open_port=sup.STANDARD_AA_PORT)
-  assert sock is None and not any(name == "tcp_port_fallback" for name, _ in logs)
+  assert sock is not None and len(calls) == 1
+  assert ("tcp_port_fallback", {"advertised": 1234, "port": sup.STANDARD_AA_PORT}) in logs
