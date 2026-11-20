@@ -121,9 +121,9 @@ def _shutdown(sock: socket.socket | None) -> None:
 
 
 def keep_alive(sock: socket.socket) -> None:
-  """A phone that drives off the hotspot sends no FIN; probe so its session ends in seconds, not never."""
+  """End a silently gone phone in ~35 s: longer than the 30 s hotspot pause while the comma joins Wi-Fi."""
   sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-  for name, value in (("TCP_KEEPIDLE", 5), ("TCP_KEEPINTVL", 2), ("TCP_KEEPCNT", 3)):
+  for name, value in (("TCP_KEEPIDLE", 10), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 5)):
     if hasattr(socket, name):
       sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, name), value)
 
