@@ -5,6 +5,15 @@ from openpilot.starpilot.system.phone_projection import settings as projection_s
 from openpilot.starpilot.system.phone_projection.ipc import StatusReader
 
 STATES = {"active", "connecting", "waiting"}
+# Where each phone type is in its setup, so Galaxy can tick off the steps already done
+RUNNER_STATES = {"starting", "unavailable", "waiting_hotspot", "waiting_phone", "waiting_projection", "connecting", "active",
+                 "retrying"}
+
+
+def _runner(value) -> dict:
+  value = value if isinstance(value, dict) else {}
+  state = value.get("state") if value.get("state") in RUNNER_STATES else ""
+  return {"state": state, "message": str(value.get("message") or "")[:200] if state else ""}
 
 
 def snapshot(reader: StatusReader | None = None, root=projection_settings.ROOT) -> dict:
@@ -14,7 +23,8 @@ def snapshot(reader: StatusReader | None = None, root=projection_settings.ROOT) 
   return {"enabled": settings.enabled, "side": settings.side, "audio": settings.audio,
           "sides": list(projection_settings.SIDES), "audioRoutes": list(projection_settings.AUDIO_ROUTES),
           "state": state, "kind": str(status.get("kind") or ""), "phone": str(status.get("phone") or "")[:64],
-          "message": str(status.get("message") or "")[:200]}
+          "message": str(status.get("message") or "")[:200], "carplay": _runner(status.get("carplay")),
+          "android": _runner(status.get("android"))}
 
 
 def save(payload, root=projection_settings.ROOT) -> dict:

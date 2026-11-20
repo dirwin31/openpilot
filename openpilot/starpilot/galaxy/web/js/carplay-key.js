@@ -98,6 +98,11 @@ export const CarPlayKey = {
       return total ? Math.min(100, Math.floor(loaded * 100 / total)) : 0
     },
     checks() { return keyChecks(this.setup?.import) },
+    // Phone file pickers (iOS Files especially) grey out .apk when told to accept only it; check the name after instead
+    onPhone() {
+      return typeof navigator !== "undefined" && (navigator.userAgentData?.mobile === true ||
+        /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "") || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+    },
     problem() { return keyProblem(this.setup?.import) },
   },
   mounted() { this.active = true; this.refresh() },
@@ -216,7 +221,7 @@ export const CarPlayKey = {
               </div>
               <div class="gx-step-card__body">
                 <label class="gx-btn gx-btn--tonal gx-starport-file" :class="{ 'gx-starport-file--disabled': installState !== 'choose' }">
-                  <input type="file" accept=".apk,.zip" aria-label="CarLink APK" :disabled="installState !== 'choose'" @change="choosePackage" />
+                  <input type="file" :accept="onPhone ? undefined : '.apk,.zip'" aria-label="CarLink APK" :disabled="installState !== 'choose'" @change="choosePackage" />
                   <i class="bi bi-folder2-open"></i> {{ packageFile ? 'Choose a Different File' : 'Choose File' }}
                 </label>
                 <div v-if="packageFile && !packageError" class="gx-chip gx-starport-file-chip">

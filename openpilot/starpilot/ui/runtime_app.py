@@ -2042,7 +2042,7 @@ class StarMainLayout(MainLayout):
       except OSError:
         pass
 
-    description = "Show your phone's screen (CarPlay or Android Auto) beside the driving view. Set it up in Galaxy under StarPort."
+    description = "Show your phone's screen (CarPlay or Android Auto) beside the driving view. Set it up in Galaxy: StarPort, then Phone Screen."
     enabled = toggle_item("Phone Screen", description, initial_state=projection.load().enabled,
                           callback=lambda state: save(enabled=state))
     side = multiple_button_item("Phone Screen Side", "Which half of the screen the phone uses.", ["Left", "Right"],

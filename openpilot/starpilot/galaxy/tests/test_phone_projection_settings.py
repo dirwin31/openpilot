@@ -35,3 +35,14 @@ def test_snapshot_reports_the_active_phone(tmp_path):
   phone_projection.save({"enabled": True}, root=tmp_path)
   value = phone_projection.snapshot(Reader({"state": "active", "kind": "carplay", "phone": "iPhone"}), root=tmp_path)
   assert (value["state"], value["kind"], value["phone"]) == ("active", "carplay", "iPhone")
+
+
+def test_snapshot_passes_each_phone_types_setup_state(tmp_path):
+  phone_projection.save({"enabled": True}, root=tmp_path)
+  status = {"state": "waiting", "carplay": {"state": "unavailable", "message": "Add the CarPlay key."},
+            "android": {"state": "bogus", "message": "x"}}
+  value = phone_projection.snapshot(Reader(status), root=tmp_path)
+  assert value["carplay"] == {"state": "unavailable", "message": "Add the CarPlay key."}
+  assert value["android"] == {"state": "", "message": ""}
+  off = phone_projection.snapshot(Reader(status), root=tmp_path / "off")
+  assert off["carplay"] == {"state": "", "message": ""}

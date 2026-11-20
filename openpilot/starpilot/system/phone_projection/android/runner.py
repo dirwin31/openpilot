@@ -81,7 +81,7 @@ class AndroidAutoRunner:
       self._set("waiting_phone", "Pair your Android phone with the comma over Bluetooth.")
       return RETRY_SECONDS
     if self.state not in ("connecting",):
-      self._set("waiting_phone", f"Waiting for Android Auto on {phones[0]['name']}…")
+      self._set("waiting_projection", f"Waiting for Android Auto on {phones[0]['name']}…")
     for phone in phones:
       if not phone["connected"] and time.monotonic() - self.woken.get(phone["address"], 0) > WAKE_SECONDS:
         self.woken[phone["address"]] = time.monotonic()
