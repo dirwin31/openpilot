@@ -67,7 +67,7 @@ export function handshakeSteps(ladder) {
   const interesting = ladder?.learned || steps.some((step) => step.state === "failed" || step.state === "worked" || step.tries > 0)
   return interesting ? steps.map((step) => ({ id: String(step.id), label: step.label, state: String(step.state),
     description: typeof step.description === "string" ? step.description : "", tries: Number.isInteger(step.tries) ? step.tries : 0,
-    reason: typeof step.reason === "string" ? step.reason : "" })) : []
+    reason: typeof step.reason === "string" ? step.reason : "", again: typeof step.again === "string" ? step.again : "" })) : []
 }
 
 // "Round 2 of 3" while the options are still being worked through; nothing once one is learned or all are used up.
@@ -256,7 +256,8 @@ export const StarPortGuidedSetup = {
             <span class="gx-starport-row__text"><strong>{{ step.label }}</strong>
               <small v-if="step.description">{{ step.description }}</small>
               <small v-if="step.state === 'current' && state.liveStep">Now: {{ state.liveStep }}</small>
-              <small v-if="step.tries || step.reason">{{ step.tries === 1 ? "1 try" : step.tries + " tries" }}<template v-if="step.reason"> · last: {{ step.reason }}</template></small></span>
+              <small v-if="step.tries || step.reason">{{ step.tries === 1 ? "1 try" : step.tries + " tries" }}<template v-if="step.reason"> · last: {{ step.reason }}</template></small>
+              <small v-if="step.again" class="gx-guided__again"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Why this one again: {{ step.again }}</small></span>
           </li>
         </ol>
         <button v-if="state.canResetHandshake" type="button" class="gx-btn gx-btn--tonal" :disabled="busy" @click="$emit('reset-handshake')">

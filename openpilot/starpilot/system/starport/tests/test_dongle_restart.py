@@ -32,7 +32,7 @@ def test_each_rung_says_what_it_does_how_often_it_ran_and_why_it_last_ended(tmp_
   ladder.note(RECEIVER, "standard", "The adapter never sent its Wi-Fi name and password")
   step = ladder.snapshot(RECEIVER, adapter=True, unofficial=True)["steps"][0]
   assert step == {"id": "standard", "label": sl.LABELS["standard"], "state": "current", "description": sl.DESCRIPTIONS["standard"],
-                  "tries": 2, "reason": "The adapter never sent its Wi-Fi name and password"}
+                  "tries": 2, "reason": "The adapter never sent its Wi-Fi name and password", "again": ""}
   assert set(sl.DESCRIPTIONS) == set(sl.RUNGS)
   assert not ladder.path.exists()                                   # this drive's counts are never written
   ladder.begin_cycle(RECEIVER)

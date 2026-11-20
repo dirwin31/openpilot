@@ -38,6 +38,7 @@
 .gx-guided__checklist > li.is-done .gx-guided__mark, .gx-guided__checklist > li.is-worked .gx-guided__mark { color: var(--success); }
 .gx-guided__checklist > li.is-active .gx-guided__mark, .gx-guided__checklist > li.is-current .gx-guided__mark, .gx-guided__checklist > li.is-retry .gx-guided__mark { color: var(--primary); }
 .gx-guided__checklist > li.is-failed .gx-guided__mark { color: var(--error); }
+.gx-starport-row__text .gx-guided__again { color: var(--primary); }
 .gx-guided__callout { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; margin: 0; padding: var(--sp-4); border-radius: var(--radius-sm); background: var(--primary-container); }
 .gx-guided__callout--quiet { background: var(--surface-container); color: var(--on-surface-variant); }
 .gx-guided__footer { display: grid; gap: var(--sp-3); }

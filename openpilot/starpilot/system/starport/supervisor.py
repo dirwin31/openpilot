@@ -1617,7 +1617,7 @@ class Supervisor:
         current = self._strategy is strategy
         if reason and current:
           self._ladder.note(address, strategy.rung, reason)
-        outcome = self._ladder.failed(address, strategy, ladder_failure=ladder_failure and current, rejected=rejected and current,
+        outcome = self._ladder.failed(address, strategy, ladder_failure=ladder_failure, rejected=rejected, current=current,
                                       video_seen=self._video_seen, version_major=boot.version_major if boot is not None else 0,
                                       adapter=adapter, unofficial=unofficial)
         if outcome:

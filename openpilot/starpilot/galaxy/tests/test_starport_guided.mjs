@@ -305,11 +305,15 @@ console.log("StarPort guided setup: a choice keeps the card open passed")
 
 // Every rung says what it does, how often it ran this drive and why it last ended; the live step shows under the current one.
 {
-  const tried = ladder({ steps: [{ id: "standard", label: "Standard handshake", state: "current", description: "Answers normally.", tries: 3, reason: "The car never said hello" },
+  const tried = ladder({ steps: [{ id: "standard", label: "Standard handshake", state: "current", description: "Answers normally.", tries: 3, reason: "The car never said hello",
+    again: "That try ended before the handshake could be judged, so it does not count against this option." },
     { id: "other_reply", label: "The other version reply", state: "waiting", description: "Other reply.", tries: 0, reason: "" }] })
   const steps = handshakeSteps(tried)
-  assert.deepEqual(steps[0], { id: "standard", label: "Standard handshake", state: "current", description: "Answers normally.", tries: 3, reason: "The car never said hello" })
+  assert.deepEqual(steps[0], { id: "standard", label: "Standard handshake", state: "current", description: "Answers normally.", tries: 3, reason: "The car never said hello",
+    again: "That try ended before the handshake could be judged, so it does not count against this option." })
   assert.equal(steps[1].tries, 0)
+  assert.equal(steps[1].again, "")
+  assert.match(StarPortGuidedSetup.template, /Why this one again: \{\{ step\.again \}\}/)
   const state = guidedState({ setup, runtime: running("wifi_start", { setup_ladder: tried, handshake_step: "Asking for its Wi-Fi name and password" }) })
   assert.equal(state.liveStep, "Asking for its Wi-Fi name and password")
   assert.equal(state.round, "Round 1 of 3")
