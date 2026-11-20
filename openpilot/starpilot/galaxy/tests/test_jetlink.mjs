@@ -2,14 +2,14 @@ import assert from "node:assert/strict"
 import { JetlinkPage, addonState } from "../web/js/jetlink.js"
 
 assert.equal(addonState(null).label, "Unavailable")
-assert.equal(addonState({ enabled: true, present: false, rebootRequired: true }).label, "Reboot to apply")
-assert.equal(addonState({ enabled: false, present: false, rebootRequired: false }).label, "Off")
+assert.equal(addonState({ enabled: true, present: false }).label, "Waiting for JetLink")
+assert.equal(addonState({ enabled: false, present: false }).label, "Off")
 assert.equal(addonState({ enabled: true, present: true, running: false }).label, "Idle")
 assert.equal(addonState({ enabled: true, present: true, running: true, connected: true, modelMismatch: true }).label, "Jetson has a different model")
 assert.equal(addonState({ enabled: true, present: true, running: true, connected: true, yielding: true }).label, "Yielding to driving model")
 assert.equal(addonState({ enabled: true, present: true, running: true, connected: true }).label, "On Jetson")
 assert.equal(addonState({ enabled: true, present: true, running: true, connected: false }).label, "Waiting for Jetson")
-assert.equal(addonState({ enabled: true, present: false, rebootRequired: false }, false).label, "Needs USB computer")
+assert.equal(addonState({ enabled: true, present: false }, false).label, "Needs USB computer")
 
 const jetlink = { mode: "usb", chargePhone: false, addons: { vasm: { enabled: false }, signVision: { enabled: true } } }
 const calls = []

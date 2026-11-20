@@ -13,8 +13,8 @@ export const JETSON_ADDONS = [
 export function addonState(addon, usb = true) {
   if (!addon) return { label: "Unavailable", tone: "" }
   if (addon.enabled && !usb) return { label: "Needs USB computer", tone: "" }
-  if (addon.rebootRequired) return { label: "Reboot to apply", tone: "warn" }
   if (!addon.enabled) return { label: "Off", tone: "" }
+  if (!addon.present) return { label: "Waiting for JetLink", tone: "" }
   if (!addon.running) return { label: "Idle", tone: "" }
   if (addon.modelMismatch) return { label: "Jetson has a different model", tone: "warn" }
   if (addon.yielding) return { label: "Yielding to driving model", tone: "warn" }

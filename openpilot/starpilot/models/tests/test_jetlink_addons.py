@@ -34,9 +34,17 @@ def cpu():
   return SimpleNamespace(setInput=lambda *a, **k: None, forward=lambda *a: np.zeros((1, 3), np.float32))
 
 
-def test_the_plain_net_while_the_setting_is_off(monkeypatch):
-  net = object()
-  assert jetlink_addons.with_jetson(net, "vasm", SHA, OUTPUTS, params=Settings()) is net
+def test_the_setting_switches_the_jetson_live(tmp_path, monkeypatch):
+  monkeypatch.setattr(jetlink_addons, "gadget_function", lambda addon: interface(tmp_path, exists=False))
+  clock = [0.0]
+  monkeypatch.setattr(jetlink_addons.time, "monotonic", lambda: clock[0])
+  settings = Settings()
+  net = jetlink_addons.with_jetson(cpu(), "vasm", SHA, OUTPUTS, params=settings)
+  assert isinstance(net, link_mod.JetsonNet) and not net.on()
+  settings.on.add("JetlinkVasm")
+  assert not net.on()   # read again only after the refresh
+  clock[0] += jetlink_addons.SETTING_REFRESH_S
+  assert net.on()
 
 
 def test_wraps_before_the_gadget_has_the_interface(tmp_path, monkeypatch):
@@ -68,17 +76,10 @@ def test_the_plain_net_on_any_failure(monkeypatch):
   assert jetlink_addons.with_jetson(net, "signs", SHA, (), params=Settings("JetlinkSignVision")) is net
 
 
-def test_declares_only_enabled_addons():
-  assert jetlink_addons.gadget_functions(Settings()) == ()
-  assert [f.name for f in jetlink_addons.gadget_functions(Settings("JetlinkVasm"))] == ["vasm"]
-  both = jetlink_addons.gadget_functions(Settings("JetlinkVasm", "JetlinkSignVision"))
-  assert [(f.name, f.iface_class) for f in both] == [("vasm", (0xFF, 0x56, 0x41)), ("slv", (0xFF, 0x53, 0x4C))]
-
-
-def test_the_adapter_declares_them_from_the_params_store(tmp_path, monkeypatch):
+def test_declares_every_addon_whatever_its_setting(tmp_path, monkeypatch):
   from openpilot.starpilot.models.jetlink_adapter import _adapter_class
   (tmp_path / "d").mkdir()
-  (tmp_path / "d" / "JetlinkSignVision").write_text("1")
   monkeypatch.setenv("PARAMS_ROOT", str(tmp_path))
   monkeypatch.delenv("OPENPILOT_PREFIX", raising=False)
-  assert [f.name for f in _adapter_class().owner_config().functions] == ["slv"]
+  functions = _adapter_class().owner_config().functions
+  assert [(f.name, f.iface_class) for f in functions] == [("vasm", (0xFF, 0x56, 0x41)), ("slv", (0xFF, 0x53, 0x4C))]

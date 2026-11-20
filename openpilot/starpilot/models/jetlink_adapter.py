@@ -63,8 +63,9 @@ def _adapter_class():
 
     @classmethod
     def gadget_functions(cls, params):
+      # always on the gadget: each add-on's setting is read live where its model runs
       from openpilot.starpilot.models.jetlink_addons import gadget_functions
-      return gadget_functions(params)
+      return gadget_functions()
 
     def model_root(self):
       from openpilot.starpilot.models.manager import ROOT

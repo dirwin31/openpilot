@@ -73,10 +73,10 @@ class JetlinkSettings:
             "state": state, "reason": reason, "progress": str(progress.get("msg", "")),
             "model": status.model if status is not None else None,
             "transport": status.transport if status is not None else "USB",
-            "chargePhone": params.get_bool("JetlinkChargePhone"), "addons": self.addons(mode)}
+            "chargePhone": params.get_bool("JetlinkChargePhone"), "addons": self.addons()}
 
-  def addons(self, mode="usb"):
-    """Each Jetson add-on: its setting, whether the gadget carries it (a change needs a reboot), and its link."""
+  def addons(self):
+    """Each Jetson add-on: its setting, whether the gadget carries it, and its link."""
     from openpilot.starpilot.models import jetlink_addons
     params, view = self.params(), {}
     for field, addon in ADDON_FIELDS.items():
@@ -86,8 +86,7 @@ class JetlinkSettings:
       link = stats.get("link") if isinstance(stats.get("link"), dict) else {}
       trips = stats.get("round_trips") if isinstance(stats.get("round_trips"), dict) else {}
       connected = bool(stats.get("connected"))
-      view[field] = {"enabled": on, "present": present, "rebootRequired": mode == "usb" and on != present,
-                     "running": bool(stats), "connected": connected, "yielding": bool(stats.get("yielding")),
+      view[field] = {"enabled": on, "present": present, "running": bool(stats), "connected": connected, "yielding": bool(stats.get("yielding")),
                      "modelMismatch": connected and bool(stats.get("missing")),
                      "answered": int(link.get("answered", 0) or 0), "timeouts": int(link.get("timeouts", 0) or 0),
                      "roundTripMs": trips.get("total_ms"), "jetsonMs": trips.get("jetson_ms")}
@@ -145,5 +144,5 @@ class JetlinkSettings:
       if field in payload:
         params.put_bool(ADDONS[addon][2], payload[field], block=True)
     if any(field in payload for field in ADDON_FIELDS):
-      return {"message": "Jetson add-on saved. Reboot the comma to apply it."}
+      return {"message": "Jetson add-on saved. It applies within a few seconds."}
     return {"message": "Jetlink settings saved. Check connection status before driving."}

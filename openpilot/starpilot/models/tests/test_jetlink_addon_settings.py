@@ -12,26 +12,17 @@ def owner(monkeypatch):
   return case.owner, case.params
 
 
-def test_addons_save_and_need_a_reboot(owner, monkeypatch):
+def test_addons_save_without_a_reboot(owner, monkeypatch):
   settings, params = owner
   params.values["JetlinkMode"] = 1
-  monkeypatch.setattr(jetlink_addons, "present", lambda addon: False)
+  monkeypatch.setattr(jetlink_addons, "present", lambda addon: True)
   monkeypatch.setattr(jetlink_addons, "read_stats", lambda addon: None)
   result = settings.configure({"vasm": True})
-  assert "Reboot" in result["message"]
+  assert "Reboot" not in result["message"]
   assert params.values["JetlinkVasm"] is True
   view = settings.snapshot()["addons"]
-  assert view["vasm"]["enabled"] and view["vasm"]["rebootRequired"] and not view["vasm"]["connected"]
-  assert not view["signVision"]["enabled"] and not view["signVision"]["rebootRequired"]
-
-
-def test_no_reboot_prompt_without_usb(owner, monkeypatch):
-  settings, params = owner
-  params.values["JetlinkMode"] = 2
-  params.values["JetlinkVasm"] = True
-  monkeypatch.setattr(jetlink_addons, "present", lambda addon: False)
-  monkeypatch.setattr(jetlink_addons, "read_stats", lambda addon: None)
-  assert not settings.snapshot()["addons"]["vasm"]["rebootRequired"]
+  assert view["vasm"]["enabled"] and "rebootRequired" not in view["vasm"] and not view["vasm"]["connected"]
+  assert not view["signVision"]["enabled"]
 
 
 def test_addon_link_stats(owner, monkeypatch):
@@ -41,7 +32,7 @@ def test_addon_link_stats(owner, monkeypatch):
   monkeypatch.setattr(jetlink_addons, "read_stats", lambda addon: {"connected": True, "yielding": False,
                       "link": {"answered": 40, "timeouts": 1}, "round_trips": {"total_ms": 6.5, "jetson_ms": 3.1}})
   view = settings.snapshot()["addons"]["signVision"]
-  assert view == {"enabled": True, "present": True, "rebootRequired": False, "running": True, "connected": True,
+  assert view == {"enabled": True, "present": True, "running": True, "connected": True,
                   "yielding": False, "modelMismatch": False, "answered": 40, "timeouts": 1, "roundTripMs": 6.5,
                   "jetsonMs": 3.1}
 
