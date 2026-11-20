@@ -1660,7 +1660,7 @@ class Supervisor:
     # only when a car that answered the handshake keeps refusing it before any video.
     with self._lock:
       base_modern = self._modern_reply.get(address, config.get("modern_reply_cache", {}).get(address, False))
-      strategy = self._strategy = self._ladder.strategy(address, base_modern)
+      strategy = self._strategy = self._ladder.strategy(address, base_modern, unofficial)
       learned = self._ladder.snapshot(address, adapter, unofficial)["learned"]
       tries = self._ladder.tried(address, strategy.rung)
     self.log("ladder_strategy", rung=strategy.rung, label=strategy.label, learned=learned, modern_reply=strategy.modern_reply,
@@ -1700,7 +1700,7 @@ class Supervisor:
                                       video_seen=self._video_seen, version_major=boot.version_major if boot is not None else 0,
                                       adapter=adapter, unofficial=unofficial)
         if outcome:
-          self.log("ladder_failed", outcome=outcome, rung=strategy.rung, next=self._ladder.strategy(address, base_modern).rung,
+          self.log("ladder_failed", outcome=outcome, rung=strategy.rung, next=self._ladder.strategy(address, base_modern, unofficial).rung,
                    version_major=boot.version_major, reason="rejected_reply" if rejected else "timeout", why=reason)
         elif boot is not None and isinstance(error, BootstrapTimeout) and error.stage == "wifi_start" and boot.only_not_ready():
           self.log("ladder_not_ready", rung=strategy.rung, refusals=len(boot.refusals))
