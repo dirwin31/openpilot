@@ -14,6 +14,7 @@ CFG = HeadUnitConfig(resolution=3, width=1920, height=1080, margin_width=960, ma
 class Sink:
   def __init__(self):
     self.configs, self.frames, self.closed, self.started = [], [], threading.Event(), threading.Event()
+    self.navigation = []
 
   def on_video_start(self, session):
     self.started.set()
@@ -32,6 +33,9 @@ class Sink:
 
   def on_session_closed(self, session):
     self.closed.set()
+
+  def on_navigation(self, session, kind, data):
+    self.navigation.append(kind)
 
 
 def test_service_discovery_describes_video_and_touch():
@@ -75,5 +79,33 @@ def test_starport_phone_projects_into_the_head_unit(tmp_path):
     phone.pump(0.1)
   assert phone.touch_events
 
+  phone_sock.close()
+  assert sink.closed.wait(3)
+
+
+class GuidingFeed:
+  def snapshot(self):
+    return {'state': 'guiding', 'metric': False, 'road': 'Main Street', 'type': 'turn', 'modifier': 'left',
+            'distance': 400.0, 'remaining': 8000.0, 'duration': 800.0}
+
+
+def test_phone_turn_by_turn_reaches_the_head_unit(tmp_path):
+  from openpilot.starpilot.system.starport.nav_status import NAV_CURRENT_POSITION, NAV_NOTIFICATION, NavStatus
+  identity = make_identity(tmp_path)
+  phone_sock, hu_sock = socket.socketpair()
+  sink = Sink()
+  hu = HeadUnitSession(hu_sock, CFG, sink, log=lambda m: None, certificate=identity["hu_cert"], private_key=identity["hu_key"])
+  threading.Thread(target=lambda: (hu.handshake(), hu.run()), daemon=True).start()
+  phone = ProjectionSession(phone_sock, str(identity["phone_cert"]), str(identity["phone_key"]), ca=str(identity["root"]))
+  phone.authenticate()
+  phone.start("Pixel", "Google")
+  phone.nav = NavStatus.create(phone, lambda *a, **k: None, feed=GuidingFeed())
+  assert phone.nav is not None  # the head unit offers the navigation service
+  deadline = time.monotonic() + 5
+  while not {NAV_NOTIFICATION, NAV_CURRENT_POSITION} <= set(sink.navigation) and time.monotonic() < deadline:
+    phone.nav.service()
+    phone.pump(0.1)
+  assert phone.nav.heard and phone.nav.started  # our start request, not StarPort's silent-car fallback
+  assert {NAV_NOTIFICATION, NAV_CURRENT_POSITION} <= set(sink.navigation)
   phone_sock.close()
   assert sink.closed.wait(3)
