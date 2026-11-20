@@ -700,13 +700,18 @@ class RuntimeSnapshotAdapter:
       display_car_valid and getattr(display_car, 'gasPressed', False) and long_engaged and
       str(getattr(display_selfdrive, 'state', '')) == 'overriding' and
       cp is not None and cp.openpilotLongitudinalControl)
-    cruise_state = getattr(car, 'cruiseState', None)
+    # Display hint only: 100 Hz messages miss the 20 ms action gate on ~10% of frames, which blinked the cue.
+    display_system_long = bool(display_long_active and display_controls is not None and
+                               str(display_controls.longControlState) != "off" and
+                               display_selfdrive is not None and display_selfdrive.enabled and display_car_valid and
+                               ui.CP is not None and ui.CP.openpilotLongitudinalControl)
+    cruise_state = getattr(display_car, 'cruiseState', None)
     wheel_confirmation = bool(
-      system_long and control is not None and getattr(control, 'enabled', False) and
+      display_system_long and display_control is not None and getattr(display_control, 'enabled', False) and
       not (cp is not None and cp.brand == 'ford' and cp.pcmCruise) and
       cruise_state is not None and getattr(cruise_state, 'available', False) and
       not (cp is not None and getattr(cp, 'brand', '') == 'toyota' and
-           (car.standstill or cruise_state.standstill or not cruise_state.enabled)))
+           (display_car.standstill or cruise_state.standstill or not cruise_state.enabled)))
     developer_metrics = ()
     if not (onroad_view_only and stopped_timer_profile == "compact"):
       delay_key = ((after, str(cp.carFingerprint), str(cp.steerControlType), str(cp.lateralTuning.which()), float(cp.steerActuatorDelay))
