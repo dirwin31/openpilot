@@ -625,7 +625,6 @@ export const ModelsPage = {
       if (this.status.jetlinkBig === true) return "Jetlink runs Active Big on its host, which downloads the model itself. A model chosen in the Jetlink app shows here once the comma connects."
       return this.status.gpuAvailable ? "" : "An external GPU is not detected. Active Small is used; your Big selection is saved for later."
     },
-    jetlinkOpen() { return !!this.status.jetlink && this.status.jetlink.mode !== "off" },
     driveMode() { return this.pairView ?? (this.lab?.configuration.enabled ? "pair" : "single") },
     labRows() { return new Map(laboratoryModels(this.lab).map(m => [m.value, m])) },
     labReady() { return laboratoryReady(this.lab) },
@@ -847,20 +846,6 @@ export const ModelsPage = {
       event.target.checked = this.status.randomizer === true
       return this.runAction(enabled ? "enable-randomizer" : "disable-randomizer")
     },
-    toggleJetlinkCharge(event) {
-      const enabled = event.target.checked
-      event.target.checked = this.status.jetlink.chargePhone === true
-      return this.configureJetlink(this.status.jetlink.mode, enabled)
-    },
-    async configureJetlink(mode, chargePhone = this.status.jetlink?.chargePhone === true) {
-      if (!this.canAction("jetlink")) return
-      this.pendingChoice = { action: "jetlink", value: mode }
-      this.busy = "jetlink:"
-      try {
-        const result = await reportSave(() => this.manager.action("jetlink", null, { mode, chargePhone }))
-        if (result) this.message = result.message
-      } finally { this.pendingChoice = null; this.busy = "" }
-    },
     async runAction(action, model = null) {
       if (this.disposed || !this.canAction(action, model)) return
       if (action.startsWith("select-")) this.pendingChoice = { action, value: model?.value || "" }
@@ -996,30 +981,7 @@ export const ModelsPage = {
         </section>
 
         <section v-if="status.jetlink" class="gx-card gx-model-jetlink">
-          <details :open="jetlinkOpen">
-            <summary class="gx-section__header"><i aria-hidden="true" class="bi bi-usb-symbol"></i><span class="gx-section__title">Jetlink</span><span class="gx-section__count">{{ status.jetlink.mode === 'off' ? 'Off' : status.jetlink.state }}</span></summary>
-            <div class="gx-panel gx-stack">
-              <div class="gx-field-group">
-                <label for="gx-jetlink-mode" class="gx-row__label">Remote model connection</label>
-                <GalaxySelect id="gx-jetlink-mode" class="gx-field" :value="pendingChoice?.action === 'jetlink' ? pendingChoice.value : status.jetlink.mode" :disabled="!actionAvailable('jetlink')" @change="configureJetlink($event.target.value)">
-                  <option value="off">Off</option>
-                  <option value="usb" :disabled="!status.jetlink.supported || status.jetlink.chestnut">USB computer</option>
-                  <option value="ios" :disabled="!status.jetlink.supported || status.jetlink.chestnut">iPhone / iPad</option>
-                </GalaxySelect>
-              </div>
-              <p class="gx-note" role="status"><span class="gx-chip">{{ status.jetlink.state }}</span><span v-if="status.jetlink.model && !status.jetlink.active"> · selected: {{ status.jetlink.model }}</span></p>
-              <p v-if="status.jetlink.progress">{{ status.jetlink.progress }}</p>
-              <p v-if="status.jetlink.reason" class="gx-model-reason">{{ status.jetlink.reason }}</p>
-              <p v-if="status.jetlink.chestnut" class="gx-model-reason">Chestnut is connected. Jetlink stays off while Chestnut is fitted.</p>
-              <p class="gx-model-reason">Prepared means the remote model is built, not active. The local Small model remains available. Small and Chestnut catalog selections are unchanged.</p>
-              <div v-if="status.jetlink.mode === 'ios'" class="gx-row" :class="{disabled: !actionAvailable('jetlink')}">
-                <span class="gx-row__info gx-row__label">Charge phone over USB</span>
-                <label class="gx-switch"><input type="checkbox" role="switch" aria-label="Charge phone over USB" :checked="status.jetlink.chargePhone === true" :disabled="!actionAvailable('jetlink')" @change="toggleJetlinkCharge($event)"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label>
-              </div>
-              <p class="gx-model-reason">Set up parked with a USB 3 data cable and separate power. Keep the computer awake; keep the iPhone app open and unlocked.</p>
-              <div class="gx-actions"><a class="gx-btn gx-btn--tonal" href="https://github.com/StarPilotHQ/StarPilot/blob/testing/openpilot/starpilot/models/JETLINK.md" target="_blank" rel="noopener noreferrer"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Jetlink setup guide</a></div>
-            </div>
-          </details>
+          <a class="gx-section__header" href="#/jetlink"><i aria-hidden="true" class="bi bi-usb-symbol"></i><span class="gx-section__title">JetLink</span><span class="gx-section__count">{{ status.jetlink.mode === 'off' ? 'Off' : status.jetlink.state }}</span><i aria-hidden="true" class="bi bi-arrow-right"></i></a>
         </section>
 
         <section ref="library" class="gx-card gx-model-library">

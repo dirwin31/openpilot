@@ -312,12 +312,7 @@ let randomAction = ''
 ModelsPage.methods.toggleRandomizer.call({ status: { randomizer: false }, runAction(action) { randomAction = action } }, randomSwitch)
 assert.equal(randomAction, 'enable-randomizer')
 assert.equal(randomSwitch.target.checked, false)
-const chargeSwitch = { target: { checked: true } }
-let chargeChoice
-ModelsPage.methods.toggleJetlinkCharge.call({ status: { jetlink: { mode: 'ios', chargePhone: false } },
-  configureJetlink(mode, enabled) { chargeChoice = [mode, enabled] } }, chargeSwitch)
-assert.deepEqual(chargeChoice, ['ios', true])
-assert.equal(chargeSwitch.target.checked, false)
+assert.match(ModelsPage.template, /href="#\/jetlink"/)
 
 
 const feedbackPage = { ...ModelsPage.data(), unauthorized() {}, canAction() { return true } }
@@ -342,7 +337,6 @@ const jetlinkView = { isOnroad: false, capabilities: { jetlink: true }, jetlink:
 assert.equal(modelActionAllowed(jetlinkView, "jetlink"), true)
 assert.equal(modelActionAllowed({ ...jetlinkView, isOnroad: true }, "jetlink"), false)
 assert.equal(modelActionAllowed({ ...jetlinkView, capabilities: {} }, "jetlink"), false)
-assert.match(ModelsPage.template, /Prepared means the remote model is built, not active/)
 const linkManagement = managerFixture()
 linkManagement.manager.start()
 await linkManagement.reply(0, { ...managerPayload, ...jetlinkView })
@@ -364,7 +358,6 @@ assert.equal(liveLink.manager.data.jetlink.active, false)
 assert.equal(liveLink.manager.data.jetlink.state, "checking execution")
 liveLink.manager.stop()
 
-assert.ok(ModelsPage.template.includes('href="https://github.com/StarPilotHQ/StarPilot/blob/testing/openpilot/starpilot/models/JETLINK.md"'), "Jetlink setup guide points at testing")
 
 const refreshingCatalog = { ...managerPayload, downloading: true, refreshing: true }
 assert.equal(modelActionAllowed(refreshingCatalog, "select-small", small), true)

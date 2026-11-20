@@ -6,7 +6,11 @@
 
 ## Jetlink external inference
 
-The comma-side Jetlink client and USB transport in `jetlink_repo` are by Zeph Leggett and the [Jetlink contributors](https://github.com/zoompilot/jetlink). They are vendored from revision `9cfde98eec1d7cc714d800504944cf1a3944513d` under the MIT license, retained in [jetlink_repo/LICENSE](jetlink_repo/LICENSE). StarPilot's adapter (`openpilot/starpilot/models/jetlink_adapter.py`) builds on Jetlink's openpilot layer and owns its param names, Always On Lateral rule, model runner reset, settings and alerts. Companion applications and inference servers remain distributed by Jetlink.
+The comma-side Jetlink client and USB transport in `jetlink_repo` are by Zeph Leggett and the [Jetlink contributors](https://github.com/zoompilot/jetlink). They are vendored from revision `9cfde98eec1d7cc714d800504944cf1a3944513d`, with the not yet merged add-ons work (`jetlink.comma.functions` and `jetlink.addons`) from StarPilot's Jetlink pull request on top, under the MIT license, retained in [jetlink_repo/LICENSE](jetlink_repo/LICENSE). StarPilot's adapter (`openpilot/starpilot/models/jetlink_adapter.py`) builds on Jetlink's openpilot layer and owns its param names, Always On Lateral rule, model runner reset, settings and alerts. Companion applications and inference servers remain distributed by Jetlink.
+
+## Jetson add-ons
+
+Running V-ASM and the sign-vision detectors on the Jetson is ported from Peter Nguyen's ([trung791997](https://github.com/trung791997/openpilot)) `vasm-jetson-updater-bridge` work: the comma-side link, the wire, the TensorRT server and the GPU yield gate. StarPilot's version generalises them into Jetlink's own add-ons (`jetlink.addons` on the comma, `jetlink-server --addons` on the Jetson), carries each add-on on its own Jetlink gadget interface, and keeps the speed classifier and identity check on the comma.
 
 ## MRR35 Hyundai angle and radar
 

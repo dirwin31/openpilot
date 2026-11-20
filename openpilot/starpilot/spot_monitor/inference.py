@@ -17,6 +17,7 @@ from openpilot.starpilot.spot_monitor.policy import (
 MODEL_SIZE_BYTES = 6_166_229
 MODEL_SHA256 = "5d20cdbb457ba18db51a537ee2e305bbe442264b1613956068d473e35d15900d"
 DEFAULT_MODEL_PATH = Path(__file__).resolve().parents[3] / "starpilot/assets/vision_models/v_asm_model.onnx"
+MODEL_OUTPUTS = (("output0", (1, 3)),)
 
 
 def _verified_model_bytes(path: Path) -> bytes:
@@ -54,6 +55,15 @@ def prepare_nv12(frame: np.ndarray, *, width: int, height: int, annotation: Anno
   return np.expand_dims(np.transpose(square.astype(np.float32) / 255.0, (2, 0, 1)), 0)
 
 
+def with_jetson(net):
+  """The net, asking the Jetson first when Jetlink's gadget carries the V-ASM add-on (jetlink_addons)."""
+  try:
+    from openpilot.starpilot.models.jetlink_addons import with_jetson as jetson
+  except Exception:
+    return net
+  return jetson(net, "vasm", MODEL_SHA256, MODEL_OUTPUTS, scaled_u8=True)
+
+
 class VASMInference:
   def __init__(self, model_path: Path, *, cv2_module=None):
     self.model_path = model_path
@@ -76,13 +86,17 @@ class VASMInference:
       net = self.cv2.dnn.readNetFromONNX(np.frombuffer(raw, dtype=np.uint8))
       net.setPreferableBackend(self.cv2.dnn.DNN_BACKEND_OPENCV)
       net.setPreferableTarget(self.cv2.dnn.DNN_TARGET_CPU)
-      self.net = net
+      self.net = with_jetson(net)
       self.loaded_sha256 = MODEL_SHA256
       self.last_error = ""
       return True
     except Exception as error:  # OpenCV raises its own extension exception type.
       self.last_error = f"V-ASM model unavailable: {error}"
       return False
+
+  def jetson_ready(self) -> bool:
+    ready = getattr(self.net, "ready", None)
+    return bool(ready()) if callable(ready) else False
 
   def infer_nv12(self, frame: np.ndarray, *, width: int, height: int, annotation: Annotation, side: str) -> float | None:
     if self.net is None:

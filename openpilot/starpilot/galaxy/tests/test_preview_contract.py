@@ -18,7 +18,7 @@ class PreviewContractTest(unittest.TestCase):
     self.assertTrue(all(path.startswith("/") and path != "/tools" for path in paths))
     self.assertEqual([tool["path"] for tool in catalog["tools"] if tool["availability"] == "partial-preview"], ["/logs"])
     self.assertEqual([tool["path"] for tool in catalog["tools"] if tool["availability"] == "local-only"],
-                     ["/cameras", "/galaxy", "/manage_models", "/navigation", "/system", "/theme_maker", "/tuning", "/starport"])
+                     ["/cameras", "/galaxy", "/manage_models", "/jetlink", "/navigation", "/system", "/theme_maker", "/tuning", "/starport"])
     galaxy = next(tool for tool in catalog["tools"] if tool["path"] == "/galaxy")
     self.assertEqual([(tool["path"], tool["availability"]) for tool in galaxy["children"]],
                      [("/networks", "local-only"), ("/bluetooth", "local-only"),

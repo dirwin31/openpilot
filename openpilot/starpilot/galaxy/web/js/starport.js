@@ -53,7 +53,7 @@ const HOTSPOT_LINK = `<a class="gx-link" href="#/galaxy">Galaxy Wi-Fi Hotspot</a
 const WIRED_STATUS = `<div v-if="wired" class="gx-note">
   <div class="gx-starport-status">
     <span class="gx-starport-pill" :class="'gx-starport-pill--' + wiredStatus.tone" role="status">{{ wiredStatus.label }}</span>
-    <a v-if="wiredJetlinkBusy" class="gx-link" href="#/manage_models">Turn off JetLink <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+    <a v-if="wiredJetlinkBusy" class="gx-link" href="#/jetlink">Turn off JetLink <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
   </div>
   <p>{{ wiredStatus.detail }}</p>
 </div>`
