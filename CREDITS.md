@@ -10,7 +10,7 @@ The comma-side Jetlink client and USB transport in `jetlink_repo` are by Zeph Le
 
 ## Jetson add-ons
 
-Running V-ASM and the sign-vision detectors on the Jetson is ported from Peter Nguyen's ([trung791997](https://github.com/trung791997/openpilot)) `vasm-jetson-updater-bridge` work: the comma-side link, the wire, the TensorRT server and the GPU yield gate. StarPilot's version generalises them into Jetlink's own add-ons (`jetlink.addons` on the comma, `jetlink-server --addons` on the Jetson), carries each add-on on its own Jetlink gadget interface, and keeps the speed classifier and identity check on the comma.
+Running V-ASM and the sign-vision detectors on the Jetson is ported from Peter Nguyen's ([trung791997](https://github.com/trung791997/openpilot)) `vasm-jetson-updater-bridge` work: the comma-side link, the wire, the TensorRT server and the GPU yield gate. StarPilot's version generalizes them into Jetlink's own add-ons (`jetlink.addons` on the comma, `jetlink-server --addons` on the Jetson), carries each add-on on its own Jetlink gadget interface, and keeps the speed classifier and identity check on the comma.
 
 ## MRR35 Hyundai angle and radar
 

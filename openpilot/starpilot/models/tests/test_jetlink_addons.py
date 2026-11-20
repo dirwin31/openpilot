@@ -68,12 +68,10 @@ def test_one_link_per_addon_reporting_to_its_stats(tmp_path, monkeypatch):
   assert written == [("vasm", {"n": 1})]
 
 
-def test_the_plain_net_on_any_failure(monkeypatch):
-  def broken(addon):
-    raise RuntimeError("no gadget")
-  monkeypatch.setattr(jetlink_addons, "gadget_function", broken)
+def test_the_plain_net_when_the_wrapper_cannot_be_made(tmp_path, monkeypatch):
+  monkeypatch.setattr(jetlink_addons, "gadget_function", lambda addon: interface(tmp_path))
   net = object()
-  assert jetlink_addons.with_jetson(net, "signs", SHA, (), params=Settings("JetlinkSignVision")) is net
+  assert jetlink_addons.with_jetson(net, "signs", "not hex", (), params=Settings("JetlinkSignVision")) is net
 
 
 def test_declares_every_addon_whatever_its_setting(tmp_path, monkeypatch):

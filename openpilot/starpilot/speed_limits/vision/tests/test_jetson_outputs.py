@@ -6,10 +6,10 @@ from openpilot.starpilot.speed_limits.vision import model, traffic_signs
 from openpilot.starpilot.speed_limits.vision.traffic_signs import JETSON_OUTPUTS, TrafficSignModelCore
 
 
+@pytest.mark.skipif(model.cv2 is None, reason="OpenCV DNN is not available on this host")
 @pytest.mark.parametrize("name", sorted(JETSON_OUTPUTS))
 def test_declared_outputs_are_the_whole_graph(name):
-  if model.cv2 is None:
-    pytest.skip("OpenCV DNN is not available on this host")
+  assert model.cv2 is not None
   net = model.cv2.dnn.readNetFromONNX(str(TrafficSignModelCore.ASSET_DIR / name))
   declared = JETSON_OUTPUTS[name]
   assert sorted(net.getUnconnectedOutLayersNames()) == sorted(n for n, _ in declared)

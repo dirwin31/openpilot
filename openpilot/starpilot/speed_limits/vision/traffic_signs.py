@@ -74,8 +74,7 @@ def feedback_panel_region(image):
   return (x1, y1, x1 + 384, y1 + 384), matches[0]
 
 
-# the detectors' graph outputs, which a Jetson add-on server returns for them (jetlink_addons); the classifier and the
-# identity net stay on the CPU, as the classifier reads an inner layer an engine does not return
+# every graph output the Jetson returns per detector; the classifier reads an inner layer, so it stays on the comma
 JETSON_OUTPUTS = {
   "traffic_signs_us_detector.onnx": (("output0", (1, 5, 1344)), ("stop/output0", (1, 5, 4096)), ("tiny/scores", (1, 1, 1024))),
   "traffic_signs_us_stop_detector.onnx": (("stop/output0", (1, 5, 4096)),),
@@ -83,11 +82,7 @@ JETSON_OUTPUTS = {
 
 
 def _with_jetson(name: str, sha256: str, net):
-  """The detector, asking the Jetson first when Jetlink's gadget carries the sign-vision add-on."""
-  try:
-    from openpilot.starpilot.models.jetlink_addons import with_jetson
-  except Exception:
-    return net
+  from openpilot.starpilot.models.jetlink_addons import with_jetson
   return with_jetson(net, "signs", sha256, JETSON_OUTPUTS[name], scaled_u8=True)
 
 

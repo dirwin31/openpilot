@@ -31,7 +31,7 @@ DEVICE_TTL_NS = 1_500_000_000  # hardwared publishes at 2 Hz; allow one missed s
 RESUME_SKEW_NS = 5_000_000
 BASE_INTERVAL_NS = 1_000_000_000
 FOLLOWUP_INTERVAL_NS = 300_000_000
-# while the Jetson answers (jetlink_addons), a check costs the comma only the crop, so each side is checked more often
+# while the Jetson answers, a check costs the comma only the crop
 JETSON_INTERVAL_NS = 200_000_000
 FOLLOWUP_WINDOW_NS = 1_000_000_000
 MODEL_RETRY_NS = 5_000_000_000

@@ -4,11 +4,15 @@ from __future__ import annotations
 from openpilot.starpilot.models.jetlink_adapter import UNSUPPORTED
 
 MODES = ("off", "usb", "ios")
-# Galaxy's name for each Jetson add-on (jetlink_addons)
+# Galaxy field to jetlink_addons key
 ADDON_FIELDS = {"vasm": "vasm", "signVision": "signs"}
 
 # jetlink's Status.phase in Galaxy's words, where they differ
 PHASES = {"waiting": "waiting for disengagement", "reconnecting": "fallback / reconnecting"}
+
+
+def _mapping(value) -> dict:
+  return value if isinstance(value, dict) else {}
 
 
 class JetlinkSettings:
@@ -80,11 +84,10 @@ class JetlinkSettings:
     from openpilot.starpilot.models import jetlink_addons
     params, view = self.params(), {}
     for field, addon in ADDON_FIELDS.items():
-      on, present = params.get_bool(jetlink_addons.ADDONS[addon][2]), jetlink_addons.present(addon)
-      stats = jetlink_addons.read_stats(addon) if present else None
-      stats = stats if isinstance(stats, dict) else {}
-      link = stats.get("link") if isinstance(stats.get("link"), dict) else {}
-      trips = stats.get("round_trips") if isinstance(stats.get("round_trips"), dict) else {}
+      on, present = params.get_bool(jetlink_addons.ADDONS[addon].setting), jetlink_addons.present(addon)
+      report = jetlink_addons.read_stats(addon) if present else None
+      stats: dict = report or {}
+      link, trips = _mapping(stats.get("link")), _mapping(stats.get("round_trips"))
       connected = bool(stats.get("connected"))
       view[field] = {"enabled": on, "present": present, "running": bool(stats), "connected": connected, "yielding": bool(stats.get("yielding")),
                      "modelMismatch": connected and bool(stats.get("missing")),
@@ -142,7 +145,7 @@ class JetlinkSettings:
     from openpilot.starpilot.models.jetlink_addons import ADDONS
     for field, addon in ADDON_FIELDS.items():
       if field in payload:
-        params.put_bool(ADDONS[addon][2], payload[field], block=True)
+        params.put_bool(ADDONS[addon].setting, payload[field], block=True)
     if any(field in payload for field in ADDON_FIELDS):
       return {"message": "Jetson add-on saved. It applies within a few seconds."}
     return {"message": "Jetlink settings saved. Check connection status before driving."}
