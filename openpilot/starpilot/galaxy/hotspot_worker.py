@@ -117,15 +117,16 @@ class HotspotBackend:
     self.firewall = shutil.which('iptables-legacy') or shutil.which('iptables')
     self.connected = set()  # channel numbers of the stations that are connected
     self.idle = []  # stations that reported no connection; NetworkManager may be about to join one
+    self.joined = 0  # stations connected to a network
 
   def command(self, args, check=True):
     return self.run(args, check=check, text=True, capture_output=True, timeout=5)
 
   def channel(self):
-    results, self.connected, self.idle = [], set(), []
+    results, self.connected, self.idle, self.joined = [], set(), [], 0
     for station in STATIONS:
       if station == STATIONS[0]:
-        result = radio_channel(self.command(['/usr/sbin/wpa_cli', '-i', station, 'status']).stdout)
+        status = self.command(['/usr/sbin/wpa_cli', '-i', station, 'status']).stdout
       else:
         if not Path(f'/sys/class/net/{station}').exists():
           continue
@@ -133,7 +134,9 @@ class HotspotBackend:
         reply = self.command(['/usr/sbin/wpa_cli', '-i', station, 'status'], check=False)
         if reply.returncode != 0:
           continue
-        result = radio_channel(reply.stdout)
+        status = reply.stdout
+      result = radio_channel(status)
+      self.joined += 'wpa_state=COMPLETED' in status.splitlines()
       if result == STANDALONE_CHANNEL:
         self.idle.append(station)
       elif isinstance(result, tuple):
@@ -294,6 +297,14 @@ class HotspotController:
         # Starting, stopping or moving the AP while a station joins makes the join fail.
         if not running or self.applied is None:
           return {'active': False, 'state': 'waiting', 'reason': 'Waiting for Wi-Fi to finish connecting.'}
+        desired = self.applied
+        channel = desired[1]
+      if self.backend.joined >= 2 and (desired != self.applied or not running):
+        # A third interface while two stations are connected crashes the Wi-Fi firmware.
+        if not running:
+          self.backend.stop()
+          self.applied = None
+          return {'active': False, 'state': 'waiting', 'reason': 'Waiting while Wi-Fi is connected to both the car and a network.'}
         desired = self.applied
         channel = desired[1]
       if desired != self.applied or not running:
