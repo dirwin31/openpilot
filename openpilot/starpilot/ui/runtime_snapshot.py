@@ -61,6 +61,7 @@ from openpilot.starpilot.speed_limits import offset_document
 
 
 SLC_SIGN_HOLD_NS = 150_000_000
+SLC_PENDING_HOLD_NS = 3_000_000_000  # map limits drop out for a second or two while a new limit waits for the driver
 EVENTS_DISPLAY_MAX_AGE_NS = 1_500_000_000  # selfdrived sends onroadEvents on every change and at least once a second
 
 
@@ -347,6 +348,7 @@ class RuntimeSnapshotAdapter:
     self._reverse_driver_camera = ReverseDriverCamera()
     self._vision_stop = StopConfirmation(display_only=True)
     self._slc_sign_cache: tuple[int, tuple[int, int], str, SpeedLimitObservation] | None = None
+    self._slc_pending_live: tuple[int, tuple, SpeedLimitObservation] | None = None
     self._mono_clock, self._boot_clock = mono_clock, boot_clock
     self._device_after_mono_ns = mono_clock()
     self._device_offset_ns: int | None = None
@@ -620,6 +622,20 @@ class RuntimeSnapshotAdapter:
     observation = speed_limit_from_message(slc) if show_slc else SpeedLimitObservation()
     if slc is None and started:
       observation = SpeedLimitObservation(kind=ObservationKind.STALE)
+    # A source gap during the same pending decision keeps its live reading, so the prompt does not flash.
+    pending_key = ((drive_key, str(slc.sessionId), int(slc.decisionId))
+                   if show_slc and drive_key is not None and slc.hasPending and getattr(slc, 'decisionId', 0) > 0 else None)
+    if pending_key is None:
+      self._slc_pending_live = None
+    elif observation.kind == ObservationKind.VALID:
+      self._slc_pending_live = (int(sm.logMonoTime['slcState']), pending_key, observation)
+    elif self._slc_pending_live is not None:
+      stamp, key, live = self._slc_pending_live
+      if key == pending_key and 0 <= now_ns - stamp <= SLC_PENDING_HOLD_NS:
+        observation = replace(observation, kind=ObservationKind.VALID, source=live.source,
+                              speed_limit_mps=live.speed_limit_mps, status=live.status)
+      else:
+        self._slc_pending_live = None
     if mode != ShellMode.ONROAD or drive_key is None or not show_slc:
       self._slc_sign_cache = None
     elif retaining_limit(observation):
