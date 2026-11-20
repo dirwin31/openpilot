@@ -60,6 +60,9 @@ UNAVAILABLE_AFTER = 1.0      # focused but no fresh UI frame for this long -> "u
 SDP_SETTLE = (1.5, 2.2, 3.0)
 TCP_ATTEMPTS = 6
 PATIENT_TCP_SECONDS = 60.0  # owner toggle: keep retrying a refused projection connection this long
+STANDARD_AA_PORT = 5288
+VERSION_WAIT_SECONDS = 90.0
+
 MAX_LOG_FILES = 20
 LOG_QUEUE_MAX = 1000          # session log records waiting for the writer; past this they are dropped and counted
 ENCODER_RECOVERIES = 3       # hardware encoder reopens allowed per window before the session is torn down
@@ -83,6 +86,21 @@ REPORTED_SETTINGS = ("connection", "usb_mode", "view", "encoder", "fps", "bitrat
                      "async_readback", "wifi_interface", "dedicated_wifi_interface", "verify_head_unit", "version_status",
                      "rfcomm_channel", "phone_class", "auto_connect", "allow_hevc", "keyframe_test", "tall_hevc",
                      "unacked_video", "patient_tcp", "head_unit_experiments", "head_unit_experiment_rules")
+
+
+def _open_projection(ip: str, ports: list[int], advertised: int, local_ip: str, log) -> socket.socket:
+  error: OSError | None = None
+  for port in ports:
+    try:
+      sock = socket.create_connection((ip, port), timeout=5.0, source_address=(local_ip, 0) if local_ip else None)
+    except OSError as failure:
+      error = failure
+      continue
+    if port != advertised:
+      log("tcp_port_fallback", advertised=advertised, port=port)
+    return sock
+  assert error is not None
+  raise error
 
 
 def _tcp_failure_kind(error: OSError) -> str:
@@ -1976,14 +1994,24 @@ class Supervisor:
     last_error: Exception | None = None
     patient_until = time.monotonic() + PATIENT_TCP_SECONDS if self.config["patient_tcp"] else 0.0
     attempt = 0
+    advertised = result.endpoint.port
+    ports = [advertised]
     while True:
       self._check_cancel()
       try:
-        sock = socket.create_connection((result.endpoint.ip, result.endpoint.port), timeout=5.0,
-                                        source_address=(lease.local_ip, 0) if lease.local_ip else None)
+        sock = _open_projection(result.endpoint.ip, ports, advertised, lease.local_ip, self.log)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         return self._track(sock)
       except OSError as error:
+        # Some dongles advertise one port but listen on the standard one
+        if _tcp_failure_kind(error) == "refused" and STANDARD_AA_PORT not in ports:
+          ports.append(STANDARD_AA_PORT)
+          try:
+            sock = _open_projection(result.endpoint.ip, [STANDARD_AA_PORT], advertised, lease.local_ip, self.log)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            return self._track(sock)
+          except OSError:
+            pass
         last_error = error
         kind = _tcp_failure_kind(error)
         self.log("tcp_retry", attempt=attempt + 1, error=str(error), kind=kind)
@@ -1992,6 +2020,7 @@ class Supervisor:
         if attempt >= TCP_ATTEMPTS and not (kind == "refused" and time.monotonic() < patient_until):
           break
     raise RuntimeError(f"Car did not accept the projection connection: {last_error}")
+
 
   def _unofficial_dongle(self) -> bool:
     return self.car_type() == "adapter" and car_profiles.resolve(self.config)[0] == "unofficial"
@@ -2023,7 +2052,8 @@ class Supervisor:
     config = self.config
     sock = connect() if connect is not None else self._connect_tcp(result, lease)
     ca = ident.root if config.get("verify_head_unit", False) else None
-    session = ProjectionSession(sock, ident.cert, ident.key, self.log, ca)
+    version_wait = VERSION_WAIT_SECONDS if self.car_type() == "adapter" else None
+    session = ProjectionSession(sock, ident.cert, ident.key, self.log, ca, version_wait=version_wait)
     session.fragment_acks = fragment_acks
     tuning = car_profiles.tuning(config)
     session.max_window = tuning["max_window"]
