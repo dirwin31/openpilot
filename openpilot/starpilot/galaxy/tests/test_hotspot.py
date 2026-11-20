@@ -24,6 +24,7 @@ def backend_mock(ready=True, ap_channel=None):
   backend.ap_status.return_value = {'ready': ready, 'channel': ap_channel}
   backend.activating.return_value = False
   backend.connected = set()
+  backend.joined = 0
   return backend
 
 
@@ -194,6 +195,42 @@ def test_backend_skips_car_station_without_status(tmp_path, monkeypatch):
     return Mock(returncode=0, stdout='wpa_state=COMPLETED\nfreq=2412')
   backend = HotspotBackend(tmp_path, run=Mock(side_effect=command), interfaces=Mock())
   assert backend.channel() == ('g', 1)
+
+
+def test_backend_counts_connected_stations(tmp_path, monkeypatch):
+  monkeypatch.setattr(Path, 'exists', lambda self: True)
+  run = Mock(return_value=Mock(returncode=0, stdout='wpa_state=COMPLETED\nfreq=2437'))
+  backend = HotspotBackend(tmp_path, run=run, interfaces=Mock())
+  backend.channel()
+  assert backend.joined == 2
+
+
+def test_ap_does_not_start_while_car_and_network_are_both_connected():
+  backend = backend_mock()
+  backend.channel.return_value = ('a', 149)
+  backend.joined = 2
+  controller = HotspotController(backend, clock=lambda: 100)
+  assert controller.tick(CONFIG)['state'] == 'waiting'
+  backend.start.assert_not_called()
+  assert controller.failures == 0
+  backend.joined = 1
+  assert controller.tick(CONFIG)['state'] == 'starting'
+  backend.start.assert_called_once_with(CONFIG, ('a', 149))
+
+
+def test_running_ap_stays_put_while_car_and_network_are_both_connected():
+  backend = backend_mock(ap_channel=36)
+  controller = HotspotController(backend, clock=lambda: 100)
+  backend.channel.return_value = ('a', 36)
+  controller.tick(CONFIG)
+  backend.start.reset_mock()
+  backend.stop.reset_mock()
+  backend.joined = 2
+  backend.channel.return_value = ('a', 149)
+  backend.ap_status.return_value = {'ready': True, 'channel': 36}
+  assert controller.tick(CONFIG)['active']
+  backend.start.assert_not_called()
+  backend.stop.assert_not_called()
 
 
 def test_networkmanager_join_holds_the_running_ap():
