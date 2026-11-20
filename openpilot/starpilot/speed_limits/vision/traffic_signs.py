@@ -74,6 +74,23 @@ def feedback_panel_region(image):
   return (x1, y1, x1 + 384, y1 + 384), matches[0]
 
 
+# the detectors' graph outputs, which a Jetson add-on server returns for them (jetlink_addons); the classifier and the
+# identity net stay on the CPU, as the classifier reads an inner layer an engine does not return
+JETSON_OUTPUTS = {
+  "traffic_signs_us_detector.onnx": (("output0", (1, 5, 1344)), ("stop/output0", (1, 5, 4096)), ("tiny/scores", (1, 1, 1024))),
+  "traffic_signs_us_stop_detector.onnx": (("stop/output0", (1, 5, 4096)),),
+}
+
+
+def _with_jetson(name: str, sha256: str, net):
+  """The detector, asking the Jetson first when Jetlink's gadget carries the sign-vision add-on."""
+  try:
+    from openpilot.starpilot.models.jetlink_addons import with_jetson
+  except Exception:
+    return net
+  return with_jetson(net, "signs", sha256, JETSON_OUTPUTS[name], scaled_u8=True)
+
+
 @dataclass(frozen=True)
 class SignDetections:
   speed: model.Detection | None
@@ -132,7 +149,8 @@ class TrafficSignModelCore(model.VisionModelCore):
   @classmethod
   def _load_net(cls, name: str, expected_sha256: str):
     if name == 'speed_limit_us_detector.onnx':
-      return CapturedSignDetectorOutputs(super()._load_net('traffic_signs_us_detector.onnx', expected_sha256))
+      return CapturedSignDetectorOutputs(_with_jetson('traffic_signs_us_detector.onnx', expected_sha256,
+                                                      super()._load_net('traffic_signs_us_detector.onnx', expected_sha256)))
     return super()._load_net(name, expected_sha256)
 
   def reset(self) -> None:
@@ -290,7 +308,8 @@ class TrafficSignModelCore(model.VisionModelCore):
   def _detector_for_mode(self, enabled):
     if enabled:
       return self._load_net("speed_limit_us_detector.onnx", self.DETECTOR_SHA256)
-    return CapturedStopDetectorOutputs(super()._load_net("traffic_signs_us_stop_detector.onnx", self.STOP_PROJECTION_SHA256))
+    return CapturedStopDetectorOutputs(_with_jetson("traffic_signs_us_stop_detector.onnx", self.STOP_PROJECTION_SHA256,
+                                                    super()._load_net("traffic_signs_us_stop_detector.onnx", self.STOP_PROJECTION_SHA256)))
 
   @classmethod
   def _validate_candidate(cls, detector, classifier, enabled):

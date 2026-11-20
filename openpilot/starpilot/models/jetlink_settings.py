@@ -4,6 +4,8 @@ from __future__ import annotations
 from openpilot.starpilot.models.jetlink_adapter import UNSUPPORTED
 
 MODES = ("off", "usb", "ios")
+# Galaxy's name for each Jetson add-on (jetlink_addons)
+ADDON_FIELDS = {"vasm": "vasm", "signVision": "signs"}
 
 # jetlink's Status.phase in Galaxy's words, where they differ
 PHASES = {"waiting": "waiting for disengagement", "reconnecting": "fallback / reconnecting"}
@@ -29,7 +31,7 @@ class JetlinkSettings:
       return {"mode": "off", "supported": False, "chestnut": False, "enabled": False,
               "present": False, "prepared": False, "active": False, "runtimeState": "unavailable", "state": "unavailable",
               "reason": "Jetlink status is unavailable; the local model remains in use.",
-              "progress": "", "model": None, "transport": "USB", "chargePhone": False}
+              "progress": "", "model": None, "transport": "USB", "chargePhone": False, "addons": {}}
 
   def _setting(self):
     """The Jetlink setting, whether this device runs Jetlink, and whether a Chestnut is fitted."""
@@ -71,7 +73,25 @@ class JetlinkSettings:
             "state": state, "reason": reason, "progress": str(progress.get("msg", "")),
             "model": status.model if status is not None else None,
             "transport": status.transport if status is not None else "USB",
-            "chargePhone": params.get_bool("JetlinkChargePhone")}
+            "chargePhone": params.get_bool("JetlinkChargePhone"), "addons": self.addons(mode)}
+
+  def addons(self, mode="usb"):
+    """Each Jetson add-on: its setting, whether the gadget carries it (a change needs a reboot), and its link."""
+    from openpilot.starpilot.models import jetlink_addons
+    params, view = self.params(), {}
+    for field, addon in ADDON_FIELDS.items():
+      on, present = params.get_bool(jetlink_addons.ADDONS[addon][2]), jetlink_addons.present(addon)
+      stats = jetlink_addons.read_stats(addon) if present else None
+      stats = stats if isinstance(stats, dict) else {}
+      link = stats.get("link") if isinstance(stats.get("link"), dict) else {}
+      trips = stats.get("round_trips") if isinstance(stats.get("round_trips"), dict) else {}
+      connected = bool(stats.get("connected"))
+      view[field] = {"enabled": on, "present": present, "rebootRequired": mode == "usb" and on != present,
+                     "running": bool(stats), "connected": connected, "yielding": bool(stats.get("yielding")),
+                     "modelMismatch": connected and bool(stats.get("missing")),
+                     "answered": int(link.get("answered", 0) or 0), "timeouts": int(link.get("timeouts", 0) or 0),
+                     "roundTripMs": trips.get("total_ms"), "jetsonMs": trips.get("jetson_ms")}
+    return view
 
   def pick(self):
     """Jetlink's big model as Active Big chose it, {sha256, displayName}, or None for the Jetlink app's choice.
@@ -100,8 +120,10 @@ class JetlinkSettings:
       return False
 
   def configure(self, payload):
-    if not payload or set(payload) - {"mode", "chargePhone"}:
+    if not payload or set(payload) - {"mode", "chargePhone", *ADDON_FIELDS}:
       raise ValueError("Invalid Jetlink settings")
+    if any(field in payload and type(payload[field]) is not bool for field in ADDON_FIELDS):
+      raise ValueError("Invalid Jetson add-on setting")
     if "mode" in payload and payload["mode"] not in MODES:
       raise ValueError("Choose Off, USB, or iPhone")
     if "chargePhone" in payload and type(payload["chargePhone"]) is not bool:
@@ -118,4 +140,10 @@ class JetlinkSettings:
       params.put_bool("JetlinkChargePhone", payload["chargePhone"], block=True)
     if "mode" in payload:
       params.put("JetlinkMode", MODES.index(payload["mode"]), block=True)
+    from openpilot.starpilot.models.jetlink_addons import ADDONS
+    for field, addon in ADDON_FIELDS.items():
+      if field in payload:
+        params.put_bool(ADDONS[addon][2], payload[field], block=True)
+    if any(field in payload for field in ADDON_FIELDS):
+      return {"message": "Jetson add-on saved. Reboot the comma to apply it."}
     return {"message": "Jetlink settings saved. Check connection status before driving."}

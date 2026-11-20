@@ -8,6 +8,7 @@ const starport = 'exclusive/starport/'
 export const WIKI_LINKS = Object.freeze({
   '/settings': settings,
   '/manage_models': 'usage/model-manager/',
+  '/jetlink': 'usage/model-manager/',
   '/model_laboratory': 'usage/model-manager/#model-pair',
   '/navigation': 'exclusive/navigation/',
   '/navigation/maps': 'exclusive/navigation/#offline-maps',

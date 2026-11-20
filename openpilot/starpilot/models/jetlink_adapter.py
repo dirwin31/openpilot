@@ -61,6 +61,11 @@ def _adapter_class():
     _aol = None
     _aol_since = 0.
 
+    @classmethod
+    def gadget_functions(cls, params):
+      from openpilot.starpilot.models.jetlink_addons import gadget_functions
+      return gadget_functions(params)
+
     def model_root(self):
       from openpilot.starpilot.models.manager import ROOT
       return ROOT

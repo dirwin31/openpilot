@@ -169,7 +169,7 @@ assert.equal(wiredSetup.wiredJetlinkBusy, true)
 assert.equal(wiredSetup.wiredStatus.tone, "expired")
 assert.equal(wiredSetup.wiredStatus.label, "Wired StarPort not enabled")
 assert.match(wiredSetup.connectReason, /Jetlink/)
-assert.match(StarPortPage.template, /class="gx-link" href="#\/manage_models"/)
+assert.match(StarPortPage.template, /class="gx-link" href="#\/jetlink"/)
 assert.match(StarPortPage.template, /bi-arrow-right/)
 wiredSetup.runtime.wired_busy = ""
 assert.equal(wiredSetup.wiredStatus.tone, "ready")

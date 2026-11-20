@@ -40,6 +40,7 @@ import { DevicePreferencesPage, devicePage } from "./device-preferences.js"
 const ControllersPage = page(() => import("./controllers.js").then((module) => module.ControllersPage))
 const BluetoothPage = page(() => import("./bluetooth.js").then((module) => module.BluetoothPage))
 const StarPortPage = page(() => import("./starport.js").then((module) => module.StarPortPage))
+const JetlinkPage = page(() => import("./jetlink.js").then((module) => module.JetlinkPage))
 const SpotifyPage = page(() => import("./spotify.js").then((module) => module.SpotifyPage))
 const OnroadLayoutPage = page(() => import("./onroad-layout.js").then((module) => module.OnroadLayoutPage))
 const GalaxyPage = page(() => import("./galaxy.js").then((module) => module.GalaxyPage))
@@ -92,7 +93,7 @@ const auth = new LocalAuth({ publish: (update) => {
 
 
 createApp({
-  components: { AppDownloadReminder, BottomNav, Home, LocalAccess, Tools, Logs, SoftwarePage, NavigationPage, ModelsPage, SettingsPage, SettingsRecoveryPage, ToggleSearch, SaveFeedback, FlmPage, LocalRecordingsPage, CamerasPage, SentryEventsPage, VasmPage, PipPage, DrivingPage, DevicePreferencesPage, BluetoothPage, ControllersPage, StarPortPage, SpotifyPage, LongitudinalCurvesPage, OnroadLayoutPage, GalaxyPage, NetworksPage, DevicePicker, DeviceState, MenuTile },
+  components: { AppDownloadReminder, BottomNav, Home, LocalAccess, Tools, Logs, SoftwarePage, NavigationPage, ModelsPage, SettingsPage, SettingsRecoveryPage, ToggleSearch, SaveFeedback, FlmPage, LocalRecordingsPage, CamerasPage, SentryEventsPage, VasmPage, PipPage, DrivingPage, DevicePreferencesPage, BluetoothPage, ControllersPage, StarPortPage, JetlinkPage, SpotifyPage, LongitudinalCurvesPage, OnroadLayoutPage, GalaxyPage, NetworksPage, DevicePicker, DeviceState, MenuTile },
   data: () => ({ state, authState, authForm, route, NAV, routeDirection: 1, updateRestart, deviceRestart, nextLayoutLeavePresentation: "inline" }),
   computed: {
     visibleTools() { return state.tools.filter(tool => tool.visibility !== "authenticated" ||
@@ -264,6 +265,7 @@ createApp({
         <NavigationPage v-else-if="['/navigation', '/navigation/maps', '/navigation/setup'].includes(route.path)" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" :tabs="currentTool?.children || []"
           :initial-tab="route.path === '/navigation/maps' ? 'maps' : route.path === '/navigation/setup' ? 'setup' : 'route'" />
         <ModelsPage v-else-if="['/manage_models', '/model_laboratory'].includes(route.path)" :mode="state.monitorMode" :unauthorized="sessionExpired" :focus="route.path === '/model_laboratory' ? 'laboratory' : ''" />
+        <JetlinkPage v-else-if="route.path === '/jetlink'" :mode="state.monitorMode" :unauthorized="sessionExpired" />
         <BluetoothPage ref="activeBluetooth" v-else-if="['/bluetooth', '/bluetooth/uniden'].includes(route.path)" :uniden-settings="route.path === '/bluetooth/uniden'" :key="route.path" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <ControllersPage v-else-if="route.path === '/bluetooth/controllers'" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <StarPortPage v-else-if="route.path === '/starport'" :mode="state.monitorMode" :local-access="authState.localAccess" :unauthorized="sessionExpired" />

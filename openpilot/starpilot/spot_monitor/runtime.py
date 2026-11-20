@@ -31,6 +31,8 @@ DEVICE_TTL_NS = 1_500_000_000  # hardwared publishes at 2 Hz; allow one missed s
 RESUME_SKEW_NS = 5_000_000
 BASE_INTERVAL_NS = 1_000_000_000
 FOLLOWUP_INTERVAL_NS = 300_000_000
+# while the Jetson answers (jetlink_addons), a check costs the comma only the crop, so each side is checked more often
+JETSON_INTERVAL_NS = 200_000_000
 FOLLOWUP_WINDOW_NS = 1_000_000_000
 MODEL_RETRY_NS = 5_000_000_000
 MAX_BUFFER_BYTES = 32 * 1024 * 1024
@@ -298,6 +300,9 @@ class VASMRuntime:
         self.client.connect(False)
         return None
       base_interval_ns = FOLLOWUP_INTERVAL_NS if now_ns < self.followup_until_ns else BASE_INTERVAL_NS
+      jetson_ready = getattr(self.model, "jetson_ready", None)
+      if callable(jetson_ready) and jetson_ready():
+        base_interval_ns = min(base_interval_ns, JETSON_INTERVAL_NS)
       cpu_usage = getattr(self.messages["deviceState"], "cpuUsagePercent", None)
       interval_ns = int(base_interval_ns * self.cpu_budget.update(
         cpu_usage, now_mono_ns=now_ns, cores=self.inference_cores))
