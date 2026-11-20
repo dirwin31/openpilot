@@ -199,3 +199,123 @@ class TestStarPortSplitOwner(unittest.TestCase):
       self.assertEqual(saved['document']['widgets']['steering_wheel']['x'], 500)
       self.assertTrue((root / 'layouts/split.json').exists())
       self.assertFalse((root / 'layouts/document.json').exists())
+
+
+def _low_cruise(y):
+  layout = comma_layout.defaults()
+  layout['speed_limit_actions']['enabled'] = False  # so only the bottom edge limits the cruise card
+  layout['cruise_limits']['y'] = y
+  return layout
+
+
+def test_comma_split_checks_the_cruise_card_with_the_sources_setting():
+  lowest = comma_layout.HEIGHT - 30 - widget_size(default_document(), 'large', 'cruise_limits')[1]  # the Big bounds
+  comma_layout.validate(_low_cruise(lowest))
+  comma_layout.validate(_low_cruise(lowest), None, {'speedSources': False, 'speedSourcesCard': True})
+  for card in (False, True):
+    sources = {'speedSources': True, 'speedSourcesCard': card}
+    # The sources row (or its own card) hangs below the cruise card: it must end inside the half, counted once.
+    lowest = comma_layout.HEIGHT - widget_size({**default_document(), **sources}, 'large', 'cruise_limits')[1]
+    comma_layout.validate(_low_cruise(lowest), None, sources)
+    with pytest.raises(ValueError):
+      comma_layout.validate(_low_cruise(lowest + 1), None, sources)
+
+
+def test_comma_split_cache_rechecks_when_the_sources_setting_changes():
+  y = comma_layout.HEIGHT - 30 - widget_size(default_document(), 'large', 'cruise_limits')[1]
+  with tempfile.TemporaryDirectory() as root:
+    checked, order = comma_layout.validate(_low_cruise(y))
+    (Path(root) / comma_layout.FILE_NAME).write_bytes(comma_layout.encode(checked, order))
+    cache = comma_layout.LayoutCache(Path(root))
+    off = {**default_document(), 'speedSources': False}
+    assert cache.get(off)[0]['cruise_limits']['y'] == y
+    # No file change and inside the one-second check window: the sources switch alone must recheck the saved layout.
+    on = {**default_document(), 'speedSources': True}
+    assert cache.get(on)[0] == comma_layout.checked_defaults(on)[0]
+    assert cache.get(off)[0]['cruise_limits']['y'] == y
+
+
+def test_map_tiles_run_for_either_car_layout(monkeypatch):
+  from openpilot.starpilot.navigation import navtilesd
+  from openpilot.starpilot.system.starport import projection_layout
+  with tempfile.TemporaryDirectory() as temp:
+    full, split = Path(temp) / 'document.json', Path(temp) / 'split.json'
+    monkeypatch.setattr(projection_layout, 'DOCUMENT_PATH', full)
+    monkeypatch.setattr(projection_layout, 'SPLIT_DOCUMENT_PATH', split)
+
+    def write(path, enabled):
+      path.write_text(json.dumps({'widgets': {'nav_map': {'enabled': enabled}}}))
+
+    assert not navtilesd._map_enabled()
+    write(full, False)
+    split.write_text('not json')
+    assert not navtilesd._map_enabled()
+    write(split, True)
+    assert navtilesd._map_enabled()
+    write(split, False)
+    write(full, True)
+    assert navtilesd._map_enabled()
+    full.write_text('{"widgets": []}')
+    assert not navtilesd._map_enabled()
+
+
+class _PreviewHandler:
+  def __init__(self):
+    self.responses = []
+
+  def settings_session(self):
+    return 'me'
+
+  def json(self, status, body):
+    self.responses.append((status, body))
+
+  def respond(self, status, *args, **kwargs):
+    self.responses.append((status, args[0]))
+
+
+def test_projection_preview_checks_each_canvas_against_its_own_layout(monkeypatch):
+  from types import SimpleNamespace as NS
+  from openpilot.starpilot.galaxy import batch_routes
+  screen = {'version': 1, 'width': 1920, 'height': 1080, 'margin_width': 0, 'margin_height': 0, 'fps': 60, 'config_index': 0}
+  sent = []
+  monkeypatch.setattr(batch_routes, 'request_preview', lambda payload, _socket: sent.append(payload) or b'png')
+  with tempfile.TemporaryDirectory() as temp:
+    projection = NS(snapshot=lambda: {'available': True, 'reason': None, 'screen': screen, 'metadata': {'width': 1920, 'height': 1080}})
+    layouts = NS(params=Params(Path(temp)), parked=lambda: True)
+    split = NS(viewport=lambda _screen: (960, 1080))
+
+    def preview(document, split_owner=lambda: split):
+      handler = _PreviewHandler()
+      batch_routes.preview_layout(handler, {'document': document, 'profile': 'projection', 'scene': 'engaged'},
+                                  lambda: projection, lambda: layouts, None, split_owner)
+      return handler.responses[-1][0]
+
+    assert preview(default_layout_for_viewport((960, 1080))) == 200
+    assert sent[-1]['document']['layout']['canvas'] == {'width': 960, 'height': 1080}
+    assert preview(default_layout_for_viewport((1920, 1080))) == 200
+    assert sent[-1]['document']['layout']['canvas'] == {'width': 1920, 'height': 1080}
+    # Without a split owner every layout must be the full car screen.
+    assert preview(default_layout_for_viewport((960, 1080)), None) == 400
+    # A split canvas that is not the current car half is refused.
+    assert preview(default_layout_for_viewport((1000, 1080))) == 400
+    assert len(sent) == 2
+
+
+def test_comma_half_hides_the_developer_sidebar_beside_the_phone():
+  from dataclasses import dataclass, replace
+  from types import SimpleNamespace as NS
+  from openpilot.starpilot.ui.layout_preview_renderer import sample_state
+  from openpilot.starpilot.ui.runtime_app import StarShellSession
+
+  @dataclass(frozen=True)
+  class Snapshot:
+    onroad: object
+
+  state = sample_state('engaged', default_document())
+  state = replace(state, appearance=replace(state.appearance, show_developer_sidebar=True))
+  with tempfile.TemporaryDirectory() as root:
+    session = NS(_phone_layout=comma_layout.LayoutCache(Path(root)))
+    split = StarShellSession._phone_split_snapshot(session, Snapshot(state)).onroad
+  assert split.appearance.show_developer_sidebar is False
+  assert split.customization['layouts']['large'] == comma_layout.anchored(comma_layout.defaults())
+  assert state.appearance.show_developer_sidebar is True

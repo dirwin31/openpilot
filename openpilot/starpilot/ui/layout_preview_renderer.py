@@ -521,6 +521,8 @@ class LayoutPreviewRenderer:
     sidebar = document.pop('developerSidebar', False)
     split = document.pop('phoneSplit', False) is True and profile == Profile.LARGE and viewport is None
     if split:
+      # The device hides the developer sidebar while the phone screen shows.
+      sidebar = False
       document = comma_layout.customization(document, document['layouts']['large'], document.get('widgetOrder', {}).get('large'))
     if profile == Profile.LARGE and viewport is None:
       width = (comma_layout.WIDTH if split else profile.size[0]) - (SIDEBAR_WIDTH if sidebar else 0)

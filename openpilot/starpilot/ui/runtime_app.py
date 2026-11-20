@@ -1386,9 +1386,9 @@ class StarShellSession:
     from openpilot.starpilot.ui.onroad_rear_fog import update_rear_fog
     snapshot = update_rear_fog(self, snapshot, onroad=mode == ShellMode.ONROAD)
     if mode == ShellMode.ONROAD and self.profile == Profile.LARGE:
-      width = getattr(self, '_onroad_page_width', 2160.0) - (SIDEBAR_WIDTH if snapshot.onroad.appearance.show_developer_sidebar else 0)
       if phone_split:
         snapshot = self._phone_split_snapshot(snapshot)
+      width = getattr(self, '_onroad_page_width', 2160.0) - (SIDEBAR_WIDTH if snapshot.onroad.appearance.show_developer_sidebar else 0)
       snapshot = fit_road_snapshot(snapshot, width)
     if mode == ShellMode.HOME:
       now = time.monotonic()
@@ -1461,13 +1461,14 @@ class StarShellSession:
     return snapshot
 
   def _phone_split_snapshot(self, snapshot):
-    """Beside a phone screen the Big layout uses its own saved split arrangement."""
+    """Beside a phone screen the Big layout uses its own saved split arrangement, without the developer sidebar."""
     from openpilot.starpilot.system.phone_projection import comma_layout
     if getattr(self, '_phone_layout', None) is None:
       self._phone_layout = comma_layout.LayoutCache()
     state = snapshot.onroad
     layout, order = self._phone_layout.get(state.customization)
-    return replace(snapshot, onroad=replace(state, customization=comma_layout.customization(state.customization, layout, order)))
+    return replace(snapshot, onroad=replace(state, customization=comma_layout.customization(state.customization, layout, order),
+                                            appearance=replace(state.appearance, show_developer_sidebar=False)))
 
   def render(self, mode: ShellMode, rect: rl.Rectangle, parent_clip: rl.Rectangle | None = None) -> None:
     if mode != ShellMode.ONROAD and (uniden := getattr(self.view.onroad, 'uniden', None)):

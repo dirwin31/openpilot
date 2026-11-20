@@ -336,3 +336,51 @@ def test_native_preview_draws_independent_camera_circles_without_camera_input():
       assert circle.call_count == ring.call_count == 1
       assert circle.call_args.args[0].x == right_center.x
       assert circle.call_args.args[0].y == right_center.y
+
+
+def _split_payload(sidebar):
+  from openpilot.starpilot.galaxy.phone_screen_layout import _document
+  from openpilot.starpilot.system.phone_projection import comma_layout
+  from openpilot.starpilot.ui.layout_preview_transport import validate_preview_document
+  document = {**_document(default_document(), comma_layout.defaults(), None), 'phoneSplit': True, 'developerSidebar': sidebar}
+  return {'document': validate_preview_document(document), 'profile': 'large', 'scene': 'engaged'}
+
+
+def test_phone_split_preview_draws_only_the_comma_half_without_the_sidebar():
+  from openpilot.starpilot.system.phone_projection import comma_layout
+  with patch('openpilot.starpilot.ui.layout_preview_renderer.rl.is_window_ready', return_value=True), \
+       patch('openpilot.starpilot.ui.layout_preview_renderer._Canvas') as canvas_type:
+    canvas = Mock(profile=Profile.LARGE, viewport=None)
+    canvas_type.return_value = canvas
+    renderer = LayoutPreviewRenderer()
+    for sidebar in (False, True):
+      # The device hides the developer sidebar beside a phone screen, whatever the setting.
+      payload = _split_payload(sidebar)
+      for art in (None, 'backdrop'):
+        renderer({**payload, **({'art': art} if art else {})})
+        state = canvas.render.call_args.args[0]
+        assert state.viewport_width == comma_layout.WIDTH
+        assert state.appearance.show_developer_sidebar is False
+        assert canvas.render.call_args.kwargs == {'crop_width': comma_layout.WIDTH}
+
+
+def test_canvas_crops_a_split_preview_to_the_comma_half():
+  from contextlib import ExitStack
+  canvas = _Canvas.__new__(_Canvas)
+  canvas.profile, canvas.viewport, canvas.map = Profile.LARGE, None, None
+  canvas.view = canvas.fonts = canvas.target = Mock()
+  canvas._settle = Mock()
+  state = replace(sample_state('engaged', default_document()), viewport_width=1080)
+  with ExitStack() as stack:
+    for name in ('begin_texture_mode', 'clear_background', 'end_texture_mode', 'image_format', 'image_flip_vertical', 'unload_image',
+                 'image_resize'):
+      stack.enter_context(patch('openpilot.starpilot.ui.layout_preview_renderer.rl.' + name))
+    image = NS(data=None)
+    stack.enter_context(patch('openpilot.starpilot.ui.layout_preview_renderer.rl.load_image_from_texture', return_value=image))
+    crop = stack.enter_context(patch('openpilot.starpilot.ui.layout_preview_renderer.rl.image_crop',
+                                     side_effect=lambda _image, rect: setattr(image, 'data', np.zeros(int(rect.width * rect.height * 4), np.uint8))))
+    png = stack.enter_context(patch('openpilot.starpilot.ui.layout_preview_renderer._png_rgba', return_value=b'png'))
+    assert canvas.render(state, 'engaged', crop_width=1080) == b'png'
+    rect = crop.call_args.args[1]
+    assert (rect.x, rect.y, rect.width, rect.height) == (0, 0, 1080, 1080)
+    assert png.call_args.args[:2] == (1080, 1080)

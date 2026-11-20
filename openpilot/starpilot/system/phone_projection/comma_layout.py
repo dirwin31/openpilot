@@ -12,7 +12,6 @@ import time
 from pathlib import Path
 
 from openpilot.starpilot.system.phone_projection import settings as projection_settings
-from openpilot.starpilot.ui.large_speed_geometry import sources_extent
 from openpilot.starpilot.ui.narrow_layout import arrange_narrow
 from openpilot.starpilot.ui.onroad_customization import (
   PROFILES, ROAD_BASE_WIDTH, customization_metadata, default_document, validate_document, widget_size,
@@ -98,8 +97,7 @@ def validate(layout, order=None, base: dict | None = None) -> tuple[dict, list |
   result = validate_document(document)
   checked = result['layouts']['large']
   for key, placed in checked.items():
-    w, h = widget_size(result, 'large', key)
-    h += sources_extent(result) if key == 'cruise_limits' and placed['enabled'] else 0
+    w, h = widget_size(result, 'large', key)  # the cruise card's size already includes the sources
     if not (0 <= placed['x'] and placed['x'] + w <= WIDTH and 0 <= placed['y'] and placed['y'] + h <= HEIGHT):
       raise ValueError('Widget outside the comma half')
   return checked, result.get('widgetOrder', {}).get('large')
