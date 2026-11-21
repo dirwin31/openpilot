@@ -294,3 +294,89 @@ class HeadUnitGuidance:
       if not self.closed:
         self._end()
         self.closed = True
+
+
+CARPLAY_SOURCE = 'carPlay'
+ROUTE_GUIDANCE_UPDATE, ROUTE_GUIDANCE_MANEUVER_UPDATE = 0x5201, 0x5202
+ROUTE_NONE, ROUTE_ARRIVED, ROUTE_REROUTING = 0, 2, 5
+
+
+def _carplay_table() -> dict[int, tuple[str, str]]:
+  """Apple's iAP2 RouteGuidanceManeuverType -> (maneuverType, maneuverModifier)."""
+  table = {1: ('turn', 'left'), 2: ('turn', 'right'), 3: ('continue', 'straight'), 4: ('turn', 'uturn'), 5: ('continue', ''),
+           6: ('roundabout', ''), 7: ('roundabout', ''), 8: ('off ramp', ''), 9: ('on ramp', ''), 11: ('continue', ''),
+           13: ('fork', 'left'), 14: ('fork', 'right'), 18: ('turn', 'uturn'), 19: ('turn', 'uturn'), 20: ('turn', 'left'),
+           21: ('turn', 'right'), 22: ('off ramp', 'left'), 23: ('off ramp', 'right'), 26: ('turn', 'uturn'),
+           47: ('turn', 'sharpLeft'), 48: ('turn', 'sharpRight'), 49: ('turn', 'slightLeft'), 50: ('turn', 'slightRight'),
+           51: ('fork', ''), 52: ('fork', 'left'), 53: ('fork', 'right')}
+  table.update(dict.fromkeys((10, 12, 24, 25, 27), ('arrive', '')))
+  table.update(dict.fromkeys(range(28, 47), ('roundabout', '')))
+  return table
+
+
+CARPLAY_MANEUVERS = _carplay_table()
+
+
+def _iap_params(payload: bytes) -> dict[int, bytes]:
+  from openpilot.starpilot.system.carplay.iap2.wire import parse_params
+  out: dict[int, bytes] = {}
+  for pid, value in parse_params(payload):
+    out.setdefault(pid, value)
+  return out
+
+
+def _iap_text(value: bytes | None) -> str:
+  return value.split(b'\0', 1)[0].decode(errors='replace').strip()[:500] if value else ''
+
+
+def _iap_uint(value: bytes | None) -> int | None:
+  return int.from_bytes(value, 'big') if value else None
+
+
+class CarPlayGuidance(HeadUnitGuidance):
+  """CarPlay route guidance (iAP2 0x5201 route and 0x5202 maneuver updates) as phone guidance."""
+  def __init__(self, publisher=None, log: Callable[[str], None] = print, **kwargs):
+    super().__init__(publisher, source=CARPLAY_SOURCE, log=log, **kwargs)
+    self.maneuvers: dict[int, dict] = {}
+    self.current: int | None = None
+
+  def handle_frame(self, message_id: int, payload: bytes) -> None:
+    try:
+      params = _iap_params(payload)
+      with self.lock:
+        if self.closed:
+          return
+        if message_id == ROUTE_GUIDANCE_MANEUVER_UPDATE:
+          index, kind = _iap_uint(params.get(1)), _iap_uint(params.get(3))
+          if index is None or kind is None:
+            return
+          maneuver_type, modifier = CARPLAY_MANEUVERS.get(kind, ('', ''))
+          self.maneuvers[index] = {'maneuverType': maneuver_type, 'maneuverModifier': modifier,
+                                   'roadName': _iap_text(params.get(4)), 'lanes': []}
+        elif message_id == ROUTE_GUIDANCE_UPDATE:
+          state = _iap_uint(params.get(1))
+          if state in (ROUTE_NONE, ROUTE_ARRIVED):
+            self.maneuvers, self.current, self.step, self.position = {}, None, {}, {}
+            self._end()
+            return
+          if state is not None:
+            self.status = STATUS_REROUTING if state == ROUTE_REROUTING else STATUS_ACTIVE
+          current = params.get(13)
+          if current is not None and len(current) >= 2:
+            index = int.from_bytes(current[:2], 'big')
+            if index != self.current:
+              self.current, self.position = index, {}
+          for pid, key, size in ((10, 'distanceMeters', 4), (7, 'remainingMeters', 4), (6, 'remainingSeconds', 8)):
+            value = params.get(pid)
+            if value is not None and len(value) >= size:
+              self.position[key] = int.from_bytes(value[:size], 'big')
+        else:
+          return
+        step = self.maneuvers.get(self.current) if self.current is not None else None
+        if step is None:
+          return
+        self.step = step
+        if self.status != STATUS_REROUTING:
+          self._publish()
+    except (ValueError, TypeError, OSError) as error:
+      self.log(f"phone guidance: unreadable CarPlay message {message_id:#x}: {error}")

@@ -194,8 +194,8 @@ class ScreenStream:
 class IapTunnel:
   """iAP2 link bytes from the iPhone over Wi-Fi: encrypted frames of 32-byte-header packages ('comm' type)."""
 
-  def __init__(self, key: bytes, host: str, peer: str, on_data, log):
-    self.key, self.peer, self.on_data, self.log = key, peer, on_data, log
+  def __init__(self, key: bytes, host: str, peer: str, on_data, log, on_open=None):
+    self.key, self.peer, self.on_data, self.log, self.on_open = key, peer, on_data, log, on_open
     self.server = _listen_tcp(host)
     self.port = self.server.getsockname()[1]
     self.closed = threading.Event()
@@ -217,6 +217,8 @@ class IapTunnel:
       return
     self.conn = conn
     self.log("airplay iAP tunnel connected")
+    if self.on_open is not None:
+      self.on_open()
     cipher = FrameCipher(self.key, self.key)
     plain = bytearray()
     try:
@@ -458,7 +460,11 @@ class AirPlaySession:
             and self.pair_verify.shared:
           seed = unsigned(stream.get("seed", 0))
           key = hkdf(self.pair_verify.shared, f"DataStream-Salt{seed}".encode(), b"DataStream-Output-Encryption-Key")
-          self.iap_tunnel = IapTunnel(key, self.host, self.peer, self.sink.on_iap_tunnel_data, self.log)
+          if self.iap_tunnel:
+            self.iap_tunnel.close()
+          opened = getattr(self.sink, "on_iap_tunnel_open", None)
+          self.iap_tunnel = IapTunnel(key, self.host, self.peer, self.sink.on_iap_tunnel_data, self.log,
+                                      on_open=(lambda opened=opened: opened(self)) if opened else None)
           entry = {"type": kind, "streamID": 1, "dataPort": self.iap_tunnel.port}
           if "streamConnectionID" in stream:
             entry["streamConnectionID"] = unsigned(stream["streamConnectionID"])
@@ -584,6 +590,9 @@ class AirPlaySession:
     """contacts: (slot, x, y, down) in CarPlay pixels."""
     return self.send_command({"type": "hidSendReport", "uuid": format(TOUCH_HID_UID, "x"),
                               "hidReport": touch_report(contacts)})
+
+  def send_iap(self, data: bytes) -> bool:
+    return self.send_command({"type": "iAPSendMessage", "params": {"data": data}})
 
   def request_keyframe(self) -> bool:
     return self.send_command({"type": "forceKeyFrame"})

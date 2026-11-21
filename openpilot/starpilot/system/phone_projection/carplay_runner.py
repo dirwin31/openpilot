@@ -19,8 +19,10 @@ from openpilot.starpilot.system.carplay.airplay.pairing import PairingStore
 from openpilot.starpilot.system.carplay.airplay.session import AirPlayServer, avcc_to_annexb
 from openpilot.starpilot.system.carplay.iap2.control import Identification, WirelessControl, WirelessEndpoint
 from openpilot.starpilot.system.carplay.iap2.session import Iap2Session
+from openpilot.starpilot.system.carplay.iap2.tunnel import TunnelLink
 from openpilot.starpilot.system.carplay.mfi import MfiIdentity
 from openpilot.starpilot.system.phone_projection.bluez import IAP2_UUID, pick_iphone
+from openpilot.starpilot.system.phone_projection.guidance import ROUTE_GUIDANCE_MANEUVER_UPDATE, ROUTE_GUIDANCE_UPDATE, CarPlayGuidance
 from openpilot.starpilot.system.phone_projection.ipc import Touch
 from openpilot.starpilot.system.phone_projection.layout import carplay_size, carplay_width_mm
 from openpilot.starpilot.system.phone_projection.runtime import HOTSPOT_ADDRESS, STATE_DIR, Context, TouchTracker, hotspot
@@ -31,6 +33,7 @@ LEGACY_STATE = Path("/data/carplay")
 RETRY_SECONDS = 10.0
 IDLE_SECONDS = 2.0
 BOOTSTRAP_TIMEOUT = 45.0
+TUNNEL_TIMEOUT = 24 * 3600.0
 NAME = "StarPilot"
 
 
@@ -98,7 +101,7 @@ class CarPlayRunner:
   kind = "carplay"
 
   def __init__(self, ctx: Context, *, mfi_loader=MfiIdentity.load, connect=iap2_socket, hotspot_source=hotspot,
-               server_factory=AirPlayServer, local_address=None):
+               server_factory=AirPlayServer, local_address=None, guidance_factory=None):
     self.ctx, self.mfi_loader, self.connect, self.hotspot_source = ctx, mfi_loader, connect, hotspot_source
     self.server_factory = server_factory
     self.local_address = local_address or ctx.bluez.adapter_address
@@ -110,6 +113,10 @@ class CarPlayRunner:
     self.server_key = None
     self.session = None
     self.link = None
+    self.tunnel: TunnelLink | None = None
+    self.control: tuple | None = None  # (mfi, identification, endpoint) the tunnel's iAP2 link identifies with again
+    self.guidance_factory = guidance_factory or (lambda: CarPlayGuidance(log=self.ctx.log))
+    self.guidance: CarPlayGuidance | None = None
     self.pipe: VideoPipe | None = None
     self.touches = TouchTracker()
     self.lock = threading.Lock()
@@ -177,6 +184,7 @@ class CarPlayRunner:
     endpoint = WirelessEndpoint(ssid=spot.ssid, passphrase=spot.passphrase, channel=spot.channel, addresses=[HOTSPOT_ADDRESS],
                                 port=AIRPLAY_PORT, device_id=self.identity.device_id, public_key_hex=self.identity.public.hex(),
                                 bssid=spot.bssid)
+    self.control = (mfi, ident, endpoint)
     try:
       WirelessControl(link, mfi, ident, endpoint, log=lambda m: None).run(BOOTSTRAP_TIMEOUT)
       deadline = time.monotonic() + BOOTSTRAP_TIMEOUT
@@ -242,8 +250,52 @@ class CarPlayRunner:
     if pipe is not None:
       pipe.submit(data)
 
+  def on_iap_tunnel_open(self, session) -> None:
+    """The iPhone moved iAP2 into the Wi-Fi session; identify on it again so route guidance keeps coming."""
+    control = self.control
+    if control is None:
+      return
+    seen: set[str] = set()
+
+    def log(message: str) -> None:
+      key = message.split(" bytes=", 1)[0][:16]  # each message kind once, so periodic updates stay out of the log
+      if key not in seen:
+        seen.add(key)
+        self._log(message)
+
+    tunnel = TunnelLink(session.send_iap, log=log)
+    with self.lock:
+      old, self.tunnel = self.tunnel, tunnel
+    if old is not None:
+      old.close()
+
+    def run() -> None:
+      WirelessControl(tunnel.session, *control, log=log, on_frame=self._route_frame).run(TUNNEL_TIMEOUT)
+      tunnel.close()
+    threading.Thread(target=run, name="carplay-iap-tunnel-control", daemon=True).start()
+
   def on_iap_tunnel_data(self, data: bytes) -> None:
-    pass
+    tunnel = self.tunnel
+    if tunnel is not None:
+      tunnel.feed(data)
+
+  def _route_frame(self, frame) -> None:
+    if frame.message_id not in (ROUTE_GUIDANCE_UPDATE, ROUTE_GUIDANCE_MANEUVER_UPDATE):
+      return
+    with self.lock:
+      if self.guidance is None:
+        self.guidance = self.guidance_factory()
+      guidance = self.guidance
+    guidance.handle_frame(frame.message_id, frame.payload)
+
+  def _end_tunnel(self) -> None:
+    with self.lock:
+      tunnel, self.tunnel = self.tunnel, None
+      guidance, self.guidance = self.guidance, None
+    if tunnel is not None:
+      tunnel.close()
+    if guidance is not None:
+      guidance.close()
 
   def on_command(self, kind: str, params) -> None:
     if kind.lower() in ("disablebluetooth", "disable-bluetooth"):
@@ -263,6 +315,7 @@ class CarPlayRunner:
       if session is not None and self.session is not None and self.session is not session:
         return  # a stale connection ending; the newer session keeps its picture
       pipe, self.pipe, self.session = self.pipe, None, None
+    self._end_tunnel()
     if pipe is not None:
       threading.Thread(target=pipe.close, daemon=True).start()
     self.ctx.audio.request(False)
@@ -304,6 +357,7 @@ class CarPlayRunner:
     return pipe.error if pipe is not None else ""
 
   def close(self) -> None:
+    self._end_tunnel()
     if self.server is not None:
       self.server.close()
       self.server = None
