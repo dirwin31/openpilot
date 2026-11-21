@@ -109,15 +109,16 @@ class JetlinkSettings:
     from openpilot.starpilot.models import jetlink_addons
     params, view = self.params(), {}
     server, progress = gadget.read_record(gadget.SERVER), params.get("JetlinkProgress")
-    for field, addon in ADDON_FIELDS.items():
-      on, present = params.get_bool(jetlink_addons.ADDONS[addon].setting), jetlink_addons.present(addon)
-      report = jetlink_addons.read_stats(addon) if present else None
+    for field, key in ADDON_FIELDS.items():
+      addon = jetlink_addons.ADDONS[key]
+      on, present = params.get_bool(addon.setting), addon.present()
+      report = addon.report() if present else None
       stats: dict = report or {}
       link, trips = _mapping(stats.get("link")), _mapping(stats.get("round_trips"))
       connected = bool(stats.get("connected"))
       view[field] = {"enabled": on, "present": present, "running": bool(stats), "connected": connected, "yielding": bool(stats.get("yielding")),
                      "modelMismatch": connected and bool(stats.get("missing")),
-                     **jetlink_addons.ADDONS[addon].state(server, progress),
+                     **addon.state(server, progress),
                      "answered": int(link.get("answered", 0) or 0), "timeouts": int(link.get("timeouts", 0) or 0),
                      "roundTripMs": trips.get("total_ms"), "jetsonMs": trips.get("jetson_ms")}
     return view

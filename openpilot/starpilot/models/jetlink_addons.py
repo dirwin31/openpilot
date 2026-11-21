@@ -22,27 +22,9 @@ ADDONS = {
 }
 
 
-def models() -> dict:
-  return {key: addon.models for key, addon in ADDONS.items()}
-
-
-def addon_models(params) -> tuple:
-  """The models of each add-on turned on, for JetLink to send the Jetson."""
-  return tuple(m for addon in ADDONS.values() for m in addon.addon_models(params))
-
-
-def present(addon: str) -> bool:
-  return ADDONS[addon].present()
-
-
 def with_jetson(net, addon: str, sha256: str, outputs, *, scaled_u8: bool = False, params=None):
   """The net, asking the Jetson first while the add-on's setting is on."""
   if params is None:
     from openpilot.common.params import Params
     params = Params()
   return ADDONS[addon].wrap(net, sha256, outputs, params=params, scaled_u8=scaled_u8)
-
-
-def read_stats(addon: str, now: float | None = None) -> dict | None:
-  """The add-on's last link report, while fresh."""
-  return ADDONS[addon].report(now)
