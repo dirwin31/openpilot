@@ -1,4 +1,5 @@
 """Jetson add-on choices in Galaxy: saved for the next boot, shown with their link."""
+from jetlink.addons.addon import Addon
 from openpilot.starpilot.models import jetlink_addons
 from openpilot.starpilot.models.jetlink_settings import JetlinkSettings
 from openpilot.starpilot.models.tests.test_jetlink_settings import MemoryParams, TestJetlinkSettings
@@ -15,8 +16,8 @@ def owner(monkeypatch):
 def test_addons_save_without_a_reboot(owner, monkeypatch):
   settings, params = owner
   params.values["JetlinkMode"] = 1
-  monkeypatch.setattr(jetlink_addons, "present", lambda addon: True)
-  monkeypatch.setattr(jetlink_addons, "read_stats", lambda addon: None)
+  monkeypatch.setattr(Addon, "present", lambda self: True)
+  monkeypatch.setattr(Addon, "report", lambda self, now=None: None)
   result = settings.configure({"vasm": True})
   assert "Reboot" not in result["message"]
   assert params.values["JetlinkVasm"] is True
@@ -28,9 +29,9 @@ def test_addons_save_without_a_reboot(owner, monkeypatch):
 def test_addon_link_stats(owner, monkeypatch):
   settings, params = owner
   params.values["JetlinkSignVision"] = True
-  monkeypatch.setattr(jetlink_addons, "present", lambda addon: addon == "signs")
+  monkeypatch.setattr(Addon, "present", lambda self: self.name == "slv")
   monkeypatch.setattr("jetlink.comma.gadget.read_record", lambda path: None)
-  monkeypatch.setattr(jetlink_addons, "read_stats", lambda addon: {"connected": True, "yielding": False,
+  monkeypatch.setattr(Addon, "report", lambda self, now=None: {"connected": True, "yielding": False,
                       "link": {"answered": 40, "timeouts": 1}, "round_trips": {"total_ms": 6.5, "jetson_ms": 3.1}})
   view = settings.snapshot()["addons"]["signVision"]
   assert view == {"enabled": True, "present": True, "running": True, "connected": True,
@@ -41,9 +42,9 @@ def test_addon_link_stats(owner, monkeypatch):
 def test_a_jetson_without_the_comma_model_shows_a_mismatch(owner, monkeypatch):
   settings, params = owner
   params.values["JetlinkVasm"] = True
-  monkeypatch.setattr(jetlink_addons, "present", lambda addon: addon == "vasm")
+  monkeypatch.setattr(Addon, "present", lambda self: self.name == "vasm")
   stats = {"connected": True, "missing": [0xAB12CD34], "link": {}, "round_trips": {"n": 0}}
-  monkeypatch.setattr(jetlink_addons, "read_stats", lambda addon: stats)
+  monkeypatch.setattr(Addon, "report", lambda self, now=None: stats)
   assert settings.snapshot()["addons"]["vasm"]["modelMismatch"]
   stats["connected"] = False
   assert not settings.snapshot()["addons"]["vasm"]["modelMismatch"]
@@ -52,8 +53,8 @@ def test_a_jetson_without_the_comma_model_shows_a_mismatch(owner, monkeypatch):
 def test_no_report_is_idle(owner, monkeypatch):
   settings, params = owner
   params.values["JetlinkVasm"] = True
-  monkeypatch.setattr(jetlink_addons, "present", lambda addon: True)
-  monkeypatch.setattr(jetlink_addons, "read_stats", lambda addon: None)
+  monkeypatch.setattr(Addon, "present", lambda self: True)
+  monkeypatch.setattr(Addon, "report", lambda self, now=None: None)
   view = settings.snapshot()["addons"]["vasm"]
   assert not view["running"] and not view["connected"] and not view["modelMismatch"]
 
@@ -76,7 +77,7 @@ def test_wake_starts_jetlinks_hold_and_shows_the_deadline(owner, monkeypatch, tm
   started = []
   monkeypatch.setattr(jetlink_settings.subprocess, "Popen", lambda argv, **kw: started.append(argv) or
                       gadget.write_record(hold.HOLD, {"pid": os.getpid(), "until": time.monotonic() + 60}))
-  monkeypatch.setattr(jetlink_addons, "present", lambda addon: False)
+  monkeypatch.setattr(Addon, "present", lambda self: False)
   params.values["JetlinkMode"] = 2
   with pytest.raises(ValueError):
     settings.configure({"wake": True})
@@ -91,13 +92,15 @@ def test_wake_starts_jetlinks_hold_and_shows_the_deadline(owner, monkeypatch, tm
 def test_only_the_models_of_addons_turned_on_go_to_the_jetson(tmp_path):
   import hashlib
   from jetlink.openpilot.settings import FileParams
+  from openpilot.starpilot.models.jetlink_adapter import _adapter_class
+  addon_models = _adapter_class().addon_models
   params = FileParams(tmp_path)
-  assert jetlink_addons.addon_models(params) == ()
+  assert addon_models(params) == ()
   (tmp_path / "JetlinkSignVision").write_bytes(b"1")
-  models = jetlink_addons.addon_models(params)
+  models = addon_models(params)
   assert [(m.function.iface_class, m.name) for m in models] == [((0xFF, 0x53, 0x4C), "Sign detector"), ((0xFF, 0x53, 0x4C), "Stop sign detector")]
   (tmp_path / "JetlinkVasm").write_bytes(b"1")
-  for model in jetlink_addons.addon_models(params):
+  for model in addon_models(params):
     assert hashlib.sha256(model.path.read_bytes()).hexdigest() == model.sha256, f"{model.name} is not the file its code pins"
 
 
@@ -106,7 +109,7 @@ def test_the_addon_models_are_the_ones_their_code_runs():
   from openpilot.starpilot.speed_limits.vision.traffic_signs import TrafficSignModelCore
   from openpilot.starpilot.spot_monitor.inference import DEFAULT_MODEL_PATH, MODEL_SHA256
   assets = VisionModelCore.ASSET_DIR
-  assert jetlink_addons.models() == {
+  assert {key: addon.models for key, addon in jetlink_addons.ADDONS.items()} == {
     "vasm": (("V-ASM", DEFAULT_MODEL_PATH, MODEL_SHA256),),
     "signs": (("Sign detector", assets / "traffic_signs_us_detector.onnx", TrafficSignModelCore.DETECTOR_SHA256),
               ("Stop sign detector", assets / "traffic_signs_us_stop_detector.onnx", TrafficSignModelCore.STOP_PROJECTION_SHA256))}
@@ -116,9 +119,9 @@ def test_the_jetson_state_of_each_addon(owner, monkeypatch):
   from jetlink.comma import gadget
   settings, params = owner
   params.values["JetlinkVasm"] = True
-  monkeypatch.setattr(jetlink_addons, "read_stats", lambda addon: None)
-  vasm = jetlink_addons.models()["vasm"][0][2]
-  signs = [sha for _, _, sha in jetlink_addons.models()["signs"]]
+  monkeypatch.setattr(Addon, "report", lambda self, now=None: None)
+  vasm = jetlink_addons.ADDONS["vasm"].models[0][2]
+  signs = [sha for _, _, sha in jetlink_addons.ADDONS["signs"].models]
   for server, vasm_state, signs_state in ((None, None, None), ({"device": "orin"}, "unsupported", "unsupported"),
                                           ({"addons": {"ready": [vasm, signs[0]], "failed": []}}, "ready", "missing"),
                                           ({"addons": {"ready": [signs[0]], "failed": [signs[1]]}}, "missing", "failed")):
