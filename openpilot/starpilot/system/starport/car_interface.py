@@ -92,6 +92,17 @@ def _join_policy() -> dict:
   return read_prefs()
 
 
+_projection_status = None
+
+
+def _phone_projecting() -> bool:
+  global _projection_status
+  if _projection_status is None:
+    from openpilot.starpilot.system.phone_projection.ipc import StatusReader
+    _projection_status = StatusReader()
+  return _projection_status.read().get("state") == "active"
+
+
 def _hotspot():
   try:
     from openpilot.starpilot.galaxy import hotspot
@@ -104,7 +115,8 @@ class DedicatedLease:
   """The car's Wi-Fi on aa0, falling back to the legacy lease on wlan0 for a session that cannot use it."""
 
   def __init__(self, log: Callable[..., None], fallback_interface: str, lease_factory, interface_factory=None,
-               enabled: bool = True, join_policy: Callable[[], dict] | None = None, hotspot=None):
+               enabled: bool = True, join_policy: Callable[[], dict] | None = None, hotspot=None,
+               phone_projecting: Callable[[], bool] = _phone_projecting):
     self.log, self.fallback_interface = log, fallback_interface
     self.lease_factory, self.interface_factory = lease_factory, interface_factory or DedicatedInterface
     self.enabled = enabled
@@ -123,6 +135,8 @@ class DedicatedLease:
     self._home_holds = 0
     self._join_stalled = False
     self._last_join = ""
+    self.phone_projecting = phone_projecting
+    self._phone_hold = False  # a phone projected this session; wlan0 stays off until it ends
     self.join_policy, self.hotspot = join_policy or _join_policy, hotspot if hotspot is not None else _hotspot()
 
   @property
@@ -184,7 +198,7 @@ class DedicatedLease:
       if self.legacy or self._cancel.is_set():
         return
       if self.home is not None:
-        if self._home_retry is None:
+        if self._home_retry is None and not self._phone_hold:
           self._arm(HOME_CHECK_S)  # the network joined during this drive was lost again
         return
       home = self.lease_factory(self.log, self.fallback_interface)
@@ -201,6 +215,35 @@ class DedicatedLease:
       self._home_holds += 1
       self._arm(after_s)
       self.log("wifi_home_held", interface=self.fallback_interface, retry_after_s=after_s)
+
+  def hold_for_phone(self) -> None:
+    """A phone projecting over the hotspot keeps wlan0 off any network until the session ends."""
+    if self._phone_hold or self.legacy or self._cancel.is_set():
+      return
+    try:
+      projecting = self.phone_projecting()
+    except Exception:
+      return
+    if not projecting:
+      return
+    with self._home_lock:
+      if self._phone_hold or self._cancel.is_set():
+        return
+      self._phone_hold = True
+      retry, self._home_retry = self._home_retry, None
+      if retry is not None:
+        retry.cancel()
+      home = self.home or self.lease_factory(self.log, self.fallback_interface)
+      try:
+        held = home.hold_autoconnect(drop=True)
+      except NetworkError as error:
+        self.log("wifi_home_hold_failed", error=str(error))
+        held = False
+      if held:
+        self.home = home
+      elif home is not self.home:
+        home.release(restore=True)
+      self.log("wifi_phone_hold", interface=self.fallback_interface, held=held)
 
   def _arm(self, after_s: float) -> None:
     self._home_retry = threading.Timer(after_s, self._retry_home)
@@ -224,6 +267,9 @@ class DedicatedLease:
     """When a hold runs out, join an allowed network by hand; wlan0 never hunts by itself during a drive."""
     with self._home_lock:
       home, self._home_retry = self.home, None
+    self.hold_for_phone()
+    if self._phone_hold:
+      return
     join = getattr(home, "drive_join", None)
     if home is None or join is None:
       self._release_home()
@@ -354,6 +400,7 @@ class DedicatedLease:
     if restore:
       with self._home_lock:
         retry, self._home_retry, self._home_holds = self._home_retry, None, 0
+        self._phone_hold = False
       if retry is not None:
         retry.cancel()
       if self.hotspot is not None:

@@ -19,12 +19,13 @@ class SharedRadioWatch:
 
   def __init__(self, log: Callable[..., None], interface: str = "wlan0", interval: float = RADIO_CHECK_INTERVAL,
                counter: Path | None = None, carrier: Path | None = None, on_down: Callable[[], None] | None = None,
-               on_stall: Callable[[], None] | None = None):
+               on_stall: Callable[[], None] | None = None, on_poll: Callable[[], None] | None = None):
     self.log, self.interface, self.interval = log, interface, interval
     self.counter = counter or Path(f"/sys/class/net/{interface}/carrier_changes")
     self.carrier = carrier or Path(f"/sys/class/net/{interface}/carrier")
     self.on_down = on_down  # the other network was lost, not just roamed
     self.on_stall = on_stall  # the car's acks stopped after a change that has not connected yet
+    self.on_poll = on_poll
     self.changed_at: float | None = None
     self._stop = threading.Event()
     self._thread = threading.Thread(target=self._run, name="aa_radio_watch", daemon=True)
@@ -51,6 +52,11 @@ class SharedRadioWatch:
   def _run(self) -> None:
     last = self._read()
     while not self._stop.wait(self.interval):
+      if self.on_poll is not None:
+        try:
+          self.on_poll()
+        except Exception as error:
+          self.log("other_wifi_poll_failed", error=str(error) or type(error).__name__)
       current = self._read()
       if current is None or current == last:
         continue

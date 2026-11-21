@@ -475,21 +475,21 @@ class NetworkLease:
     except NetworkError as error:
       self.log("wifi_scan_request_failed", error=str(error))
 
-  def hold_autoconnect(self) -> bool:
-    """Stop wlan0 hunting for a network until release(restore=True). True when held."""
+  def hold_autoconnect(self, drop: bool = False) -> bool:
+    """Stop wlan0 hunting for a network until release(restore=True). True when held; drop also leaves a joined one."""
     with self._lock:
       self.device_path = next((path for path, name in self._wifi_devices() if name == self.interface), "")
       if not self.device_path:
         return False
       state = int(self._get(self.device_path, NM_DEVICE_IFACE, "State"))
-      if state == DEVICE_STATE_ACTIVATED:
+      if state == DEVICE_STATE_ACTIVATED and not drop:
         if self._carrier():
           return False  # connected again; nothing to hold
         # NetworkManager reports a lost network as connected for 15 s, then joins the next one by itself.
         self._pause_autoconnect()
         return self.autoconnect_paused
       self._pause_autoconnect()
-      if DEVICE_STATE_PREPARE <= state < DEVICE_STATE_ACTIVATED:
+      if DEVICE_STATE_PREPARE <= state <= DEVICE_STATE_ACTIVATED:
         self._remember_join()
         try:
           self._call(self.device_path, NM_DEVICE_IFACE, "Disconnect")  # a join already under way

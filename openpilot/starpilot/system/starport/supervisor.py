@@ -2085,7 +2085,8 @@ class Supervisor:
     radio = None
     if getattr(lease, "dedicated", False) and getattr(lease, "interface", "wlan0") != "wlan0":
       radio = SharedRadioWatch(self.log, on_down=getattr(lease, "hold_home_wifi", None),
-                               on_stall=getattr(lease, "stop_home_join", None)).start()
+                               on_stall=getattr(lease, "stop_home_join", None),
+                               on_poll=getattr(lease, "hold_for_phone", None)).start()
       session.radio_change = radio.recent
       session.radio_stalled = radio.stalled
       if not radio._carrier() and getattr(lease, "hold_home_wifi", None) is not None:

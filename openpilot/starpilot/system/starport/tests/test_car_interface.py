@@ -66,8 +66,8 @@ class FakeLease:
   def release(self, restore=True):
     self.releases.append(restore)
 
-  def hold_autoconnect(self):
-    self.held = True
+  def hold_autoconnect(self, drop=False):
+    self.held, self.dropped = True, drop
     return True
 
 
@@ -231,6 +231,36 @@ def test_late_radio_callback_cannot_hold_home_wifi_after_release():
   assert lease.home is None and not any(item.held for item in leases)
 
 
+def test_projecting_phone_drops_home_wifi_and_blocks_joins_until_the_session_ends(monkeypatch):
+  monkeypatch.setattr(car_interface, "HOME_RETRY_S", 0.01)
+  projecting = [False]
+  lease, leases, log = make()
+  lease.phone_projecting = lambda: projecting[0]
+  lease.acquire(credentials())
+  lease.hold_for_phone()
+  assert lease.home is None
+  projecting[0] = True
+  lease.hold_for_phone()
+  home = lease.home
+  assert home is not None and home.dropped and lease._home_retry is None
+  projecting[0] = False  # the phone went away; home Wi-Fi stays off for the rest of the session
+  lease.hold_home_wifi()
+  lease._retry_home()
+  lease.release(restore=False)
+  assert lease.home is home and lease._home_retry is None and home.releases == []
+  assert log.names().count("wifi_phone_hold") == 1 and "wifi_drive_join" not in log.names()
+  lease.release(restore=True)
+  assert home.releases == [True] and not lease._phone_hold
+
+
+def test_phone_hold_leaves_wlan0_alone_when_the_car_uses_it():
+  lease, leases, log = make(fail=True)
+  lease.phone_projecting = lambda: True
+  lease.acquire(credentials())
+  lease.hold_for_phone()
+  assert lease.home is None and not any(item.held for item in leases)
+
+
 def test_home_wifi_that_came_back_is_not_held(monkeypatch):
   lease, leases, log = make()
   lease.acquire(credentials())
@@ -391,15 +421,17 @@ def test_dedicated_network_lease_rejects_overlapping_subnet_without_a_second_joi
   assert nm.calls.count("AddAndActivateConnection2") == 1
 
 
-@pytest.mark.parametrize("state, held, disconnected", [(30, True, False), (120, True, False), (50, True, True), (100, False, False)])
-def test_hold_autoconnect_on_lost_home_wifi(tmp_path, state, held, disconnected):
+@pytest.mark.parametrize("state, held, disconnected, drop", [(30, True, False, False), (120, True, False, False), (50, True, True, False),
+                                                       (100, False, False, False), (100, True, True, True)])
+def test_hold_autoconnect_on_lost_home_wifi(tmp_path, state, held, disconnected, drop, monkeypatch):
+  monkeypatch.setattr(NetworkLease, "_carrier", lambda self: True)
   nm = FakeNM(state=state)
   lease: Any = NetworkLease(Log(), "wlan0")
   lease._call, lease._get, lease._set = nm.call, nm.get, nm.set_property
   lease.router = type("R", (), {"close": lambda self: None})()
   lease.marker = tmp_path / "paused.json"
   lease.rejoin_marker = tmp_path / "rejoin.json"
-  assert lease.hold_autoconnect() is held
+  assert lease.hold_autoconnect(drop=drop) is held
   assert ("Disconnect" in nm.calls) is disconnected
   assert nm.set == ([("/dev/wlan0", "Autoconnect", False)] if held else [])
   # NetworkManager blocks a network stopped mid-join, so only that one is noted for a rejoin
@@ -569,10 +601,6 @@ def test_daemon_saves_and_reports_the_dedicated_wifi_choice(identity, tmp_path, 
 class JoiningLease(FakeLease):
   outcomes: list = []
   calls: list = []
-
-  def hold_autoconnect(self):
-    self.held = True
-    return True
 
   def drive_join(self, allowed, before=lambda: True, after=lambda: None):
     JoiningLease.calls.append((allowed("parked-only"), allowed("anywhere"), before()))
