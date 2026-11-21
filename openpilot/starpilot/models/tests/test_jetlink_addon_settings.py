@@ -29,12 +29,13 @@ def test_addon_link_stats(owner, monkeypatch):
   settings, params = owner
   params.values["JetlinkSignVision"] = True
   monkeypatch.setattr(jetlink_addons, "present", lambda addon: addon == "signs")
+  monkeypatch.setattr("jetlink.comma.gadget.read_record", lambda path: None)
   monkeypatch.setattr(jetlink_addons, "read_stats", lambda addon: {"connected": True, "yielding": False,
                       "link": {"answered": 40, "timeouts": 1}, "round_trips": {"total_ms": 6.5, "jetson_ms": 3.1}})
   view = settings.snapshot()["addons"]["signVision"]
   assert view == {"enabled": True, "present": True, "running": True, "connected": True,
-                  "yielding": False, "modelMismatch": False, "answered": 40, "timeouts": 1, "roundTripMs": 6.5,
-                  "jetsonMs": 3.1}
+                  "yielding": False, "modelMismatch": False, "jetson": None, "preparing": "", "answered": 40, "timeouts": 1,
+                  "roundTripMs": 6.5, "jetsonMs": 3.1}
 
 
 def test_a_jetson_without_the_comma_model_shows_a_mismatch(owner, monkeypatch):
@@ -63,38 +64,70 @@ def test_addon_choices_are_exact(owner, payload):
     owner[0].configure(payload)
 
 
-def test_wake_starts_a_hold_and_shows_the_deadline(owner, monkeypatch, tmp_path):
+def test_wake_starts_jetlinks_hold_and_shows_the_deadline(owner, monkeypatch, tmp_path):
   import os
+  import sys
   import time
-  from jetlink.comma import gadget
-  from openpilot.starpilot.models import jetlink_wake
+  from jetlink.comma import gadget, hold
+  from openpilot.starpilot.models import jetlink_settings
   settings, params = owner
-  monkeypatch.setattr(jetlink_wake, "RECORD", tmp_path / "wake.json")
+  monkeypatch.setattr(hold, "HOLD", tmp_path / "hold.json")
   monkeypatch.setattr(gadget, "owner_status", lambda: {"dormant": True})
   started = []
-  monkeypatch.setattr(jetlink_wake.subprocess, "Popen", lambda *a, **kw: started.append(a) or
-                      gadget.write_record(jetlink_wake.RECORD, {"pid": os.getpid(), "until": time.monotonic() + 60}))
+  monkeypatch.setattr(jetlink_settings.subprocess, "Popen", lambda argv, **kw: started.append(argv) or
+                      gadget.write_record(hold.HOLD, {"pid": os.getpid(), "until": time.monotonic() + 60}))
   monkeypatch.setattr(jetlink_addons, "present", lambda addon: False)
   params.values["JetlinkMode"] = 2
   with pytest.raises(ValueError):
     settings.configure({"wake": True})
   params.values["JetlinkMode"] = 1
   assert "Waking" in settings.configure({"wake": True})["message"]
-  assert "already" in settings.configure({"wake": True})["message"] and len(started) == 1
+  assert "already" in settings.configure({"wake": True})["message"]
+  assert started == [[sys.executable, "-m", "jetlink.comma.hold", "-t", "900", "--parked"]]
   view = settings.snapshot()
   assert view["asleep"] and 0 < view["awakeFor"] <= 60
 
 
-def test_the_hold_gives_the_gadget_back_when_driving_starts(monkeypatch, tmp_path):
-  from unittest import mock
-  from jetlink.comma import lending
-  from openpilot.starpilot.models import jetlink_wake
-  monkeypatch.setattr(jetlink_wake, "RECORD", tmp_path / "wake.json")
-  monkeypatch.setattr(lending, "hung_up", lambda conn, wait: False)
-  loan = mock.Mock()
-  jetlink_wake.hold(loan, lambda: True)
-  loan.close.assert_called_once()
-  assert not jetlink_wake.RECORD.exists() and jetlink_wake.awake_for() is None
+def test_only_the_models_of_addons_turned_on_go_to_the_jetson(tmp_path):
+  import hashlib
+  from jetlink.openpilot.settings import FileParams
+  params = FileParams(tmp_path)
+  assert jetlink_addons.addon_models(params) == ()
+  (tmp_path / "JetlinkSignVision").write_bytes(b"1")
+  models = jetlink_addons.addon_models(params)
+  assert [(m.function.iface_class, m.name) for m in models] == [((0xFF, 0x53, 0x4C), "Sign detector"), ((0xFF, 0x53, 0x4C), "Stop sign detector")]
+  (tmp_path / "JetlinkVasm").write_bytes(b"1")
+  for model in jetlink_addons.addon_models(params):
+    assert hashlib.sha256(model.path.read_bytes()).hexdigest() == model.sha256, f"{model.name} is not the file its code pins"
+
+
+def test_the_addon_models_are_the_ones_their_code_runs():
+  from openpilot.starpilot.speed_limits.vision.model import VisionModelCore
+  from openpilot.starpilot.speed_limits.vision.traffic_signs import TrafficSignModelCore
+  from openpilot.starpilot.spot_monitor.inference import DEFAULT_MODEL_PATH, MODEL_SHA256
+  assets = VisionModelCore.ASSET_DIR
+  assert jetlink_addons.MODELS == {
+    "vasm": (("V-ASM", DEFAULT_MODEL_PATH, MODEL_SHA256),),
+    "signs": (("Sign detector", assets / "traffic_signs_us_detector.onnx", TrafficSignModelCore.DETECTOR_SHA256),
+              ("Stop sign detector", assets / "traffic_signs_us_stop_detector.onnx", TrafficSignModelCore.STOP_PROJECTION_SHA256))}
+
+
+def test_the_jetson_state_of_each_addon(owner, monkeypatch):
+  from jetlink.comma import gadget
+  settings, params = owner
+  params.values["JetlinkVasm"] = True
+  monkeypatch.setattr(jetlink_addons, "read_stats", lambda addon: None)
+  vasm = jetlink_addons.models()["vasm"][0][2]
+  signs = [sha for _, _, sha in jetlink_addons.models()["signs"]]
+  for server, vasm_state, signs_state in ((None, None, None), ({"device": "orin"}, "unsupported", "unsupported"),
+                                          ({"addons": {"ready": [vasm, signs[0]], "failed": []}}, "ready", "missing"),
+                                          ({"addons": {"ready": [signs[0]], "failed": [signs[1]]}}, "missing", "failed")):
+    monkeypatch.setattr(gadget, "read_record", lambda path, server=server: server)
+    view = settings.snapshot()["addons"]
+    assert (view["vasm"]["jetson"], view["signVision"]["jetson"]) == (vasm_state, signs_state)
+  params.values["JetlinkProgress"] = {"msg": "V-ASM: build 40%", "code": "addon_build", "args": {"name": "V-ASM"}}
+  view = settings.snapshot()["addons"]
+  assert view["vasm"]["preparing"] == "V-ASM: build 40%" and view["signVision"]["preparing"] == ""
 
 
 def test_unavailable_snapshot_has_addons():

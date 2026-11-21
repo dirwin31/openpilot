@@ -56,7 +56,7 @@ def _adapter_class():
     # sizes it, jetlink writes a newer choice made in its app into it, and with none runs the app's choice or its
     # default model
     KEYS = Keys(link="JetlinkMode", offroad="IsOffroad", progress="JetlinkProgress", spec="JetlinkSpec",
-                big_model="JetlinkModel", charge_phone="JetlinkChargePhone")
+                big_model="JetlinkModel", charge_phone="JetlinkChargePhone", addons=("JetlinkVasm", "JetlinkSignVision"))
     IN_CONTROL_SERVICES = ("carControl", "selfdriveState")
     _aol = None
     _aol_since = 0.
@@ -66,6 +66,11 @@ def _adapter_class():
       # always on the gadget: each add-on's setting is read live where its model runs
       from openpilot.starpilot.models.jetlink_addons import gadget_functions
       return gadget_functions()
+
+    @classmethod
+    def addon_models(cls, params):
+      from openpilot.starpilot.models.jetlink_addons import addon_models
+      return addon_models(params)
 
     def model_root(self):
       from openpilot.starpilot.models.manager import ROOT

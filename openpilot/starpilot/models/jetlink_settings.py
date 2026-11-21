@@ -1,11 +1,15 @@
 """Parked Jetlink selection and its read-only provisioning status."""
 from __future__ import annotations
 
+import subprocess
+import sys
+
 from openpilot.starpilot.models.jetlink_adapter import UNSUPPORTED
 
 MODES = ("off", "usb", "ios")
 # Galaxy field to jetlink_addons key
 ADDON_FIELDS = {"vasm": "vasm", "signVision": "signs"}
+WAKE_SECONDS = 15 * 60
 
 # jetlink's Status.phase in Galaxy's words, where they differ
 PHASES = {"waiting": "waiting for disengagement", "reconnecting": "fallback / reconnecting"}
@@ -82,25 +86,29 @@ class JetlinkSettings:
 
   @staticmethod
   def awake():
-    """Whether the owner let the Jetson sleep, and the deadline of a wake asked from Galaxy."""
-    from jetlink.comma import gadget
-    from openpilot.starpilot.models import jetlink_wake
+    """Whether the owner let the Jetson sleep, and how long a hold keeps it awake."""
+    from jetlink.comma import gadget, hold
     record = gadget.owner_status() or {}
-    return {"asleep": bool(record.get("dormant")), "awakeFor": jetlink_wake.awake_for()}
+    return {"asleep": bool(record.get("dormant")), "awakeFor": hold.awake_for()}
 
   def wake(self):
     view = self.snapshot()
     if view["mode"] != "usb" or not view["supported"]:
       raise ValueError("Waking the Jetson needs the USB computer connection")
-    from openpilot.starpilot.models import jetlink_wake
-    if not jetlink_wake.start():
+    from jetlink.comma import hold
+    if hold.awake_for() is not None:
       return {"message": "The Jetson is already being kept awake."}
+    # JetLink's own hold, in a process of its own so a Galaxy restart does not end it; a drive starting does
+    subprocess.Popen([sys.executable, "-m", "jetlink.comma.hold", "-t", str(WAKE_SECONDS), "--parked"], start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {"message": "Waking the Jetson. It stays awake for 15 minutes and joins its Wi-Fi."}
 
   def addons(self):
-    """Each Jetson add-on: its setting, whether the gadget carries it, and its link."""
+    """Each Jetson add-on: its setting, whether the gadget carries it, its models on the Jetson, and its link."""
+    from jetlink.comma import gadget
     from openpilot.starpilot.models import jetlink_addons
     params, view = self.params(), {}
+    server, progress = gadget.read_record(gadget.SERVER), params.get("JetlinkProgress")
     for field, addon in ADDON_FIELDS.items():
       on, present = params.get_bool(jetlink_addons.ADDONS[addon].setting), jetlink_addons.present(addon)
       report = jetlink_addons.read_stats(addon) if present else None
@@ -109,6 +117,7 @@ class JetlinkSettings:
       connected = bool(stats.get("connected"))
       view[field] = {"enabled": on, "present": present, "running": bool(stats), "connected": connected, "yielding": bool(stats.get("yielding")),
                      "modelMismatch": connected and bool(stats.get("missing")),
+                     **dict(zip(("jetson", "preparing"), jetlink_addons.jetson_state(addon, server, progress), strict=True)),
                      "answered": int(link.get("answered", 0) or 0), "timeouts": int(link.get("timeouts", 0) or 0),
                      "roundTripMs": trips.get("total_ms"), "jetsonMs": trips.get("jetson_ms")}
     return view
