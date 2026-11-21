@@ -1,9 +1,11 @@
-"""Jetson add-ons over Jetlink's cable: V-ASM and sign vision ask the Jetson first, switched live by their settings."""
+"""Jetson add-ons over Jetlink's cable: V-ASM and sign vision ask the Jetson first, switched live by their settings.
+JetLink's parked provisioning run sends the Jetson each model it lacks (addon_models)."""
 from __future__ import annotations
 
 import json
 import os
 import time
+from pathlib import Path
 from typing import NamedTuple
 
 
@@ -29,6 +31,41 @@ def gadget_function(addon: str):
 def gadget_functions() -> tuple:
   """Every add-on's interface, whatever its setting: one nothing opens costs nothing."""
   return tuple(gadget_function(addon) for addon in ADDONS)
+
+
+_ROOT = Path(__file__).resolve().parents[3]
+_SIGN_ASSETS = _ROOT / "openpilot/starpilot/speed_limits/vision/assets"
+# each add-on's models, (name, path, sha256): the files and hashes the code that runs them pins
+MODELS = {"vasm": (("V-ASM", _ROOT / "starpilot/assets/vision_models/v_asm_model.onnx",
+                    "5d20cdbb457ba18db51a537ee2e305bbe442264b1613956068d473e35d15900d"),),
+          "signs": (("Sign detector", _SIGN_ASSETS / "traffic_signs_us_detector.onnx",
+                     "dd9398ca0df68abdbc1120d41859d17d634a21a625b1191d10b5e4ddf88de7c8"),
+                    ("Stop sign detector", _SIGN_ASSETS / "traffic_signs_us_stop_detector.onnx",
+                     "a744df1b585bfd80a2a983229509f52bf2f09714d9df011109ad1b8b875aaecc"))}
+
+
+def models() -> dict:
+  return MODELS
+
+
+def addon_models(params) -> tuple:
+  """The models of each add-on turned on, for JetLink to send the Jetson."""
+  from jetlink.openpilot.interface import AddonModel
+  return tuple(AddonModel(gadget_function(addon), name, path, sha256) for addon, entries in models().items()
+               if params.get_bool(ADDONS[addon].setting) for name, path, sha256 in entries)
+
+
+def jetson_state(addon: str, server: dict | None, progress: dict | None) -> tuple[str | None, str]:
+  """The add-on's models on the Jetson the comma last spoke to (jetlink's provision.addon_state, the worst of them),
+  and the provisioning run's progress text while it prepares one of them."""
+  from jetlink.openpilot.provision import addon_state
+  entries = models()[addon]
+  states = {addon_state(sha256, server) for _, _, sha256 in entries}
+  state = next((s for s in ("unsupported", "failed", "missing", None) if s in states), "ready")
+  progress = progress if isinstance(progress, dict) else {}
+  args = progress.get("args") if isinstance(progress.get("args"), dict) else {}
+  preparing = progress.get("code") in ("addon_upload", "addon_build") and args.get("name") in {name for name, _, _ in entries}
+  return state, str(progress.get("msg", "")) if preparing else ""
 
 
 def live_setting(key: str, params):

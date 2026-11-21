@@ -14,9 +14,13 @@ export function addonState(addon, usb = true) {
   if (!addon) return "Unavailable"
   if (addon.enabled && !usb) return "Needs USB computer"
   if (!addon.enabled) return "Off"
+  if (addon.preparing) return `Preparing… ${addon.preparing}`
+  if (addon.jetson === "unsupported") return "Update JetLink on the Jetson"
+  if (addon.jetson === "failed") return "Jetson can't run this model"
+  if (addon.jetson === "missing") return "Prepares next time you park"
   if (!addon.present) return "Waiting for JetLink"
   if (!addon.running) return "Idle"
-  if (addon.modelMismatch) return "Jetson has a different model"
+  if (addon.modelMismatch) return "Prepares next time you park"
   if (addon.yielding) return "Yielding to driving model"
   if (addon.connected) return "On Jetson"
   return "Waiting for Jetson"
@@ -125,13 +129,13 @@ export const JetlinkPage = {
           <section class="gx-card gx-settings__section" aria-labelledby="gx-jetlink-addons">
             <div class="gx-section__header"><i aria-hidden="true" class="bi bi-gpu-card"></i><span id="gx-jetlink-addons" class="gx-section__title">Jetson add-ons</span></div>
             <div class="gx-panel gx-stack">
-              <p class="gx-model-reason">For a Jetson on USB. The comma keeps running each model itself whenever the Jetson is busy with the driving model or doesn't answer. Set up the add-ons on the Jetson first (tools/jetson_addons).</p>
+              <p class="gx-model-reason">For a Jetson on USB. The comma keeps running each model itself whenever the Jetson is busy with the driving model or doesn't answer. The Jetson gets each model while parked, then sleeps.</p>
               <div v-for="item in addonRows" :key="item.field" class="gx-row" :class="{disabled: !canChange || !usb}">
                 <span class="gx-row__info">
                   <span class="gx-row__label"><i :class="['bi', item.icon]" aria-hidden="true"></i> {{ item.title }}</span>
                   <span class="gx-note">{{ item.detail }}</span>
                   <span class="gx-note" role="status"><span class="gx-chip">{{ item.label }}</span><span v-if="item.timing"> · {{ item.timing }}</span></span>
-                  <span v-if="item.addon?.modelMismatch" class="gx-model-reason">The comma runs this model itself until the Jetson has the same file. Run tools/jetson_addons/install.sh again.</span>
+                  <span v-if="item.addon?.modelMismatch" class="gx-model-reason">The comma runs this model itself until the Jetson has the same file. JetLink sends it next time you park.</span>
                   <span v-else-if="item.idle" class="gx-note">Starts when the comma runs this model, usually once driving.</span>
                 </span>
                 <label class="gx-switch"><input type="checkbox" role="switch" :aria-label="item.title" :checked="pending?.[item.field] ?? item.enabled" :disabled="!canChange || (!usb && !item.enabled)" @change="toggle(item.field, $event)"><span class="gx-switch__track"></span><span class="gx-switch__thumb"></span></label>
