@@ -106,7 +106,7 @@ def test_the_addon_models_are_the_ones_their_code_runs():
   from openpilot.starpilot.speed_limits.vision.traffic_signs import TrafficSignModelCore
   from openpilot.starpilot.spot_monitor.inference import DEFAULT_MODEL_PATH, MODEL_SHA256
   assets = VisionModelCore.ASSET_DIR
-  assert jetlink_addons.MODELS == {
+  assert jetlink_addons.models() == {
     "vasm": (("V-ASM", DEFAULT_MODEL_PATH, MODEL_SHA256),),
     "signs": (("Sign detector", assets / "traffic_signs_us_detector.onnx", TrafficSignModelCore.DETECTOR_SHA256),
               ("Stop sign detector", assets / "traffic_signs_us_stop_detector.onnx", TrafficSignModelCore.STOP_PROJECTION_SHA256))}

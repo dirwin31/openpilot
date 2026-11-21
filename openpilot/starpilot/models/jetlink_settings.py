@@ -117,7 +117,7 @@ class JetlinkSettings:
       connected = bool(stats.get("connected"))
       view[field] = {"enabled": on, "present": present, "running": bool(stats), "connected": connected, "yielding": bool(stats.get("yielding")),
                      "modelMismatch": connected and bool(stats.get("missing")),
-                     **dict(zip(("jetson", "preparing"), jetlink_addons.jetson_state(addon, server, progress), strict=True)),
+                     **jetlink_addons.ADDONS[addon].state(server, progress),
                      "answered": int(link.get("answered", 0) or 0), "timeouts": int(link.get("timeouts", 0) or 0),
                      "roundTripMs": trips.get("total_ms"), "jetsonMs": trips.get("jetson_ms")}
     return view

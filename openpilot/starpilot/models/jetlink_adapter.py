@@ -50,27 +50,19 @@ def aol_in_control(intent, alive, axes, waiting=False) -> bool:
 def _adapter_class():
   from jetlink.openpilot.interface import Keys
   from jetlink.openpilot.stock import Stock
+  from openpilot.starpilot.models import jetlink_addons
 
   class StarPilotAdapter(Stock):
     # Active Big's choice for Jetlink, by the ONNX's hash (jetlink_settings), and no catalog: Jetlink's model index
     # sizes it, jetlink writes a newer choice made in its app into it, and with none runs the app's choice or its
     # default model
     KEYS = Keys(link="JetlinkMode", offroad="IsOffroad", progress="JetlinkProgress", spec="JetlinkSpec",
-                big_model="JetlinkModel", charge_phone="JetlinkChargePhone", addons=("JetlinkVasm", "JetlinkSignVision"))
+                big_model="JetlinkModel", charge_phone="JetlinkChargePhone")
     IN_CONTROL_SERVICES = ("carControl", "selfdriveState")
     _aol = None
     _aol_since = 0.
 
-    @classmethod
-    def gadget_functions(cls, params):
-      # always on the gadget: each add-on's setting is read live where its model runs
-      from openpilot.starpilot.models.jetlink_addons import gadget_functions
-      return gadget_functions()
-
-    @classmethod
-    def addon_models(cls, params):
-      from openpilot.starpilot.models.jetlink_addons import addon_models
-      return addon_models(params)
+    ADDONS = tuple(jetlink_addons.ADDONS.values())
 
     def model_root(self):
       from openpilot.starpilot.models.manager import ROOT
