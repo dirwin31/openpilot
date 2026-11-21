@@ -1,4 +1,5 @@
 """CarPlay route guidance carried in the Wi-Fi session's iAP2 tunnel becomes phone guidance for navigationd."""
+import json
 import socket
 import threading
 import time
@@ -11,6 +12,7 @@ from openpilot.starpilot.system.carplay.iap2.session import Iap2Session
 from openpilot.starpilot.system.carplay.iap2.tunnel import TunnelLink
 from openpilot.starpilot.system.carplay.iap2.wire import Body, Frame
 from openpilot.starpilot.system.phone_projection import guidance as g
+from openpilot.starpilot.system.phone_projection.guidance_log import GuidanceLog, nav_app
 
 
 class Timer:
@@ -138,6 +140,8 @@ def test_runner_carries_tunnel_guidance_to_navigation_and_ends_it_with_the_sessi
   runner = CarPlayRunner.__new__(CarPlayRunner)
   runner.lock, runner.touches, runner.state, runner.pipe = threading.Lock(), TouchTracker(), "active", None
   runner.message = ""
+  runner.phone = "iPhone"
+  runner.trace = GuidanceLog("iPhone", directory=tmp_path / "logs")
   runner.ctx = type("Ctx", (), {"audio": Audio(), "log": staticmethod(lambda m: None)})()
   runner.tunnel = runner.guidance = None
   runner.guidance_factory = lambda: g.CarPlayGuidance(publisher=publisher, log=lambda m: None, timer=Timer)
@@ -164,7 +168,7 @@ def test_runner_carries_tunnel_guidance_to_navigation_and_ends_it_with_the_sessi
   try:
     assert phone.ready.wait(5)
     phone.send(Frame.build(g.ROUTE_GUIDANCE_MANEUVER_UPDATE, Body().u16(1, 0).u8(3, 1).string(4, 'Elm St')))
-    phone.send(Frame.build(g.ROUTE_GUIDANCE_UPDATE, Body().u8(1, 1).u16_list(13, [0]).u32(10, 120)))
+    phone.send(Frame.build(g.ROUTE_GUIDANCE_UPDATE, Body().u8(1, 1).u16_list(13, [0]).u32(10, 120).string(0x13, 'Google Maps')))
     deadline = time.monotonic() + 5
     while (value := read_phone_navigation(time.monotonic_ns(), publisher.path)) is None and time.monotonic() < deadline:
       time.sleep(0.02)
@@ -174,6 +178,32 @@ def test_runner_carries_tunnel_guidance_to_navigation_and_ends_it_with_the_sessi
     assert selected['source'] == 'phone:carPlay' and selected['status'] == 'guiding'
     runner.on_session_closed(session)
     assert runner.tunnel is None and read_phone_navigation(time.monotonic_ns(), publisher.path) is None
+    events = [json.loads(line) for line in next((tmp_path / "logs").glob("carplay-*.jsonl")).read_text().splitlines()]
+    names = [e["event"] for e in events]
+    for name in ("session_start", "tunnel_open", "maneuver", "route_state", "nav_app", "step", "navigation", "session_end"):
+      assert name in names
+    assert next(e for e in events if e["event"] == "nav_app")["app"] == "googleMaps"
+    step = next(e for e in events if e["event"] == "step")
+    assert step["roadName"] == "Elm St" and step["distanceMeters"] == 120 and step["known"]
+    end = events[-1]
+    assert end["guidance"] and end["apps"] == ["googleMaps"] and end["received"]["0x5201"] >= 1
   finally:
     phone.close()
     bridge.close()
+
+
+@pytest.mark.parametrize("source, app", [("Google Maps", "googleMaps"), ("Maps", "appleMaps"), ("Apple Maps", "appleMaps"),
+                                         ("Waze", "waze"), ("Some Nav", "other"), ("", "")])
+def test_nav_app_names_the_navigating_app(source, app):
+  assert nav_app(source) == app
+
+
+def test_guidance_log_keeps_only_the_newest_files(tmp_path):
+  for i in range(5):
+    (tmp_path / f"carplay-2026010{i}-000000.jsonl").write_text("{}\n")
+  log = GuidanceLog("iPhone", directory=tmp_path, keep=3)
+  log.close("done")
+  files = sorted(p.name for p in tmp_path.glob("carplay-*.jsonl"))
+  assert len(files) == 3 and "carplay-20260104-000000.jsonl" in files
+  log.event("after_close")
+  assert "after_close" not in log.path.read_text()

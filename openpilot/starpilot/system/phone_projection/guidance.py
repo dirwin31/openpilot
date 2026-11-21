@@ -335,10 +335,16 @@ def _iap_uint(value: bytes | None) -> int | None:
 
 class CarPlayGuidance(HeadUnitGuidance):
   """CarPlay route guidance (iAP2 0x5201 route and 0x5202 maneuver updates) as phone guidance."""
-  def __init__(self, publisher=None, log: Callable[[str], None] = print, **kwargs):
+  def __init__(self, publisher=None, log: Callable[[str], None] = print, trace=None, **kwargs):
     super().__init__(publisher, source=CARPLAY_SOURCE, log=log, **kwargs)
     self.maneuvers: dict[int, dict] = {}
     self.current: int | None = None
+    self.trace = trace  # GuidanceLog: what the iPhone sent, kept for after the drive
+    self.route_state: int | None = None
+
+  def _note(self, name: str, **fields) -> None:
+    if self.trace is not None:
+      self.trace.event(name, **fields)
 
   def handle_frame(self, message_id: int, payload: bytes) -> None:
     try:
@@ -353,23 +359,39 @@ class CarPlayGuidance(HeadUnitGuidance):
           maneuver_type, modifier = CARPLAY_MANEUVERS.get(kind, ('', ''))
           self.maneuvers[index] = {'maneuverType': maneuver_type, 'maneuverModifier': modifier,
                                    'roadName': _iap_text(params.get(4)), 'lanes': []}
+          self._note('maneuver', index=index, appleType=kind, maneuverType=maneuver_type, modifier=modifier,
+                     road=_iap_text(params.get(4)), description=_iap_text(params.get(2)), side=_iap_uint(params.get(8)))
         elif message_id == ROUTE_GUIDANCE_UPDATE:
           state = _iap_uint(params.get(1))
+          if 0x13 in params and self.trace is not None:
+            self.trace.source(_iap_text(params.get(0x13)))
+          if state is not None and state != self.route_state:
+            self.route_state = state
+            self._note('route_state', state=state, currentRoad=_iap_text(params.get(3)))
           if state in (ROUTE_NONE, ROUTE_ARRIVED):
+            if self.step:
+              self._note('route_end', state=state)
             self.maneuvers, self.current, self.step, self.position = {}, None, {}, {}
             self._end()
             return
           if state is not None:
             self.status = STATUS_REROUTING if state == ROUTE_REROUTING else STATUS_ACTIVE
+          changed = False
           current = params.get(13)
           if current is not None and len(current) >= 2:
             index = int.from_bytes(current[:2], 'big')
             if index != self.current:
               self.current, self.position = index, {}
+              changed = True
           for pid, key, size in ((10, 'distanceMeters', 4), (7, 'remainingMeters', 4), (6, 'remainingSeconds', 8)):
             value = params.get(pid)
             if value is not None and len(value) >= size:
               self.position[key] = int.from_bytes(value[:size], 'big')
+          if self.trace is not None and (changed or self.trace.distance_due()) and self.current is not None:
+            if changed:
+              self.trace.steps += 1
+            self._note('step' if changed else 'distance', index=self.current, known=self.current in self.maneuvers,
+                       **self.maneuvers.get(self.current, {}), **self.position)
         else:
           return
         step = self.maneuvers.get(self.current) if self.current is not None else None
@@ -377,6 +399,11 @@ class CarPlayGuidance(HeadUnitGuidance):
           return
         self.step = step
         if self.status != STATUS_REROUTING:
+          was = self.published is not None
           self._publish()
+          if (self.published is not None) != was:
+            if self.published is not None and self.trace is not None:
+              self.trace.published += 1
+            self._note('navigation' if self.published is not None else 'navigation_refused')
     except (ValueError, TypeError, OSError) as error:
       self.log(f"phone guidance: unreadable CarPlay message {message_id:#x}: {error}")

@@ -23,6 +23,7 @@ from openpilot.starpilot.system.carplay.iap2.tunnel import TunnelLink
 from openpilot.starpilot.system.carplay.mfi import MfiIdentity
 from openpilot.starpilot.system.phone_projection.bluez import IAP2_UUID, pick_iphone
 from openpilot.starpilot.system.phone_projection.guidance import ROUTE_GUIDANCE_MANEUVER_UPDATE, ROUTE_GUIDANCE_UPDATE, CarPlayGuidance
+from openpilot.starpilot.system.phone_projection.guidance_log import GuidanceLog
 from openpilot.starpilot.system.phone_projection.ipc import Touch
 from openpilot.starpilot.system.phone_projection.layout import carplay_size, carplay_width_mm
 from openpilot.starpilot.system.phone_projection.runtime import HOTSPOT_ADDRESS, STATE_DIR, Context, TouchTracker, hotspot
@@ -117,6 +118,8 @@ class CarPlayRunner:
     self.control: tuple | None = None  # (mfi, identification, endpoint) the tunnel's iAP2 link identifies with again
     self.guidance_factory = guidance_factory or (lambda: CarPlayGuidance(log=self.ctx.log))
     self.guidance: CarPlayGuidance | None = None
+    self.trace: GuidanceLog | None = None
+    self.trace_factory = GuidanceLog
     self.pipe: VideoPipe | None = None
     self.touches = TouchTracker()
     self.lock = threading.Lock()
@@ -227,6 +230,8 @@ class CarPlayRunner:
   def on_session_active(self, session) -> None:
     with self.lock:
       self.session = session
+      if self.trace is None:
+        self.trace = self.trace_factory(self.phone)
     self.ctx.audio.request(self.ctx.settings().audio == "music")
     self._set("active", f"{self.phone or 'iPhone'} connected")
 
@@ -253,15 +258,26 @@ class CarPlayRunner:
   def on_iap_tunnel_open(self, session) -> None:
     """The iPhone moved iAP2 into the Wi-Fi session; identify on it again so route guidance keeps coming."""
     control = self.control
+    trace = self.trace
     if control is None:
+      if trace is not None:
+        trace.event("tunnel_skipped", reason="no bootstrap identity")
       return
     seen: set[str] = set()
 
     def log(message: str) -> None:
+      if trace is not None:
+        if message.startswith("iap2 rx 0x"):
+          trace.rx(int(message[8:14], 16))
+        elif not message.startswith("iap2 tx") or message.startswith("iap2 tx 0x5200"):
+          trace.event("iap2", message=message)
       key = message.split(" bytes=", 1)[0][:16]  # each message kind once, so periodic updates stay out of the log
       if key not in seen:
         seen.add(key)
         self._log(message)
+
+    if trace is not None:
+      trace.event("tunnel_open")
 
     tunnel = TunnelLink(session.send_iap, log=log)
     with self.lock:
@@ -270,7 +286,10 @@ class CarPlayRunner:
       old.close()
 
     def run() -> None:
-      WirelessControl(tunnel.session, *control, log=log, on_frame=self._route_frame).run(TUNNEL_TIMEOUT)
+      state = WirelessControl(tunnel.session, *control, log=log, on_frame=self._route_frame).run(TUNNEL_TIMEOUT)
+      if trace is not None:
+        trace.event("tunnel_closed", reason=tunnel.session.dead_reason or "", identified=state.get("identified"),
+                    authenticated=state.get("authenticated"))
       tunnel.close()
     threading.Thread(target=run, name="carplay-iap-tunnel-control", daemon=True).start()
 
@@ -285,6 +304,7 @@ class CarPlayRunner:
     with self.lock:
       if self.guidance is None:
         self.guidance = self.guidance_factory()
+        self.guidance.trace = self.trace
       guidance = self.guidance
     guidance.handle_frame(frame.message_id, frame.payload)
 
@@ -292,12 +312,18 @@ class CarPlayRunner:
     with self.lock:
       tunnel, self.tunnel = self.tunnel, None
       guidance, self.guidance = self.guidance, None
+      trace, self.trace = self.trace, None
     if tunnel is not None:
       tunnel.close()
     if guidance is not None:
       guidance.close()
+    if trace is not None:
+      trace.close("CarPlay disconnected")
 
   def on_command(self, kind: str, params) -> None:
+    trace = self.trace
+    if trace is not None:
+      trace.event("airplay_command", type=kind, params=params)  # modesChanged shows when the phone runs turn-by-turn
     if kind.lower() in ("disablebluetooth", "disable-bluetooth"):
       link = self.link
       if link is not None:
