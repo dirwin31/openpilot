@@ -6,7 +6,7 @@
 
 ## Jetlink external inference
 
-The comma-side Jetlink client and USB transport in `jetlink_repo` are by Zeph Leggett and the [Jetlink contributors](https://github.com/zoompilot/jetlink). They are vendored from revision `9cfde98eec1d7cc714d800504944cf1a3944513d`, with the not yet merged add-ons work (`jetlink.comma.functions` and `jetlink.addons`) from StarPilot's Jetlink pull request on top, under the MIT license, retained in [jetlink_repo/LICENSE](jetlink_repo/LICENSE). StarPilot's adapter (`openpilot/starpilot/models/jetlink_adapter.py`) builds on Jetlink's openpilot layer and owns its param names, Always On Lateral rule, model runner reset, settings and alerts. Companion applications and inference servers remain distributed by Jetlink.
+The comma-side Jetlink client and USB transport in `jetlink_repo` are by Zeph Leggett and the [Jetlink contributors](https://github.com/zoompilot/jetlink). They are vendored from revision `9be48b18c1fa1f6f8b88ef2e14fb4aa85c54a83b`, with the not yet merged add-ons work (`jetlink.comma.functions`, `jetlink.comma.hold` and `jetlink.addons`) from StarPilot's Jetlink pull request (branch `comma-addons`) on top, under the MIT license, retained in [jetlink_repo/LICENSE](jetlink_repo/LICENSE). StarPilot's adapter (`openpilot/starpilot/models/jetlink_adapter.py`) builds on Jetlink's openpilot layer and owns its param names, Always On Lateral rule, model runner reset, settings and alerts. Companion applications and inference servers remain distributed by Jetlink.
 
 ## Jetson add-ons
 
