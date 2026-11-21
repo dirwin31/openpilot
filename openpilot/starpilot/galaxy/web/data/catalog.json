@@ -131,7 +131,7 @@
       "name": "JetLink",
       "path": "/jetlink",
       "icon": "bi-usb-symbol",
-      "description": "Remote big model over USB, and Jetson add-ons for V-ASM and sign vision",
+      "description": "Remote big model over USB, and JetLink add-ons for V-ASM and sign vision",
       "availability": "local-only"
     },
     {

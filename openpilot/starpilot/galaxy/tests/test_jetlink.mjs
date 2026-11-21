@@ -8,13 +8,15 @@ assert.equal(addonState({ enabled: true, present: true, running: false }), "Idle
 assert.equal(addonState({ enabled: true, present: true, running: true, connected: true, modelMismatch: true }), "Prepares next time you park")
 assert.equal(addonState({ enabled: true, present: true, jetson: "missing" }), "Prepares next time you park")
 assert.equal(addonState({ enabled: true, present: true, jetson: "missing", preparing: "V-ASM: build 40%" }), "Preparing… V-ASM: build 40%")
-assert.equal(addonState({ enabled: true, present: true, jetson: "failed" }), "Jetson can't run this model")
-assert.equal(addonState({ enabled: true, present: true, jetson: "unsupported" }), "Update JetLink on the Jetson")
+assert.equal(addonState({ enabled: true, present: true, jetson: "failed" }), "JetLink can't run this model")
+assert.equal(addonState({ enabled: true, present: true, jetson: "unsupported" }), "Update JetLink on the computer or phone")
 assert.equal(addonState({ enabled: false, jetson: "missing" }), "Off")
 assert.equal(addonState({ enabled: true, present: true, running: true, connected: true, yielding: true }), "Yielding to driving model")
-assert.equal(addonState({ enabled: true, present: true, running: true, connected: true }), "On Jetson")
-assert.equal(addonState({ enabled: true, present: true, running: true, connected: false }), "Waiting for Jetson")
-assert.equal(addonState({ enabled: true, present: false }, false), "Needs USB computer")
+assert.equal(addonState({ enabled: true, present: true, running: true, connected: true }), "On JetLink")
+assert.equal(addonState({ enabled: true, present: true, running: true, connected: false }), "Waiting for JetLink")
+assert.equal(addonState({ enabled: true, present: false }, false), "Needs a JetLink connection")
+assert.equal(JetlinkPage.computed.linked.call({ jetlink: { mode: "ios" } }), true, "an iPhone serves add-ons too")
+assert.equal(JetlinkPage.computed.linked.call({ jetlink: { mode: "off" } }), false)
 
 const jetlink = { mode: "usb", chargePhone: false, addons: { vasm: { enabled: false }, signVision: { enabled: true } } }
 const calls = []
@@ -43,7 +45,7 @@ assert.match(JetlinkPage.template, /Prepared means the remote model is built, no
 assert.match(JetlinkPage.template, /Small and Chestnut catalog selections are unchanged/)
 assert.match(JetlinkPage.template, /JetLink sends it next time you park/)
 assert.ok(JetlinkPage.template.includes('href="https://github.com/StarPilotHQ/StarPilot/blob/testing/openpilot/starpilot/models/JETLINK.md"'), "setup guide points at testing")
-const rowsPage = { jetlink: { mode: "usb", addons: { vasm: { enabled: true, present: true, running: false } } }, usb: true,
+const rowsPage = { jetlink: { mode: "usb", addons: { vasm: { enabled: true, present: true, running: false } } }, usb: true, linked: true,
   addon: JetlinkPage.methods.addon, timing: JetlinkPage.methods.timing }
 const rows = JetlinkPage.computed.addonRows.call(rowsPage)
 assert.deepEqual(rows.map(row => [row.field, row.label, row.idle, row.enabled]), [["vasm", "Idle", true, true], ["signVision", "Unavailable", false, false]])

@@ -155,7 +155,7 @@ class JetlinkSettings:
     if not payload or set(payload) - {"mode", "chargePhone", *ADDON_FIELDS}:
       raise ValueError("Invalid Jetlink settings")
     if any(field in payload and type(payload[field]) is not bool for field in ADDON_FIELDS):
-      raise ValueError("Invalid Jetson add-on setting")
+      raise ValueError("Invalid JetLink add-on setting")
     if "mode" in payload and payload["mode"] not in MODES:
       raise ValueError("Choose Off, USB, or iPhone")
     if "chargePhone" in payload and type(payload["chargePhone"]) is not bool:
@@ -177,5 +177,5 @@ class JetlinkSettings:
       if field in payload:
         params.put_bool(ADDONS[addon].setting, payload[field], block=True)
     if any(field in payload for field in ADDON_FIELDS):
-      return {"message": "Jetson add-on saved. It applies within a few seconds."}
+      return {"message": "JetLink add-on saved. It applies within a few seconds."}
     return {"message": "Jetlink settings saved. Check connection status before driving."}
