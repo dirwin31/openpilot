@@ -116,9 +116,10 @@ class JetlinkSettings:
       stats: dict = report or {}
       link, trips = _mapping(stats.get("link")), _mapping(stats.get("round_trips"))
       connected = bool(stats.get("connected"))
+      state = addon.state(server, progress)
       view[field] = {"enabled": on, "present": present, "running": bool(stats), "connected": connected, "yielding": bool(stats.get("yielding")),
                      "modelMismatch": connected and bool(stats.get("missing")),
-                     **addon.state(server, progress),
+                     "jetson": state["host"], "preparing": state["preparing"],
                      "answered": int(link.get("answered", 0) or 0), "timeouts": int(link.get("timeouts", 0) or 0),
                      "roundTripMs": trips.get("total_ms"), "jetsonMs": trips.get("jetson_ms")}
     return view
