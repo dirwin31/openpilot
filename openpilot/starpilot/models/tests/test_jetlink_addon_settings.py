@@ -97,7 +97,7 @@ def test_the_hold_gives_the_gadget_back_when_driving_starts(monkeypatch, tmp_pat
   monkeypatch.setattr(jetlink_wake, "RECORD", tmp_path / "wake.json")
   monkeypatch.setattr(lending, "hung_up", lambda conn, wait: False)
   loan = mock.Mock()
-  jetlink_wake.hold(loan, lambda: True)
+  assert jetlink_wake.hold(loan, lambda: True) == "the car is onroad"
   loan.close.assert_called_once()
   assert not jetlink_wake.RECORD.exists() and jetlink_wake.awake_for() is None
 
@@ -149,3 +149,31 @@ def test_the_jetson_state_of_each_addon(owner, monkeypatch):
 def test_unavailable_snapshot_has_addons():
   broken = JetlinkSettings(params=MemoryParams(), device_type=lambda: (_ for _ in ()).throw(OSError()))
   assert broken.snapshot()["addons"] == {}
+
+
+def test_the_wake_reads_the_offroad_param_openpilot_has(monkeypatch, tmp_path):
+  # openpilot has IsOffroad and no IsOnroad: asking for that raised and gave the link straight back
+  from unittest import mock
+  from jetlink.comma import lending
+  from openpilot.starpilot.models import jetlink_wake
+  monkeypatch.setattr(jetlink_wake, "RECORD", tmp_path / "wake.json")
+  monkeypatch.setattr(lending, "SOCKET", tmp_path / "owner.sock")
+  (tmp_path / "owner.sock").touch()
+  loan = mock.Mock()
+  monkeypatch.setattr(lending, "borrow", lambda name, timeout: loan)
+  reads = []
+
+  class Params:
+    def get_bool(self, key):
+      reads.append(key)
+      if key != "IsOffroad":
+        raise KeyError(key)
+      return len(reads) < 3   # parked twice, then a drive starts
+
+  import sys
+  import types
+  monkeypatch.setitem(sys.modules, "openpilot.common.params", types.SimpleNamespace(Params=Params))
+  monkeypatch.setattr(lending, "hung_up", lambda conn, wait: False)
+  assert jetlink_wake.main() == 0
+  assert set(reads) == {"IsOffroad"} and len(reads) == 3
+  loan.close.assert_called_once()

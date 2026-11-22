@@ -31,28 +31,43 @@ def start() -> bool:
   return True
 
 
-def hold(loan, onroad, seconds: float = SECONDS) -> None:
+def hold(loan, onroad, seconds: float = SECONDS) -> str:
+  """Keep the loan until `seconds` pass, the car is onroad or the owner hangs up; why it ended."""
   from jetlink.comma import gadget, lending
   until = time.monotonic() + seconds
+  why = "the time is up"
   try:
     gadget.write_record(RECORD, {"pid": os.getpid(), "until": until})
-    # modeld needs the gadget once driving starts
-    while time.monotonic() < until and not onroad():
-      if lending.hung_up(loan.conn, POLL):
+    while time.monotonic() < until:
+      # modeld needs the gadget once driving starts
+      if onroad():
+        why = "the car is onroad"
         break
+      if lending.hung_up(loan.conn, POLL):
+        why = "the owner hung up"
+        break
+  except Exception as e:
+    why = f"it failed: {e!r}"
+    raise
   finally:
     loan.close()
     RECORD.unlink(missing_ok=True)
+  return why
 
 
 def main() -> int:
   from jetlink.comma import lending
   from openpilot.common.params import Params
+  from openpilot.common.swaglog import cloudlog
   params = Params()
   loan = lending.borrow("galaxy-wake", timeout=30.0) if lending.SOCKET.exists() else None
   if loan is None:
+    cloudlog.warning("jetlink: Galaxy's wake could not borrow the link")
     return 1
-  hold(loan, lambda: params.get_bool("IsOnroad"))
+  cloudlog.info(f"jetlink: Galaxy's wake holds the link for {SECONDS / 60:.0f} min")
+  # manager writes IsOffroad; there is no IsOnroad param
+  why = hold(loan, lambda: params.get_bool("IsOffroad") is False)
+  cloudlog.info(f"jetlink: Galaxy's wake gave the link back: {why}")
   return 0
 
 
