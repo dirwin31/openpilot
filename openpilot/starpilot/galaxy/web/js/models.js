@@ -174,6 +174,8 @@ export function formatEta(seconds, short = false) {
   return short ? `~${span}` : `about ${span} left`
 }
 
+// how long "active" holds without a fresh reply: three of the 1 s polls
+const ACTIVE_EXPIRY_MS = 3500
 const PHASES = { catalog: "Checking the model catalog", verifying: "Verifying download", installing: "Installing model" }
 
 // Progress panel shape; a percent in a text-only progress line still draws a bar.
@@ -334,7 +336,8 @@ export class ModelManagerFeed {
             if (!this.active || this.data !== data) return
             this.data = { ...data, jetlink: { ...data.jetlink, active: false, state: "checking execution", runtimeState: "unavailable" } }
             this.publish({ loading: false, data: this.data, error: "" })
-          }, 1500)
+          // three missed polls, not one slow reply: a reply over Wi-Fi from a busy comma can take most of a second
+          }, ACTIVE_EXPIRY_MS)
         }
         this.publish({ loading: false, data, error: "" })
       }
