@@ -66,18 +66,18 @@ def test_addon_choices_are_exact(owner, payload):
     owner[0].configure(payload)
 
 
-def test_wake_starts_jetlinks_hold_and_shows_the_deadline(owner, monkeypatch, tmp_path):
+def test_wake_starts_a_hold_and_shows_the_deadline(owner, monkeypatch, tmp_path):
   import os
   import sys
   import time
-  from jetlink.comma import gadget, hold
-  from openpilot.starpilot.models import jetlink_settings
+  from jetlink.comma import gadget
+  from openpilot.starpilot.models import jetlink_wake
   settings, params = owner
-  monkeypatch.setattr(hold, "HOLD", tmp_path / "hold.json")
+  monkeypatch.setattr(jetlink_wake, "RECORD", tmp_path / "wake.json")
   monkeypatch.setattr(gadget, "owner_status", lambda: {"dormant": True})
   started = []
-  monkeypatch.setattr(jetlink_settings.subprocess, "Popen", lambda argv, **kw: started.append(argv) or
-                      gadget.write_record(hold.HOLD, {"pid": os.getpid(), "until": time.monotonic() + 60}))
+  monkeypatch.setattr(jetlink_wake.subprocess, "Popen", lambda argv, **kw: started.append(argv) or
+                      gadget.write_record(jetlink_wake.RECORD, {"pid": os.getpid(), "until": time.monotonic() + 60}))
   monkeypatch.setattr(Addon, "present", lambda self: False)
   params.values["JetlinkMode"] = 2
   with pytest.raises(ValueError):
@@ -85,9 +85,21 @@ def test_wake_starts_jetlinks_hold_and_shows_the_deadline(owner, monkeypatch, tm
   params.values["JetlinkMode"] = 1
   assert "Waking" in settings.configure({"wake": True})["message"]
   assert "already" in settings.configure({"wake": True})["message"]
-  assert started == [[sys.executable, "-m", "jetlink.comma.hold", "-t", "900", "--parked"]]
+  assert started == [[sys.executable, "-m", "openpilot.starpilot.models.jetlink_wake"]]
   view = settings.snapshot()
   assert view["asleep"] and 0 < view["awakeFor"] <= 60
+
+
+def test_the_hold_gives_the_gadget_back_when_driving_starts(monkeypatch, tmp_path):
+  from unittest import mock
+  from jetlink.comma import lending
+  from openpilot.starpilot.models import jetlink_wake
+  monkeypatch.setattr(jetlink_wake, "RECORD", tmp_path / "wake.json")
+  monkeypatch.setattr(lending, "hung_up", lambda conn, wait: False)
+  loan = mock.Mock()
+  jetlink_wake.hold(loan, lambda: True)
+  loan.close.assert_called_once()
+  assert not jetlink_wake.RECORD.exists() and jetlink_wake.awake_for() is None
 
 
 def test_only_the_models_of_addons_turned_on_go_to_the_jetson(tmp_path):

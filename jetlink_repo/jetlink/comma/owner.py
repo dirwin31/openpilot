@@ -639,8 +639,6 @@ class Owner:
       'error': self.backing_off or gadget.gadget_error(),
       'net': gadget.net_status(),
       'dormant': self.dormant,
-      # what --parked holds (jetlink.comma.hold) read, as this owner reads it
-      'offroad': self.settings.offroad(),
       'udc': state,
       'speed': gadget.usb_speed() if configured else None,
       'present': present,

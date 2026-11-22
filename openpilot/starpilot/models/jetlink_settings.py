@@ -1,15 +1,11 @@
 """Parked Jetlink selection and its read-only provisioning status."""
 from __future__ import annotations
 
-import subprocess
-import sys
-
 from openpilot.starpilot.models.jetlink_adapter import UNSUPPORTED
 
 MODES = ("off", "usb", "ios")
 # Galaxy field to jetlink_addons key
 ADDON_FIELDS = {"vasm": "vasm", "signVision": "signs"}
-WAKE_SECONDS = 15 * 60
 
 # jetlink's Status.phase in Galaxy's words, where they differ
 PHASES = {"waiting": "waiting for disengagement", "reconnecting": "fallback / reconnecting"}
@@ -86,21 +82,19 @@ class JetlinkSettings:
 
   @staticmethod
   def awake():
-    """Whether the owner let the Jetson sleep, and how long a hold keeps it awake."""
-    from jetlink.comma import gadget, hold
+    """Whether the owner let the Jetson sleep, and how long Galaxy's wake keeps it awake."""
+    from jetlink.comma import gadget
+    from openpilot.starpilot.models import jetlink_wake
     record = gadget.owner_status() or {}
-    return {"asleep": bool(record.get("dormant")), "awakeFor": hold.awake_for()}
+    return {"asleep": bool(record.get("dormant")), "awakeFor": jetlink_wake.awake_for()}
 
   def wake(self):
     view = self.snapshot()
     if view["mode"] != "usb" or not view["supported"]:
       raise ValueError("Waking the Jetson needs the USB computer connection")
-    from jetlink.comma import hold
-    if hold.awake_for() is not None:
+    from openpilot.starpilot.models import jetlink_wake
+    if not jetlink_wake.start():
       return {"message": "The Jetson is already being kept awake."}
-    # JetLink's own hold, in a process of its own so a Galaxy restart does not end it; a drive starting does
-    subprocess.Popen([sys.executable, "-m", "jetlink.comma.hold", "-t", str(WAKE_SECONDS), "--parked"], start_new_session=True,
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {"message": "Waking the Jetson. It stays awake for 15 minutes and joins its Wi-Fi."}
 
   def addons(self):
