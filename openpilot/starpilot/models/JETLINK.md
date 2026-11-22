@@ -66,6 +66,34 @@ comma power. Choose **USB computer** in StarPilot. Follow the host's USB permiss
 prompt and benchmark sustained performance before use.
 [Credited Android host reference](https://github.com/zoompilot/jetlink/blob/v0.9.0/docs/android-app.md).
 
+## Jetson add-ons
+
+With **USB computer** and a Jetson whose JetLink server serves add-ons, Galaxy's
+JetLink page has two more switches: **V-ASM** and **Sign vision** (the sign and
+stop-sign detectors). Each asks the Jetson first and runs on the comma whenever
+the Jetson does not answer in time, is busy with the driving model, or is gone.
+
+- **Turning one on** starts a parked run: the comma wakes the Jetson over USB,
+  sends the model and the Jetson builds it, which takes several minutes. Galaxy
+  shows **Preparing…**, then **Ready · runs while driving** and the run's result
+  under **Last check**. Turning another on while a run is going starts the next run.
+- **Turning one off** deletes it from the Jetson at the next park: it stops
+  being served, its GPU memory is freed, and its engine and model file go.
+  Turning it on again sends and builds it again.
+- **The Jetson's web page** (port 8081), **Models** tab, has an **Add-ons** card:
+  each model, how long a pass takes, what it answered and whether it is answering now.
+- **Wake** on Galaxy's JetLink page keeps the USB link up for 15 minutes, or
+  until a drive starts, so the Jetson stays awake and joins its Wi-Fi. **Asleep**
+  means the comma let go of the link; a keep-awake set on the Jetson's own page
+  holds it awake all the same, and the comma does not see it.
+
+To check it works, the comma logs to swaglog: `jetlink: <addon> <sha> asks the
+Jetson first` when a model loads, a `jetlink.addon` event when its link connects,
+drops, starts or stops yielding or misses a model, and every 5 minutes with its
+answers, timeouts and round trips, and `jetlink: Galaxy turned the <addon> add-on
+on/off`. On the Jetson, `jetlink logs` shows each build, `serving interface class`,
+and `the comma turned <model> off` / `deleted` for one turned off.
+
 ## Use and recovery
 
 Before changing the remote model, disengage cruise **and** any independent

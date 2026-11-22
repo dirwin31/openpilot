@@ -172,6 +172,12 @@ class JetlinkSettings:
     for field, addon in ADDON_FIELDS.items():
       if field in payload:
         params.put_bool(ADDONS[addon].setting, payload[field], block=True)
+        try:
+          from openpilot.common.swaglog import cloudlog
+          state = "on" if payload[field] else "off"
+          cloudlog.info(f"jetlink: Galaxy turned the {addon} add-on {state}; a parked run sends it to the Jetson or deletes it there")
+        except Exception:
+          pass
     if any(field in payload for field in ADDON_FIELDS):
       return {"message": "JetLink add-on saved. It applies within a few seconds."}
     return {"message": "Jetlink settings saved. Check connection status before driving."}

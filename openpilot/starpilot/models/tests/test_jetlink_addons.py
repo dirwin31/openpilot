@@ -85,3 +85,34 @@ def test_declares_every_addon_whatever_its_setting(tmp_path, monkeypatch):
   monkeypatch.delenv("OPENPILOT_PREFIX", raising=False)
   functions = _adapter_class().owner_config().functions
   assert [(f.name, f.iface_class) for f in functions] == [("vasm", (0xFF, 0x56, 0x41)), ("slv", (0xFF, 0x53, 0x4C))]
+
+
+def test_a_link_is_logged_when_it_changes_and_summed_up_while_it_does_not(monkeypatch):
+  from openpilot.common import swaglog
+  from openpilot.starpilot.models import jetlink_addons
+  events = []
+  monkeypatch.setattr(swaglog.cloudlog, "event", lambda name, **kw: events.append((name, kw)))
+  monkeypatch.setattr(jetlink_addons, "_logged", {})
+  monkeypatch.setattr(jetlink_addons, "_summary_at", {})
+  up = {"connected": True, "yielding": False, "missing": [], "link": {"answered": 40, "timeouts": 1},
+        "round_trips": {"n": 40, "total_ms": 3.1, "jetson_ms": 2.6}}
+  assert jetlink_addons.log_report("vasm", up, now=0.0)
+  assert not jetlink_addons.log_report("vasm", up, now=30.0)
+  assert jetlink_addons.log_report("vasm", {**up, "yielding": True}, now=60.0)
+  assert jetlink_addons.log_report("vasm", {**up, "yielding": True}, now=60.0 + jetlink_addons.SUMMARY_S)
+  assert [kw["changed"] for _, kw in events] == [True, True, False]
+  name, first = events[0]
+  assert name == "jetlink.addon" and first["addon"] == "vasm" and first["connected"] and first["answered"] == 40
+  assert first["round_trip_ms"] == 3.1 and first["jetson_ms"] == 2.6
+  # another add-on has its own state
+  assert jetlink_addons.log_report("slv", {"connected": False}, now=30.0)
+
+
+def test_the_addons_report_to_swaglog_and_to_their_file(monkeypatch, tmp_path):
+  import dataclasses
+  from openpilot.starpilot.models import jetlink_addons
+  heard = []
+  monkeypatch.setattr(jetlink_addons, "log_report", lambda name, report: heard.append(name))
+  addon = dataclasses.replace(jetlink_addons.ADDONS["vasm"], report_path=tmp_path / "vasm.json")
+  addon.write_report({"connected": True})
+  assert heard == ["vasm"] and (tmp_path / "vasm.json").exists()
