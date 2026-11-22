@@ -184,6 +184,8 @@ def main():
       fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
       return
+    from openpilot.starpilot.bluetooth import crash_log
+    crash_log.start()
     worker = Bootstrap(Params())
     while True:
       worker.step()
