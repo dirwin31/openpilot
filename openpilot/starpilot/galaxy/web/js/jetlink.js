@@ -76,6 +76,9 @@ export const JetlinkPage = {
       if (this.jetlink?.awakeFor) return `Awake until ${new Date(Date.now() + this.jetlink.awakeFor * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
       return this.jetlink?.asleep ? "Asleep" : "Awake"
     },
+    checkTime(at) {
+      return at ? new Date(at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : ""
+    },
     timing(addon) {
       if (!addon?.connected || addon.roundTripMs == null) return ""
       return `${addon.answered} passes · ${addon.roundTripMs} ms round trip${addon.jetsonMs != null ? ` · ${addon.jetsonMs} ms on Jetson` : ""}`
@@ -136,6 +139,7 @@ export const JetlinkPage = {
                   <span class="gx-row__label"><i :class="['bi', item.icon]" aria-hidden="true"></i> {{ item.title }}</span>
                   <span class="gx-note">{{ item.detail }}</span>
                   <span class="gx-note" role="status"><span class="gx-chip">{{ item.label }}</span><span v-if="item.timing"> · {{ item.timing }}</span></span>
+                  <span v-if="item.addon?.lastCheck" class="gx-note">Last check {{ checkTime(item.addon.lastCheckAt) }}: {{ item.addon.lastCheck }}</span>
                   <span v-if="item.addon?.modelMismatch" class="gx-model-reason">The comma runs this model itself until JetLink has the same file. JetLink sends it next time you park.</span>
                   <span v-else-if="item.idle" class="gx-note">Starts when the comma runs this model, usually once driving.</span>
                 </span>

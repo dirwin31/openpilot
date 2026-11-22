@@ -1097,3 +1097,9 @@ button.gx-chip.gx-uniden__choice[aria-pressed="true"] { background: var(--primar
 .gx-settings .gx-wiki-help > i { display: block; line-height: 1; }
 .gx-settings .gx-wiki-help > i::before { display: block; vertical-align: 0; }
 .gx-setting-level { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--warning); margin-inline: 4px; vertical-align: middle; }
+
+/* JetLink: a row's lines each on their own, the state pill at the start of its
+   line; rows flush with the rest of their panel rather than indented */
+.gx-jetlink .gx-row__info { display: grid; gap: var(--sp-1); justify-items: start; }
+.gx-jetlink .gx-panel > .gx-row { padding-inline: 0; }
+.gx-jetlink .gx-stack > .gx-model-reason { margin: 0; }

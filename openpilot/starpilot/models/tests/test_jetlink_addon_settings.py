@@ -35,7 +35,8 @@ def test_addon_link_stats(owner, monkeypatch):
                       "link": {"answered": 40, "timeouts": 1}, "round_trips": {"total_ms": 6.5, "jetson_ms": 3.1}})
   view = settings.snapshot()["addons"]["signVision"]
   assert view == {"enabled": True, "present": True, "running": True, "connected": True,
-                  "yielding": False, "modelMismatch": False, "jetson": None, "preparing": "", "answered": 40, "timeouts": 1,
+                  "yielding": False, "modelMismatch": False, "jetson": None, "preparing": "", "lastCheck": "", "lastCheckAt": None,
+                  "answered": 40, "timeouts": 1,
                   "roundTripMs": 6.5, "jetsonMs": 3.1}
 
 
