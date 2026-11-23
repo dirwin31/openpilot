@@ -65,7 +65,6 @@ DESCRIPTIONS = {
   'CustomCruiseLong': 'Sets how much holding a cruise button changes the set speed.',
   'ReverseCruise': 'Swaps the Toyota short-press and held-press cruise-speed increments.',
   'ForceStops': 'Improves stopping behavior at traffic lights and enables automatic stopping at detected stop signs. Press the accelerator to continue.',
-  'NavTurnSlowdownEarlier': 'Negative levels start slowing closer to the turn. Positive levels start earlier. 0 is standard. Higher approach speeds need more distance.',
   'ForceStopDistanceOffset': 'Moves the planned stopping point. Positive values stop farther forward; negative values stop earlier.',
   'LeadApproachBuffer': 'Gradually adds following distance when approaching a slower or braking lead vehicle.',
   'RedneckCruise': 'Adjusts conventional factory cruise with Resume and Set after the next startup.',

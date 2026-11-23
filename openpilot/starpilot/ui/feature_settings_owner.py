@@ -20,7 +20,6 @@ from openpilot.starpilot.lateral.pause import KEYS as LATERAL_PAUSE_KEYS
 from openpilot.starpilot.lateral.lane_centering import STRENGTH_BASELINE, STRENGTH_MAX
 
 from opendbc.car.structs import car
-from openpilot.starpilot.navigation.turn_timing import LIMIT, saved_level
 from openpilot.common.hardware import HARDWARE
 from openpilot.common.params import UnknownKeyName
 from openpilot.starpilot.longitudinal.accel_profile import A_CRUISE_MAX_VALS_TRAFFIC_ALL, interpolate_accel_profile
@@ -658,7 +657,7 @@ class FeatureSettingsOwner:
       return "Vision"
     if key == "IsMetric":
       return "0"
-    if key in SLC_OFFSET_KEYS or key in ("ForceStopDistanceOffset", "NavTurnSlowdownEarlier", *ADVANCE_KEYS):
+    if key in SLC_OFFSET_KEYS or key in ("ForceStopDistanceOffset", *ADVANCE_KEYS):
       return "0"
     value = self.params.get_default_value(key)
     return str(value) if value is not None else ""
@@ -908,7 +907,6 @@ class FeatureSettingsOwner:
               FeatureRow("", "Driving Modes", "Choose Automatic, Chill or Experimental", page=FeaturePage.CONDITIONAL, available=True),
               FeatureRow("", "Developer Parameters", "Advanced acceleration and braking parameters",
                          page=FeaturePage.DEVELOPER_LONGITUDINAL, available=True),
-              FeatureRow("", "Navigation Planner", "Adjust when to slow for routed turns", page=FeaturePage.NAVIGATION_PLANNER, available=True),
               FeatureRow("", "Wheel Controls", "Assign steering-wheel buttons and cruise behavior", page=FeaturePage.WHEEL, available=True)]
       if (self._long_pitch_capability() is not None or self._bolt_disable_capability() is not None or
           self._auto_hold_capability() is not None or self._toyota_sng_capability() is not None or self._jeep_hold_capability() is not None or
@@ -1056,17 +1054,6 @@ class FeatureSettingsOwner:
       title = "Driving Modes" if page == FeaturePage.CONDITIONAL else \
               "Automatic Conditions"
       rows.extend(self.conditional.rows(page, parked))
-    elif page == FeaturePage.NAVIGATION_PLANNER:
-      title = "Navigation Planner"
-      allowed = configurable and system_long and self.authority("long")
-      _, nav_raw, valid = self._value("NavTurnSlowdownEarlier")
-      level = saved_level(nav_raw)
-      valid = valid and level is not None
-      rows.append(FeatureRow("NavTurnSlowdownEarlier", "Slow for navigation turns", str(level) if valid else "Invalid saved value",
-                             nav_raw, step=1., minimum=-LIMIT, maximum=LIMIT, unit="", default_value="0",
-                             repair_value="" if valid else "0", vehicle_fingerprint=self.vehicle_fingerprint(),
-                             available=parked and allowed and self._readable("NavTurnSlowdownEarlier"),
-                             reason="Choose a lower setting to start braking closer to the turn. 0 is standard. Applies on the next drive."))
     elif page == FeaturePage.CURVE:
       title = "Curve Speed Controller"
       allowed = configurable and system_long and self.authority("long")
@@ -1483,18 +1470,6 @@ class FeatureSettingsOwner:
       return self.wheel.apply(request)
     if key == OUTPUT_MAX_KEY:
       return False
-    if key == "NavTurnSlowdownEarlier":
-      def authorized():
-        return (self.authority("parked_preferences") and self.authority("long") and self._readable(key) and
-                self._raw(key) == request.expected and self.vehicle_fingerprint() == request.vehicle_fingerprint)
-      try:
-        level = float(request.value)
-      except (ValueError, TypeError):
-        return False
-      if level not in range(-LIMIT, LIMIT + 1) or not authorized():
-        return False
-      return commit_exact(self.params, key=key, max_bytes=128, raw=str(int(level) * 25).encode(),
-                          expected=request.expected, authorized=authorized, temp_prefix=".nav-turn-").verified
     if key == "ReverseCruise":
       return self._apply_reverse_cruise(request)
     if key in LATERAL_PAUSE_KEYS:

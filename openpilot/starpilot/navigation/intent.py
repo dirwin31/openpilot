@@ -5,7 +5,7 @@ import math
 from openpilot.cereal import log
 from openpilot.common.constants import CV
 
-from openpilot.starpilot.navigation.turn_timing import LIMIT
+from openpilot.starpilot.navigation.slowdown import DEFAULT_SLOWDOWN_PERCENT, valid_slowdown_percent
 from openpilot.starpilot.navigation.wire import navigation_state
 from openpilot.starpilot.lateral.signal_turn import SignalTurnEvidence
 
@@ -60,7 +60,7 @@ def turn_desire(sm, now_ns: int, current_desire, *, supported: bool):
   return current_desire
 
 
-def turn_speed(maneuver, min_steer_speed: float, traveled: float = 0., timing_level: int = 0) -> float | None:
+def turn_speed(maneuver, min_steer_speed: float, slowdown_percent: int = DEFAULT_SLOWDOWN_PERCENT, *, traveled: float = 0.) -> float | None:
   kind, modifier = maneuver.maneuverType, maneuver.maneuverModifier
   target = TARGET_MPH.get(modifier) if kind == 'turn' else None
   if modifier == 'uturn' or 'uturn' in kind or 'u-turn' in kind:
@@ -72,16 +72,15 @@ def turn_speed(maneuver, min_steer_speed: float, traveled: float = 0., timing_le
   target = max(target * CV.MPH_TO_MS, min_steer_speed)
   ordinary = kind == 'turn' and modifier in ('left', 'right')
   approach_decel, settling_distance = (.75, 20.) if ordinary else (.45, 8.)
-  remaining = max(0., maneuver.distanceMeters - traveled - settling_distance)
-  if timing_level < 0:
-    # Use progressively more of the existing braking allowance to delay the onset.
-    approach_decel += (NAVIGATION_BRAKE_MAGNITUDE - approach_decel) * (-timing_level / LIMIT)
-  elif timing_level > 0:
-    approach_decel /= 1. + .05 * timing_level
-  return math.sqrt(target * target + 2 * approach_decel * remaining)
+  if valid_slowdown_percent(slowdown_percent) and slowdown_percent != DEFAULT_SLOWDOWN_PERCENT:
+    # Distance scale is .25 at 0%, 1 at 50%, and 2 at 100%. Keep the
+    # existing braking envelope and preserve the turn-speed settling buffer.
+    scale = 1.0 + (slowdown_percent - DEFAULT_SLOWDOWN_PERCENT) * (.015 if slowdown_percent < DEFAULT_SLOWDOWN_PERCENT else .02)
+    approach_decel = min(approach_decel / scale, NAVIGATION_BRAKE_MAGNITUDE)
+  return math.sqrt(target * target + 2 * approach_decel * max(0., maneuver.distanceMeters - traveled - settling_distance))
 
 
-def cruise_ceiling(sm, CP, now_ns: int, cruise_mps: float, timing_level: int = 0) -> float | None:
+def cruise_ceiling(sm, CP, now_ns: int, cruise_mps: float, *, slowdown_percent: int = DEFAULT_SLOWDOWN_PERCENT) -> float | None:
   nav = current_instruction(sm, now_ns)
   if nav is None:
     return None
@@ -97,7 +96,7 @@ def cruise_ceiling(sm, CP, now_ns: int, cruise_mps: float, timing_level: int = 0
   # route distance is measured at the location fix
   traveled = cs.vEgo * ((now_ns - nav.locationMonoTime) / 1e9)
   for instruction in (nav.instruction, nav.nextManeuver):
-    target = turn_speed(instruction, max(minimum, 0.), traveled, timing_level)
+    target = turn_speed(instruction, max(minimum, 0.), slowdown_percent, traveled=traveled)
     if target is not None and target + .25 < cruise_mps:
       return target
   return None

@@ -21,6 +21,18 @@ def owner(tmp_path, monkeypatch):
   return NavigationOwner(tmp_path, runtime_source=lambda: None, transient_root=tmp_path / 'runtime')
 
 
+def test_old_timing_only_applies_until_a_percentage_is_saved(owner):
+  owner._previous_slowdown = 33
+  assert owner.read()['turnSlowdownPercent'] == 33
+  old = owner.read()
+  del old['turnSlowdownPercent']
+  owner.root.mkdir(exist_ok=True)
+  owner.path.write_text(json.dumps(old))
+  assert owner.read()['turnSlowdownPercent'] == 33
+  owner.configure({'turnSlowdownPercent': 50}, old['revision'], True)
+  assert owner.read()['turnSlowdownPercent'] == 50
+
+
 def test_gps_source_defaults_saves_and_rejects_unknown(owner):
   assert owner.snapshot()['gpsSource'] == 'backup'
   saved = owner.configure({'gpsSource': 'phone'}, '0', True)
@@ -39,6 +51,24 @@ def test_preferences_default_and_survive_restart(owner):
   assert restarted.read()['avoidHighways'] is False
   assert restarted.snapshot()['avoidFerries'] is False
   assert restarted.snapshot()['destination']['name'] == 'Library'
+
+
+def test_turn_slowdown_preferences_are_saved_without_rerouting(owner):
+  assert owner.snapshot()['turnSlowdownPercent'] == 50
+  saved = owner.configure({'enabled': True, 'token': 'pk.test'}, '0', True)
+  selected = owner.select(PLACE, saved['revision'], True)
+  routing_revision = owner.read()['routingRevision']
+  for value in (True, -1, 101, 50.0, '50'):
+    with pytest.raises(ValidationError):
+      owner.configure({'turnSlowdownPercent': value}, selected['revision'], True)
+  with pytest.raises(PermissionError):
+    owner.configure({'turnSlowdownPercent': 0}, selected['revision'], False)
+  updated = owner.configure({'turnSlowdownPercent': 0}, selected['revision'], True)
+  assert updated['turnSlowdownPercent'] == 0
+  assert updated['destination'] == selected['destination']
+  assert owner.read()['routingRevision'] == routing_revision
+  restarted = NavigationOwner(owner.root, runtime_source=lambda: None, transient_root=owner.transient_root)
+  assert restarted.read()['turnSlowdownPercent'] == 0
 
 
 def test_old_settings_default_without_rewriting(owner):

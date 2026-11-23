@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs"
 import { DRIVING_GROUPS, DRIVING_PAGES, DrivingPage, drivingPage } from "../web/js/driving.js"
 import { SettingsFeed } from "../web/js/settings.js"
 
-assert(DRIVING_GROUPS.find(group => group.title === "Speed & longitudinal").items.some(item => item.page === "navigation_planner"))
 const items = DRIVING_GROUPS.flatMap((group) => group.items)
 assert.deepEqual(new Set(items.map((item) => item.page)), new Set(Object.keys(DRIVING_PAGES)))
 assert.equal(items.find((item) => item.page === "traffic")?.title, "Traffic Mode")

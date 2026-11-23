@@ -1,6 +1,8 @@
 from openpilot.starpilot.navigation.wire import navigation_envelope
 from types import SimpleNamespace as NS
 
+from typing import cast
+
 import pytest
 
 from openpilot.cereal import messaging, log
@@ -63,39 +65,34 @@ def test_far_signal_is_available_for_lane_selection(sm):
   assert matching_turn_signal(sm, NOW, supported=True)
 
 
-@pytest.mark.parametrize("earlier", [-3, -2, -1, 0, 1, 2, 3])
+@pytest.mark.parametrize("earlier", [0, 33, 50, 75, 100])
 def test_turn_distance_advances_between_fixes(sm, earlier):
   cp = NS(openpilotLongitudinalControl=True, passive=False, dashcamOnly=False, minSteerSpeed=0.)
   nav = sm['starpilotNavigation'].navigation
   nav.instruction.distanceMeters = 130.
   sm['carState'].vEgo = 12.
   nav.locationMonoTime = NOW - 500_000_000
-  target = cruise_ceiling(sm, cp, NOW, 30., earlier)
-  assert target == pytest.approx(turn_speed(nav.instruction, 0., 6., earlier))
+  target = cruise_ceiling(sm, cp, NOW, 30., slowdown_percent=earlier)
+  assert target == pytest.approx(turn_speed(nav.instruction, 0., earlier, traveled=6.))
   nav.locationMonoTime = NOW - 3_000_000_000
-  assert cruise_ceiling(sm, cp, NOW, 30., earlier) is None
+  assert cruise_ceiling(sm, cp, NOW, 30., slowdown_percent=earlier) is None
 
 
-@pytest.mark.parametrize("kind,modifier,margin", [("turn", "left", 20.), ("turn", "sharpRight", 8.), ("roundabout", "right", 8.)])
-def test_signed_distance_changes_approach_and_keeps_turn_target(kind, modifier, margin):
-  maneuver = NS(maneuverType=kind, maneuverModifier=modifier, distanceMeters=500.)
-  offsets = (-3, -2, -1, 0, 1, 2, 3)
-  targets = [turn_speed(maneuver, 0., timing_level=offset) for offset in offsets]
-  assert all(a >= b for a, b in zip(targets, targets[1:], strict=False))
-  assert targets[0] > targets[3] > targets[-1]
-  maneuver.distanceMeters = margin + 5.
-  for offset in offsets:
-    assert turn_speed(maneuver, 0., traveled=5., timing_level=offset) == turn_speed(maneuver, 0., traveled=5.)
-
-
-@pytest.mark.parametrize("kph", [50., 80.])
-def test_latest_turn_timing_uses_existing_braking_limit(kph):
-  from openpilot.starpilot.navigation.intent import NAVIGATION_BRAKE_MAGNITUDE
-  speed = kph / 3.6
-  distance = 20. + (speed ** 2 - (14 * CV.MPH_TO_MS) ** 2) / (2 * NAVIGATION_BRAKE_MAGNITUDE)
-  maneuver = NS(maneuverType="turn", maneuverModifier="right", distanceMeters=distance)
-  assert turn_speed(maneuver, 0., timing_level=-3) == pytest.approx(speed)
-  assert turn_speed(maneuver, 0.) < speed
+@pytest.mark.parametrize('modifier,target_mph,decel,settling', [('right', 14., .75, 20.), ('sharpLeft', 10., .45, 8.)])
+def test_slowdown_slider_preserves_default_target_and_braking_envelope(modifier, target_mph, decel, settling):
+  target = target_mph * CV.MPH_TO_MS
+  maneuver = NS(maneuverType='turn', maneuverModifier=modifier, distanceMeters=settling + 100.)
+  ceilings = [turn_speed(maneuver, 0., percent) for percent in range(101)]
+  assert all(ceiling is not None for ceiling in ceilings)
+  ceilings = cast(list[float], ceilings)
+  assert all(a >= b for a, b in zip(ceilings, ceilings[1:], strict=False))
+  assert ceilings[0] == pytest.approx((target ** 2 + 2 * 100.) ** .5)
+  assert ceilings[50] == turn_speed(maneuver, 0.) == pytest.approx((target ** 2 + 2 * decel * 100.) ** .5)
+  assert ceilings[100] == pytest.approx((target ** 2 + decel * 100.) ** .5)
+  for bad in (True, -1, 101, float('nan'), None, '0'):
+    assert turn_speed(maneuver, 0., cast(int, bad)) == ceilings[50]
+  maneuver.distanceMeters = settling
+  assert all(turn_speed(maneuver, 0., percent) == target for percent in (0, 50, 100))
 
 
 def test_turn_ceiling_and_override(sm):

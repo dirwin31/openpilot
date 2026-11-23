@@ -59,7 +59,6 @@ class FeaturePage(StrEnum):
   RELAXED = "relaxed"
   TRAFFIC = "traffic"
   CURVE = "curve"
-  NAVIGATION_PLANNER = "navigation_planner"
   TORQUE = "torque"
   DEVELOPER_LATERAL = "torque/developer"
   DEVELOPER_LONGITUDINAL = "profiles/developer"

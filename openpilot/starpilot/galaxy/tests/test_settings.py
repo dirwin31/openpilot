@@ -43,24 +43,6 @@ class SettingsGatewayTest(unittest.TestCase):
   def page(self, name):
     return self.gateway.page(name, self.session, self.generation)
 
-  def test_navigation_turn_slider(self):
-    self.assertFalse(any(row['label'] == 'Slow for navigation turns' for row in self.page('curve')['rows']))
-    for offset in range(-3, 4):
-      page = self.page('navigation_planner')
-      index = next(i for i, row in enumerate(page['rows']) if row['label'] == 'Slow for navigation turns')
-      row = page['rows'][index]
-      self.assertEqual((row['minimum'], row['maximum'], row['step'], row['unit']), (-3, 3, 1, ''))
-      with self.assertRaises(SettingsChanged):
-        self.gateway.preview(page['view'], index, 0, self.session, self.generation, value=14)
-      intent = self.gateway.preview(page['view'], index, 0, self.session, self.generation, value=offset)
-      self.assertTrue(self.gateway.confirm(intent['intent'], self.session, self.generation))
-      self.assertEqual(read_saved(self.params, 'NavTurnSlowdownEarlier', 8), (str(offset * 25).encode(), True))
-    page = self.page('navigation_planner')
-    self.assertEqual(page['rows'][index]['defaultValue'], '0')
-    intent = self.gateway.preview(page['view'], index, 0, self.session, self.generation, reset_default=True)
-    self.assertTrue(self.gateway.confirm(intent['intent'], self.session, self.generation))
-    self.assertEqual(read_saved(self.params, 'NavTurnSlowdownEarlier', 8), (b'0', True))
-
   def test_kona_main_cruise_assignment_stays_selected_after_save(self):
     from opendbc.car.hyundai.tests.test_kona_ccnc_long_aol import kona_params
     from opendbc.car.hyundai.values import CAR as HYUNDAI
@@ -358,7 +340,7 @@ class SettingsGatewayTest(unittest.TestCase):
     lateral = next(section for section in hub["sections"] if section["id"] == "lateral")
     self.assertEqual(next(page for page in lateral["pages"] if page["id"] == "aol")["title"], self.page("aol")["title"])
     self.assertEqual([row["page"] for row in hub["rows"]],
-                     ["aol", "lane_change", "lane", "torque", "torque/developer", "curve", "slc", "profiles", "conditional", "profiles/developer", "navigation_planner", "wheel",
+                     ["aol", "lane_change", "lane", "torque", "torque/developer", "curve", "slc", "profiles", "conditional", "profiles/developer", "wheel",
                      "vehicle", "personalities", "developer"])
     self.assertEqual([row["page"] for row in self.page("personalities")["rows"]],
                      ["aggressive", "standard", "relaxed", "traffic"])

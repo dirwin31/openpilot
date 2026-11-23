@@ -14,6 +14,7 @@ import sys
 import subprocess
 from urllib.parse import quote, urljoin, urlsplit
 from pathlib import Path
+from functools import cached_property
 from itertools import islice
 import tempfile
 import threading
@@ -25,6 +26,7 @@ import requests.adapters
 
 from openpilot.starpilot.storage import starpilot_storage_root
 from openpilot.starpilot.navigation.position import LastPositionStore
+from openpilot.starpilot.navigation.slowdown import DEFAULT_SLOWDOWN_PERCENT, valid_slowdown_percent
 from openpilot.starpilot.gps.source import GPS_MODES
 
 MAX_DOCUMENT = 256 * 1024
@@ -48,8 +50,8 @@ MAP_STYLES = {'light': 'mapbox/light-v11', 'dark': 'mapbox/dark-v11'}
 MAP_PROVIDERS = ('mapbox', 'google')
 SHORT_MAP_LINK = re.compile(r'https://(?:maps\.app\.goo\.gl|goo\.gl/maps)/[A-Za-z0-9_-]{1,64}')
 GOOGLE_MAP_HOST = re.compile(r'(?:maps\.app\.goo\.gl|goo\.gl|(?:[a-z0-9-]+\.)*google\.com)')
-CONFIGURABLE = {'enabled', 'token', 'gpsSource', 'mapProvider', 'routeProvider', 'googleKey'}
-KEEPS_ACTIVE = {'gpsSource', 'mapProvider', 'routeProvider', 'googleKey'}
+CONFIGURABLE = {'enabled', 'token', 'gpsSource', 'mapProvider', 'routeProvider', 'googleKey', 'turnSlowdownPercent'}
+KEEPS_ACTIVE = {'gpsSource', 'mapProvider', 'routeProvider', 'googleKey', 'turnSlowdownPercent'}
 GOOGLE_KEY_CHARS = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-')
 SAFE_ID = re.compile(r'[a-zA-Z0-9_-]{1,64}')
 
@@ -60,7 +62,8 @@ def valid_google_key(key: str) -> bool:
 
 def default_settings() -> dict:
   return {'version': 1, 'revision': '0', 'routingRevision': '0', 'enabled': False, 'token': '', 'destination': None, 'favorites': [], 'recents': [],
-          'gpsSource': 'backup', 'mapProvider': 'mapbox', 'routeProvider': 'mapbox', 'googleKey': '', **dict.fromkeys(ROUTE_AVOIDANCES, False)}
+          'gpsSource': 'backup', 'mapProvider': 'mapbox', 'routeProvider': 'mapbox', 'googleKey': '',
+          'turnSlowdownPercent': DEFAULT_SLOWDOWN_PERCENT, **dict.fromkeys(ROUTE_AVOIDANCES, False)}
 
 
 class ValidationError(ValueError):
@@ -174,6 +177,7 @@ class NavigationOwner:
     self._read_cache = None
     self._phone_trip_cache = None
     self._params = None
+    self._device_preferences = root is None
     identity = hashlib.sha256(str(self.root.resolve()).encode()).hexdigest()[:24]
     if transient_root is not None:
       self.transient_root = Path(transient_root)
@@ -184,12 +188,22 @@ class NavigationOwner:
       boot_id = hashlib.sha256(boot).hexdigest()[:16]
       self.transient_root = Path("/tmp") / ("starpilot-navigation-" + boot_id + "-" + identity)
 
+  @cached_property
+  def _previous_slowdown(self) -> int:
+    if self._device_preferences:
+      from openpilot.common.params import Params
+      from openpilot.starpilot.saved_source import read_saved
+      raw, readable = read_saved(Params(), 'NavTurnSlowdownEarlier', 8)
+      if readable:
+        return {b'-75': 33, b'-50': 38, b'-25': 43, b'25': 53, b'50': 55, b'75': 58}.get(raw, DEFAULT_SLOWDOWN_PERCENT)
+    return DEFAULT_SLOWDOWN_PERCENT
+
   def read(self) -> dict:
     # Galaxy polls and every map tile read settings; reparse only after a write replaced the file.
     try:
       info = os.stat(self.path)
     except FileNotFoundError:
-      return default_settings()
+      return {**default_settings(), 'turnSlowdownPercent': self._previous_slowdown}
     key = (info.st_ino, info.st_mtime_ns, info.st_size)
     cached = getattr(self, '_read_cache', None)
     if cached is not None and cached[0] == key:
@@ -198,7 +212,7 @@ class NavigationOwner:
       with self.path.open('rb') as source:
         raw = source.read(MAX_DOCUMENT + 1)
     except FileNotFoundError:
-      return default_settings()
+      return {**default_settings(), 'turnSlowdownPercent': self._previous_slowdown}
     try:
       value = json.loads(raw)
       if (len(raw) > MAX_DOCUMENT or not isinstance(value, dict) or value.get('version') != 1 or
@@ -234,6 +248,10 @@ class NavigationOwner:
         raise ValueError
       if not isinstance(value.setdefault('googleKey', ''), str) or not valid_google_key(value['googleKey']):
         raise ValueError
+      if 'turnSlowdownPercent' not in value:
+        value['turnSlowdownPercent'] = self._previous_slowdown
+      elif not valid_slowdown_percent(value['turnSlowdownPercent']):
+        value['turnSlowdownPercent'] = DEFAULT_SLOWDOWN_PERCENT
     except (ValueError, TypeError, KeyError):
       raise ValidationError('Saved navigation settings could not be read') from None
     self._read_cache = (key, copy.deepcopy(value))
@@ -406,7 +424,7 @@ class NavigationOwner:
     document = self.read_routing()
     status = ('disabled' if not document['enabled'] else 'needsKey' if not document['token'] else
               'noDestination' if document['destination'] is None else 'waitingForLocation')
-    result = {key: document[key] for key in ('enabled', 'destination', 'recents', 'revision')}
+    result = {key: document[key] for key in ('enabled', 'destination', 'recents', 'revision', 'turnSlowdownPercent')}
     if 'phoneRoute' in document:
       result['activeRouteSource'] = 'iphone'
     result.update({key: document[key] for key in ROUTE_AVOIDANCES})
@@ -607,6 +625,8 @@ class NavigationOwner:
       raise ValidationError('Choose a GPS source')
     if 'enabled' in patch and type(patch['enabled']) is not bool:
       raise ValidationError('Navigation enabled must be on or off')
+    if 'turnSlowdownPercent' in patch and not valid_slowdown_percent(patch['turnSlowdownPercent']):
+      raise ValidationError('Turn slowdown distance must be a whole percentage from 0 to 100')
     if any(type(patch[key]) is not bool for key in ROUTE_AVOIDANCES if key in patch):
       raise ValidationError('Route avoidance settings must be on or off')
     if 'token' in patch and (not isinstance(patch['token'], str) or len(patch['token']) > 2048 or

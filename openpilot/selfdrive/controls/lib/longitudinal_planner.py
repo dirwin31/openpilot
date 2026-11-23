@@ -34,7 +34,7 @@ from openpilot.starpilot.longitudinal.lane_change_gap import LaneChangeGap, proj
 from openpilot.starpilot.longitudinal.experimental_release import ConditionalHandoff, ExperimentalRelease, project as project_release
 from openpilot.starpilot.longitudinal.force_stop import StopPlan
 from openpilot.starpilot.longitudinal.force_stop_braking import distance_target, eligible as distance_braking_eligible
-from openpilot.starpilot.navigation.turn_timing import LIMIT
+from openpilot.starpilot.navigation.slowdown import DEFAULT_SLOWDOWN_PERCENT
 from openpilot.starpilot.longitudinal.follow_jerk import FollowJerk
 from openpilot.starpilot.longitudinal.highlander_cruise import owner_for as highlander_cruise_owner
 from openpilot.starpilot.longitudinal.lead_takeoff import LeadTakeoff, project as project_takeoff
@@ -116,10 +116,10 @@ def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, 
 
 class LongitudinalPlanner:
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL, clock_ns: Callable[[], int] = time.monotonic_ns, *,
-               developer_tuning=None, nav_turn_timing=0):
+               developer_tuning=None, navigation_slowdown_percent: int = DEFAULT_SLOWDOWN_PERCENT):
     self.CP = CP
     tuning = developer_tuning or {}
-    self.nav_turn_timing = nav_turn_timing if nav_turn_timing in range(-LIMIT, LIMIT + 1) else 0
+    self.navigation_slowdown_percent = navigation_slowdown_percent
     self.action_delay_override = tuning.get("delay")
     self.stop_speed = tuning.get("stop_speed", .3)
     self.max_accel_override = tuning.get("max_accel")
@@ -329,7 +329,7 @@ class LongitudinalPlanner:
     self.last_curve_ceiling_applied = False
     if curve.effective_mps is not None:
       v_cruise = curve.effective_mps
-    navigation_target = navigation_ceiling(sm, self.CP, sample_now_ns, v_cruise, self.nav_turn_timing) if profile_eligible else None
+    navigation_target = navigation_ceiling(sm, self.CP, sample_now_ns, v_cruise, slowdown_percent=self.navigation_slowdown_percent) if profile_eligible else None
     if navigation_target is not None:
       v_cruise = min(v_cruise, navigation_target)
     coast_plan = None

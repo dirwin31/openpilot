@@ -24,7 +24,7 @@ const post = (fetcher, path, body, signal) => fetcher(path, {
 
 export const SETTINGS_SECTIONS = Object.freeze([
   { id: "lateral", label: "Lateral (Steering)", icon: "bi-arrows-move", pages: ["aol", "lane_change", "lane", "torque", "torque/developer"] },
-  { id: "longitudinal", label: "Longitudinal (Speed & Following)", icon: "bi-speedometer2", pages: ["profiles", "conditional", "curve", "slc", "personalities", "aggressive", "standard", "relaxed", "traffic", "profiles/developer", "navigation_planner"] },
+  { id: "longitudinal", label: "Longitudinal (Speed & Following)", icon: "bi-speedometer2", pages: ["profiles", "conditional", "curve", "slc", "personalities", "aggressive", "standard", "relaxed", "traffic", "profiles/developer"] },
   { id: "wheel", label: "Wheel Controls", icon: "bi-controller", pages: ["wheel"] },
   { id: "visual", label: "Visual (Display & UI)", icon: "bi-eye", pages: ["display", "appearance", "ui_layout", "favorites", "pip"] },
   { id: "sounds", label: "Sounds & Alerts", icon: "bi-volume-up", pages: ["sounds"] },
@@ -496,7 +496,6 @@ export const SettingsPage = {
       <p class="gx-page-description" v-else-if="state.data?.page === 'torque/developer'">Adjust supported steering parameters.</p>
       <p class="gx-page-description" v-else-if="state.data?.page === 'lane'">Choose lane-centering behavior and alerts.</p>
       <p class="gx-page-description" v-else-if="state.data?.page === 'curve'">Set how the vehicle slows for curves ahead.</p>
-      <p class="gx-page-description" v-else-if="state.data?.page === 'navigation_planner'">Changes to navigation turn timing apply on your next drive.</p>
       <p class="gx-page-description" v-else-if="state.data?.page === 'slc'">Control how speed limits change your set speed.</p>
       <p class="gx-page-description" v-else-if="state.data?.page === 'wheel'">Assign what the steering-wheel controls do.</p>
       <p class="gx-page-description" v-else-if="['aggressive','standard','relaxed'].includes(state.data?.page)">Adjust acceleration, braking and following for this driving style.</p>
