@@ -624,7 +624,7 @@ export const NavigationPage = {
               <template v-for="row in usageRows" :key="row.key"><dt>{{ row.label }}</dt><dd>{{ row.used.toLocaleString() }} of {{ row.limit.toLocaleString() }} free</dd></template>
             </dl>
             <details class="gx-starport-wiki"><summary>About the token and your allowance</summary>
-              <p>Use the public token that starts with pk. A secret token isn't needed, and URL-restricted tokens may be rejected. Galaxy keeps the token on your comma and never shows it again.</p>
+              <p>Use the public token that starts with pk. Your key stays on your comma unless you choose Share Mapbox key in its Bluetooth settings. Mapbox may reject URL-restricted tokens.</p>
               <p>Typing suggestions, address lookups and offline road maps stop just short of their free monthly allowances and resume on the 1st. Routes, full searches and map views are counted but not limited. Saved places and recents skip search entirely.</p>
             </details>
           </div></GxCollapse>

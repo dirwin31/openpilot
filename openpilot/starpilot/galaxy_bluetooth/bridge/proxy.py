@@ -104,6 +104,16 @@ class GalaxyProxy:
   def handle(self, request):
     request_id = str(request.get('id', ''))
     try:
+      if request.get('path') == '/_bridge/mapbox-public-token' and request.get('method') == 'GET':
+        if __package__:
+          from .map_token import take
+        else:
+          from map_token import take
+        token = take()
+        if token is None:
+          return error_response(request_id, 404, 'No public map key is being shared')
+        return {'id': request_id, 'status': 200, 'headers': {'content-type': 'application/json', 'cache-control': 'no-store'},
+                'body': base64.b64encode(json.dumps({'publicToken': token}).encode()).decode()}
       if request.get('path') == '/_bridge/health' and request.get('method') == 'GET':
         health = {'protocol': 1, 'transport': 'bluetooth', 'readStream': True, 'notificationStream': True, 'galaxy': 'secretgood'}
         return {'id': request_id, 'status': 200, 'headers': {'content-type': 'application/json'},

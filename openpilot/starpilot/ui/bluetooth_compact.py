@@ -262,6 +262,11 @@ class BluetoothCompact(NavScroller):
       pairing.set_enabled(lambda: self._ready() or self._pairing_ready())
       cards.append(pairing)
       if status.get("powered"):
+        from openpilot.starpilot.galaxy_bluetooth.phone_ui import share_map_key
+        share = BigButton("share Mapbox key", "allow one paired phone for two minutes")
+        share.set_enabled(self.phone_pairing_allowed)
+        share.set_click_callback(lambda: gui_app.push_widget(BigDialog("Mapbox", share_map_key(self.phone_pairing_allowed))))
+        cards.append(share)
         from openpilot.starpilot.galaxy_bluetooth.phone_ui import is_app_link
         devices = [device for device in status.get("devices", ()) if (device.get("paired") or device.get("connected")) and not is_app_link(device)]
         links = [device for device in status.get("devices", ()) if is_app_link(device)]

@@ -274,6 +274,9 @@ class BluetoothLarge(Widget):
     elif self.status is not None and not status.get("parked"):
       rows.append(text_item("Bluetooth status", "Switch to Offroad to change Bluetooth power."))
     if status.get("powered"):
+      from openpilot.starpilot.galaxy_bluetooth.phone_ui import share_map_key
+      rows.append(button_item("Share Mapbox key", "Share", description="Let one paired phone copy your public map key within two minutes.",
+        callback=lambda: gui_app.push_widget(alert_dialog(share_map_key(self.phone_pairing_allowed))), enabled=self.phone_pairing_allowed))
       rows.append(button_item("Nearby devices", "Stop scan" if status.get("discovering") else "Scan",
         callback=lambda: self._request("stop_scan" if (self.status or {}).get("discovering") else "scan"),
         enabled=lambda: self.active and self._ready()))

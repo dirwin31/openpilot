@@ -42,6 +42,19 @@ def forget_phone_keys(allowed, address):
       pass
 
 
+def share_map_key(allowed):
+  if not permitted(allowed):
+    return 'Park to share your map key.'
+  try:
+    from openpilot.starpilot.galaxy_bluetooth.bridge.map_token import offer
+    from openpilot.starpilot.navigation.owner import NavigationOwner
+    if offer(NavigationOwner().read().get('token')):
+      return 'On your paired iPhone, tap Use key from comma in Navigation settings within two minutes.'
+    return 'Save a public Mapbox key in Galaxy navigation setup first.'
+  except (OSError, ValueError):
+    return 'Could not share the map key. Check navigation setup and try again.'
+
+
 def app_pairing_title(phone, phones):
   """The phone's name; the added date only tells apart phones that share a name."""
   label = phone['label']
