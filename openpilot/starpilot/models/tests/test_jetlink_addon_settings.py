@@ -177,3 +177,42 @@ def test_the_wake_reads_the_offroad_param_openpilot_has(monkeypatch, tmp_path):
   assert jetlink_wake.main() == 0
   assert set(reads) == {"IsOffroad"} and len(reads) == 3
   loan.close.assert_called_once()
+
+
+def test_the_wake_is_extended_restarted_and_released_from_galaxy(owner, monkeypatch, tmp_path):
+  import os
+  import time
+  from jetlink.comma import gadget
+  from openpilot.starpilot.models import jetlink_wake
+  settings, params = owner
+  params.values["JetlinkMode"] = 1
+  monkeypatch.setattr(jetlink_wake, "RECORD", tmp_path / "wake.json")
+  monkeypatch.setattr(Addon, "present", lambda self: False)
+  assert "Wake it first" in settings.configure({"wake": "extend"})["message"]
+  assert "Nothing" in settings.configure({"wake": "release"})["message"]
+  # a wake holding the gadget for another minute
+  gadget.write_record(jetlink_wake.RECORD, {"pid": os.getpid(), "until": time.monotonic() + 60})
+  assert "16 more minutes" in settings.configure({"wake": "extend"})["message"]
+  assert 900 < jetlink_wake.awake_for() <= 960
+  assert "15 more minutes" in settings.configure({"wake": "restart"})["message"]
+  assert 890 < jetlink_wake.awake_for() <= 900
+  # never more than two hours from now
+  for _ in range(10):
+    jetlink_wake.extend()
+  assert jetlink_wake.awake_for() <= jetlink_wake.LONGEST
+  assert "Released" in settings.configure({"wake": "release"})["message"]
+  assert jetlink_wake.awake_for() is None
+  with pytest.raises(ValueError):
+    settings.configure({"wake": "forever"})
+
+
+def test_a_hold_gives_the_gadget_back_when_galaxy_releases_it(monkeypatch, tmp_path):
+  from unittest import mock
+  from jetlink.comma import lending
+  from openpilot.starpilot.models import jetlink_wake
+  monkeypatch.setattr(jetlink_wake, "RECORD", tmp_path / "wake.json")
+  # Galaxy releases it while the hold waits on the owner
+  monkeypatch.setattr(lending, "hung_up", lambda conn, wait: jetlink_wake.release() and False)
+  loan = mock.Mock()
+  assert jetlink_wake.hold(loan, lambda: False, seconds=600) == "the time is up, or Galaxy released it"
+  loan.close.assert_called_once()

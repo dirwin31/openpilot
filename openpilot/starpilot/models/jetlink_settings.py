@@ -5,6 +5,7 @@ from openpilot.starpilot.models.jetlink_adapter import UNSUPPORTED
 
 MODES = ("off", "usb", "ios")
 # Galaxy field to jetlink_addons key
+WAKE_ACTIONS = ("start", "extend", "restart", "release")
 ADDON_FIELDS = {"vasm": "vasm", "signVision": "signs"}
 
 # jetlink's Status.phase in Galaxy's words, where they differ
@@ -88,14 +89,24 @@ class JetlinkSettings:
     record = gadget.owner_status() or {}
     return {"asleep": bool(record.get("dormant")), "awakeFor": jetlink_wake.awake_for()}
 
-  def wake(self):
+  def wake(self, action="start"):
+    """Galaxy's wake: start one, add 15 minutes, restart it at 15, or release it now."""
     view = self.snapshot()
     if view["mode"] != "usb" or not view["supported"]:
       raise ValueError("Waking the Jetson needs the USB computer connection")
     from openpilot.starpilot.models import jetlink_wake
-    if not jetlink_wake.start():
-      return {"message": "The Jetson is already being kept awake."}
-    return {"message": "Waking the Jetson. It stays awake for 15 minutes and joins its Wi-Fi."}
+    if action == "start" or (action == "restart" and jetlink_wake.awake_for() is None):
+      if not jetlink_wake.start():
+        return {"message": "The Jetson is already being kept awake."}
+      return {"message": "Waking the Jetson. It stays awake for 15 minutes and joins its Wi-Fi."}
+    if action == "release":
+      if not jetlink_wake.release():
+        return {"message": "Nothing is keeping the Jetson awake."}
+      return {"message": "Released. The Jetson sleeps once JetLink has nothing left to do."}
+    left = jetlink_wake.extend() if action == "extend" else jetlink_wake.restart()
+    if left is None:
+      return {"message": "Nothing is keeping the Jetson awake. Wake it first."}
+    return {"message": f"The Jetson stays awake for {round(left / 60)} more minutes."}
 
   def addons(self):
     """Each Jetson add-on: its setting, whether the gadget carries it, its models on the Jetson, and its link."""
@@ -146,8 +157,11 @@ class JetlinkSettings:
       return False
 
   def configure(self, payload):
-    if payload == {"wake": True}:
-      return self.wake()
+    if isinstance(payload, dict) and set(payload) == {"wake"}:
+      action = "start" if payload["wake"] is True else payload["wake"]
+      if action not in WAKE_ACTIONS:
+        raise ValueError("Invalid wake request")
+      return self.wake(action)
     if not payload or set(payload) - {"mode", "chargePhone", *ADDON_FIELDS}:
       raise ValueError("Invalid Jetlink settings")
     if any(field in payload and type(payload[field]) is not bool for field in ADDON_FIELDS):

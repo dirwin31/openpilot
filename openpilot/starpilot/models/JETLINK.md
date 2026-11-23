@@ -83,7 +83,9 @@ the Jetson does not answer in time, is busy with the driving model, or is gone.
 - **The Jetson's web page** (port 8081), **Models** tab, has an **Add-ons** card:
   each model, how long a pass takes, what it answered and whether it is answering now.
 - **Wake** on Galaxy's JetLink page keeps the USB link up for 15 minutes, or
-  until a drive starts, so the Jetson stays awake and joins its Wi-Fi. **Asleep**
+  until a drive starts, so the Jetson stays awake and joins its Wi-Fi. While it
+  holds, Galaxy counts down the time left: **+15 min** adds time (up to two
+  hours ahead), **Restart 15 min** starts it over, and **Release** lets go now. **Asleep**
   means the comma let go of the link; a keep-awake set on the Jetson's own page
   holds it awake all the same, and the comma does not see it.
 

@@ -30,7 +30,7 @@ export const JetlinkPage = {
   name: "JetlinkPage",
   components: { WikiHelp, GxState, GxNotice, GalaxySelect },
   props: { mode: { type: String, required: true }, unauthorized: { type: Function, required: true } },
-  data() { return { loading: true, status: null, error: "", message: "", busy: "", pending: null } },
+  data() { return { loading: true, status: null, error: "", message: "", busy: "", pending: null, now: Date.now(), awakeUntil: null } },
   mounted() {
     this.feed = new ModelManagerFeed({ unauthorized: this.unauthorized, publish: ({ loading, data, error }) => {
       this.loading = loading
@@ -38,8 +38,13 @@ export const JetlinkPage = {
       this.error = error || ""
     } })
     if (this.mode === "local") this.feed.start()
+    // the wake's countdown ticks between polls
+    this.clock = setInterval(() => { this.now = Date.now() }, 1000)
   },
-  beforeUnmount() { this.feed?.stop() },
+  beforeUnmount() { this.feed?.stop(); clearInterval(this.clock) },
+  watch: {
+    "jetlink.awakeFor": { immediate: true, handler(seconds) { this.awakeUntil = seconds ? Date.now() + seconds * 1000 : null } },
+  },
   computed: {
     jetlink() { return this.status?.jetlink || null },
     canChange() { return !this.busy && modelActionAllowed(this.status, "jetlink") },
@@ -71,9 +76,18 @@ export const JetlinkPage = {
       event.target.checked = field === "chargePhone" ? this.jetlink.chargePhone === true : this.addon(field)?.enabled === true
       return this.configure({ [field]: enabled })
     },
-    wake() { return this.configure({ wake: true }) },
+    wake(action = "start") { return this.configure({ wake: action }) },
+    /** Seconds left on Galaxy's wake, counted down between polls. */
+    awakeLeft() {
+      const until = this.awakeUntil ?? (this.jetlink?.awakeFor ? Date.now() + this.jetlink.awakeFor * 1000 : null)
+      return until ? Math.max(0, Math.round((until - (this.now ?? Date.now())) / 1000)) : 0
+    },
     awakeText() {
-      if (this.jetlink?.awakeFor) return `Awake until ${new Date(Date.now() + this.jetlink.awakeFor * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      const left = this.awakeLeft()
+      if (left > 0) {
+        const until = new Date(Date.now() + left * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+        return `Awake · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left, until ${until}`
+      }
       return this.jetlink?.asleep ? "Asleep" : "Awake"
     },
     checkTime(at) {
@@ -115,8 +129,13 @@ export const JetlinkPage = {
               <div v-if="usb" class="gx-row" :class="{disabled: !canChange}">
                 <span class="gx-row__info"><span class="gx-row__label">Jetson</span>
                   <span class="gx-note" role="status"><span class="gx-chip">{{ awakeText() }}</span></span>
-                  <span class="gx-note">Wakes the Jetson over USB and keeps it up for 15 minutes, so it joins its Wi-Fi and you can reach it.</span></span>
-                <button type="button" class="gx-btn gx-btn--tonal" :disabled="!canChange" @click="wake"><i class="bi bi-power" aria-hidden="true"></i> Wake Jetson</button>
+                  <span class="gx-note">Wakes the Jetson over USB and keeps it up for 15 minutes, so it joins its Wi-Fi and you can reach it. Add time, start the 15 minutes over, or release it to let it sleep.</span></span>
+                <button v-if="awakeLeft() === 0" type="button" class="gx-btn gx-btn--tonal" :disabled="!canChange" @click="wake('start')"><i class="bi bi-power" aria-hidden="true"></i> Wake Jetson</button>
+              </div>
+              <div v-if="usb && awakeLeft() > 0" class="gx-actions" aria-label="Keep the Jetson awake">
+                <button type="button" class="gx-btn gx-btn--tonal" :disabled="!canChange" @click="wake('extend')"><i class="bi bi-plus-lg" aria-hidden="true"></i> 15 min</button>
+                <button type="button" class="gx-btn gx-btn--tonal" :disabled="!canChange" @click="wake('restart')"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Restart 15 min</button>
+                <button type="button" class="gx-btn gx-btn--tonal" :disabled="!canChange" @click="wake('release')"><i class="bi bi-moon" aria-hidden="true"></i> Release</button>
               </div>
               <div v-if="jetlink.mode === 'ios'" class="gx-row" :class="{disabled: !canChange}">
                 <span class="gx-row__info gx-row__label">Charge phone over USB</span>

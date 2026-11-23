@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 
 SECONDS = 15 * 60
+# a hold is extended up to this long from now
+LONGEST = 2 * 60 * 60
 RECORD = Path("/dev/shm/jetlink/galaxy-wake.json")
 POLL = 1.0
 
@@ -20,6 +22,44 @@ def awake_for() -> float | None:
   if type(until) not in (int, float) or until <= time.monotonic() or not gadget.pid_alive(record.get("pid")):
     return None
   return float(until) - time.monotonic()
+
+
+def _held() -> dict | None:
+  """The record of a wake that still holds the gadget, if any."""
+  from jetlink.comma import gadget
+  record = gadget.read_record(RECORD) or {}
+  until = record.get("until")
+  if type(until) not in (int, float) or until <= time.monotonic() or not gadget.pid_alive(record.get("pid")):
+    return None
+  return record
+
+
+def _set_until(until: float) -> float | None:
+  """Move the running wake's deadline, which it reads every POLL; seconds left, or None without one."""
+  from jetlink.comma import gadget
+  record = _held()
+  if record is None:
+    return None
+  now = time.monotonic()
+  until = min(until, now + LONGEST)
+  gadget.write_record(RECORD, {**record, "until": until})
+  return max(until - now, 0.0)
+
+
+def extend(seconds: float = SECONDS) -> float | None:
+  """Another `seconds` on the running wake, up to LONGEST from now."""
+  record = _held()
+  return None if record is None else _set_until(float(record["until"]) + seconds)
+
+
+def restart(seconds: float = SECONDS) -> float | None:
+  """The running wake's deadline `seconds` from now."""
+  return _set_until(time.monotonic() + seconds)
+
+
+def release() -> bool:
+  """End the running wake now: it gives the gadget back at its next look."""
+  return _set_until(time.monotonic()) is not None
 
 
 def start() -> bool:
@@ -35,10 +75,16 @@ def hold(loan, onroad, seconds: float = SECONDS) -> str:
   """Keep the loan until `seconds` pass, the car is onroad or the owner hangs up; why it ended."""
   from jetlink.comma import gadget, lending
   until = time.monotonic() + seconds
-  why = "the time is up"
+  why = "the time is up, or Galaxy released it"
   try:
     gadget.write_record(RECORD, {"pid": os.getpid(), "until": until})
-    while time.monotonic() < until:
+    while True:
+      # Galaxy moves the deadline in the record: extended, restarted or released
+      record = gadget.read_record(RECORD) or {}
+      if type(record.get("until")) in (int, float):
+        until = float(record["until"])
+      if time.monotonic() >= until:
+        break
       # modeld needs the gadget once driving starts
       if onroad():
         why = "the car is onroad"
