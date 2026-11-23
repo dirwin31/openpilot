@@ -49,10 +49,10 @@ class LoggedAddon(Addon):
 
 # interface class: vendor, then 'V' 'A' / 'S' 'L'; the models are the files and hashes the code that runs them pins
 ADDONS = {
-  "vasm": LoggedAddon("vasm", (0xFF, 0x56, 0x41), setting="JetlinkVasm", report_path=Path("/tmp/vasm_jetson_stats.json"),
+  "vasm": LoggedAddon("vasm", (0xFF, 0x56, 0x41), setting="JetlinkVasm",
                 models=(("V-ASM", _ROOT / "starpilot/assets/vision_models/v_asm_model.onnx",
                          "5d20cdbb457ba18db51a537ee2e305bbe442264b1613956068d473e35d15900d"),)),
-  "signs": LoggedAddon("slv", (0xFF, 0x53, 0x4C), setting="JetlinkSignVision", report_path=Path("/tmp/signs_jetson_stats.json"),
+  "signs": LoggedAddon("slv", (0xFF, 0x53, 0x4C), setting="JetlinkSignVision",
                  models=(("Sign detector", _SIGN_ASSETS / "traffic_signs_us_detector.onnx",
                           "dd9398ca0df68abdbc1120d41859d17d634a21a625b1191d10b5e4ddf88de7c8"),
                          ("Stop sign detector", _SIGN_ASSETS / "traffic_signs_us_stop_detector.onnx",

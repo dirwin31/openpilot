@@ -57,8 +57,8 @@ class ProvisioningRun:
     self.loan = None
     self.stop = False
     self.fetch_failed = False
-    # what came of each add-on model this run, by sha256 (note_addons)
-    self.addon_results: dict[str, dict] = {}
+    # what came of each add-on model this run, by interface triple then sha256 (note_addons)
+    self.addon_results: dict[str, dict[str, dict]] = {}
     # a warp is built for this camera: without one only the add-ons are provisioned
     self.driving = True
     # a driving model was picked, as provide_driving found
@@ -193,9 +193,8 @@ class ProvisioningRun:
     entry = parts.models.selected_model()
     self.picked = entry is not None
     if entry is None:
-      # no catalog yet; not an error
+      # no catalog yet; not an error. provision() clears the progress after the add-ons
       parts.spec.clear_ready()
-      parts.progress.clear()
       return False
     sha256, nbytes = link.identity(parts, entry)
 
@@ -247,14 +246,12 @@ class ProvisioningRun:
 
   def note_addons(self, result: str) -> None:
     """Say what this run made of the add-ons (gadget.ADDON_RUN), for a fork's
-    panel: the run's result and each model it sent. Only with an add-on on."""
-    models = addon_models(self.parts)
-    if not models:
+    panel: the run's result and each model it sent, by interface triple then
+    sha256. Only with an add-on on."""
+    if not addon_models(self.parts):
       return
-    names = {m.sha256: m.name for m in models}
     # epoch seconds, for a panel to show
-    record = {'at': time.time(), 'result': result,
-              'models': {sha: {'name': names.get(sha, sha[:16]), **r} for sha, r in self.addon_results.items()}}
+    record = {'at': time.time(), 'result': result, 'models': self.addon_results}
     self.log.warning("jetlink: add-ons: %s", result)
     try:
       gadget.write_record(gadget.ADDON_RUN, record)
@@ -265,21 +262,24 @@ class ProvisioningRun:
     """One add-on model: uploaded and built, or failed on the server, which
     then says so in its hello and is not asked again. False only for what the
     next run may fix."""
+    from jetlink.addons.wire import interface_triple
     parts = self.parts
+    triple = interface_triple(addon.function.iface_class)
+
+    def result(state: str, detail: str = '') -> None:
+      self.addon_results.setdefault(triple, {})[addon.sha256] = {'name': addon.name, 'state': state, 'detail': detail}
+
     path = Path(addon.path)
-    try:
-      nbytes = path.stat().st_size
-    except OSError:
-      self.log.warning("jetlink: add-on %s has no model at %s", addon.name, path)
-      self.addon_results[addon.sha256] = {'state': 'failed', 'detail': 'the comma has no copy of the model'}
-      return True
+    nbytes = path.stat().st_size if path.exists() else 0
     upload = link.verified_upload(self.log, path, addon.sha256, nbytes)
     if upload is None:
-      self.addon_results[addon.sha256] = {'state': 'failed', 'detail': "the comma's copy is not the file it names"}
+      result('failed', "the comma's copy is missing or not the file it names")
       return True
 
     def progress(stage: str, frac: float, msg: str) -> None:
-      text, args = f"{addon.name}: {stage} {frac:.0%}", {'name': addon.name, 'stage': stage}
+      # the model is its interface and sha256; the name is only for the text
+      text = f"{addon.name}: {stage} {frac:.0%}"
+      args = {'name': addon.name, 'stage': stage, 'interface': triple, 'sha256': addon.sha256}
       if stage == 'build':
         # TensorRT says little while it builds: a percentage would sit at one value for minutes
         text = f"{addon.name}: building on JetLink, several minutes"
@@ -295,14 +295,14 @@ class ProvisioningRun:
                                build_timeout=ADDON_BUILD_TIMEOUT, should_stop=lambda: self.stop, port=addon.function.port)
     except AddonFailed as e:
       self.log.warning("jetlink: the jetson cannot run add-on %s: %s", addon.name, e)
-      self.addon_results[addon.sha256] = {'state': 'failed', 'detail': str(e)}
+      result('failed', str(e))
       return True
     except LinkError as e:
       self.log.warning("jetlink: add-on %s is left for the next run: %s", addon.name, e)
-      self.addon_results[addon.sha256] = {'state': 'left', 'detail': str(e)}
+      result('left', str(e))
       return False
     self.log.warning("jetlink: add-on %s ready on the jetson", addon.name)
-    self.addon_results[addon.sha256] = {'state': 'ready', 'detail': ''}
+    result('ready')
     return True
 
   def hello(self) -> dict:
@@ -447,18 +447,18 @@ class ProvisioningRun:
 
 def addon_models(parts) -> tuple:
   """The fork's add-on models turned on now (Stock.addon_models); none on any doubt."""
-  return _addon_models(parts) or ()
+  return _hook(parts, 'addon_models') or ()
 
 
-def _addon_models(parts) -> tuple | None:
-  """addon_models, or None when the fork has no hook or it failed."""
-  hook = getattr(parts.op, 'addon_models', None)
+def _hook(parts, name: str) -> tuple | None:
+  """A fork's add-on hook (Stock.addon_models, Stock.gadget_functions); None when it has none or it failed."""
+  hook = getattr(parts.op, name, None)
   if not callable(hook):
     return None
   try:
     return tuple(hook(parts.settings.params))
   except Exception:
-    parts.log.exception("jetlink: addon_models failed, sending the jetson no add-ons")
+    parts.log.exception("jetlink: %s failed, the jetson is sent and told nothing of add-ons", name)
     return None
 
 
@@ -469,14 +469,8 @@ def addon_keep(parts) -> dict | None:
   there. None on any doubt, a hook missing or failing, or no add-on
   declared: the server then deletes nothing."""
   from jetlink.addons.wire import interface_triple
-  models = _addon_models(parts)
-  hook = getattr(parts.op, 'gadget_functions', None)
-  if models is None or not callable(hook):
-    return None
-  try:
-    functions = tuple(hook(parts.settings.params))
-  except Exception:
-    parts.log.exception("jetlink: gadget_functions failed, the jetson keeps every add-on")
+  models, functions = _hook(parts, 'addon_models'), _hook(parts, 'gadget_functions')
+  if models is None or functions is None:
     return None
   keep = {interface_triple(f.iface_class): [] for f in functions}
   for m in models:
@@ -487,11 +481,9 @@ def addon_keep(parts) -> dict | None:
 
 
 def addons_extra(keep: dict | None, server: dict | None) -> bool:
-  """Does the server serve a model on one of keep's interfaces that is not
-  in it, and delete one on a hello's word (`forgets`)? Never for an older
-  server: it would keep it, and the Jetson would be woken every park."""
+  """Does the server serve a model on one of keep's interfaces that is not in it?"""
   addons = (server or {}).get('addons')
-  if not keep or not isinstance(addons, dict) or addons.get('forgets') is not True:
+  if not keep or not isinstance(addons, dict):
     return False
   serving = addons.get('serving') if isinstance(addons.get('serving'), dict) else {}
   return any(set(serving.get(triple) or ()) - set(shas) for triple, shas in keep.items())
@@ -500,29 +492,22 @@ def addons_extra(keep: dict | None, server: dict | None) -> bool:
 def _serves(addons: dict, sha256: str, iface_class) -> bool:
   """Does the server serve sha256 on iface_class's interface? Its hello's
   `serving` says per interface: a model built for one add-on is not served on
-  another's until it is asked for there. A server too old to say has only
-  `ready`, and served each model on one interface."""
-  serving = addons.get('serving')
-  if isinstance(serving, dict) and iface_class is not None:
-    from jetlink.addons.wire import interface_triple
-    return sha256 in (serving.get(interface_triple(iface_class)) or ())
-  return sha256 in (addons.get('ready') or ())
+  another's until it is asked for there."""
+  from jetlink.addons.wire import interface_triple
+  serving = addons.get('serving') if isinstance(addons.get('serving'), dict) else {}
+  return sha256 in (serving.get(interface_triple(iface_class)) or ())
 
 
 def addons_missing(models, server: dict | None) -> list:
   """The add-on models a server that serves add-ons has neither ready on
   their own interface nor failed. None for one whose hello lists no
   `addons`: an older server would take an add-on for its driving model."""
-  addons = (server or {}).get('addons')
-  if not isinstance(addons, dict):
-    return []
-  failed = set(addons.get('failed') or ())
-  return [m for m in models if m.sha256 not in failed and not _serves(addons, m.sha256, m.function.iface_class)]
+  return [m for m in models if addon_state(m.sha256, server, m.function.iface_class) == 'missing']
 
 
-def addon_state(sha256: str, server: dict | None, iface_class=None) -> str | None:
+def addon_state(sha256: str, server: dict | None, iface_class) -> str | None:
   """An add-on model on the server the comma last spoke to, as the owner
-  keeps its hello: ready (on iface_class's interface, given one), failed,
+  keeps its hello: ready (on iface_class's interface), failed,
   missing, or unsupported for a server too old to serve add-ons. None before
   any hello."""
   if not server:

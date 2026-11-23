@@ -56,8 +56,10 @@ def test_wraps_before_the_gadget_has_the_interface(tmp_path, monkeypatch):
   use_interface(monkeypatch, tmp_path, exists=False)
   net = jetlink_addons.with_jetson(cpu(), "vasm", SHA, OUTPUTS, scaled_u8=True, params=Settings("JetlinkVasm"))
   assert isinstance(net, link_mod.JetsonNet) and net.tag == 0xAB12CD34 and net.scaled_u8
+  # V-ASM's jetson_ready asks the wrapper, not cv2's net, which has no ready()
+  assert net.ready() is False
   net.setInput(np.zeros((1, 3, 4, 4), np.float32))
-  assert net.forward().shape == (1, 3) and net.stats == {"host": 0, "local": 1}
+  assert net.forward().shape == (1, 3)
 
 
 def test_one_link_per_addon_reporting_to_its_stats(tmp_path, monkeypatch):
@@ -109,10 +111,29 @@ def test_a_link_is_logged_when_it_changes_and_summed_up_while_it_does_not(monkey
 
 
 def test_the_addons_report_to_swaglog_and_to_their_file(monkeypatch, tmp_path):
-  import dataclasses
   from openpilot.starpilot.models import jetlink_addons
   heard = []
   monkeypatch.setattr(jetlink_addons, "log_report", lambda name, report: heard.append(name))
-  addon = dataclasses.replace(jetlink_addons.ADDONS["vasm"], report_path=tmp_path / "vasm.json")
-  addon.write_report({"connected": True})
-  assert heard == ["vasm"] and (tmp_path / "vasm.json").exists()
+  monkeypatch.setattr(addon_mod, "REPORT_DIR", tmp_path)
+  jetlink_addons.ADDONS["vasm"].write_report({"connected": True})
+  assert heard == ["vasm"] and (tmp_path / "jetlink-addon-vasm.json").exists()
+
+
+def test_the_declarations_match_the_shipped_models():
+  # the add-on declarations, the loaders and the ONNX graphs name one contract: a model update must change all three
+  import hashlib
+  import onnx
+  from openpilot.starpilot.spot_monitor import inference
+  from openpilot.starpilot.speed_limits.vision import traffic_signs
+  loaders = {inference.MODEL_SHA256: inference.MODEL_OUTPUTS,
+             traffic_signs.TrafficSignModelCore.DETECTOR_SHA256: traffic_signs.JETSON_OUTPUTS["traffic_signs_us_detector.onnx"],
+             traffic_signs.TrafficSignModelCore.STOP_PROJECTION_SHA256: traffic_signs.JETSON_OUTPUTS["traffic_signs_us_stop_detector.onnx"]}
+  declared = {sha: path for addon in jetlink_addons.ADDONS.values() for _, path, sha in addon.models}
+  assert set(declared) == set(loaders)
+  for sha, path in declared.items():
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == sha, path.name
+    graph = onnx.load(str(path), load_external_data=False).graph
+    shapes = {o.name: tuple(d.dim_value for d in o.type.tensor_type.shape.dim) for o in graph.output}
+    assert {name: shapes.get(name) for name, _ in loaders[sha]} == dict(loaders[sha]), path.name
+    (image,) = [i for i in graph.input if i.name not in {t.name for t in graph.initializer}]
+    assert image.type.tensor_type.shape.dim[0].dim_value == 1, f"{path.name}: the Jetson takes one image"

@@ -26,9 +26,8 @@ The standard library only: the owner reads ADDONS off the adapter.
 from __future__ import annotations
 
 import json
-import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from jetlink.comma.functions import GadgetFunction, cable_network, present
@@ -56,14 +55,9 @@ def live_setting(params, key: str | None, refresh_s: float = SETTING_REFRESH_S):
     nonlocal read_at, value
     now = time.monotonic()
     if read_at is None or now - read_at >= refresh_s:
-      read_at, value = now, setting_on(params, key)
+      read_at, value = now, bool(params.get_bool(key))
     return value
   return on
-
-
-def setting_on(params, key: str | None) -> bool:
-  """Is the BOOL param on? Always without a key."""
-  return key is None or params.get_bool(key) is True
 
 
 @dataclass(frozen=True)
@@ -75,7 +69,6 @@ class Addon:
   iface_class: tuple[int, int, int]
   setting: str | None = None
   models: tuple[tuple[str, Path, str], ...] = ()
-  report_path: Path | None = field(default=None, compare=False)
 
   @property
   def function(self) -> GadgetFunction:
@@ -83,10 +76,10 @@ class Addon:
 
   @property
   def report_file(self) -> Path:
-    return self.report_path or REPORT_DIR / f'jetlink-addon-{self.name}.json'
+    return REPORT_DIR / f'jetlink-addon-{self.name}.json'
 
   def enabled(self, params) -> bool:
-    return setting_on(params, self.setting)
+    return self.setting is None or params.get_bool(self.setting) is True
 
   def addon_models(self, params) -> tuple[AddonModel, ...]:
     """Its models while it is on, for the provisioning run (Stock.addon_models)."""
@@ -96,17 +89,7 @@ class Addon:
 
   def present(self) -> bool:
     """Does the gadget carry its interface, or the cable network that stands for it on an iPhone?"""
-    function = self.checked_function()
-    return function is not None and (present(function) or cable_network())
-
-  def checked_function(self) -> GadgetFunction | None:
-    """Its interface, or None for a name or class GadgetFunction refuses: the
-    model process then runs the model on the comma, as on any other doubt."""
-    try:
-      return self.function
-    except ValueError:
-      logging.getLogger(__name__).exception("jetlink: add-on %s runs on the comma alone", self.name)
-      return None
+    return present(self.function) or cable_network()
 
   # -- the comma's model process ------------------------------------------
 
@@ -115,10 +98,7 @@ class Addon:
     to report_file; net itself if the wrapper cannot be made
     (jetlink.addons.link.with_host)."""
     from jetlink.addons.link import with_host
-    function = self.checked_function()
-    if function is None:
-      return net
-    return with_host(net, function, sha256, outputs, scaled_u8=scaled_u8, report=self.write_report,
+    return with_host(net, self.function, sha256, outputs, scaled_u8=scaled_u8, report=self.write_report,
                      enabled=live_setting(params, self.setting))
 
   def model(self, local, sha256: str, outputs, *, params, scaled_u8: bool = False):
@@ -126,10 +106,7 @@ class Addon:
     order, as a call asking the Jetson first while the setting is on; local
     itself if the wrapper cannot be made (jetlink.addons.link.host_model)."""
     from jetlink.addons.link import host_model
-    function = self.checked_function()
-    if function is None:
-      return local
-    return host_model(local, function, sha256, outputs, scaled_u8=scaled_u8, report=self.write_report,
+    return host_model(local, self.function, sha256, outputs, scaled_u8=scaled_u8, report=self.write_report,
                       enabled=live_setting(params, self.setting))
 
   def write_report(self, report: dict) -> None:
@@ -158,24 +135,30 @@ class Addon:
     phone), as the owner keeps its hello (jetlink.comma.gadget.SERVER): `host`
     the worst of ready on its interface, missing, failed and unsupported (None
     before any hello), and `preparing`, the provisioning run's progress text
-    (the fork's progress param) while it sends or builds one of them. With
+    (the fork's progress param) while it sends or builds one of them, each
+    model known by its interface and sha256, never its name. With
     the last provisioning run's record (jetlink.comma.gadget.ADDON_RUN),
     `last_check` says what came of it for this add-on and `last_check_at` when,
     in epoch seconds; '' and None without one."""
+    from jetlink.addons.wire import interface_triple
     from jetlink.openpilot.provision import addon_state
     states = {addon_state(sha256, server, self.iface_class) for _, _, sha256 in self.models}
     host = next((s for s in WORST_FIRST if s in states), 'ready') if states else None
     progress = progress if isinstance(progress, dict) else {}
     args = progress.get('args') if isinstance(progress.get('args'), dict) else {}
-    mine = progress.get('code') in PREPARING_CODES and args.get('name') in {name for name, _, _ in self.models}
+    mine = (progress.get('code') in PREPARING_CODES and args.get('interface') == interface_triple(self.iface_class)
+            and args.get('sha256') in {sha256 for _, _, sha256 in self.models})
     return {'host': host, 'preparing': str(progress.get('msg', '')) if mine else '', **self.last_check(run)}
 
   def last_check(self, run: dict | None) -> dict:
     """What the last provisioning run made of this add-on's models: each it
-    sent, else the run's own result."""
+    sent on its interface, else the run's own result."""
+    from jetlink.addons.wire import interface_triple
     if not isinstance(run, dict) or not isinstance(run.get('at'), (int, float)):
       return {'last_check': '', 'last_check_at': None}
     models = run.get('models') if isinstance(run.get('models'), dict) else {}
+    models = models.get(interface_triple(self.iface_class))
+    models = models if isinstance(models, dict) else {}
     words = {'ready': 'sent and built', 'failed': "JetLink can't run it", 'left': 'left for the next park'}
     mine = []
     for name, _, sha256 in self.models:
