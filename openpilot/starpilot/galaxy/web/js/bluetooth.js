@@ -1,3 +1,4 @@
+import { ConnectionLogs } from "./local-access.js"
 import { WikiHelp } from './wiki-help.js'
 import { UnidenPanel } from './uniden.js'
 import { GxState } from "./state.js"
@@ -169,7 +170,7 @@ export class BluetoothFeed {
 }
 
 export const BluetoothPage = {
-  components: { WikiHelp, UnidenPanel, GxState, GxNotice, BluetoothTabs, GxDialog },
+  components: { WikiHelp, UnidenPanel, GxState, GxNotice, BluetoothTabs, GxDialog, ConnectionLogs },
   props: { go: { type: Function, default: path => { location.hash = path } }, unidenSettings: Boolean, mode: { type: String, required: true }, unauthorized: { type: Function, required: true } },
   data: () => ({ status: null, busy: false, error: "", pairValue: "", now: Date.now(), claimAt: Date.now(), forgetting: null, adding: false, dismissedPairing: null }),
   mounted() {
@@ -241,6 +242,7 @@ export const BluetoothPage = {
       <header class="gx-settings__header gx-page-header"><div><h2>{{ unidenSettings ? 'Uniden' : 'Bluetooth' }}</h2>
         <p>{{ unidenSettings ? 'Detector preferences and custom frequency rules.' : 'Pair and manage devices here. Use the tabs for integration settings.' }}</p></div><WikiHelp /></header>
       <BluetoothTabs :active="unidenSettings ? 'uniden' : 'devices'" :go="go" />
+      <ConnectionLogs v-if="mode === 'local' && !unidenSettings" panel :on-unauthorized="unauthorized" />
       <GxState v-if="mode !== 'local'">Bluetooth requires the device. No radio was checked in preview.</GxState>
       <template v-else>
         <GxNotice tone="danger" v-if="error">{{ error }}</GxNotice>

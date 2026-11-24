@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { compile } from "../web/vendor/vue/vue.esm-browser.js"
-import { LocalAccess, LocalAccessFeed, validLocalAccess } from "../web/js/local-access.js"
+import { ConnectionLogs, LocalAccess, LocalAccessFeed, validLocalAccess } from "../web/js/local-access.js"
 import { Home } from "../web/js/home.js"
 import { GalaxyPage } from "../web/js/galaxy.js"
 const snapshot = { available: true, addresses: [{ interface: 'wlan0', label: 'Wi-Fi', url: 'http://192.168.20.5:8082/' }], reason: '' }
@@ -68,8 +68,8 @@ assert.ok(!GalaxyPage.template.includes('<LocalAccess'))
 compile(GalaxyPage.template, { decodeEntities: value => value.replaceAll('&amp;', '&') })
 console.log('Galaxy local access remains independent of app installation')
 
-const capture = { mode: 'local', onUnauthorized() { assert.fail('unexpected sign-in request') },
-  ...LocalAccess.data(), ...LocalAccess.methods }
+const capture = { onUnauthorized() { assert.fail('unexpected sign-in request') },
+  ...ConnectionLogs.data(), ...ConnectionLogs.methods }
 const originalFetch = globalThis.fetch
 try {
   globalThis.fetch = async (url, options) => {
@@ -82,8 +82,8 @@ try {
   assert.equal(capture.captureRequest, null)
   capture.resetCapture()
   assert.equal(capture.capture, null)
-  capture.mode = 'sample'
-  await capture.captureConnectionLogs()
-  assert.equal(capture.capture, null)
 } finally { globalThis.fetch = originalFetch }
-assert.ok(LocalAccess.template.includes('Download'))
+assert.equal(LocalAccess.components.ConnectionLogs, ConnectionLogs)
+assert.ok(LocalAccess.template.includes("mode === 'local'"))
+compile(ConnectionLogs.template, { decodeEntities: value => value })
+assert.ok(ConnectionLogs.template.includes('Download ZIP'))

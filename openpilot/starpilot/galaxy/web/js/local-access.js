@@ -49,18 +49,11 @@ export class LocalAccessFeed {
   }
 }
 
-export const LocalAccess = {
+export const ConnectionLogs = {
   components: { GxNotice },
-  props: { mode: { type: String, required: true }, onUnauthorized: { type: Function, default: () => {} } },
-  setup(props) {
-    const state = reactive({ loading: false, data: null, error: "" })
-    const feed = new LocalAccessFeed({ publish: update => Object.assign(state, update), onUnauthorized: props.onUnauthorized })
-    return { state, feed }
-  },
+  props: { panel: Boolean, onUnauthorized: { type: Function, default: () => {} } },
   data: () => ({ capture: null, captureError: "", captureRequest: null }),
-  mounted() { this.feed.start(this.mode) },
-  watch: { mode(value) { this.resetCapture(); this.feed.start(value) } },
-  beforeUnmount() { this.resetCapture(); this.feed.stop() },
+  beforeUnmount() { this.resetCapture() },
   methods: {
     resetCapture() {
       this.captureRequest?.abort()
@@ -69,7 +62,7 @@ export const LocalAccess = {
       this.captureError = ""
     },
     async captureConnectionLogs() {
-      if (this.mode !== "local" || this.captureRequest) return
+      if (this.captureRequest) return
       const request = new AbortController()
       this.captureRequest = request
       this.capture = null
@@ -103,6 +96,28 @@ export const LocalAccess = {
       setTimeout(() => URL.revokeObjectURL(url), 1000)
     },
   },
+  template: `<div class="gx-stack" :class="{ 'gx-card gx-panel': panel }">
+    <div v-if="panel" class="gx-section__header"><i class="bi bi-file-earmark-text" aria-hidden="true"></i><span class="gx-section__title">Connection logs</span></div>
+    <div class="gx-actions">
+      <button type="button" class="gx-btn gx-btn--tonal" :disabled="!!captureRequest" @click="captureConnectionLogs">{{ captureRequest ? 'Capturing…' : 'Capture connection logs' }}</button>
+      <button type="button" class="gx-btn gx-btn--tonal" :disabled="!capture" @click="downloadConnectionLogs">Download ZIP</button>
+    </div>
+    <GxNotice v-if="captureError" tone="danger">{{ captureError }}</GxNotice>
+    <p v-if="capture" class="gx-note" role="status">Capture ready. Download it to share with support.</p>
+  </div>`,
+}
+
+export const LocalAccess = {
+  components: { GxNotice, ConnectionLogs },
+  props: { mode: { type: String, required: true }, onUnauthorized: { type: Function, default: () => {} } },
+  setup(props) {
+    const state = reactive({ loading: false, data: null, error: "" })
+    const feed = new LocalAccessFeed({ publish: update => Object.assign(state, update), onUnauthorized: props.onUnauthorized })
+    return { state, feed }
+  },
+  mounted() { this.feed.start(this.mode) },
+  watch: { mode(value) { this.feed.start(value) } },
+  beforeUnmount() { this.feed.stop() },
   template: `<section class="gx-card gx-local-access gx-panel" aria-label="Local comma access">
     <div class="gx-section__header"><i class="bi bi-router" aria-hidden="true"></i><span class="gx-section__title">Local access</span></div>
     <GxNotice v-if="state.error" tone="danger">{{ state.error }}</GxNotice>
@@ -112,11 +127,6 @@ export const LocalAccess = {
       <p class="gx-note">Use the full http:// address and bookmark it. Allow local-network access if prompted. Your Firestar Link uses Internet instead.</p>
     </template>
     <p v-else-if="state.data" class="gx-note" role="status">{{ state.data.reason || 'The comma has no local network address available.' }}</p>
-    <div v-if="mode === 'local'" class="gx-actions">
-      <button type="button" class="gx-btn gx-btn--tonal" :disabled="!!captureRequest" @click="captureConnectionLogs">{{ captureRequest ? 'Capturing…' : 'Capture connection logs' }}</button>
-      <button type="button" class="gx-btn gx-btn--tonal" :disabled="!capture" @click="downloadConnectionLogs">Download ZIP</button>
-    </div>
-    <GxNotice v-if="captureError" tone="danger">{{ captureError }}</GxNotice>
-    <p v-if="capture" class="gx-note" role="status">Capture ready. Download it to share with support.</p>
+    <ConnectionLogs v-if="mode === 'local'" :on-unauthorized="onUnauthorized" />
   </section>`,
 }
