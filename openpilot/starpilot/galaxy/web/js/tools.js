@@ -23,29 +23,3 @@ export const Tools = {
     </div>
   `,
 }
-
-export const ConnectionsApps = {
-  components: { MenuTile },
-  props: {
-    tools: { type: Array, required: true },
-    mode: { type: String, required: true },
-    go: { type: Function, required: true },
-  },
-  computed: {
-    visibleTools() { return this.tools.filter(tool => tool.visibility !== "authenticated" || this.mode === "local") },
-  },
-  template: `
-    <div class="gx-view">
-      <header class="gx-settings__header gx-page-header">
-        <div><h2>Connections &amp; Apps</h2></div>
-        <button type="button" class="gx-btn gx-btn--tonal" @click="go('/logs/help')">
-          <i class="bi bi-life-preserver" aria-hidden="true"></i>Get help
-        </button>
-      </header>
-      <div class="gx-grid">
-        <MenuTile v-for="tool in visibleTools" :key="tool.path" :icon="tool.icon" :title="tool.name"
-          :description="tool.description" :disabled="mode !== 'local'" :availability="mode !== 'local' ? 'Connect to your comma' : ''"
-          @select="go(tool.path)" />
-      </div>
-    </div>`,
-}

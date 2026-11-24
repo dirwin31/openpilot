@@ -12,7 +12,7 @@ import { GxNotice } from "./notice.js"
 import { createApp, reactive, defineAsyncComponent } from "../vendor/vue/vue.esm-browser.js"
 import { route, navigate, navigateBack, ensureBackEntry, setRouteLeaveGuard, startRouter } from "./router.js"
 import { loadCatalog } from "./startup.js"
-import { ConnectionsApps, Tools } from "./tools.js"
+import { Tools } from "./tools.js"
 window.addEventListener("beforeinstallprompt", rememberInstallPrompt)
 installDisclosureMotion()
 
@@ -92,7 +92,7 @@ const auth = new LocalAuth({ publish: (update) => {
 
 
 createApp({
-  components: { AppDownloadReminder, BottomNav, Home, LocalAccess, Tools, ConnectionsApps, Logs, SoftwarePage, NavigationPage, ModelsPage, SettingsPage, SettingsRecoveryPage, ToggleSearch, SaveFeedback, FlmPage, LocalRecordingsPage, CamerasPage, SentryEventsPage, VasmPage, PipPage, DrivingPage, DevicePreferencesPage, BluetoothPage, ControllersPage, StarPortPage, SpotifyPage, LongitudinalCurvesPage, OnroadLayoutPage, GalaxyPage, NetworksPage, DevicePicker, DeviceState, MenuTile },
+  components: { AppDownloadReminder, BottomNav, Home, LocalAccess, Tools, Logs, SoftwarePage, NavigationPage, ModelsPage, SettingsPage, SettingsRecoveryPage, ToggleSearch, SaveFeedback, FlmPage, LocalRecordingsPage, CamerasPage, SentryEventsPage, VasmPage, PipPage, DrivingPage, DevicePreferencesPage, BluetoothPage, ControllersPage, StarPortPage, SpotifyPage, LongitudinalCurvesPage, OnroadLayoutPage, GalaxyPage, NetworksPage, DevicePicker, DeviceState, MenuTile },
   data: () => ({ state, authState, authForm, route, NAV, routeDirection: 1, updateRestart, deviceRestart, nextLayoutLeavePresentation: "inline" }),
   computed: {
     visibleTools() { return state.tools.filter(tool => tool.visibility !== "authenticated" ||
@@ -155,7 +155,7 @@ createApp({
       save(PIN_KEY, String(state.navPinned))
     },
     isActive(path) {
-      if (path === "/connections" && ["/networks", "/bluetooth", "/starport", "/spotify"].some(child =>
+      if (path === "/galaxy" && ["/networks", "/bluetooth"].some(child =>
         route.path === child || route.path.startsWith(child + "/"))) return true
       return route.path === path || route.path.startsWith(path + "/") || (path === "/manage_models" && route.path === "/model_laboratory")
     },
@@ -228,7 +228,7 @@ createApp({
 
         </div>
         <div class="gx-nav-footer"><DevicePicker />
-          <button type="button" class="gx-nav-item" :class="{active:isActive('/galaxy')}" @click="goFromMenu('/galaxy')"><i class="bi bi-globe"></i><span>Galaxy Access & Install</span></button>
+          <button type="button" class="gx-nav-item" :class="{active:isActive('/galaxy')}" @click="goFromMenu('/galaxy')"><i class="bi bi-globe"></i><span>Galaxy Access &amp; Connections</span></button>
         </div>
       </aside>
       <main class="gx-content" :style="{'--route-direction': routeDirection}"><div class="gx-route-stage">
@@ -258,8 +258,7 @@ createApp({
         <VasmPage v-else-if="route.path === '/cameras/vasm'" :mode="state.monitorMode" :unauthorized="sessionExpired" :go="go" />
         <Tools v-else-if="route.path === '/tools'" :tools="visibleTools" :mode="state.monitorMode" />
         <SettingsPage @nested="ensureBackEntry" ref="activeSettings" v-else-if="route.path === '/developer/connect'" :mode="state.monitorMode" :unauthorized="sessionExpired" initial-section="developer" />
-        <GalaxyPage v-else-if="route.path === '/galaxy'" :mode="state.monitorMode" :unauthorized="sessionExpired" />
-        <ConnectionsApps v-else-if="route.path === '/connections'" :mode="state.monitorMode" :tools="currentTool?.children || []" :go="go" />
+        <GalaxyPage v-else-if="route.path === '/galaxy'" :mode="state.monitorMode" :tools="currentTool?.children || []" :unauthorized="sessionExpired" :go="go" />
         <NetworksPage v-else-if="route.path === '/networks'" :go="go" :mode="state.monitorMode" :unauthorized="sessionExpired" />
         <OnroadLayoutPage ref="activeLayout" v-else-if="['/theme_maker', '/theme_maker/starport', '/appearance'].includes(route.path)" :key="route.path" :projection="route.path === '/theme_maker/starport'" :initial-panel="route.path === '/appearance' ? 'display' : 'widgets'" :mode="state.monitorMode" :unauthorized="sessionExpired" @target="go($event === 'projection' ? '/theme_maker/starport' : '/theme_maker')" @close="routeBack" />
         <SettingsRecoveryPage v-else-if="route.path === '/settings/recovery'" :mode="state.monitorMode" :unauthorized="sessionExpired" />
