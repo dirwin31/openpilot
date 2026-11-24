@@ -78,23 +78,25 @@ export const Logs = {
           <div class="gx-section__header"><i class="bi bi-car-front" aria-hidden="true"></i><h3 class="gx-section__title">Driving behavior or a specific drive</h3></div>
           <DrivingHelp :routes-available="localRoutes" @routes="go('/recordings')" />
         </section>
-        <section class="gx-card gx-panel gx-stack" aria-label="Phone connection">
-          <div class="gx-section__header"><i class="bi bi-phone" aria-hidden="true"></i><h3 class="gx-section__title">My phone won’t connect to comma</h3></div>
+        <section class="gx-card gx-panel gx-stack" aria-label="Mobile App Support">
+          <div class="gx-section__header"><i class="bi bi-phone" aria-hidden="true"></i><h3 class="gx-section__title">Mobile App Support</h3></div>
           <p class="gx-note">For Wi-Fi, Bluetooth pairing, or Galaxy Tunnel issues. Capture a Galaxy ZIP, then attach it in your support thread or use Send to support to sign in with Discord. If you use StarPilot on iPhone, you can also report from Logs &amp; support.</p>
           <ConnectionLogs v-if="mode === 'local'" :on-unauthorized="unauthorized" />
           <p v-else class="gx-note">Connect to your comma to capture its connection logs.</p>
           <div class="gx-actions"><a class="gx-btn gx-btn--tonal" href="https://starpilot-log-relay.nathan-g-hubbard.workers.dev/report/galaxy" target="_blank" rel="noopener noreferrer">Send to support</a></div>
         </section>
-        <section class="gx-card gx-panel gx-stack" aria-label="Controller help">
-          <div class="gx-section__header"><i class="bi bi-controller" aria-hidden="true"></i><h3 class="gx-section__title">My controller isn’t showing up</h3></div>
-          <p class="gx-note">Connect and wake the controller. If it still doesn’t show up, include the controller model and whether you connected it by USB or Bluetooth.</p>
+        <section class="gx-card gx-panel gx-stack" aria-label="Bluetooth Controller Support">
+          <div class="gx-section__header"><i class="bi bi-controller" aria-hidden="true"></i><h3 class="gx-section__title">Bluetooth Controller Support</h3></div>
+          <p class="gx-note">Connect and wake your USB or Bluetooth controller before capturing its input report. Include the controller model and what went wrong when you send it.</p>
+          <ConnectionLogs v-if="mode === 'local'" controller :on-unauthorized="unauthorized" />
+          <p v-else class="gx-note">Connect to your comma to capture a controller log.</p>
           <div class="gx-actions">
-            <button v-if="mode === 'local'" type="button" class="gx-btn gx-btn--tonal" @click="go(tools.some(tool => tool.path === '/logs/bluetooth') ? '/logs/bluetooth' : '/bluetooth/controllers')">{{ tools.some(tool => tool.path === '/logs/bluetooth') ? 'Open controller report' : 'Open Controllers' }}</button>
-            <a class="gx-btn gx-btn--tonal" href="https://firestar.link/discord" target="_blank" rel="noopener noreferrer">StarPilot Discord</a>
+            <button v-if="mode === 'local'" type="button" class="gx-btn gx-btn--tonal" @click="go('/bluetooth/controllers')">Open Controllers</button>
+            <a class="gx-btn gx-btn--tonal" href="https://starpilot-log-relay.nathan-g-hubbard.workers.dev/report/galaxy" target="_blank" rel="noopener noreferrer">Send to support</a>
           </div>
         </section>
-        <section class="gx-card gx-panel gx-stack" aria-label="StarPort help">
-          <div class="gx-section__header"><i class="bi bi-phone" aria-hidden="true"></i><h3 class="gx-section__title">Android Auto or StarPort isn’t working</h3></div>
+        <section class="gx-card gx-panel gx-stack" aria-label="StarPort / Android Auto Support">
+          <div class="gx-section__header"><i class="bi bi-phone" aria-hidden="true"></i><h3 class="gx-section__title">StarPort / Android Auto Support</h3></div>
           <p class="gx-note">Open StarPort Logs to download your session bundle or send it to the developer.</p>
           <button v-if="mode === 'local'" type="button" class="gx-btn gx-btn--tonal" @click="go('/logs/starport')">Open StarPort Logs</button>
         </section>

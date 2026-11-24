@@ -51,7 +51,7 @@ export class LocalAccessFeed {
 
 export const ConnectionLogs = {
   components: { GxNotice },
-  props: { panel: Boolean, onUnauthorized: { type: Function, default: () => {} } },
+  props: { panel: Boolean, controller: Boolean, onUnauthorized: { type: Function, default: () => {} } },
   emits: ["help"],
   data: () => ({ capture: null, captureError: "", captureRequest: null }),
   beforeUnmount() { this.resetCapture() },
@@ -69,13 +69,14 @@ export const ConnectionLogs = {
       this.capture = null
       this.captureError = ""
       try {
-        const data = await requestJson("./api/local-access/capture", { request: { signal: request.signal } })
+        const endpoint = this.controller ? "./api/controllers/log/capture" : "./api/local-access/capture"
+        const data = await requestJson(endpoint, { request: { signal: request.signal } })
         if (this.captureRequest !== request) return
         if (data?.schemaVersion !== 1 || typeof data.zipBase64 !== "string" || data.zipBase64.length > 131072)
-          throw new Error("Invalid connection capture")
+          throw new Error("Invalid diagnostic capture")
         const bytes = Uint8Array.from(atob(data.zipBase64), character => character.charCodeAt(0))
         if (bytes.length < 22 || bytes[0] !== 80 || bytes[1] !== 75 || bytes[2] !== 3 || bytes[3] !== 4)
-          throw new Error("Invalid connection capture")
+          throw new Error("Invalid diagnostic capture")
         this.capture = new Blob([bytes], { type: "application/zip" })
       } catch (error) {
         if (this.captureRequest !== request) return
@@ -90,7 +91,7 @@ export const ConnectionLogs = {
       const url = URL.createObjectURL(this.capture)
       const link = document.createElement("a")
       link.href = url
-      link.download = "starpilot-connection-logs.zip"
+      link.download = this.controller ? "starpilot-controller-logs.zip" : "starpilot-connection-logs.zip"
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -102,7 +103,7 @@ export const ConnectionLogs = {
       <button type="button" class="gx-btn gx-btn--tonal" @click="$emit('help')">Get help</button>
     </div>
     <div class="gx-actions">
-      <button type="button" class="gx-btn gx-btn--tonal" :disabled="!!captureRequest" @click="captureConnectionLogs">{{ captureRequest ? 'Capturing…' : 'Capture connection logs' }}</button>
+      <button type="button" class="gx-btn gx-btn--tonal" :disabled="!!captureRequest" @click="captureConnectionLogs">{{ captureRequest ? 'Capturing…' : controller ? 'Capture controller log' : 'Capture connection logs' }}</button>
       <button type="button" class="gx-btn gx-btn--tonal" :disabled="!capture" @click="downloadConnectionLogs">Download ZIP</button>
     </div>
     <GxNotice v-if="captureError" tone="danger">{{ captureError }}</GxNotice>

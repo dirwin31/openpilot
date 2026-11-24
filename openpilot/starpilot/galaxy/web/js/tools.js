@@ -36,12 +36,12 @@ export const ConnectionsApps = {
   },
   template: `
     <div class="gx-view">
-      <header class="gx-settings__header gx-page-header"><h2>Connections &amp; Apps</h2></header>
-      <section class="gx-card gx-panel gx-stack" aria-label="Support">
-        <div class="gx-section__header"><i class="bi bi-life-preserver" aria-hidden="true"></i><h3 class="gx-section__title">Support</h3></div>
-        <p class="gx-note">Get driving help, collect connection logs, or report an issue.</p>
-        <div class="gx-actions"><button type="button" class="gx-btn" @click="go('/logs/help')">Get help</button></div>
-      </section>
+      <header class="gx-settings__header gx-page-header">
+        <div><h2>Connections &amp; Apps</h2></div>
+        <button type="button" class="gx-btn gx-btn--tonal" @click="go('/logs/help')">
+          <i class="bi bi-life-preserver" aria-hidden="true"></i>Get help
+        </button>
+      </header>
       <div class="gx-grid">
         <MenuTile v-for="tool in visibleTools" :key="tool.path" :icon="tool.icon" :title="tool.name"
           :description="tool.description" :disabled="mode !== 'local'" :availability="mode !== 'local' ? 'Connect to your comma' : ''"

@@ -954,7 +954,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           return
         from openpilot.starpilot.galaxy.pairing_ready import bridge_state, pairing_readiness
         self.json(200, pairing_readiness(parked=configuration_allowed, snapshot=lambda: bluetooth_owner().snapshot(), bridge=bridge_state))
-      elif path in ('/api/local-access', '/api/local-access/capture', '/api/tmux/live', '/api/troubleshoot'):
+      elif path in ('/api/local-access', '/api/local-access/capture', '/api/controllers/log/capture', '/api/tmux/live', '/api/troubleshoot'):
         if not self.require_session():
           return
         identity = self.settings_session()
@@ -966,6 +966,9 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
             result = address_source.snapshot()
           elif path == '/api/local-access/capture':
             result = connection_capture(address_source.snapshot(), configuration_allowed=configuration_allowed)
+          elif path == '/api/controllers/log/capture':
+            from openpilot.starpilot.galaxy.controller_diagnostics import controller_capture
+            result = controller_capture()
           elif path == '/api/tmux/live':
             result = console_source.snapshot()
           else:
