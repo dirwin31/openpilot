@@ -80,9 +80,10 @@ export const Logs = {
         </section>
         <section class="gx-card gx-panel gx-stack" aria-label="Phone connection">
           <div class="gx-section__header"><i class="bi bi-phone" aria-hidden="true"></i><h3 class="gx-section__title">My phone won’t connect to comma</h3></div>
-          <p class="gx-note">For Wi-Fi, Bluetooth pairing, or Galaxy Tunnel issues. Share the Galaxy ZIP in your support thread. If you use StarPilot on iPhone, include the report from Logs &amp; support too.</p>
+          <p class="gx-note">For Wi-Fi, Bluetooth pairing, or Galaxy Tunnel issues. Capture a Galaxy ZIP, then attach it in your support thread or use Send to support to sign in with Discord. If you use StarPilot on iPhone, you can also report from Logs &amp; support.</p>
           <ConnectionLogs v-if="mode === 'local'" :on-unauthorized="unauthorized" />
           <p v-else class="gx-note">Connect to your comma to capture its connection logs.</p>
+          <div class="gx-actions"><a class="gx-btn gx-btn--tonal" href="https://starpilot-log-relay.nathan-g-hubbard.workers.dev/report/galaxy" target="_blank" rel="noopener noreferrer">Send to support</a></div>
         </section>
         <section class="gx-card gx-panel gx-stack" aria-label="Controller help">
           <div class="gx-section__header"><i class="bi bi-controller" aria-hidden="true"></i><h3 class="gx-section__title">My controller isn’t showing up</h3></div>
