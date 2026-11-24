@@ -242,7 +242,7 @@ export const BluetoothPage = {
       <header class="gx-settings__header gx-page-header"><div><h2>{{ unidenSettings ? 'Uniden' : 'Bluetooth' }}</h2>
         <p>{{ unidenSettings ? 'Detector preferences and custom frequency rules.' : 'Pair and manage devices here. Use the tabs for integration settings.' }}</p></div><WikiHelp /></header>
       <BluetoothTabs :active="unidenSettings ? 'uniden' : 'devices'" :go="go" />
-      <ConnectionLogs v-if="mode === 'local' && !unidenSettings" panel :on-unauthorized="unauthorized" />
+      <ConnectionLogs v-if="mode === 'local' && !unidenSettings" panel :on-unauthorized="unauthorized" @help="go('/logs/help')" />
       <GxState v-if="mode !== 'local'">Bluetooth requires the device. No radio was checked in preview.</GxState>
       <template v-else>
         <GxNotice tone="danger" v-if="error">{{ error }}</GxNotice>

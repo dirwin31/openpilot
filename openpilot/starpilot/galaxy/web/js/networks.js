@@ -30,7 +30,7 @@ export const choiceRow = (label, value, choices, reason = '') => ({ label, value
 export const NetworksPage = {
   name: "NetworksPage",
   components: { WikiHelp, GxNotice, GxState, GalaxySettingRow, GalaxyHotspot, GxDialog, ConnectionLogs },
-  props: { mode: { type: String, required: true }, unauthorized: { type: Function, required: true } },
+  props: { go: { type: Function, required: true }, mode: { type: String, required: true }, unauthorized: { type: Function, required: true } },
   data: () => ({ snapshot: null, busy: false, error: '', openUuid: null, adding: false, joiningSsid: '', joinPassword: '',
     hiddenOpen: false, hiddenSsid: '', showJoinPassword: false, forgetUuid: null, timer: null, controller: null, generation: 0, active: false }),
   computed: {
@@ -177,7 +177,7 @@ export const NetworksPage = {
   },
   template: `<section class="gx-driving gx-networks" aria-label="Networks">
     <header class="gx-settings__header gx-page-header"><div><h2>Networks</h2><p>Wi-Fi priority, cellular data, and local hotspot access.</p></div><WikiHelp /></header>
-    <ConnectionLogs v-if="mode === 'local'" panel :on-unauthorized="unauthorized" />
+    <ConnectionLogs v-if="mode === 'local'" panel :on-unauthorized="unauthorized" @help="go('/logs/help')" />
     <GxState v-if="mode !== 'local'">Connect to your comma to manage its networks.</GxState>
     <GxState v-else-if="!snapshot && !error" loading>Loading network settings…</GxState>
     <template v-if="snapshot">

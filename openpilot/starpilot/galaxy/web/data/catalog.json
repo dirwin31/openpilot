@@ -96,10 +96,10 @@
           "availability": "local-only"
         },
         {
-          "name": "Help & Community",
+          "name": "Get help",
           "path": "/logs/help",
           "icon": "bi-life-preserver",
-          "description": "Guides and community help",
+          "description": "Driving, phone connection, controllers, and StarPort support",
           "availability": "always"
         }
       ]

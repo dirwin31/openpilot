@@ -52,6 +52,7 @@ export class LocalAccessFeed {
 export const ConnectionLogs = {
   components: { GxNotice },
   props: { panel: Boolean, onUnauthorized: { type: Function, default: () => {} } },
+  emits: ["help"],
   data: () => ({ capture: null, captureError: "", captureRequest: null }),
   beforeUnmount() { this.resetCapture() },
   methods: {
@@ -97,7 +98,9 @@ export const ConnectionLogs = {
     },
   },
   template: `<div class="gx-stack" :class="{ 'gx-card gx-panel': panel }">
-    <div v-if="panel" class="gx-section__header"><i class="bi bi-file-earmark-text" aria-hidden="true"></i><span class="gx-section__title">Connection logs</span></div>
+    <div v-if="panel" class="gx-section__header"><i class="bi bi-file-earmark-text" aria-hidden="true"></i><span class="gx-section__title">Connection logs</span>
+      <button type="button" class="gx-btn gx-btn--tonal" @click="$emit('help')">Get help</button>
+    </div>
     <div class="gx-actions">
       <button type="button" class="gx-btn gx-btn--tonal" :disabled="!!captureRequest" @click="captureConnectionLogs">{{ captureRequest ? 'Capturing…' : 'Capture connection logs' }}</button>
       <button type="button" class="gx-btn gx-btn--tonal" :disabled="!capture" @click="downloadConnectionLogs">Download ZIP</button>
