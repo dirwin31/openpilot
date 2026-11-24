@@ -1,7 +1,9 @@
 """Actual LAN addresses for direct Galaxy access, independent of the tunnel."""
 
+from datetime import datetime, timezone
 from ipaddress import IPv4Address, ip_network
 import json
+import re
 import subprocess
 import threading
 import time
@@ -73,3 +75,48 @@ class LocalAccess:
                      'reason': '' if addresses else reason}
       self.expiry = self.clock() + 5.0
       return self.cached
+
+
+DISCOVERY_UNIT = 'galaxy-lan-discovery.service'
+DISCOVERY_MESSAGE = re.compile(
+  r'(Galaxy Wi-Fi discovery available on [0-9]{1,3} local interface\(s\)|'
+  r'Wi-Fi discovery unavailable: [A-Za-z][A-Za-z0-9_]{0,63}|LAN publisher cleanup failed)\Z',
+)
+
+
+def connection_capture(addresses, *, run=subprocess.run):
+  lines = ['StarPilot connection capture', f'Captured at (UTC): {datetime.now(timezone.utc).isoformat(timespec="seconds")}',
+           'Galaxy endpoint: HTTP port 8082', 'Bonjour service: _sp-galaxy._tcp.local.', '', 'Local addresses']
+  lines.extend(f'{row["interface"]}: {row["url"]}' for row in addresses['addresses'])
+  if not addresses['available']:
+    lines.append(addresses['reason'] or 'No eligible local address')
+  try:
+    result = run(['systemctl', 'is-active', DISCOVERY_UNIT], capture_output=True, timeout=1)
+    raw = result.stdout.decode('ascii', errors='replace').strip()
+    state = raw if raw in {'active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading'} else 'unavailable'
+  except (OSError, subprocess.SubprocessError):
+    state = 'unavailable'
+  lines.extend(['', f'Bonjour advertiser: {state}', 'Recent advertiser events (last 30 minutes)'])
+  try:
+    result = run(['journalctl', '--no-pager', '--quiet', '-u', DISCOVERY_UNIT, '--since', '-30min',
+                  '-n', '24', '-o', 'json', '--output-fields=MESSAGE'],
+                 capture_output=True, timeout=2, check=True)
+    events = []
+    for raw in result.stdout.splitlines()[-24:]:
+      if len(raw) > 8192:
+        continue
+      try:
+        entry = json.loads(raw)
+        message = entry.get('MESSAGE') if isinstance(entry, dict) else None
+        if isinstance(message, str) and DISCOVERY_MESSAGE.fullmatch(message):
+          stamp = entry.get('__REALTIME_TIMESTAMP', '')
+          if isinstance(stamp, str) and re.fullmatch(r'[0-9]{1,16}', stamp):
+            timestamp = datetime.fromtimestamp(int(stamp) / 1e6, timezone.utc).isoformat(timespec='seconds')
+            message = f'{timestamp} {message}'
+          events.append(message)
+      except (ValueError, OSError, OverflowError):
+        continue
+    lines.extend(events or ['No matching events'])
+  except (OSError, subprocess.SubprocessError):
+    lines.append('Advertiser journal unavailable')
+  return {'schemaVersion': 1, 'text': '\n'.join(lines) + '\n'}

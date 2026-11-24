@@ -67,3 +67,23 @@ assert.equal(GalaxyPage.components.LocalAccess, undefined)
 assert.ok(!GalaxyPage.template.includes('<LocalAccess'))
 compile(GalaxyPage.template, { decodeEntities: value => value.replaceAll('&amp;', '&') })
 console.log('Galaxy local access remains independent of app installation')
+
+const capture = { mode: 'local', onUnauthorized() { assert.fail('unexpected sign-in request') },
+  ...LocalAccess.data(), ...LocalAccess.methods }
+const originalFetch = globalThis.fetch
+try {
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, './api/local-access/capture')
+    assert.equal(options.credentials, 'same-origin')
+    return { ok: true, json: async () => ({ schemaVersion: 1, text: 'StarPilot connection capture' }) }
+  }
+  await capture.captureConnectionLogs()
+  assert.equal(capture.capture, 'StarPilot connection capture')
+  assert.equal(capture.captureRequest, null)
+  capture.resetCapture()
+  assert.equal(capture.capture, '')
+  capture.mode = 'sample'
+  await capture.captureConnectionLogs()
+  assert.equal(capture.capture, '')
+} finally { globalThis.fetch = originalFetch }
+assert.ok(LocalAccess.template.includes('Download'))

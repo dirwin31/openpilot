@@ -8,7 +8,7 @@ import subprocess
 from types import SimpleNamespace
 import unittest
 
-from openpilot.starpilot.galaxy.local_access import LocalAccess
+from openpilot.starpilot.galaxy.local_access import LocalAccess, connection_capture
 from openpilot.starpilot.galaxy.tmux_live import TmuxLive, MAX_BYTES
 
 
@@ -65,6 +65,37 @@ class TestNetworkDiagnostics(unittest.TestCase):
   def test_large_inventory_and_reader_errors_fail_closed(self):
     for run in [lambda *_a, **_k: SimpleNamespace(stdout=b'x' * 65537), lambda *_a, **_k: (_ for _ in ()).throw(subprocess.TimeoutExpired('ip', 1))]:
       self.assertFalse(LocalAccess(run=run).snapshot()['available'])
+
+  def test_connection_capture_includes_only_known_advertiser_events(self):
+    source, _ = self.addresses([interface()])
+    commands = []
+
+    def run(args, **_kwargs):
+      commands.append(args)
+      if args[0] == 'systemctl':
+        return SimpleNamespace(stdout=b'active')
+      rows = [{'MESSAGE': 'Galaxy Wi-Fi discovery available on 1 local interface(s)'},
+              {'MESSAGE': 'Wi-Fi discovery unavailable: TimeoutExpired'},
+              {'MESSAGE': 'Wi-Fi discovery unavailable: cookie=private'},
+              {'MESSAGE': 'Tunnel password: private'}]
+      return SimpleNamespace(stdout='\n'.join(map(json.dumps, rows)).encode())
+
+    capture = connection_capture(source.snapshot(), run=run)
+    self.assertEqual(capture['schemaVersion'], 1)
+    self.assertIn('http://192.168.50.21:8082/', capture['text'])
+    self.assertIn('Bonjour advertiser: active', capture['text'])
+    self.assertIn('Galaxy Wi-Fi discovery available on 1 local interface(s)', capture['text'])
+    self.assertIn('Wi-Fi discovery unavailable: TimeoutExpired', capture['text'])
+    self.assertNotIn('private', capture['text'])
+    self.assertIn('galaxy-lan-discovery.service', commands[1])
+
+    def missing(*_args, **_kwargs):
+      raise FileNotFoundError()
+
+    partial = connection_capture(source.snapshot(), run=missing)['text']
+    self.assertIn('Bonjour advertiser: unavailable', partial)
+    self.assertIn('Advertiser journal unavailable', partial)
+    self.assertIn('192.168.50.21', partial)
 
   def test_console_uses_exact_readonly_launcher_pane_and_cache(self):
     source, calls = self.console(b'first\nsecond\n')

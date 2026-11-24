@@ -57,9 +57,49 @@ export const LocalAccess = {
     const feed = new LocalAccessFeed({ publish: update => Object.assign(state, update), onUnauthorized: props.onUnauthorized })
     return { state, feed }
   },
+  data: () => ({ capture: "", captureError: "", captureRequest: null }),
   mounted() { this.feed.start(this.mode) },
-  watch: { mode(value) { this.feed.start(value) } },
-  beforeUnmount() { this.feed.stop() },
+  watch: { mode(value) { this.resetCapture(); this.feed.start(value) } },
+  beforeUnmount() { this.resetCapture(); this.feed.stop() },
+  methods: {
+    resetCapture() {
+      this.captureRequest?.abort()
+      this.captureRequest = null
+      this.capture = ""
+      this.captureError = ""
+    },
+    async captureConnectionLogs() {
+      if (this.mode !== "local" || this.captureRequest) return
+      const request = new AbortController()
+      this.captureRequest = request
+      this.capture = ""
+      this.captureError = ""
+      try {
+        const data = await requestJson("./api/local-access/capture", { request: { signal: request.signal } })
+        if (this.captureRequest !== request) return
+        if (data?.schemaVersion !== 1 || typeof data.text !== "string" || !data.text || data.text.length > 16384)
+          throw new Error("Invalid connection capture")
+        this.capture = data.text
+      } catch (error) {
+        if (this.captureRequest !== request) return
+        if (error.status === 401 || ["setup_required", "access_unavailable"].includes(error.code)) this.onUnauthorized()
+        else this.captureError = connectionError(error)
+      } finally {
+        if (this.captureRequest === request) this.captureRequest = null
+      }
+    },
+    downloadConnectionLogs() {
+      if (!this.capture) return
+      const url = URL.createObjectURL(new Blob([this.capture], { type: "text/plain;charset=utf-8" }))
+      const link = document.createElement("a")
+      link.href = url
+      link.download = "starpilot-connection-logs.txt"
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    },
+  },
   template: `<section class="gx-card gx-local-access gx-panel" aria-label="Local comma access">
     <div class="gx-section__header"><i class="bi bi-router" aria-hidden="true"></i><span class="gx-section__title">Local access</span></div>
     <GxNotice v-if="state.error" tone="danger">{{ state.error }}</GxNotice>
@@ -69,5 +109,11 @@ export const LocalAccess = {
       <p class="gx-note">Use the full http:// address and bookmark it. Allow local-network access if prompted. Your Firestar Link uses Internet instead.</p>
     </template>
     <p v-else-if="state.data" class="gx-note" role="status">{{ state.data.reason || 'The comma has no local network address available.' }}</p>
+    <div v-if="mode === 'local'" class="gx-actions">
+      <button type="button" class="gx-btn gx-btn--tonal" :disabled="!!captureRequest" @click="captureConnectionLogs">{{ captureRequest ? 'Capturing…' : 'Capture connection logs' }}</button>
+      <button type="button" class="gx-btn gx-btn--tonal" :disabled="!capture" @click="downloadConnectionLogs">Download</button>
+    </div>
+    <GxNotice v-if="captureError" tone="danger">{{ captureError }}</GxNotice>
+    <p v-if="capture" class="gx-note" role="status">Capture ready. Download it to share with support.</p>
   </section>`,
 }

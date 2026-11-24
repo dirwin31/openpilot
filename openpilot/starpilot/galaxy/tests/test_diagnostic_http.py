@@ -57,12 +57,15 @@ class DiagnosticHTTPTest(unittest.TestCase):
       connection.close()
 
   def test_real_http_routes_authentication_and_no_mutations(self):
-    for path in ('/api/local-access', '/api/tmux/live', '/api/troubleshoot'):
+    for path in ('/api/local-access', '/api/local-access/capture', '/api/tmux/live', '/api/troubleshoot'):
       self.assertEqual(self.request(path, remote=True)[0], 401)
     self.assertEqual(self.calls, [])
     status, _, self.cookie = self.request('/api/auth/session')
     self.assertEqual(status, 200)
     self.assertEqual(self.request('/api/local-access')[1]['addresses'][0]['url'], 'http://192.168.4.2:8082/')
+    status, capture, _ = self.request('/api/local-access/capture')
+    self.assertEqual(status, 200)
+    self.assertIn('http://192.168.4.2:8082/', capture['text'])
     self.assertEqual(self.request('/api/tmux/live')[1]['text'], 'actual console')
     self.assertEqual(self.request('/api/troubleshoot')[1]['sections'], [])
     before = len(self.calls)

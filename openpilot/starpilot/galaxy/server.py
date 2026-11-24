@@ -51,7 +51,7 @@ from openpilot.starpilot.ui.layout_preview_transport import (request_profile)
 from openpilot.starpilot.favorites.owner import FavoritesChanged
 from openpilot.starpilot.galaxy.favorites import FavoritesGateway
 from openpilot.starpilot.galaxy.system_monitor import SystemMonitor
-from openpilot.starpilot.galaxy.local_access import LocalAccess
+from openpilot.starpilot.galaxy.local_access import LocalAccess, connection_capture
 from openpilot.starpilot.galaxy.tmux_live import TmuxLive
 from openpilot.starpilot.galaxy.vehicle_selection import VehicleSelectionChanged, VehicleSelectionGateway, VehicleSelectionUnverified
 from openpilot.starpilot.bluetooth.owner import BluetoothOwner, BluetoothRejected, BluetoothUnavailable, normalized_address
@@ -954,7 +954,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           return
         from openpilot.starpilot.galaxy.pairing_ready import bridge_state, pairing_readiness
         self.json(200, pairing_readiness(parked=configuration_allowed, snapshot=lambda: bluetooth_owner().snapshot(), bridge=bridge_state))
-      elif path in ('/api/local-access', '/api/tmux/live', '/api/troubleshoot'):
+      elif path in ('/api/local-access', '/api/local-access/capture', '/api/tmux/live', '/api/troubleshoot'):
         if not self.require_session():
           return
         identity = self.settings_session()
@@ -964,6 +964,8 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
         try:
           if path == '/api/local-access':
             result = address_source.snapshot()
+          elif path == '/api/local-access/capture':
+            result = connection_capture(address_source.snapshot())
           elif path == '/api/tmux/live':
             result = console_source.snapshot()
           else:
