@@ -57,7 +57,7 @@ export const LocalAccess = {
     const feed = new LocalAccessFeed({ publish: update => Object.assign(state, update), onUnauthorized: props.onUnauthorized })
     return { state, feed }
   },
-  data: () => ({ capture: "", captureError: "", captureRequest: null }),
+  data: () => ({ capture: null, captureError: "", captureRequest: null }),
   mounted() { this.feed.start(this.mode) },
   watch: { mode(value) { this.resetCapture(); this.feed.start(value) } },
   beforeUnmount() { this.resetCapture(); this.feed.stop() },
@@ -65,21 +65,24 @@ export const LocalAccess = {
     resetCapture() {
       this.captureRequest?.abort()
       this.captureRequest = null
-      this.capture = ""
+      this.capture = null
       this.captureError = ""
     },
     async captureConnectionLogs() {
       if (this.mode !== "local" || this.captureRequest) return
       const request = new AbortController()
       this.captureRequest = request
-      this.capture = ""
+      this.capture = null
       this.captureError = ""
       try {
         const data = await requestJson("./api/local-access/capture", { request: { signal: request.signal } })
         if (this.captureRequest !== request) return
-        if (data?.schemaVersion !== 1 || typeof data.text !== "string" || !data.text || data.text.length > 16384)
+        if (data?.schemaVersion !== 1 || typeof data.zipBase64 !== "string" || data.zipBase64.length > 131072)
           throw new Error("Invalid connection capture")
-        this.capture = data.text
+        const bytes = Uint8Array.from(atob(data.zipBase64), character => character.charCodeAt(0))
+        if (bytes.length < 22 || bytes[0] !== 80 || bytes[1] !== 75 || bytes[2] !== 3 || bytes[3] !== 4)
+          throw new Error("Invalid connection capture")
+        this.capture = new Blob([bytes], { type: "application/zip" })
       } catch (error) {
         if (this.captureRequest !== request) return
         if (error.status === 401 || ["setup_required", "access_unavailable"].includes(error.code)) this.onUnauthorized()
@@ -90,10 +93,10 @@ export const LocalAccess = {
     },
     downloadConnectionLogs() {
       if (!this.capture) return
-      const url = URL.createObjectURL(new Blob([this.capture], { type: "text/plain;charset=utf-8" }))
+      const url = URL.createObjectURL(this.capture)
       const link = document.createElement("a")
       link.href = url
-      link.download = "starpilot-connection-logs.txt"
+      link.download = "starpilot-connection-logs.zip"
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -111,7 +114,7 @@ export const LocalAccess = {
     <p v-else-if="state.data" class="gx-note" role="status">{{ state.data.reason || 'The comma has no local network address available.' }}</p>
     <div v-if="mode === 'local'" class="gx-actions">
       <button type="button" class="gx-btn gx-btn--tonal" :disabled="!!captureRequest" @click="captureConnectionLogs">{{ captureRequest ? 'Capturing…' : 'Capture connection logs' }}</button>
-      <button type="button" class="gx-btn gx-btn--tonal" :disabled="!capture" @click="downloadConnectionLogs">Download</button>
+      <button type="button" class="gx-btn gx-btn--tonal" :disabled="!capture" @click="downloadConnectionLogs">Download ZIP</button>
     </div>
     <GxNotice v-if="captureError" tone="danger">{{ captureError }}</GxNotice>
     <p v-if="capture" class="gx-note" role="status">Capture ready. Download it to share with support.</p>

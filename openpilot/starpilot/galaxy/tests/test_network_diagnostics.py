@@ -1,6 +1,9 @@
 """Pure bounded network/launcher readers; never imports native vehicle modules."""
 
 import ast
+from base64 import b64decode
+from io import BytesIO
+from zipfile import ZipFile
 from pathlib import Path
 import threading
 import json
@@ -73,7 +76,16 @@ class TestNetworkDiagnostics(unittest.TestCase):
     def run(args, **_kwargs):
       commands.append(args)
       if args[0] == 'systemctl':
-        return SimpleNamespace(stdout=b'active')
+        return SimpleNamespace(stdout=b'ActiveState=active\nSubState=running\nNRestarts=3\n')
+      if args[0] == 'ip':
+        state = [{'dev': 'wlan0', 'gateway': '192.168.50.1'}] if 'route' in args else [
+          {'ifname': 'wlan0', 'operstate': 'UP', 'address': 'de:ad:be:ef:00:01',
+           'addr_info': [{'local': '192.168.50.21', 'prefixlen': 24}, {'local': '8.8.8.8', 'prefixlen': 32}]}]
+        return SimpleNamespace(stdout=json.dumps(state).encode())
+      if args[0] == 'ss':
+        return SimpleNamespace(stdout=b'LISTEN 0 20 0.0.0.0:8082 0.0.0.0:*')
+      if 'galaxy-ble-fork.service' in args:
+        return SimpleNamespace(stdout=b'{"MESSAGE":"Phone claimed pairing window"}')
       rows = [{'MESSAGE': 'Galaxy Wi-Fi discovery available on 1 local interface(s)'},
               {'MESSAGE': 'Wi-Fi discovery unavailable: TimeoutExpired'},
               {'MESSAGE': 'Wi-Fi discovery unavailable: cookie=private'},
@@ -86,8 +98,18 @@ class TestNetworkDiagnostics(unittest.TestCase):
     self.assertIn('Bonjour advertiser: active', capture['text'])
     self.assertIn('Galaxy Wi-Fi discovery available on 1 local interface(s)', capture['text'])
     self.assertIn('Wi-Fi discovery unavailable: TimeoutExpired', capture['text'])
-    self.assertNotIn('private', capture['text'])
-    self.assertIn('galaxy-lan-discovery.service', commands[1])
+    self.assertNotIn('Tunnel password:', capture['text'])
+    self.assertTrue(any('galaxy-lan-discovery.service' in args for args in commands))
+    with ZipFile(BytesIO(b64decode(capture['zipBase64']))) as archive:
+      self.assertEqual(archive.namelist(), ['connection-logs.txt'])
+      report = archive.read('connection-logs.txt').decode()
+    self.assertIn('192.168.50.21/24', report)
+    self.assertIn('IPv4 default route interfaces: wlan0', report)
+    self.assertIn('TCP port 8082 listening: all interfaces', report)
+    self.assertIn('NRestarts=3', report)
+    self.assertIn('Phone claimed pairing window', report)
+    for private_value in ('de:ad:be:ef:00:01', '192.168.50.1', '8.8.8.8', 'cookie=private'):
+      self.assertNotIn(private_value, report)
 
     def missing(*_args, **_kwargs):
       raise FileNotFoundError()

@@ -75,15 +75,15 @@ try {
   globalThis.fetch = async (url, options) => {
     assert.equal(url, './api/local-access/capture')
     assert.equal(options.credentials, 'same-origin')
-    return { ok: true, json: async () => ({ schemaVersion: 1, text: 'StarPilot connection capture' }) }
+    return { ok: true, json: async () => ({ schemaVersion: 1, zipBase64: 'UEsDBAAAAAAAAAAAAAAAAAAAAAAAAAAA' }) }
   }
   await capture.captureConnectionLogs()
-  assert.equal(capture.capture, 'StarPilot connection capture')
+  assert.equal(capture.capture.type, 'application/zip')
   assert.equal(capture.captureRequest, null)
   capture.resetCapture()
-  assert.equal(capture.capture, '')
+  assert.equal(capture.capture, null)
   capture.mode = 'sample'
   await capture.captureConnectionLogs()
-  assert.equal(capture.capture, '')
+  assert.equal(capture.capture, null)
 } finally { globalThis.fetch = originalFetch }
 assert.ok(LocalAccess.template.includes('Download'))

@@ -965,7 +965,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           if path == '/api/local-access':
             result = address_source.snapshot()
           elif path == '/api/local-access/capture':
-            result = connection_capture(address_source.snapshot())
+            result = connection_capture(address_source.snapshot(), configuration_allowed=configuration_allowed)
           elif path == '/api/tmux/live':
             result = console_source.snapshot()
           else:
