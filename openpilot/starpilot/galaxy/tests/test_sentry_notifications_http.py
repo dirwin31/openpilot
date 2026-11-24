@@ -7,6 +7,7 @@ import threading
 import unittest
 
 from openpilot.starpilot.galaxy.access import GalaxyAccessOwner
+from openpilot.starpilot.galaxy.camera_snapshot import SnapshotDenied
 from openpilot.starpilot.galaxy.server import make_remote_server, make_server
 from openpilot.starpilot.sentry_mode.notifications import NotificationOwner
 
@@ -19,16 +20,26 @@ class NotificationHTTPTests(unittest.TestCase):
       from openpilot.starpilot.sentry_mode.storage import EventStore
       owner.store = EventStore(root / 'events')
       parked = [True]
-      server = make_server(port=0, owner=GalaxyAccessOwner(root / 'access'), notifications=owner, parked=lambda: parked[0])
+      photos = []
+      jpeg = b'\xff\xd8\xff\xe0'
+      class Camera:
+        def capture(self, camera, *, permitted, parked):
+          if not parked or not permitted():
+            raise SnapshotDenied
+          photos.append(camera)
+          return jpeg
+      server = make_server(port=0, owner=GalaxyAccessOwner(root / 'access'), notifications=owner, parked=lambda: parked[0],
+                           camera_snapshot=Camera())
       thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': .01}, daemon=True)
       thread.start()
-      def request(payload=None, cookie=''):
+      def request(payload=None, cookie='', path=None):
         connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
         headers = {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{server.server_port}', 'Content-Type': 'application/json'}
-        connection.request('POST' if payload is not None else 'GET', '/api/sentry/notifications' if payload is not None else '/api/auth/session',
+        connection.request('POST' if payload is not None else 'GET', path or ('/api/sentry/notifications' if payload is not None else '/api/auth/session'),
                            json.dumps(payload) if payload is not None else None, headers)
         reply = connection.getresponse()
-        result = reply.status, json.loads(reply.read()), dict(reply.getheaders())
+        raw = reply.read()
+        result = reply.status, raw if reply.getheader('Content-Type') == 'image/jpeg' else json.loads(raw), dict(reply.getheaders())
         connection.close()
         return result
       try:
@@ -38,9 +49,21 @@ class NotificationHTTPTests(unittest.TestCase):
         self.assertNotIn('test-token', json.dumps(result))
         self.assertEqual(request({'action': 'test', 'target': 'app', 'id': 'missing'}, cookie)[0], 404)
         self.assertEqual(request({'action': 'test', 'target': 'app', 'id': result['appSubscriptions'][0]['id']}, cookie)[0], 200)
+        test_route = '/api/sentry/notifications/photo-test'
+        test = {'camera': 'cabin', 'id': result['appSubscriptions'][0]['id']}
+        self.assertEqual(request(test, path=test_route)[0], 401)
         parked[0] = False
+        self.assertEqual(request(test, cookie, test_route)[0], 409)
+        self.assertEqual(photos, [])
         self.assertEqual(request({'action': 'simulate'}, cookie)[0], 403)
         parked[0] = True
+        self.assertEqual(request(test, cookie, test_route)[:2], (200, {'queued': True}))
+        self.assertEqual(photos, ['cabin'])
+        event_id = next(iter(owner.test_photos))
+        image_path = f'/api/sentry/image/{event_id}/test'
+        self.assertEqual(request(path=image_path)[0], 401)
+        self.assertEqual(request(cookie=cookie, path=image_path)[:2], (200, jpeg))
+        self.assertEqual(owner.store.snapshot()['events'], [])
         self.assertEqual(request({'action': 'simulate'}, cookie)[0], 200)
         self.assertTrue(owner.store.snapshot()['events'][0]['simulated'])
         self.assertEqual(request({'action': 'simulate'}, cookie)[0], 429)

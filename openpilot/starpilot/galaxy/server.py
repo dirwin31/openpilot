@@ -1459,7 +1459,9 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           self.json(400, {'error': 'Choose an event image'})
           return
         try:
-          body = motion_events.image(parts[0], parts[1])
+          body = notification_owner.test_image(parts[0]) if parts[1] == 'test' else motion_events.image(parts[0], parts[1])
+          if body is None:
+            raise SentryEventsUnavailable
         except SentryEventsUnavailable:
           self.json(404, {'error': 'Event image unavailable'})
         else:
@@ -1930,6 +1932,43 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
         else:
           if self.require_session():
             self.json(200, result)
+        return
+      if path == '/api/sentry/notifications/photo-test':
+        if (type(payload) is not dict or set(payload) != {'camera', 'id'} or payload['camera'] not in ('wide', 'cabin') or
+            not isinstance(payload['id'], str) or not re.fullmatch(r'[0-9a-f]{12}', payload['id'])):
+          self.json(400, {'error': 'Choose a phone and camera'})
+          return
+        identity = self.settings_session()
+        if identity is None:
+          self.json(401, {'error': 'Sign in to Galaxy'})
+          return
+
+        def permitted():
+          readable, _, _ = select.select([self.connection], [], [], 0)
+          if readable and not self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT):
+            return False
+          return self.settings_session() == identity and parked()
+
+        try:
+          photo = snapshots.capture(payload['camera'], permitted=permitted, parked=True)
+          notification_owner.photo_test(payload['id'], payload['camera'], photo, permitted=permitted)
+        except (SnapshotDenied, PermissionError):
+          if self.require_session():
+            self.json(409, {'error': 'Park the car before sending a photo test'})
+        except SnapshotUnavailable:
+          if self.require_session():
+            self.json(503, {'error': 'No fresh camera frame. Try again shortly.'})
+        except LookupError:
+          self.json(404, {'error': 'Phone subscription not found'})
+        except ValueError as error:
+          self.json(400, {'error': str(error)})
+        except (NotificationUnavailable, OSError):
+          self.json(503, {'error': 'Sentry phone push is unavailable. Check Galaxy Sentry settings.'})
+        else:
+          if self.settings_session() == identity:
+            self.json(200, {'queued': True})
+          else:
+            self.json(401, {'error': 'Sign in to Galaxy'})
         return
       if path == '/api/sentry/notifications':
         identity = self.settings_session()
