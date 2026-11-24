@@ -2,11 +2,44 @@
   "mode": "offline-preview",
   "tools": [
     {
-      "name": "Bluetooth",
-      "path": "/bluetooth",
-      "icon": "bi-bluetooth",
-      "description": "Adapter power, saved devices and connections",
-      "availability": "local-only"
+      "name": "Connections & Apps",
+      "path": "/connections",
+      "icon": "bi-diagram-3",
+      "description": "Networks, Bluetooth, StarPort, and support",
+      "availability": "always",
+      "children": [
+        {
+          "name": "Networks",
+          "path": "/networks",
+          "icon": "bi-wifi",
+          "description": "Preferred Wi-Fi, cellular data and the Galaxy hotspot",
+          "availability": "local-only"
+        },
+        {
+          "name": "Bluetooth",
+          "path": "/bluetooth",
+          "icon": "bi-bluetooth",
+          "description": "Adapter power, saved devices and connections",
+          "availability": "local-only"
+        },
+        {
+          "name": "StarPort",
+          "path": "/starport",
+          "icon": "bi-phone",
+          "description": "Connect StarPilot directly to your car screen, customize its layout, save offline maps, and set up Spotify or phone audio",
+          "availability": "local-only",
+          "visibility": "authenticated",
+          "children": [
+            {
+              "name": "Spotify & Phone Audio",
+              "path": "/starport/audio",
+              "icon": "bi-spotify",
+              "description": "Play Spotify or forward phone music through your comma to your car",
+              "availability": "local-only"
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "Cameras & Monitoring",
@@ -142,13 +175,6 @@
       ]
     },
     {
-      "name": "Networks",
-      "path": "/networks",
-      "icon": "bi-wifi",
-      "description": "Preferred Wi-Fi, cellular data and the Galaxy hotspot",
-      "availability": "local-only"
-    },
-    {
       "name": "System Tools",
       "path": "/system",
       "icon": "bi-arrow-repeat",
@@ -168,23 +194,6 @@
       "icon": "bi-sliders2",
       "description": "Automatic steering tuning, measured corrections and live plots",
       "availability": "local-only"
-    },
-    {
-      "name": "StarPort",
-      "path": "/starport",
-      "icon": "bi-phone",
-      "description": "Connect StarPilot directly to your car screen, customize its layout, save offline maps, and set up Spotify or phone audio",
-      "availability": "local-only",
-      "visibility": "authenticated",
-      "children": [
-        {
-          "name": "Spotify & Phone Audio",
-          "path": "/starport/audio",
-          "icon": "bi-spotify",
-          "description": "Play Spotify or forward phone music through your comma to your car",
-          "availability": "local-only"
-        }
-      ]
     }
   ]
 }
