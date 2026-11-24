@@ -15,8 +15,9 @@ again. infer() returns None, for the caller's own model, on any doubt:
   - the host yielding its GPU to the driving model: a YIELD answer for that
     request alone, a YIELD hello until the next plain one,
   - no answer within REPLY_TIMEOUT_S, a send still in flight, or an answer of
-    the wrong size; after a miss it rests MISS_HOLD_S, so a slow host cannot
-    hold a caller at the faster cadence it keeps for the host.
+    the wrong size; it rests MISS_HOLD_S after a bad answer, or MISS_REST_AFTER
+    timeouts in MISS_WINDOW_S, so a slow host cannot hold a caller at the faster
+    cadence it keeps for the host, while one late answer costs that request alone.
 
 HostModel wraps any runtime's model as a call, and JetsonNet stands in for a
 cv2.dnn net (setInput/forward): only the forward pass moves, and the caller's
@@ -42,6 +43,7 @@ import os
 import queue
 import signal
 import socket
+import sys
 import threading
 import time
 
@@ -50,10 +52,14 @@ import numpy as np
 from jetlink import protocol as P
 from jetlink.addons import wire as W
 from jetlink.comma import functions
+from jetlink.transport.aio import Aio
 
 HELLO_FRESH_S = 2.5
 REPLY_TIMEOUT_S = 0.05
 MISS_HOLD_S = 3.0
+# as the server's yieldAfter in yieldFor: a lone timeout is a transfer's tail, not a slow host
+MISS_REST_AFTER = 3
+MISS_WINDOW_S = 2.0
 REOPEN_S = 2.0
 WRITE_CHUNK = 8192
 # as jetlink.transport.ffs reads: a multiple of the packet size, an order-2 allocation
@@ -109,6 +115,57 @@ class _Endpoint:
       pass
 
 
+class _AioSender:
+  """One endpoint generation. Only its lock holder touches the kernel context."""
+
+  def __init__(self, endpoint):
+    self.endpoint = endpoint
+    self.aio = Aio(endpoint.fd, W.MAX_REQUEST // WRITE_CHUNK + 1)
+    self.lock = threading.Lock()
+    self.pending = 0
+    self.remaining_bytes = 0
+    self.message = None
+    self.retired = False
+    self.settled = threading.Event()
+
+  def available(self):
+    if self.retired:
+      return False
+    if self.pending:
+      results = self.aio.reap(0, 0)
+      self.pending -= len(results)
+      self.remaining_bytes -= sum(results)
+      if any(n <= 0 for n in results) or (not self.pending and self.remaining_bytes):
+        raise OSError("incomplete add-on transfer")
+      if not self.pending:
+        self.message = None
+    return not self.pending
+
+  def send(self, msg, deadline):
+    plan = self.aio.layout((len(msg),), WRITE_CHUNK)
+    bases = [self.aio.address(msg)[0]]
+    self.message = msg
+    self.remaining_bytes = len(msg)
+    while self.pending < plan.count:
+      if self.retired or time.monotonic() >= deadline:
+        raise TimeoutError("add-on submit deadline")
+      count = self.aio.submit(plan, bases, self.pending, plan.count - self.pending)
+      if not count:
+        raise OSError("no add-on writes queued")
+      self.pending += count
+
+  def drain(self, endpoints):
+    # The host may suspend indefinitely. Never disable the shared gadget.
+    with self.lock:
+      while self.pending:
+        self.pending -= len(self.aio.reap(1, 0.5))
+      self.aio.close()
+      self.message = None
+    for endpoint in endpoints:
+      endpoint.close()
+    self.settled.set()
+
+
 class RoundTrips:
   """Answered requests' round trips, and the Jetson's own share of each (server_us)."""
 
@@ -147,8 +204,9 @@ class AddonLink:
     self.last_hello = -1e9
     self.yield_seen = False
     self.hold_until = -1e9
-    self.stats = {"sent": 0, "answered": 0, "timeouts": 0, "skipped_busy": 0, "unknown_model": 0, "bad_answers": 0,
-                  "yields": 0, "reopens": 0}
+    self.misses: collections.deque = collections.deque(maxlen=MISS_REST_AFTER)
+    self.stats = {"eligible_attempts": 0, "sent": 0, "answered": 0, "timeouts": 0, "skipped_busy": 0, "unknown_model": 0, "bad_answers": 0,
+                  "yields": 0, "reopens": 0, "submit_ms": 0.0}
     self.round_trips = RoundTrips()
     self._lock = threading.Lock()
     self._seq = 0
@@ -161,6 +219,9 @@ class AddonLink:
     self._listener: socket.socket | None = None
     self._conn: socket.socket | None = None
     self._next_open = 0.0
+    self._sender = self._retiring = None
+    self._writer_started = False
+    self._mode = None
     self._threads_started = False
     self._open_lock = threading.Lock()   # one opener, for nets on several threads
     self._report_lock = threading.Lock()
@@ -175,8 +236,27 @@ class AddonLink:
   def live(self, model_tag: int) -> bool:
     return model_tag in self.tags and self.clock() - self.last_hello < HELLO_FRESH_S and not self.yield_seen
 
+  def note_attempt(self, model_tag: int):
+    with self._lock:
+      if self.live(model_tag):
+        self.stats["eligible_attempts"] += 1
+
   def ready(self, model_tag: int) -> bool:
-    return self.live(model_tag) and self.clock() >= self.hold_until and not self._writing.is_set()
+    return self.live(model_tag) and self.clock() >= self.hold_until and self._available()
+
+  def _available(self):
+    sender = self._sender
+    if sender is None:
+      return not self._writing.is_set()
+    if not sender.lock.acquire(blocking=False):
+      return False
+    try:
+      return sender.available()
+    except OSError:
+      self._close(sender.endpoint)
+      return False
+    finally:
+      sender.lock.release()
 
   def poll(self, model_tag: int) -> bool:
     """May a request for the model go now? Cheap, and it opens the link and
@@ -184,9 +264,10 @@ class AddonLink:
     self.want(model_tag)
     self._ensure_open()
     self._maybe_report()
-    if not self.ready(model_tag):
-      if self._writing.is_set():
-        self.stats["skipped_busy"] += 1
+    if not self.live(model_tag) or self.clock() < self.hold_until:
+      return False
+    if not self._available():
+      self.stats["skipped_busy"] += 1
       return False
     return True
 
@@ -202,21 +283,45 @@ class AddonLink:
       return None
     with self._lock:
       self._seq = (self._seq + 1) % W.HELLO_SEQ
+      if not self.live(model_tag):
+        return None
+      sender, endpoint = self._sender, self._tx
       seq = self._seq
-      slot = [threading.Event(), None]
+      slot = [threading.Event(), None, 0.0]
       self._waiting[seq] = slot
     t0 = time.monotonic_ns()
     msg = W.pack_request(seq, model_tag, np.ascontiguousarray(image).tobytes(), image.shape, encoding)
-    try:
-      self._requests.put_nowait(msg)
-    except queue.Full:
-      self._drop(seq)
-      return None
+    started = time.monotonic()
+    deadline = started + REPLY_TIMEOUT_S
+    if sender is None:
+      try:
+        self._requests.put_nowait((endpoint, msg))
+      except queue.Full:
+        self._drop(seq)
+        return None
+    else:
+      claimed = sender.lock.acquire(blocking=False)
+      try:
+        if not claimed or not sender.available():
+          self.stats["skipped_busy"] += 1
+          self._drop(seq)
+          return None
+        try:
+          sender.send(msg, deadline)
+        finally:
+          self.stats["submit_ms"] += (time.monotonic() - started) * 1000
+      except OSError:
+        self._drop(seq)
+        self._close(endpoint)
+        return None
+      finally:
+        if claimed:
+          sender.lock.release()
     self.stats["sent"] += 1
-    if not slot[0].wait(REPLY_TIMEOUT_S):
+    if not slot[0].wait(max(0, deadline - time.monotonic())) or slot[2] > deadline:
       self._drop(seq)
       self.stats["timeouts"] += 1
-      self.hold_until = self.clock() + MISS_HOLD_S
+      self._timed_out()
       return None
     status, server_us, out = slot[1]
     if status == W.STATUS_UNKNOWN_MODEL:
@@ -230,6 +335,13 @@ class AddonLink:
     self.round_trips.add((time.monotonic_ns() - t0) // 1000, server_us)
     self.stats["answered"] += 1
     return out
+
+  def _timed_out(self):
+    now = self.clock()
+    self.misses.append(now)
+    if len(self.misses) == MISS_REST_AFTER and now - self.misses[0] < MISS_WINDOW_S:
+      self.misses.clear()
+      self.hold_until = now + MISS_HOLD_S
 
   def report(self) -> dict:
     """models: the host's, by tag; missing: those this comma asks for that a
@@ -265,20 +377,33 @@ class AddonLink:
     if not self._open_lock.acquire(blocking=False):
       return
     try:
-      if self._rx is not None:
+      if self._rx is not None or (self._retiring and not self._retiring.settled.is_set()):
         return
       self._next_open = self.clock() + REOPEN_S
       stream = self.cable_network()
       fds = self._accept() if stream else self._open_endpoints()
       if fds is None:
         return
+      rx, tx = map(_Endpoint, fds)
+      sender = None
+      if not stream and sys.platform == "linux":
+        try:
+          sender = _AioSender(tx)
+        except (KeyError, OSError):
+          pass   # unsupported architecture, syscall or kernel AIO limit
+      mode = "AIO" if sender else "blocking"
+      if mode != self._mode:
+        logging.getLogger(__name__).info("jetlink: %s uses %s writes", self.addon, mode)
+        self._mode = mode
       with self._lock:
-        self._rx, self._tx = _Endpoint(fds[0]), _Endpoint(fds[1])
+        self._rx, self._tx, self._sender = rx, tx, sender
         self._stream = stream
       self.stats["reopens"] += 1
       if not self._threads_started:
         self._threads_started = True
         threading.Thread(target=self._forever, args=(self._read_forever, 'reader'), name=f"{self.addon}-jetson-rx", daemon=True).start()
+      if sender is None and not self._writer_started:
+        self._writer_started = True
         threading.Thread(target=self._forever, args=(self._write_forever, 'writer'), name=f"{self.addon}-jetson-tx", daemon=True).start()
     finally:
       self._open_lock.release()
@@ -335,6 +460,10 @@ class AddonLink:
       if failed is not None and failed is not self._rx and failed is not self._tx:
         return
       endpoints, self._rx, self._tx = (self._rx, self._tx), None, None
+      sender, self._sender = self._sender, None
+      if sender:
+        sender.retired = True
+        self._retiring = sender
       conn, self._conn = self._conn, None
       self.tags, self.yield_seen = frozenset(), False
       self._next_open = self.clock() + REOPEN_S
@@ -345,6 +474,9 @@ class AddonLink:
       except OSError:
         pass
       conn.close()
+    if sender:
+      threading.Thread(target=sender.drain, args=(endpoints,), daemon=True, name=f"{self.addon}-aio-close").start()
+      return
     for endpoint in endpoints:
       if endpoint is not None:
         endpoint.close()
@@ -369,6 +501,7 @@ class AddonLink:
       slot = self._waiting.pop(seq, None)
     if slot is not None:
       slot[1] = (status, server_us, np.frombuffer(payload, np.float32).copy())
+      slot[2] = time.monotonic()
       slot[0].set()
 
   def _forever(self, body, what: str):
@@ -421,8 +554,7 @@ class AddonLink:
   def _write_forever(self):
     _mask_signals()
     while True:
-      msg = self._requests.get()
-      endpoint = self._tx
+      endpoint, msg = self._requests.get()
       fd = endpoint.acquire() if endpoint is not None else -1
       if fd < 0:
         continue
@@ -448,6 +580,28 @@ class AddonLink:
 def blob_to_u8(blob: np.ndarray) -> np.ndarray:
   """blobFromImage(u8, 1/255) back to the u8 [3, H, W] it came from: exact for those values."""
   return np.rint(blob[0] * 255.0).clip(0, 255).astype(np.uint8)
+
+
+class ScaledU8:
+  """A uint8 blob [1, C, H, W] that stands for blob / 255, as blobFromImage(img,
+  1/255) makes it: the host gets its bytes as they are and scales them, and the
+  float blob is made only when the comma runs the model itself, so neither end
+  converts the image back. For a HostModel or JetsonNet only; scaled_input()
+  gives a plain net its float blob."""
+
+  __slots__ = ("u8",)
+
+  def __init__(self, u8: np.ndarray):
+    self.u8 = u8
+
+  def scaled(self) -> np.ndarray:
+    return self.u8.astype(np.float32) / 255.0
+
+
+def scaled_input(net, u8: np.ndarray):
+  """The blob for net from a uint8 [1, C, H, W] image scaled by 1/255:
+  ScaledU8 for a net that asks a host, the float blob for any other."""
+  return ScaledU8(u8) if isinstance(net, HostModel) else ScaledU8(u8).scaled()
 
 
 class HostModel:
@@ -487,8 +641,15 @@ class HostModel:
   def ask(self, blob) -> dict | None:
     """Every output by name from the host; None for the caller's own model."""
     # the image is built only for a host that will take it: no cost on the comma without one
-    if blob is None or not self.on() or not self.link.poll(self.tag):
+    if blob is None or not self.on():
       return None
+    self.link.note_attempt(self.tag)
+    if not self.link.poll(self.tag):
+      return None
+    if isinstance(blob, ScaledU8):
+      if blob.u8.dtype != np.uint8 or blob.u8.ndim != 4 or blob.u8.shape[0] != 1:
+        return None
+      return self._values(np.ascontiguousarray(blob.u8[0]), W.ENC_U8)
     blob = np.asarray(blob)
     # the host takes one image, [1, C, H, W]: a batch runs here, whole
     if blob.ndim != 4 or blob.shape[0] != 1:
@@ -500,6 +661,9 @@ class HostModel:
       image, encoding = blob_to_u8(blob), W.ENC_U8
     else:
       image, encoding = np.ascontiguousarray(blob[0], np.float32), W.ENC_F32
+    return self._values(image, encoding)
+
+  def _values(self, image: np.ndarray, encoding: int) -> dict | None:
     flat = self.link.infer(self.tag, image, sum(self.sizes), encoding)
     if flat is None:
       return None
@@ -511,6 +675,8 @@ class HostModel:
 
   def __call__(self, blob):
     values = self.ask(blob)
+    if values is None and isinstance(blob, ScaledU8):
+      blob = blob.scaled()
     return self.local(blob) if values is None else tuple(values[name] for name, _ in self.outputs)
 
 
@@ -519,10 +685,10 @@ class JetsonNet(HostModel):
   of `outputs` is what forward() with no names returns, as cv2 returns the
   graph's first."""
 
-  _OWN = frozenset({"net", "link", "tag", "local", "outputs", "wire", "sizes", "scaled_u8", "enabled", "blob"})
+  _OWN = frozenset({"net", "link", "tag", "local", "outputs", "wire", "sizes", "scaled_u8", "enabled", "blob", "pending"})
 
   def __init__(self, net, link: AddonLink, sha256: str, outputs, scaled_u8: bool = False, enabled=None):
-    self.net, self.blob = net, None
+    self.net, self.blob, self.pending = net, None, None
     super().__init__(link, sha256, outputs, scaled_u8=scaled_u8, enabled=enabled)
 
   def setInput(self, blob, *args, **kwargs):
@@ -530,7 +696,15 @@ class JetsonNet(HostModel):
     # that cv2 would scale or shift runs on the comma, where it is
     scale = kwargs.get("scalefactor", args[1] if len(args) > 1 else 1.0)
     mean = kwargs.get("mean", args[2] if len(args) > 2 else None)
-    self.blob = blob if scale == 1.0 and (mean is None or not np.any(mean)) else None
+    plain = scale == 1.0 and (mean is None or not np.any(mean))
+    self.pending = None
+    if isinstance(blob, ScaledU8):
+      if plain:
+        # the float blob reaches the net only if forward() runs it here
+        self.blob, self.pending = blob, (args, kwargs)
+        return
+      blob = blob.scaled()
+    self.blob = blob if plain else None
     self.net.setInput(blob, *args, **kwargs)
 
   def forward(self, names=None):
@@ -538,6 +712,10 @@ class JetsonNet(HostModel):
     values = self.ask(self.blob) if set(wanted) <= {name for name, _ in self.outputs} else None
     if values is not None:
       return values[wanted[0]] if names is None or isinstance(names, str) else tuple(values[name] for name in wanted)
+    if self.pending is not None:
+      args, kwargs = self.pending
+      self.pending = None
+      self.net.setInput(self.blob.scaled(), *args, **kwargs)
     return self.net.forward() if names is None else self.net.forward(names)
 
   def __getattr__(self, name):

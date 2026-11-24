@@ -32,7 +32,9 @@ def log_report(name: str, report: dict, now: float | None = None) -> bool:
     # lazily: the owner reads ADDONS off the adapter with the standard library only
     from openpilot.common.swaglog import cloudlog
     cloudlog.event("jetlink.addon", addon=name, changed=changed, connected=state[0], yielding=state[1], missing=list(state[2]),
-                   answered=int(link.get("answered", 0) or 0), timeouts=int(link.get("timeouts", 0) or 0),
+                   eligible_attempts=int(link.get("eligible_attempts", 0) or 0), answered=int(link.get("answered", 0) or 0),
+                   timeouts=int(link.get("timeouts", 0) or 0), skipped_busy=int(link.get("skipped_busy", 0) or 0),
+                   submit_ms=round(float(link.get("submit_ms", 0.0) or 0.0), 1),
                    round_trips=int(trips.get("n", 0) or 0), round_trip_ms=trips.get("total_ms"), jetson_ms=trips.get("jetson_ms"))
   except Exception:
     return False

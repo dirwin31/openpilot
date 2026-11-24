@@ -52,7 +52,8 @@ def prepare_nv12(frame: np.ndarray, *, width: int, height: int, annotation: Anno
     raise ValueError("Invalid resized crop")
   square = np.zeros((MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, 3), dtype=np.uint8)
   square[crop.pad_top:crop.pad_top + crop.model_height, crop.pad_left:crop.pad_left + crop.model_width] = resized
-  return np.expand_dims(np.transpose(square.astype(np.float32) / 255.0, (2, 0, 1)), 0)
+  # the u8 image: the Jetson scales it, and the float blob is made only to run here
+  return np.expand_dims(np.transpose(square, (2, 0, 1)), 0)
 
 
 def with_jetson(net):
@@ -102,7 +103,8 @@ class VASMInference:
       # Later file changes cannot alter this loaded network; reloading
       # requires a new exact-hash verification in load().
       blob = prepare_nv12(frame, width=width, height=height, annotation=annotation, side=side, cv2_module=self.cv2)
-      self.net.setInput(blob)
+      from jetlink.addons.link import scaled_input
+      self.net.setInput(scaled_input(self.net, blob))
       output = np.asarray(self.net.forward())
       if output.shape != (1, 3) or not np.isfinite(output).all():
         raise ValueError("Unexpected tri-class V-ASM output")

@@ -96,7 +96,8 @@ def test_a_link_is_logged_when_it_changes_and_summed_up_while_it_does_not(monkey
   monkeypatch.setattr(swaglog.cloudlog, "event", lambda name, **kw: events.append((name, kw)))
   monkeypatch.setattr(jetlink_addons, "_logged", {})
   monkeypatch.setattr(jetlink_addons, "_summary_at", {})
-  up = {"connected": True, "yielding": False, "missing": [], "link": {"answered": 40, "timeouts": 1},
+  link = {"eligible_attempts": 50, "answered": 40, "timeouts": 1, "skipped_busy": 2, "submit_ms": 12.34}
+  up = {"connected": True, "yielding": False, "missing": [], "link": link,
         "round_trips": {"n": 40, "total_ms": 3.1, "jetson_ms": 2.6}}
   assert jetlink_addons.log_report("vasm", up, now=0.0)
   assert not jetlink_addons.log_report("vasm", up, now=30.0)
@@ -105,6 +106,7 @@ def test_a_link_is_logged_when_it_changes_and_summed_up_while_it_does_not(monkey
   assert [kw["changed"] for _, kw in events] == [True, True, False]
   name, first = events[0]
   assert name == "jetlink.addon" and first["addon"] == "vasm" and first["connected"] and first["answered"] == 40
+  assert (first["eligible_attempts"], first["skipped_busy"], first["submit_ms"]) == (50, 2, 12.3)
   assert first["round_trip_ms"] == 3.1 and first["jetson_ms"] == 2.6
   # another add-on has its own state
   assert jetlink_addons.log_report("slv", {"connected": False}, now=30.0)
