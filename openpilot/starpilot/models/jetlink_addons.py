@@ -42,7 +42,9 @@ def log_report(name: str, report: dict, now: float | None = None) -> bool:
                    submit_ms=round(float(link.get("submit_ms", 0.0) or 0.0), 1),
                    yields=int(link.get("yields", 0) or 0), late=int(link.get("late", 0) or 0), late_replies=late_replies,
                    round_trips=int(trips.get("n", 0) or 0), round_trip_ms=trips.get("total_ms"),
-                   round_trip_p99_ms=trips.get("total_p99_ms"), jetson_ms=trips.get("jetson_ms"))
+                   round_trip_p99_ms=trips.get("total_p99_ms"), jetson_ms=trips.get("jetson_ms"),
+                   write_ms=trips.get("write_ms"), write_p99_ms=trips.get("write_p99_ms"), back_ms=trips.get("back_ms"),
+                   back_p99_ms=trips.get("back_p99_ms"), wake_p99_ms=trips.get("wake_p99_ms"))
   except Exception:
     return False
   return True

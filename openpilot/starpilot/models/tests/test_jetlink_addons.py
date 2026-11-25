@@ -99,7 +99,8 @@ def test_a_link_is_logged_when_it_changes_and_summed_up_while_it_does_not(monkey
   monkeypatch.setattr(jetlink_addons, "_late", {})
   link = {"eligible_attempts": 50, "answered": 40, "timeouts": 1, "skipped_busy": 2, "submit_ms": 12.34, "yields": 3, "late": 1}
   up = {"connected": True, "yielding": False, "missing": [], "link": link, "late_replies": [(4.2, 3.1)],
-        "round_trips": {"n": 40, "total_ms": 3.1, "total_p99_ms": 9.5, "jetson_ms": 2.6}}
+        "round_trips": {"n": 40, "total_ms": 3.1, "total_p99_ms": 9.5, "jetson_ms": 2.6, "write_ms": 0.4, "write_p99_ms": 1.2,
+                        "back_ms": 2.1, "back_p99_ms": 7.5, "wake_p99_ms": 0.3}}
   assert jetlink_addons.log_report("vasm", up, now=0.0)
   assert not jetlink_addons.log_report("vasm", {**up, "late_replies": [(30.0, 38.0)]}, now=30.0)
   assert jetlink_addons.log_report("vasm", {**up, "yielding": True}, now=60.0)
@@ -109,6 +110,7 @@ def test_a_link_is_logged_when_it_changes_and_summed_up_while_it_does_not(monkey
   assert name == "jetlink.addon" and first["addon"] == "vasm" and first["connected"] and first["answered"] == 40
   assert (first["eligible_attempts"], first["skipped_busy"], first["submit_ms"]) == (50, 2, 12.3)
   assert first["round_trip_ms"] == 3.1 and first["round_trip_p99_ms"] == 9.5 and first["jetson_ms"] == 2.6
+  assert (first["write_ms"], first["write_p99_ms"], first["back_ms"], first["back_p99_ms"], first["wake_p99_ms"]) == (0.4, 1.2, 2.1, 7.5, 0.3)
   assert (first["yields"], first["late"], first["late_replies"]) == (3, 1, [(4.2, 3.1)])
   # late answers from reports that were not logged go in the next line
   assert events[1][1]["late_replies"] == [(30.0, 38.0), (4.2, 3.1)]

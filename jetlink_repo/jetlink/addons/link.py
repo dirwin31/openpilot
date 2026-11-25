@@ -141,6 +141,20 @@ class _AioSender:
         self.message = None
     return not self.pending
 
+  def wait_written(self, deadline):
+    """Until the host has taken the whole request: the time it had, None past the deadline."""
+    while self.pending:
+      left = deadline - time.monotonic()
+      if left <= 0 or self.retired:
+        return None
+      results = self.aio.reap(1, left)
+      self.pending -= len(results)
+      self.remaining_bytes -= sum(results)
+      if any(n <= 0 for n in results) or (not self.pending and self.remaining_bytes):
+        raise OSError("incomplete add-on transfer")
+    self.message = None
+    return time.monotonic()
+
   def send(self, msg, deadline):
     plan = self.aio.layout((len(msg),), WRITE_CHUNK)
     bases = [self.aio.address(msg)[0]]
@@ -167,40 +181,52 @@ class _AioSender:
 
 
 class RoundTrips:
-  """Answered requests' round trips, and the Jetson's own share of each (server_us)."""
+  """Answered requests' round trips and their legs: the request onto the bus (write), the Jetson's
+  own share (server_us), the answer back to the reader (back), and the caller waking to it (wake)."""
 
   def __init__(self, keep: int = 4096):
     self.total_us: collections.deque = collections.deque(maxlen=keep)
     self.server_us: collections.deque = collections.deque(maxlen=keep)
+    self.legs: collections.deque = collections.deque(maxlen=keep)   # (write, back, wake) ms, None if unknown
     self._lock = threading.Lock()   # the caller adds, the reader takes
 
-  def add(self, total_us: int, server_us: int):
+  def add(self, total_us: int, server_us: int, legs: tuple = (None, None, None)):
     with self._lock:
       self.total_us.append(total_us)
       self.server_us.append(server_us)
+      self.legs.append(legs)
 
   def take(self) -> dict:
     with self._lock:
       total = np.asarray(self.total_us, np.float64) / 1000.0
       server = np.asarray(self.server_us, np.float64) / 1000.0
+      legs = list(self.legs)
       self.total_us.clear()
       self.server_us.clear()
+      self.legs.clear()
     if total.size == 0:
       return {"n": 0}
-    return {"n": int(total.size), "total_ms": round(float(np.percentile(total, 50)), 2),
-            "total_p99_ms": round(float(np.percentile(total, 99)), 2), "jetson_ms": round(float(np.percentile(server, 50)), 2)}
+    out = {"n": int(total.size), "total_ms": round(float(np.percentile(total, 50)), 2),
+           "total_p99_ms": round(float(np.percentile(total, 99)), 2), "jetson_ms": round(float(np.percentile(server, 50)), 2)}
+    for i, name in enumerate(("write", "back", "wake")):
+      known = np.asarray([leg[i] for leg in legs if leg[i] is not None], np.float64)
+      if known.size:
+        out[f"{name}_ms"] = round(float(np.percentile(known, 50)), 2)
+        out[f"{name}_p99_ms"] = round(float(np.percentile(known, 99)), 2)
+    return out
 
 
 class LateReplies:
-  """Answers that came after their request timed out: how late, and the Jetson's own share of each."""
+  """Answers that came after their request timed out: how late, the Jetson's own share, and the
+  write and back legs (as RoundTrips), None where unknown."""
 
   def __init__(self, keep: int = 256):
     self.pairs: collections.deque = collections.deque(maxlen=keep)
     self._lock = threading.Lock()
 
-  def add(self, late_ms: float, server_ms: float):
+  def add(self, late_ms: float, server_ms: float, write_ms: float | None = None, back_ms: float | None = None):
     with self._lock:
-      self.pairs.append((round(late_ms, 1), round(server_ms, 1)))
+      self.pairs.append((round(late_ms, 1), round(server_ms, 1), _ms(write_ms), _ms(back_ms)))
 
   def take(self) -> list:
     with self._lock:
@@ -227,7 +253,7 @@ class AddonLink:
                   "yields": 0, "reopens": 0, "submit_ms": 0.0, "late": 0}
     self.round_trips = RoundTrips()
     self.late_replies = LateReplies()
-    self._expired: dict[int, float] = {}   # timed-out requests by seq, so a late answer can say how late
+    self._expired: dict[int, tuple] = {}   # timed-out requests by seq: (deadline, started, written), so a late answer can say how late
     self._lock = threading.Lock()
     self._seq = 0
     self._waiting: dict[int, list] = {}
@@ -307,12 +333,13 @@ class AddonLink:
         return None
       sender, endpoint = self._sender, self._tx
       seq = self._seq
-      slot = [threading.Event(), None, 0.0]
+      slot = [threading.Event(), None, 0.0, 0.0, None]   # done, answer, answered at, started, written
       self._waiting[seq] = slot
     t0 = time.monotonic_ns()
     msg = W.pack_request(seq, model_tag, np.ascontiguousarray(image).tobytes(), image.shape, encoding)
     started = time.monotonic()
     deadline = started + REPLY_TIMEOUT_S
+    slot[3] = started
     if sender is None:
       try:
         self._requests.put_nowait((endpoint, msg))
@@ -330,6 +357,7 @@ class AddonLink:
           sender.send(msg, deadline)
         finally:
           self.stats["submit_ms"] += (time.monotonic() - started) * 1000
+        slot[4] = sender.wait_written(deadline)
       except OSError:
         self._drop(seq)
         self._close(endpoint)
@@ -343,6 +371,7 @@ class AddonLink:
       self.stats["timeouts"] += 1
       self._timed_out()
       return None
+    woke = time.monotonic()
     status, server_us, out = slot[1]
     if status == W.STATUS_UNKNOWN_MODEL:
       self.stats["unknown_model"] += 1
@@ -352,7 +381,8 @@ class AddonLink:
         self.stats["bad_answers"] += 1
         self.hold_until = self.clock() + MISS_HOLD_S
       return None
-    self.round_trips.add((time.monotonic_ns() - t0) // 1000, server_us)
+    write_ms, back_ms = _legs(slot[3], slot[4], slot[2], server_us)
+    self.round_trips.add((time.monotonic_ns() - t0) // 1000, server_us, (write_ms, back_ms, (woke - slot[2]) * 1000))
     self.stats["answered"] += 1
     return out
 
@@ -394,17 +424,18 @@ class AddonLink:
   def _expire(self, seq: int, deadline: float, slot: list):
     with self._lock:
       if self._waiting.pop(seq, None) is not None:
-        self._expired[seq] = deadline
+        self._expired[seq] = (deadline, slot[3], slot[4])
         while len(self._expired) > 64:
           self._expired.pop(next(iter(self._expired)))
         return
     # the reader has the answer: it fills the slot just after taking it
     if slot[0].wait(0.01) and slot[1] is not None:
-      self._note_late(slot[2] - deadline, slot[1][1])
+      self._note_late(slot[2], (deadline, slot[3], slot[4]), slot[1][1])
 
-  def _note_late(self, late_s: float, server_us: int):
+  def _note_late(self, answered: float, expired: tuple, server_us: int):
+    deadline, started, written = expired
     self.stats["late"] += 1
-    self.late_replies.add(late_s * 1000, server_us / 1000)
+    self.late_replies.add((answered - deadline) * 1000, server_us / 1000, *_legs(started, written, answered, server_us))
 
   def _ensure_open(self):
     if self._rx is not None or self.clock() < self._next_open:
@@ -536,7 +567,7 @@ class AddonLink:
       slot = self._waiting.pop(seq, None)
       expired = self._expired.pop(seq, None) if slot is None else None
     if expired is not None:
-      self._note_late(time.monotonic() - expired, server_us)
+      self._note_late(time.monotonic(), expired, server_us)
     if slot is not None:
       slot[1] = (status, server_us, np.frombuffer(payload, np.float32).copy())
       slot[2] = time.monotonic()
@@ -613,6 +644,18 @@ class AddonLink:
         self._close(endpoint)
 
 
+
+
+def _ms(value: float | None) -> float | None:
+  return None if value is None else round(value, 1)
+
+
+def _legs(started: float, written: float | None, answered: float, server_us: int) -> tuple:
+  """(write, back) ms: the request onto the bus until the host took it, then the answer back
+  to the reader less the Jetson's own share; both None without a write time (blocking writes)."""
+  if written is None:
+    return None, None
+  return (written - started) * 1000, (answered - written) * 1000 - server_us / 1000
 
 
 def blob_to_u8(blob: np.ndarray) -> np.ndarray:
