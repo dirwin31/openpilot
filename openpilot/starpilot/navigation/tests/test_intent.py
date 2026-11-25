@@ -416,9 +416,9 @@ def test_routed_turn_distance_is_advanced_between_route_frames(sm):
   assert matching_turn_signal(sm, NOW, supported=True)
   nav.frameMonoTime = NOW
   assert turn_desire(sm, NOW, log.Desire.none, supported=True) == log.Desire.none
-  # The routed ceiling keeps its own distance handling.
+  # The routed ceiling advances from the last location fix instead.
   nav.frameMonoTime = NOW - 900_000_000
-  assert cruise_ceiling(sm, CP, NOW, 20.) == pytest.approx(turn_speed(nav.instruction, 0.))
+  assert cruise_ceiling(sm, CP, NOW, 20.) == pytest.approx(turn_speed(nav.instruction, 0., traveled=6.7 * 2.))
 
 
 def test_stop_cleared_one_sample_after_pulling_away_does_not_hold_the_turn(sm):
