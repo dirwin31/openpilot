@@ -191,6 +191,24 @@ class RoundTrips:
             "total_p99_ms": round(float(np.percentile(total, 99)), 2), "jetson_ms": round(float(np.percentile(server, 50)), 2)}
 
 
+class LateReplies:
+  """Answers that came after their request timed out: how late, and the Jetson's own share of each."""
+
+  def __init__(self, keep: int = 256):
+    self.pairs: collections.deque = collections.deque(maxlen=keep)
+    self._lock = threading.Lock()
+
+  def add(self, late_ms: float, server_ms: float):
+    with self._lock:
+      self.pairs.append((round(late_ms, 1), round(server_ms, 1)))
+
+  def take(self) -> list:
+    with self._lock:
+      pairs = list(self.pairs)
+      self.pairs.clear()
+    return pairs
+
+
 class AddonLink:
   def __init__(self, function, *, host_ready=None, report=None, clock=time.monotonic, cable_network=None):
     """function: the add-on's GadgetFunction. report(dict) hears the link's
@@ -206,8 +224,10 @@ class AddonLink:
     self.hold_until = -1e9
     self.misses: collections.deque = collections.deque(maxlen=MISS_REST_AFTER)
     self.stats = {"eligible_attempts": 0, "sent": 0, "answered": 0, "timeouts": 0, "skipped_busy": 0, "unknown_model": 0, "bad_answers": 0,
-                  "yields": 0, "reopens": 0, "submit_ms": 0.0}
+                  "yields": 0, "reopens": 0, "submit_ms": 0.0, "late": 0}
     self.round_trips = RoundTrips()
+    self.late_replies = LateReplies()
+    self._expired: dict[int, float] = {}   # timed-out requests by seq, so a late answer can say how late
     self._lock = threading.Lock()
     self._seq = 0
     self._waiting: dict[int, list] = {}
@@ -319,7 +339,7 @@ class AddonLink:
           sender.lock.release()
     self.stats["sent"] += 1
     if not slot[0].wait(max(0, deadline - time.monotonic())) or slot[2] > deadline:
-      self._drop(seq)
+      self._expire(seq, deadline, slot)
       self.stats["timeouts"] += 1
       self._timed_out()
       return None
@@ -350,7 +370,7 @@ class AddonLink:
     tags = self.tags
     return {"present": True, "connected": connected, "yielding": self.yield_seen, "models": sorted(tags),
             "missing": sorted(self.wanted - tags) if connected else [], "link": dict(self.stats),
-            "round_trips": self.round_trips.take()}
+            "round_trips": self.round_trips.take(), "late_replies": self.late_replies.take()}
 
   # -- internals ---------------------------------------------------------
   def _maybe_report(self):
@@ -370,6 +390,21 @@ class AddonLink:
   def _drop(self, seq: int):
     with self._lock:
       self._waiting.pop(seq, None)
+
+  def _expire(self, seq: int, deadline: float, slot: list):
+    with self._lock:
+      if self._waiting.pop(seq, None) is not None:
+        self._expired[seq] = deadline
+        while len(self._expired) > 64:
+          self._expired.pop(next(iter(self._expired)))
+        return
+    # the reader has the answer: it fills the slot just after taking it
+    if slot[0].wait(0.01) and slot[1] is not None:
+      self._note_late(slot[2] - deadline, slot[1][1])
+
+  def _note_late(self, late_s: float, server_us: int):
+    self.stats["late"] += 1
+    self.late_replies.add(late_s * 1000, server_us / 1000)
 
   def _ensure_open(self):
     if self._rx is not None or self.clock() < self._next_open:
@@ -499,6 +534,9 @@ class AddonLink:
       self.stats["yields"] += 1
     with self._lock:
       slot = self._waiting.pop(seq, None)
+      expired = self._expired.pop(seq, None) if slot is None else None
+    if expired is not None:
+      self._note_late(time.monotonic() - expired, server_us)
     if slot is not None:
       slot[1] = (status, server_us, np.frombuffer(payload, np.float32).copy())
       slot[2] = time.monotonic()

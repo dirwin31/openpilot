@@ -14,6 +14,7 @@ _SIGN_ASSETS = _ROOT / "openpilot/starpilot/speed_limits/vision/assets"
 SUMMARY_S = 300.0
 _logged: dict[str, tuple] = {}
 _summary_at: dict[str, float] = {}
+_late: dict[str, list] = {}
 
 
 def log_report(name: str, report: dict, now: float | None = None) -> bool:
@@ -22,10 +23,14 @@ def log_report(name: str, report: dict, now: float | None = None) -> bool:
   otherwise every SUMMARY_S with what the Jetson answered. Whether it logged."""
   now = time.monotonic() if now is None else now
   state = (bool(report.get("connected")), bool(report.get("yielding")), tuple(report.get("missing") or ()))
+  late = _late.setdefault(name, [])
+  late.extend(report.get("late_replies") or ())
+  del late[:-64]
   changed = _logged.get(name) != state
   if not changed and now < _summary_at.get(name, 0.0):
     return False
   _logged[name], _summary_at[name] = state, now + SUMMARY_S
+  late_replies, _late[name] = late, []
   link = report.get("link") if isinstance(report.get("link"), dict) else {}
   trips = report.get("round_trips") if isinstance(report.get("round_trips"), dict) else {}
   try:
@@ -35,7 +40,9 @@ def log_report(name: str, report: dict, now: float | None = None) -> bool:
                    eligible_attempts=int(link.get("eligible_attempts", 0) or 0), answered=int(link.get("answered", 0) or 0),
                    timeouts=int(link.get("timeouts", 0) or 0), skipped_busy=int(link.get("skipped_busy", 0) or 0),
                    submit_ms=round(float(link.get("submit_ms", 0.0) or 0.0), 1),
-                   round_trips=int(trips.get("n", 0) or 0), round_trip_ms=trips.get("total_ms"), jetson_ms=trips.get("jetson_ms"))
+                   yields=int(link.get("yields", 0) or 0), late=int(link.get("late", 0) or 0), late_replies=late_replies,
+                   round_trips=int(trips.get("n", 0) or 0), round_trip_ms=trips.get("total_ms"),
+                   round_trip_p99_ms=trips.get("total_p99_ms"), jetson_ms=trips.get("jetson_ms"))
   except Exception:
     return False
   return True
