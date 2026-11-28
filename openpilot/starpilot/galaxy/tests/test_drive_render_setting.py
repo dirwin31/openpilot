@@ -35,12 +35,12 @@ def test_default_row_on_a_large_device(tmp_path):
   with device:
     _, row = developer_row(gate.page('developer', 'session', b'generation'))
   assert row['value'] == 'Off' and row['defaultValue'] == 'Off'
-  assert row['choices'] == ['Off', 'StarPort', 'Comma display', 'Both']
+  assert row['choices'] == ['Off', 'StarPort', 'Comma display']
   assert row['available'] and 'next connection' in row['reason']
   assert params.get(PARAM_KEY) is None
 
 
-@pytest.mark.parametrize('choice,stored', [('StarPort', 'starport'), ('Comma display', 'device'), ('Both', 'both')])
+@pytest.mark.parametrize('choice,stored', [('StarPort', 'starport'), ('Comma display', 'device')])
 def test_gateway_round_trip_keeps_the_layout(tmp_path, choice, stored):
   params = Params(str(tmp_path))
   document = default_document()
@@ -81,7 +81,7 @@ def test_compact_device_never_offers_or_saves_the_comma_display(tmp_path):
   params.put(PARAM_KEY, {**default_document(), drive_render.FIELD: 'device'}, block=True)
   row = owner.developer_snapshot().rows[1]
   assert row.value == 'Off' and row.choices == ('Off', 'StarPort')
-  params.put(PARAM_KEY, {**default_document(), drive_render.FIELD: 'both'}, block=True)
+  params.put(PARAM_KEY, {**default_document(), drive_render.FIELD: 'starport'}, block=True)
   row = owner.developer_snapshot().rows[1]
   assert row.value == 'StarPort'
   assert owner.apply(FeatureSettingsRequest(row.key, row.source, 'Off'))

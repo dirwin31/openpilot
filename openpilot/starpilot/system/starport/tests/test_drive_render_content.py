@@ -1,4 +1,4 @@
-"""StarPort's car screen follows Galaxy's "3D drive render" choice: the render takes the camera's place for StarPort and Both."""
+"""StarPort's car screen follows Galaxy's "3D drive render" choice: the render takes the camera's place only for StarPort."""
 import json
 from types import SimpleNamespace
 
@@ -25,7 +25,7 @@ def test_unsaved_setting_keeps_the_camera_on_the_car_screen(tmp_path):
   assert current_car_ui.saved_render_layer(read_only_params(tmp_path)) is False
 
 
-@pytest.mark.parametrize('choice,layer', [(None, False), ('off', False), ('device', False), ('starport', True), ('both', True)])
+@pytest.mark.parametrize('choice,layer', [(None, False), ('off', False), ('device', False), ('starport', True)])
 def test_each_choice_selects_the_car_screen_layer(tmp_path, choice, layer):
   save(tmp_path, choice)
   assert current_car_ui.saved_render_layer(read_only_params(tmp_path)) is layer

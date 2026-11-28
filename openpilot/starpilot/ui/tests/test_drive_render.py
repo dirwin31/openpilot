@@ -47,18 +47,16 @@ def test_default_is_off_and_absent_from_the_default_document():
 def test_device_only_acts_on_the_large_profile():
   assert drive_render.effective('device', True) == 'device'
   assert drive_render.effective('device', False) == 'off'
-  assert drive_render.effective('both', True) == 'both'
-  assert drive_render.effective('both', False) == 'starport'
   for value in ('off', 'starport'):
     assert drive_render.effective(value, True) == drive_render.effective(value, False) == value
-  assert drive_render.choices(True) == ('off', 'starport', 'device', 'both')
+  assert drive_render.choices(True) == ('off', 'starport', 'device')
   assert drive_render.choices(False) == ('off', 'starport')
   assert 'Comma display' in drive_render.description(True) and 'Comma display' not in drive_render.description(False)
   assert all('next connection' in drive_render.description(large) for large in (True, False))
 
 
 @pytest.mark.parametrize('choice, device, starport', [
-  (None, False, False), ('off', False, False), ('starport', False, True), ('device', True, False), ('both', True, True)])
+  (None, False, False), ('off', False, False), ('starport', False, True), ('device', True, False), ('both', False, False)])
 def test_each_choice_names_its_screens(choice, device, starport):
   assert drive_render.on_device(choice) is device
   assert drive_render.on_starport(choice) is starport
@@ -74,7 +72,7 @@ def test_document_keeps_a_valid_choice(choice):
   assert fit_to_road(validated, 1560)[drive_render.FIELD] == choice
 
 
-@pytest.mark.parametrize('bad', ['', 'Off', 'camera', None, True, 1, ['device']])
+@pytest.mark.parametrize('bad', ['', 'Off', 'camera', 'both', None, True, 1, ['device']])
 def test_document_rejects_an_unknown_choice(bad):
   document = default_document()
   document[drive_render.FIELD] = bad
@@ -96,7 +94,7 @@ def test_read_needs_only_the_param_path(tmp_path):
   assert drive_render.read(params) == 'off'
 
 
-@pytest.mark.parametrize('choice', ['device', 'both'])
+@pytest.mark.parametrize('choice', ['device'])
 def test_large_device_choice_keeps_the_composition_and_swaps_only_the_camera(choice):
   v = view()
   assert v.drive_render_active(state(choice))

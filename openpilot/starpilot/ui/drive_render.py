@@ -1,19 +1,19 @@
-"""The "3D drive render" setting: which screens draw the rendered road view in place of the front camera.
+"""The "3D drive render" setting: which one screen draws the rendered road view in place of the front camera.
 
 The render is a layer: it takes the camera's place and the layout's widgets, alerts and borders still draw over it.
 It is the ``driveRender`` field of the OnroadCustomizations document; an absent field is the default, off.
-The comma's own screen only offers it on the large profile (comma 3 / 3X); elsewhere ``device`` acts as off and
-``both`` as StarPort.
+One choice, so the comma's screen and StarPort never both draw it. The comma's own screen only offers it on the large
+profile (comma 3 / 3X); elsewhere ``device`` acts as off.
 """
 
 FIELD = "driveRender"
-OFF, STARPORT, DEVICE, BOTH = "off", "starport", "device", "both"
-VALUES = (OFF, STARPORT, DEVICE, BOTH)
+OFF, STARPORT, DEVICE = "off", "starport", "device"
+VALUES = (OFF, STARPORT, DEVICE)
 DEFAULT = OFF
 
 KEY = "DriveRender"
 LABEL = "3D drive render"
-LABELS = {OFF: "Off", STARPORT: "StarPort", DEVICE: "Comma display", BOTH: "Both"}
+LABELS = {OFF: "Off", STARPORT: "StarPort", DEVICE: "Comma display"}
 
 
 def normalize(value) -> str:
@@ -24,17 +24,15 @@ def normalize(value) -> str:
 def effective(value, large_profile: bool) -> str:
   """The choice this device acts on: the comma display needs the large profile."""
   value = normalize(value)
-  if large_profile:
-    return value
-  return STARPORT if value == BOTH else OFF if value == DEVICE else value
+  return OFF if value == DEVICE and not large_profile else value
 
 
 def on_device(value, large_profile: bool = True) -> bool:
-  return effective(value, large_profile) in (DEVICE, BOTH)
+  return effective(value, large_profile) == DEVICE
 
 
 def on_starport(value) -> bool:
-  return normalize(value) in (STARPORT, BOTH)
+  return normalize(value) == STARPORT
 
 
 def choices(large_profile: bool) -> tuple[str, ...]:
@@ -42,7 +40,7 @@ def choices(large_profile: bool) -> tuple[str, ...]:
 
 
 def description(large_profile: bool) -> str:
-  screens = "StarPort shows it on the car screen" + (", Comma display on the comma 3 or 3X screen, Both on each" if large_profile else "")
+  screens = "StarPort shows it on the car screen" + (", Comma display on the comma 3 or 3X screen" if large_profile else "")
   return ("Draws a rendered 3D view of the road, lanes and traffic in place of the front camera; the layout's widgets " +
           "and alerts stay on top. " + screens + ". StarPort uses the choice from its next connection.")
 
