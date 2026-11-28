@@ -30,11 +30,9 @@ LABELS = {
 
 
 class AppearanceOwner:
-  def __init__(self, params, parked: Callable[[], bool], *, large_display: bool = False):
+  def __init__(self, params, parked: Callable[[], bool]):
     self.params = params
     self.parked = parked
-    # The comma 3 / 3X screen: the only one that can draw the 3D drive render itself.
-    self.large_display = large_display
 
   def snapshot(self, profile: Profile, *, include_large: bool = False) -> FeatureSettingsState:
     parked = self.parked()
@@ -119,14 +117,11 @@ class AppearanceOwner:
                      reason=("0% leaves the display unchanged. Lower if the comma reads too high; raise if it reads too low. " +
                              "Only changes displayed vehicle speed, not cruise speed or vehicle control.") if valid else
                             "Repair the saved driving-screen layout first.")
-    options = drive_render.choices(self.large_display)
     render = FeatureRow(drive_render.KEY, drive_render.LABEL,
-                        drive_render.LABELS[drive_render.effective(document.get(drive_render.FIELD), self.large_display)]
-                        if document is not None else "Unavailable", source=raw,
-                        choices=tuple(drive_render.LABELS[option] for option in options) if valid else (),
-                        default_value=drive_render.LABELS[drive_render.DEFAULT], available=self.parked() and valid,
-                        reason=drive_render.description(self.large_display) if valid else
-                               "Repair the saved driving-screen layout first.")
+                        ("On" if drive_render.enabled(document) else "Off") if document is not None else "Unavailable",
+                        source=raw, choices=("Off", "On") if valid else (), default_value="Off",
+                        available=self.parked() and valid,
+                        reason=drive_render.DESCRIPTION if valid else "Repair the saved driving-screen layout first.")
     blackout = FeatureRow(streaming_blackout.KEY, streaming_blackout.LABEL,
                           ("On" if streaming_blackout.enabled(document) else "Off") if document is not None else "Unavailable",
                           source=raw, choices=("Off", "On") if valid else (), default_value="Off",
@@ -138,14 +133,12 @@ class AppearanceOwner:
   def apply(self, request: FeatureSettingsRequest) -> bool:
     if request.key == drive_render.KEY:
       raw, document = self._motion_source()
-      choice = next((option for option in drive_render.choices(self.large_display)
-                     if drive_render.LABELS[option] == request.value), None)
-      if document is None or request.expected != raw or choice is None:
+      if document is None or request.expected != raw or request.value not in ("Off", "On"):
         return False
-      if choice == drive_render.DEFAULT:
-        document.pop(drive_render.FIELD, None)
+      if request.value == "On":
+        document[drive_render.FIELD] = True
       else:
-        document[drive_render.FIELD] = choice
+        document.pop(drive_render.FIELD, None)
       result = commit_exact(self.params, key=PARAM_KEY, max_bytes=MAX_BYTES,
                             raw=json.dumps(document, separators=(',', ':')).encode(), expected=raw,
                             authorized=self.parked, temp_prefix='.appearance-')

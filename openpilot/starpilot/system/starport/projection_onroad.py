@@ -166,7 +166,7 @@ def standby_logo_loader(rl):
 class ProjectionOnroad:
   """Separate renderer with projected actions; native UIState stays read-only.
 
-  ``render_layer`` (Galaxy's "3D drive render" on StarPort) draws the birds-eye view in the camera's place, whatever
+  ``render_layer`` (Galaxy's "Birds-eye view instead of camera") draws the birds-eye view in the camera's place, whatever
   the layout's birds-eye widget says; the layout's widgets still draw over it.
   """
 

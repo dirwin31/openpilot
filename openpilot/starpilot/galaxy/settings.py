@@ -454,7 +454,7 @@ def _question(row: FeatureRow, request: FeatureSettingsRequest) -> str:
   if key == streaming_blackout.KEY:
     return f"Turn {row.label} {request.value.lower()}? This changes only the comma's driving screen."
   if key == drive_render.KEY:
-    return f"Set {row.label} to {request.value}? StarPort uses the choice from its next connection."
+    return f"Turn {row.label} {request.value.lower()}? StarPort uses the choice from its next connection."
   if key in APPEARANCE_LABELS:
     return f"Save {row.label} as {request.value}? This changes only the display."
   if key == VASM_RESET:
@@ -596,7 +596,7 @@ class SettingsGateway:
         return False
       fresh = self.context.sample() if live else ctx
       return fresh.cp_raw == ctx.cp_raw
-    return AppearanceOwner(self.params, authorized, large_display=HARDWARE.get_device_type() != "mici")
+    return AppearanceOwner(self.params, authorized)
 
   def _sounds_owner(self, ctx: AuthorityContext, *, live: bool = False,
                     session_valid: Callable[[], bool] = lambda: True) -> SoundsOwner:

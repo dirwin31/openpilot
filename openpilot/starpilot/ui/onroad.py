@@ -142,8 +142,8 @@ class OnroadView:
     self.map_layer: OverlayLayer | None = None  # Android Auto map overlay, under the HUD widgets
     self.birds_eye_layer: OverlayLayer | None = None  # Android Auto birds-eye panel, under the HUD widgets
     self.projection_exit_layer: ProjectionControlLayer | None = None
-    # The native comma 3 / 3X screen sets this (an onroad_drive_render.DriveRenderLayer): the 3D drive render
-    # takes the camera's place while Galaxy's "3D drive render" includes the comma display.
+    # The native comma 3 / 3X screen sets this (an onroad_drive_render.DriveRenderLayer): the birds-eye view
+    # takes the camera's place while its toggle is on and StarPort is not streaming.
     self.drive_render = None
     # The comma's own screen sets this (a projection_stream_lease.StreamLeaseReader): True while StarPort's drive
     # view is reaching the car screen. With "Black screen while StarPort streams" on, this screen then draws black.
@@ -244,15 +244,17 @@ class OnroadView:
       clip.end_scissor_mode()
 
   def drive_render_active(self, state: OnroadState) -> bool:
-    """The comma's own large screen draws the 3D drive render in the camera's place for this frame.
+    """The comma's own large screen draws the birds-eye view in the camera's place for this frame.
 
-    Never the projection, a layout or replay preview, or the reverse driver camera; a render that cannot be built
-    leaves the camera in place.
+    Never while StarPort streams (the car screen draws it then), the projection, a layout or replay preview, or the
+    reverse driver camera; a render that cannot be built leaves the camera in place.
     """
     layer = getattr(self, "drive_render", None)
-    return bool(layer is not None and self.fonts.profile == Profile.LARGE and self.projection_viewport is None and
-                state.visual_preview is None and not state.reverse_driver_camera and
-                drive_render.on_device(state.customization.get(drive_render.FIELD)) and layer.ready())
+    if not (layer is not None and self.fonts.profile == Profile.LARGE and self.projection_viewport is None and
+            state.visual_preview is None and not state.reverse_driver_camera and drive_render.enabled(state.customization)):
+      return False
+    streaming = getattr(self, "streaming_blackout", None)
+    return not (streaming is not None and streaming()) and layer.ready()
 
   def _slc_actions(self, state: OnroadState) -> None:
     sign = self.unified_speed.sign if self.fonts.profile == Profile.LARGE else self.compact_hud._speed_limit_widget

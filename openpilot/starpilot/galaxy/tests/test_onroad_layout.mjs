@@ -1408,12 +1408,12 @@ for (const invalidOffset of [true, null, "1", NaN, Infinity, -5.1, 5.1]) {
   const document = { ...speedAdjustment.document, speedDisplayOffset: invalidOffset }
   assert.equal(validDocument(document, speedAdjustment.metadata), false)
 }
-for (const driveRender of ["off", "starport", "device"]) {
+for (const driveRender of [true, false]) {
   const document = { ...snapshot().document, driveRender }
   assert.ok(validDocument(document, speedAdjustment.metadata))
   assert.equal(layoutDocument({ ...document, display: {} }).driveRender, driveRender)
 }
-for (const driveRender of [true, null, "", "Off", "camera"]) {
+for (const driveRender of [null, "", "On", "device", 1]) {
   assert.equal(validDocument({ ...snapshot().document, driveRender }, speedAdjustment.metadata), false)
 }
 for (const blackWhileStreaming of [true, false]) {
@@ -1426,7 +1426,7 @@ for (const blackWhileStreaming of [null, "", "On", 1]) {
 }
 {
   // "Reset to stock" restores colors and layouts and leaves the Developer page's choices alone.
-  const owned = { driveRender: "device", blackWhileStreaming: true }
+  const owned = { driveRender: true, blackWhileStreaming: true }
   const fixture = editor()
   fixture.publish({ status: "ready", data: { ...snapshot(), document: { ...snapshot().document, ...owned } },
     draft: { ...copy(snapshot().document), ...owned } })

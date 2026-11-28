@@ -1,4 +1,4 @@
-"""The "3D drive render" choice: its saved field, and the comma 3 / 3X screen drawing the render in the camera's place."""
+"""The "Birds-eye view instead of camera" toggle: its saved field, and the comma 3 / 3X screen drawing it in the camera's place."""
 from collections import namedtuple
 from dataclasses import replace
 from types import SimpleNamespace as NS
@@ -37,46 +37,27 @@ def view(profile=Profile.LARGE, *, ready=True, projection=None):
 
 
 def test_default_is_off_and_absent_from_the_default_document():
-  assert drive_render.DEFAULT == drive_render.OFF
   assert drive_render.FIELD not in default_document()
-  assert drive_render.normalize(default_document().get(drive_render.FIELD)) == 'off'
-  for bad in (None, '', 'Off', 'camera', 1, True, ['device']):
-    assert drive_render.normalize(bad) == 'off'
+  assert not drive_render.enabled(default_document())
+  for bad in (None, '', 'On', 'device', 1, ['x']):
+    assert not drive_render.enabled({drive_render.FIELD: bad})
+  assert drive_render.enabled({drive_render.FIELD: True})
 
 
-def test_device_only_acts_on_the_large_profile():
-  assert drive_render.effective('device', True) == 'device'
-  assert drive_render.effective('device', False) == 'off'
-  for value in ('off', 'starport'):
-    assert drive_render.effective(value, True) == drive_render.effective(value, False) == value
-  assert drive_render.choices(True) == ('off', 'starport', 'device')
-  assert drive_render.choices(False) == ('off', 'starport')
-  assert 'Comma display' in drive_render.description(True) and 'Comma display' not in drive_render.description(False)
-  assert all('next connection' in drive_render.description(large) for large in (True, False))
-
-
-@pytest.mark.parametrize('choice, device, starport', [
-  (None, False, False), ('off', False, False), ('starport', False, True), ('device', True, False), ('both', False, False)])
-def test_each_choice_names_its_screens(choice, device, starport):
-  assert drive_render.on_device(choice) is device
-  assert drive_render.on_starport(choice) is starport
-  assert drive_render.on_device(choice, large_profile=False) is False
-
-
-@pytest.mark.parametrize('choice', drive_render.VALUES)
-def test_document_keeps_a_valid_choice(choice):
+@pytest.mark.parametrize('value', [True, False])
+def test_document_keeps_a_valid_toggle(value):
   document = default_document()
-  document[drive_render.FIELD] = choice
+  document[drive_render.FIELD] = value
   validated = validate_document(document)
-  assert validated[drive_render.FIELD] == choice
-  assert fit_to_road(validated, 1560)[drive_render.FIELD] == choice
+  assert validated[drive_render.FIELD] is value
+  assert fit_to_road(validated, 1560)[drive_render.FIELD] is value
 
 
-@pytest.mark.parametrize('bad', ['', 'Off', 'camera', 'both', None, True, 1, ['device']])
-def test_document_rejects_an_unknown_choice(bad):
+@pytest.mark.parametrize('bad', ['', 'On', 'off', 'device', 'starport', None, 1, ['device']])
+def test_document_rejects_anything_but_a_bool(bad):
   document = default_document()
   document[drive_render.FIELD] = bad
-  with pytest.raises(ValueError, match='3D drive render'):
+  with pytest.raises(ValueError, match='birds-eye'):
     validate_document(document)
 
 
@@ -84,21 +65,17 @@ def test_read_needs_only_the_param_path(tmp_path):
   import json
   path = tmp_path / 'OnroadCustomizations'
   params = NS(get_param_path=lambda key: str(path))
-  assert drive_render.read(params) == 'off'
-  for choice in drive_render.VALUES:
-    path.write_text(json.dumps({**default_document(), drive_render.FIELD: choice}))
-    assert drive_render.read(params) == choice
-  path.write_text(json.dumps({**default_document(), drive_render.FIELD: 'camera'}))
-  assert drive_render.read(params) == 'off'
+  assert drive_render.read(params) is False
+  path.write_text(json.dumps({**default_document(), drive_render.FIELD: True}))
+  assert drive_render.read(params) is True
   path.write_text('{broken')
-  assert drive_render.read(params) == 'off'
+  assert drive_render.read(params) is False
 
 
-@pytest.mark.parametrize('choice', ['device'])
-def test_large_device_choice_keeps_the_composition_and_swaps_only_the_camera(choice):
+def test_on_swaps_only_the_camera_and_keeps_the_composition():
   v = view()
-  assert v.drive_render_active(state(choice))
-  v.render(state(choice))
+  assert v.drive_render_active(state(True))
+  v.render(state(True))
   v._large.assert_called_once()
   from inspect import getsource
   source = getsource(onroad.OnroadView._large)
@@ -106,29 +83,37 @@ def test_large_device_choice_keeps_the_composition_and_swaps_only_the_camera(cho
          source.index('self._ordered_widgets(content, state)'), 'the render takes the camera slot, the widgets stay above'
 
 
-@pytest.mark.parametrize('choice', [None, 'off', 'starport', 'camera'])
-def test_other_choices_keep_the_camera(choice):
+def test_off_keeps_the_camera_and_builds_nothing():
   v = view()
-  assert not v.drive_render_active(state(choice))
+  assert not v.drive_render_active(state())
   v.drive_render.ready.assert_not_called()
 
 
-def test_compact_profile_ignores_a_saved_device_choice():
+def test_starport_streaming_hands_the_render_to_the_car_screen():
+  v = view()
+  v.streaming_blackout = Mock(return_value=True)
+  assert not v.drive_render_active(state(True)), 'only one screen draws it: the car screen while it streams'
+  v.drive_render.ready.assert_not_called()
+  v.streaming_blackout.return_value = False
+  assert v.drive_render_active(state(True))
+
+
+def test_compact_profile_never_draws_it():
   v = view(Profile.COMPACT)
-  assert not v.drive_render_active(state('device'))
-  v.render(state('device'))
+  assert not v.drive_render_active(state(True))
+  v.render(state(True))
   v._compact.assert_called_once()
 
 
 def test_projection_preview_reverse_camera_and_failed_build_keep_the_camera():
-  for v, current in ((view(projection=(1860, 1080)), state('device')),
-                     (view(), state('device', visual_preview=OnroadVisualPreview(layout_sample=True))),
-                     (view(), state('device', reverse_driver_camera=True)),
-                     (view(ready=False), state('device'))):
+  for v, current in ((view(projection=(1860, 1080)), state(True)),
+                     (view(), state(True, visual_preview=OnroadVisualPreview(layout_sample=True))),
+                     (view(), state(True, reverse_driver_camera=True)),
+                     (view(ready=False), state(True))):
     assert not v.drive_render_active(current)
   unset = view()
   del unset.drive_render
-  assert not unset.drive_render_active(state('device'))
+  assert not unset.drive_render_active(state(True))
 
 
 def test_layer_that_raises_while_drawing_gives_the_camera_back():
@@ -137,7 +122,7 @@ def test_layer_that_raises_while_drawing_gives_the_camera_back():
   layer = onroad_drive_render.DriveRenderLayer('fonts', NS(), factory=Mock(return_value=render_view))
   assert layer.ready()
   with patch('openpilot.common.swaglog.cloudlog'):
-    layer.render(NS(x=30, y=30, width=1800, height=1020), state('device'))
+    layer.render(NS(x=30, y=30, width=1800, height=1020), state(True))
   assert not layer.ready() and layer.view is None
 
 
@@ -149,7 +134,7 @@ def test_layer_builds_once_and_fills_the_content_with_the_view():
   factory.assert_not_called()
   assert layer.ready() and layer.ready()
   factory.assert_called_once_with('fonts', ui)
-  current = state('device', metric=False)
+  current = state(True, metric=False)
   current.customization['roadColors']['large'] = {'path': '#11223344'}
   content = NS(x=30, y=30, width=1800, height=1020)
   layer.render(content, current)
@@ -179,7 +164,7 @@ def test_native_large_session_wires_the_layer_and_keeps_widgets_live():
 
 def test_hidden_widgets_take_no_taps():
   from openpilot.starpilot.ui import onroad_state
-  current = replace(state('device'), experimental_available=True, alert=OnroadAlert())
+  current = replace(state(True), experimental_available=True, alert=OnroadAlert())
   for target in ('personality', 'wheel'):
     personality = target == 'personality'
     drawn, hidden = onroad_state.OnroadInput(Mock()), onroad_state.OnroadInput(Mock())
@@ -195,7 +180,7 @@ def test_hidden_widgets_take_no_taps():
 
 def test_wheel_press_ends_when_the_wheel_is_hidden_under_it():
   from openpilot.starpilot.ui import onroad_state
-  current = replace(state('device'), experimental_available=True, alert=OnroadAlert())
+  current = replace(state(True), experimental_available=True, alert=OnroadAlert())
   emit, shown = Mock(), [False]
   touch = onroad_state.OnroadInput(emit)
   touch.widgets_hidden = lambda _state: shown[0]

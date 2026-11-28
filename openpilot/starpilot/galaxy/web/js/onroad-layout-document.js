@@ -140,7 +140,6 @@ export function previewPoint(event, rect, profile) {
 // Legacy saved layouts retain this field even though the paired speed widget uses fixed alignment.
 export const SPEED_ALIGNMENTS = ["left", "center", "right"]
 // The Developer page's "3D drive render" choice; the layout editor only carries it through a save.
-export const DRIVE_RENDERS = ["off", "starport", "device"]
 // Fields the Developer page owns: the layout editor carries them through a save and "Reset to stock" keeps them.
 export const DEVELOPER_FIELDS = ["driveRender", "blackWhileStreaming"]
 // Android Auto display switches, independent of the comma screen's preferences.
@@ -157,7 +156,7 @@ export function validDocument(document, metadata) {
     (Object.hasOwn(document, "reduceMotion") && typeof document.reduceMotion !== "boolean") ||
     (Object.hasOwn(document, "showMaxSpeed") && typeof document.showMaxSpeed !== "boolean") ||
     (Object.hasOwn(document, "speedDisplayOffset") && (!Number.isFinite(document.speedDisplayOffset) || document.speedDisplayOffset < -5 || document.speedDisplayOffset > 5)) ||
-    (Object.hasOwn(document, "driveRender") && !DRIVE_RENDERS.includes(document.driveRender)) ||
+    (Object.hasOwn(document, "driveRender") && typeof document.driveRender !== "boolean") ||
     (Object.hasOwn(document, "blackWhileStreaming") && typeof document.blackWhileStreaming !== "boolean") ||
     (Object.hasOwn(document, "display") && (!object(document.display) || !Object.values(document.display).every((value) => typeof value === "string"))) ||
     (Object.hasOwn(document, "largeUiGammaTrial") && typeof document.largeUiGammaTrial !== "boolean") ||

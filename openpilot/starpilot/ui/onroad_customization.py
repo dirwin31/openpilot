@@ -581,8 +581,8 @@ def validate_document(value):
       raise ValueError('Invalid speed display adjustment')
   if drive_render.FIELD in value:
     fields.add(drive_render.FIELD)
-    if type(value[drive_render.FIELD]) is not str or value[drive_render.FIELD] not in drive_render.VALUES:
-      raise ValueError('Invalid 3D drive render choice')
+    if type(value[drive_render.FIELD]) is not bool:
+      raise ValueError('Invalid birds-eye view choice')
   if streaming_blackout.FIELD in value:
     fields.add(streaming_blackout.FIELD)
     if type(value[streaming_blackout.FIELD]) is not bool:

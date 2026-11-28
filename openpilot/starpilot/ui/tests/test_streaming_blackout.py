@@ -130,7 +130,7 @@ def test_black_screen_wins_over_the_drive_render():
   v.drive_render = Mock()
   v.drive_render.ready.return_value = True
   document = default_document()
-  document.update({streaming_blackout.FIELD: True, drive_render.FIELD: 'device'})
+  document.update({streaming_blackout.FIELD: True, drive_render.FIELD: True})
   current = replace(state(), customization=document)
   assert v.streaming_blackout_active(current)
   v._large = Mock()

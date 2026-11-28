@@ -203,7 +203,7 @@ class StarShellSession(TeslaSpeedActions):
         self.view.onroad.extra_overlays = lambda rect, state: camera_owner.render_model_source_layer(rect, show_long_indicator=None)
       else:
         self.view.onroad.extra_overlays = lambda rect, state: camera_owner.render_model_source_layer(rect)
-        # Galaxy's "3D drive render" on the comma display; nothing is built until a frame needs it.
+        # Galaxy's "Birds-eye view instead of camera"; nothing is built until a frame needs it.
         from openpilot.starpilot.ui.onroad_drive_render import DriveRenderLayer
         self.view.onroad.drive_render = DriveRenderLayer(self.fonts, ui_state)
     except Exception:

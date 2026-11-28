@@ -2,7 +2,7 @@
 
 Frames are rendered only while requested. Touch input controls navigation favorites and drive bookmarks.
 Onroad, each new camera frame is drawn exactly once, as soon as it lands (see
-CameraPacer). With Galaxy's "3D drive render" on StarPort the render takes the camera's place, so no camera is drawn
+CameraPacer). With Galaxy's "Birds-eye view instead of camera" on, the render takes the camera's place, so no camera is drawn
 and frames follow the encoder interval. When the encoder takes NV12, the frame is converted on the GPU,
 and it can be read back without stalling the renderer.
 """
@@ -143,9 +143,9 @@ def wait_for_request(producer: FrameProducer) -> FrameRequest:
 
 
 def saved_render_layer(params) -> bool:
-  """True when the saved "3D drive render" choice includes StarPort; ``params`` needs only the read interface."""
+  """The saved "Birds-eye view instead of camera" toggle; ``params`` needs only the read interface."""
   from openpilot.starpilot.ui import drive_render
-  return drive_render.on_starport(drive_render.read(params))
+  return drive_render.read(params)
 
 
 def run(frames_path: str, touch_path: str | None = None, control_path: str | None = None) -> int:
@@ -199,7 +199,7 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
     from openpilot.starpilot.system.starport import reconnect_notice
     from openpilot.starpilot.system.starport.identity import certificate_days_left
     from openpilot.starpilot.system.starport.projection_layout_runtime import ProjectionLayoutWatcher, comma_display_seed
-    # Galaxy's "3D drive render" choice decides for this connection whether the render takes the camera's place.
+    # While streaming, the car screen draws the birds-eye view and the comma's own screen shows the camera.
     render_layer = saved_render_layer(ui_state.params)
     stream_content = "render" if render_layer else "camera"
     viewport = (geometry.logical_width, geometry.logical_height)

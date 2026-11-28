@@ -48,7 +48,7 @@ def test_gateway_round_trip_keeps_the_layout_and_the_render_choice(tmp_path):
   params = Params(str(tmp_path))
   document = default_document()
   document['layouts']['large']['steering_wheel']['enabled'] = False
-  document[drive_render.FIELD] = 'device'
+  document[drive_render.FIELD] = True
   params.put(PARAM_KEY, document, block=True)
   device, gate = gateway(params, 'mici')
   with device:
