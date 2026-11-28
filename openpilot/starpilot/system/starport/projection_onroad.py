@@ -335,6 +335,11 @@ class ProjectionOnroad:
     ui = native.ui_state
     text = native.birds_eye_text(self.fonts) if getattr(native, 'birds_eye_text', None) is not None else None
     self.birds_eye = native.birds_eye(text=text, source=lambda: (ui.sm, ui.started_frame))
+    from openpilot.starpilot.ui.birds_eye_map import new_underlay
+    underlay = new_underlay()
+    if underlay is not None:
+      self.birds_eye.map_underlay = underlay
+      self._resources.callback(underlay.close)
     model_renderer = getattr(self.camera, 'model_renderer', None)
     self.birds_eye.long_control = bool(getattr(model_renderer, '_longitudinal_control', True))
     self.onroad.birds_eye_layer = self._birds_eye_layer

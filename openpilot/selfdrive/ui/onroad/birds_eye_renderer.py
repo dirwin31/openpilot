@@ -110,6 +110,11 @@ NAV_LANES_RANGE = (15.0, 55.0)
 NAV_BENDS = {'straight': 0.0, 'slightright': 0.6, 'right': 1.35, 'sharpright': 2.2, 'uturn': -2.8,
              'slightleft': -0.6, 'left': -1.35, 'sharpleft': -2.2}  # rad, right-positive
 NAV_NO_ARROW = {'arrive', 'depart', 'notification', 'new name', 'continue'}
+MAP_RGB = {0: (150, 160, 182), 1: (128, 137, 158), 2: (112, 120, 140), 3: (112, 120, 140), 4: (92, 99, 116)}
+MAP_ALPHA = 80                # the road network underneath is faint: the model's road is what is driven
+MAP_MAX_SHIFT = 8.0           # m and rad: the most the map is moved to sit on the model's road
+MAP_MAX_TURN = math.radians(12.0)
+MAP_ALIGN_RATE = 0.08
 PREVIEW_S = 2.0           # s: the lead preview's horizon (leadsV3 points are at t = 0, 2 .. 10 s)
 PREVIEW_MIN = (1.5, 0.5)  # m: the preview is drawn only once the lead moves this far ahead/behind or across
 # Lines narrower than this many pixels are widened to it: what the far end of the view shows. Near the car the
@@ -395,6 +400,27 @@ def _arrow(x: float, y: float, heading: float, bend: float, length: float, rgba)
                       (ex - nx * head / 2, ey - ny * head / 2)]), rgba)]
 
 
+def _map_ops(anchor, opacity: float) -> list:
+  """Strip ops of every map line as a ribbon of its class's width, minor roads first so major ones lie on top."""
+  from openpilot.starpilot.ui.birds_eye_map import WIDTHS
+  ops: list = []
+  for road_class in sorted({c for c, _ in anchor.lines}, reverse=True):
+    lines = [line for c, line in anchor.lines if c == road_class]
+    points = np.concatenate(lines)
+    sizes = np.array([len(line) for line in lines])
+    ends = np.cumsum(sizes)
+    starts = ends - sizes
+    prev, nxt = np.roll(points, 1, axis=0), np.roll(points, -1, axis=0)
+    prev[starts], nxt[ends - 1] = points[starts], points[ends - 1]
+    tangent = nxt - prev
+    tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True), 1e-6)
+    normal = np.stack((-tangent[:, 1], tangent[:, 0]), axis=1) * (WIDTHS.get(road_class, 4.0) / 2)
+    runs = list(zip(starts.tolist(), ends.tolist(), strict=True))
+    rgba = _rgba(MAP_RGB.get(road_class, MAP_RGB[4]), MAP_ALPHA * opacity)
+    ops += _strips(bem.strip_points(points + normal, points - normal), runs, [rgba] * len(runs))
+  return ops
+
+
 class _DefaultText:
   """gui_app fonts; screens with their own bitmap fonts pass a drawer instead."""
   def measure(self, text: str, size: float) -> tuple[float, float]:
@@ -655,6 +681,8 @@ class BirdsEyeRenderer(Widget):
     self.long_control = True
     self.speed_limit_sign = True  # off when the layout's own speed-limit widget draws above the view
     self.navigation = None        # the screen's NavigationDisplay, set by the caller each frame
+    self.map_underlay = None      # starpilot.ui.birds_eye_map.MapUnderlay, from the screen that owns one
+    self._map_shift = (0.0, 0.0)  # (lateral m, turn rad) that lays the GPS map on the model's road
     self.parent_clip: rl.Rectangle | None = None
     self.clock = time.monotonic
     self.clock_ns = time.monotonic_ns  # the logMonoTime clock lane-centering freshness is judged against
@@ -895,6 +923,7 @@ class BirdsEyeRenderer(Widget):
       leads = self._lead_poses(scene, view)
       saved = _begin_ground(view)
       try:
+        self._map(scene)
         if scene.valid:
           if scene.path is not None:
             target = 1.0 if scene.allow_throttle else 0.0
@@ -1431,6 +1460,53 @@ class BirdsEyeRenderer(Widget):
     alpha = SHADOW_ALPHA * self.opacity
     return [_fan(bem.car_outline(x, y, heading, LEAD_LENGTH + 0.5, LEAD_WIDTH + 0.35, chamfer=0.55), (0, 0, 0, alpha))
             for x, y, heading in poses]
+
+  def _map(self, scene) -> None:
+    """The road network from map tiles, under everything, placed by GPS and nudged onto the model's road."""
+    underlay = self.map_underlay
+    if underlay is None:
+      return
+    try:
+      placed = underlay.update()
+    except Exception:
+      self.map_underlay = None
+      from openpilot.common.swaglog import cloudlog
+      cloudlog.exception("3D drive render: map underlay unavailable")
+      return
+    if placed is None:
+      return
+    anchor, pose = placed
+    ops = self._cached('map', (id(anchor), self.opacity), lambda: _map_ops(anchor, self.opacity), keep=(anchor,))
+    if not ops:
+      return
+    from openpilot.starpilot.ui.birds_eye_map import pose_matrix
+    lateral, turn = self._map_alignment(scene, anchor, pose)
+    _raw.rlDrawRenderBatchActive()
+    camera = _raw.rlGetMatrixModelview()
+    placed_camera = _matrix_array(camera) @ pose_matrix(*pose, lateral=lateral, turn=turn)
+    _raw.rlSetMatrixModelview(_CMatrix(*placed_camera.astype(np.float32).ravel().tolist()))
+    try:
+      _run(ops)
+    finally:
+      _raw.rlDrawRenderBatchActive()
+      _raw.rlSetMatrixModelview(camera)
+
+  def _map_alignment(self, scene, anchor, pose) -> tuple[float, float]:
+    """Ease the map's (lateral, turn) correction toward the one that lines its road up with the model's road edges."""
+    from openpilot.starpilot.ui.birds_eye_map import ALIGN_X, road_at, to_car
+    target = None
+    if scene.valid and len(scene.edges) == 2 and len(anchor.segments):
+      near = anchor.segments[np.abs(anchor.segments[:, 0, 0] - pose[0]) + np.abs(anchor.segments[:, 0, 1] - pose[1]) < 80.0]
+      road = road_at(to_car(near.reshape(-1, 2), *pose).reshape(-1, 2, 2)) if len(near) else None
+      left, right = (bem.lateral_at(scene.grid, edge, ALIGN_X, math.nan) for edge in scene.edges)
+      if road is not None and math.isfinite(left) and math.isfinite(right) and 4.0 < right - left < 40.0:
+        y, angle = road
+        turn = float(np.clip(self._road_heading(scene, ALIGN_X) - angle, -MAP_MAX_TURN, MAP_MAX_TURN))
+        lateral = float(np.clip((left + right) / 2 - (y + ALIGN_X * math.tan(turn)), -MAP_MAX_SHIFT, MAP_MAX_SHIFT))
+        target = (lateral, turn)
+    if target is not None:
+      self._map_shift = tuple(old + (new - old) * MAP_ALIGN_RATE for old, new in zip(self._map_shift, target, strict=True))
+    return self._map_shift
 
   def _lead_previews(self, scene, leads) -> list:
     """Ground ops: a faint outline where the model puts each lead in PREVIEW_S, joined to it by a thin line."""

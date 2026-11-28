@@ -9,7 +9,10 @@ it, so a device that never chooses it pays nothing.
 def build(fonts, ui_state):
   """The view, reading the live UIState; imported here so only a device that draws it loads it."""
   from openpilot.selfdrive.ui.onroad.birds_eye_renderer import BirdsEyeRenderer, BitmapText
-  return BirdsEyeRenderer(text=BitmapText(fonts), source=lambda: (ui_state.sm, ui_state.started_frame))
+  from openpilot.starpilot.ui.birds_eye_map import new_underlay
+  view = BirdsEyeRenderer(text=BitmapText(fonts), source=lambda: (ui_state.sm, ui_state.started_frame))
+  view.map_underlay = new_underlay()
+  return view
 
 
 class DriveRenderLayer:
@@ -55,4 +58,7 @@ class DriveRenderLayer:
       cloudlog.exception("3D drive render failed on the comma display; showing the camera")
 
   def close(self) -> None:
+    underlay = getattr(self.view, 'map_underlay', None)
+    if underlay is not None:
+      underlay.close()
     self.view = None

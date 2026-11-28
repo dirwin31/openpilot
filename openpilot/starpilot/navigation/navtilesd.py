@@ -4,7 +4,7 @@ The only process that requests map tiles. The renderer reads tiles from disk
 and never touches the network, so a slow or metered connection can never stall
 a frame. Priorities, highest first:
 
-  1. Tiles around the car and ahead of it, while the map overlay is on a layout.
+  1. Tiles around the car and ahead of it, while the map overlay or the birds-eye view is on.
   2. The active route's corridor.
   3. Offline areas, only on Wi-Fi or Ethernet.
 
@@ -448,8 +448,16 @@ def _map_enabled() -> bool:
   from openpilot.starpilot.navigation.offline_roads import read_json
   document = read_json(Path(DOCUMENT_PATH), 1 << 16)
   try:
-    return bool(document["widgets"]["nav_map"]["enabled"])
+    if document["widgets"]["nav_map"]["enabled"]:
+      return True
   except (TypeError, KeyError):
+    pass
+  # The birds-eye view lays the road network under its road.
+  try:
+    from openpilot.common.params import Params
+    from openpilot.starpilot.ui import drive_render
+    return drive_render.read(Params())
+  except Exception:
     return False
 
 
