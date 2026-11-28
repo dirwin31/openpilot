@@ -384,3 +384,48 @@ def test_blinkers_flash_only_on_the_blinking_side(monkeypatch):
   view.clock = lambda: 0.1
   view._blinkers(view.scene, pv)
   assert circles == []
+
+
+def _radar_lead(d, y_left=0.0, a=0.0):
+  return SimpleNamespace(present=True, dRel=d, yRel=y_left, vRel=-1.0, aLeadK=a)
+
+
+def test_a_braking_radar_lead_lights_its_brake_lights():
+  from openpilot.selfdrive.ui.onroad.birds_eye_renderer import scene_leads
+  idle = SimpleNamespace(present=False, dRel=0.0, yRel=0.0, vRel=0.0, aLeadK=0.0)
+  hard = scene_leads(SimpleNamespace(leadOne=_radar_lead(30.0, a=-3.0), leadTwo=idle), None)
+  soft = scene_leads(SimpleNamespace(leadOne=_radar_lead(30.0, a=-0.5), leadTwo=idle), None)
+  unknown = scene_leads(SimpleNamespace(leadOne=SimpleNamespace(present=True, dRel=30.0, yRel=0.0, vRel=-1.0), leadTwo=idle), None)
+  assert hard[0].braking and not soft[0].braking and not unknown[0].braking
+
+
+def test_a_lead_carries_the_model_step_two_seconds_on_and_keeps_it_through_smoothing():
+  from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
+  idle = SimpleNamespace(present=False, dRel=0.0, yRel=0.0, vRel=0.0, aLeadK=0.0)
+  model = SimpleNamespace(leadsV3=[_lead_v3(0.9, 30.0 + ber.EGO_FRONT, 0.0, dx=(0.0, -6.0, -12.0, -18.0, -24.0, -30.0),
+                                            dy=(0.0, 1.0, 2.0, 3.0, 4.0, 5.0))])
+  leads = ber.scene_leads(SimpleNamespace(leadOne=_radar_lead(30.0), leadTwo=idle), model)
+  assert len(leads) == 1 and leads[0].ahead == pytest.approx((-6.0, 1.0))
+  smoothed = ber.BirdsEyeRenderer._smooth_leads(leads, [replace_lead(leads[0], d_rel=31.0)])
+  assert smoothed[0].ahead == pytest.approx((-6.0, 1.0)) and smoothed[0].d_rel == pytest.approx(30.5)
+
+
+def replace_lead(lead, **changes):
+  from dataclasses import replace
+  return replace(lead, **changes)
+
+
+def test_lead_preview_draws_only_when_the_lead_will_move():
+  from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
+  view, _ = _renderer_with_scene()
+  moving = ber.BirdsEyeLead(30.0, 0.0, -2.0, ahead=(-8.0, 1.5))
+  still = ber.BirdsEyeLead(30.0, 0.0, 0.0, ahead=(0.5, 0.1))
+  unknown = ber.BirdsEyeLead(30.0, 0.0, 0.0)
+  passing = ber.BirdsEyeLead(4.0, 0.0, -9.0, ahead=(-20.0, 0.0))
+  pose = (30.0 + ber.EGO_FRONT + ber.LEAD_LENGTH / 2, 0.0, 0.0)
+  ops = view._lead_previews(view.scene, [(moving, pose)])
+  assert len(ops) == 3
+  outline = _op_points(ops[1])
+  assert outline[:, 0].mean() == pytest.approx(pose[0] - 8.0, abs=0.3) and outline[:, 1].mean() == pytest.approx(1.5, abs=0.2)
+  assert view._lead_previews(view.scene, [(still, pose), (unknown, pose)]) == []
+  assert view._lead_previews(view.scene, [(passing, (4.0 + ber.EGO_FRONT + 2.3, 0.0, 0.0))]) == [], 'not drawn over your own car'

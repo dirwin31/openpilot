@@ -19,7 +19,7 @@ quads, for the path alone. A car is one DrawTriangleFan per face that looks towa
 """
 from collections.abc import Callable
 import ctypes
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from itertools import chain, repeat, starmap
 import math
@@ -92,6 +92,9 @@ EDGE_WIDTH = 0.28
 MODEL_LEAD_PROB = 0.5
 SMOOTHING = 0.55     # blend toward each new model frame
 LEAD_SMOOTHING = 0.5
+LEAD_BRAKE_ACCEL = -1.5   # m/s^2: a radar lead decelerating harder than this lights its brake lights
+PREVIEW_S = 2.0           # s: the lead preview's horizon (leadsV3 points are at t = 0, 2 .. 10 s)
+PREVIEW_MIN = (1.5, 0.5)  # m: the preview is drawn only once the lead moves this far ahead/behind or across
 # Lines narrower than this many pixels are widened to it: what the far end of the view shows. Near the car the
 # metre widths are wider anyway.
 LANE_MIN_PX = 3.0
@@ -152,6 +155,8 @@ class BirdsEyeLead:
   y: float            # right-positive, meters
   v_rel: float
   radar: bool = True
+  braking: bool = False                       # radarState aLeadK below LEAD_BRAKE_ACCEL: its tail lights light
+  ahead: tuple[float, float] | None = None    # (dx, dy) m: where the model puts it in PREVIEW_S, relative to now
 
 
 @dataclass(frozen=True)
@@ -296,18 +301,30 @@ def scene_leads(radar_state, model, tracks=None) -> list[BirdsEyeLead]:
   unclamped, so a lead changing lanes moves across the lane lines."""
   if tracks is None:
     tracks = bem.model_lead_tracks(getattr(model, 'leadsV3', []), MODEL_LEAD_PROB) if model is not None else []
+
+  def ahead(d, y):
+    """The PREVIEW_S step of the model track that starts at this lead, if one does."""
+    for xs, ys in tracks:
+      if xs.size >= 2 and abs(float(xs[0]) - EGO_FRONT - d) < 6.0 and abs(float(ys[0]) - y) < 2.0:
+        step = (float(xs[1] - xs[0]), float(ys[1] - ys[0]))
+        return step if all(math.isfinite(v) for v in step) else None
+    return None
+
   leads: list[BirdsEyeLead] = []
   if radar_state is not None:
     for lead in (radar_state.leadOne, radar_state.leadTwo):
       if lead.present and math.isfinite(lead.dRel) and lead.dRel > 0 and math.isfinite(lead.yRel):
         # radarState yRel is left-positive.
-        v_rel = float(lead.vRel)
-        leads.append(BirdsEyeLead(float(lead.dRel), -float(lead.yRel), v_rel if math.isfinite(v_rel) else 0.0, radar=True))
+        v_rel, y = float(lead.vRel), -float(lead.yRel)
+        a_lead = getattr(lead, 'aLeadK', math.nan)
+        braking = isinstance(a_lead, (int, float)) and math.isfinite(a_lead) and a_lead < LEAD_BRAKE_ACCEL
+        leads.append(BirdsEyeLead(float(lead.dRel), y, v_rel if math.isfinite(v_rel) else 0.0, radar=True,
+                                  braking=braking, ahead=ahead(float(lead.dRel), y)))
   for xs, ys in tracks:
     d, y = float(xs[0]) - EGO_FRONT, float(ys[0])
     if d > 0 and not any(abs(o.d_rel - d) < 6.0 and abs(o.y - y) < 2.0 for o in leads):
       # leadsV3 speed is absolute; without ego speed here the closing rate is unknown.
-      leads.append(BirdsEyeLead(d, y, math.nan, radar=False))
+      leads.append(BirdsEyeLead(d, y, math.nan, radar=False, ahead=ahead(d, y)))
   return leads
 
 
@@ -652,8 +669,8 @@ class BirdsEyeRenderer(Widget):
     for lead in current:
       match = next((p for p in previous if p.radar == lead.radar and abs(p.d_rel - lead.d_rel) < 5 and abs(p.y - lead.y) < 1.5), None)
       if match is not None:
-        lead = BirdsEyeLead(match.d_rel + (lead.d_rel - match.d_rel) * LEAD_SMOOTHING,
-                            match.y + (lead.y - match.y) * LEAD_SMOOTHING, lead.v_rel, lead.radar)
+        lead = replace(lead, d_rel=match.d_rel + (lead.d_rel - match.d_rel) * LEAD_SMOOTHING,
+                       y=match.y + (lead.y - match.y) * LEAD_SMOOTHING)
       out.append(lead)
     return out
 
@@ -796,6 +813,7 @@ class BirdsEyeRenderer(Widget):
           _run(path.curve_edge)
           _run(self._marks(scene, reference, path))
         _run(self._lane_change_ghost(scene))
+        _run(self._lead_previews(scene, leads))
         _run(self._shadows([pose for _, pose in leads]))
         self._ego_ground()
       finally:
@@ -1259,6 +1277,26 @@ class BirdsEyeRenderer(Widget):
     return [_fan(bem.car_outline(x, y, heading, LEAD_LENGTH + 0.5, LEAD_WIDTH + 0.35, chamfer=0.55), (0, 0, 0, alpha))
             for x, y, heading in poses]
 
+  def _lead_previews(self, scene, leads) -> list:
+    """Ground ops: a faint outline where the model puts each lead in PREVIEW_S, joined to it by a thin line."""
+    ops = []
+    for lead, (x, y, _) in leads:
+      if lead.ahead is None:
+        continue
+      dx, dy = lead.ahead
+      if abs(dx) < PREVIEW_MIN[0] and abs(dy) < PREVIEW_MIN[1]:
+        continue
+      px, py = x + dx, y + dy
+      if px - LEAD_LENGTH / 2 <= EGO_FRONT:
+        continue  # behind the ego's bumper: nothing useful to show
+      rgb = bem.lead_color(lead.d_rel, lead.v_rel if math.isfinite(lead.v_rel) else 0.0)
+      a = self.opacity
+      outline = bem.car_outline(px, py, self._road_heading(scene, px), LEAD_LENGTH, LEAD_WIDTH, chamfer=0.38)
+      link = bem.segment_quad((x + px) / 2, (y + py) / 2, math.atan2(py - y, px - x), math.hypot(px - x, py - y), 0.12)
+      ops += [_fan(link, _rgba(rgb, 90 * a)), _fan(outline, _rgba(rgb, 30 * a)),
+              _strip(bem.ring_strip(outline, GHOST_OUTLINE), _rgba(rgb, 150 * a))]
+    return ops
+
   def _ego_ground(self) -> None:
     """The ego's shadow and front tyres, drawn on the road during the ground pass (meters)."""
     _run(self._shadows([(EGO_FRONT - EGO_LENGTH / 2, 0.0, 0.0)]))
@@ -1312,7 +1350,8 @@ class BirdsEyeRenderer(Widget):
     for lead, _ in leads:
       rgb = bem.lead_color(lead.d_rel, lead.v_rel if math.isfinite(lead.v_rel) else 0.0)
       alpha = 255 * (1.0 if lead.radar else 0.7) * self.opacity
-      palettes.append(((rgb, alpha), (LEAD_GLASS, alpha), (LEAD_LIGHT, alpha)))
+      lit = lead.braking or (scene.hard_brake and lead is leads[-1][0])
+      palettes.append(((rgb, alpha), (LEAD_GLASS, alpha), (EGO_BRAKE if lit else LEAD_LIGHT, alpha)))
       rgbs.append(rgb)
     cars, screens = self._cars(view, [pose for _, pose in leads], _car_mesh(LEAD_LENGTH, LEAD_WIDTH), palettes)
     previous, self._labels = self._labels, []
