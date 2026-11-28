@@ -319,15 +319,15 @@ def test_car_bodies_draw_only_the_faces_that_look_toward_the_camera():
   assert np.ptp(mesh.vertices[:, 1]) == pytest.approx(1.9) and mesh.vertices[:, 2].max() == ber.ROOF_HEIGHT
   assert np.allclose(np.linalg.norm(mesh.normals, axis=1), 1.0)
   up = mesh.normals[:, 2] > 0.99
-  assert up.sum() == 2 and [mesh.parts[i] for i in np.flatnonzero(up)] == [ber.BODY, ber.BODY], 'the deck and the roof face up'
+  assert [mesh.parts[i] for i in np.flatnonzero(up)] == [ber.BODY, ber.BODY, ber.BODY, ber.BODY, ber.GLASS], 'the deck, roof and its glass panel face up'
   body, glass, light = ((200, 100, 50), 255), ((10, 20, 30), 255), ((250, 0, 0), 255)
   cars, screens = ber.BirdsEyeRenderer._cars(view, [(40.0, 0.0, 0.0), (40.0, -9.0, 0.0), (40.0, 9.0, 0.0)], mesh, [(body, glass, light)] * 3)
   assert screens.shape == (3, mesh.vertices.shape[0], 2)
   ahead, left, right = (_draw_ops(ops) for ops in cars)
   assert all(op[0] is ber._raw.DrawTriangleFan for op in ahead)
   assert len(ahead) < len(mesh.parts), 'the front of a car ahead is not drawn'
-  assert _fan_colors(ahead).count((250, 0, 0, 255)) == 2, 'both tail lights, unshaded'
-  left_wall, right_wall, front_wall = 1, 5, 7  # hull edges: the two flanks and the nose
+  assert _fan_colors(ahead).count((250, 0, 0, 255)) == 3, 'the whole tail-light bar, unshaded'
+  left_wall, right_wall, front_wall = 14, 20, 23  # upper hull bands: the two flanks and the nose
   faces = [_drawn_faces(ops, car, mesh) for car, ops in enumerate(cars)]
   assert not faces[0] & {left_wall, right_wall, front_wall}, 'dead ahead: neither flank, and never the nose'
   assert right_wall in faces[1] and left_wall not in faces[1], 'a car to the left shows its right flank'
@@ -351,7 +351,7 @@ def test_the_ego_tail_lights_follow_braking(monkeypatch):
   car = SimpleNamespace(steeringAngleDeg=0.0, leftBlinker=False, rightBlinker=False, vEgo=20.0, aEgo=-0.4, brakePressed=True)
   view.ingest(None, None, car)
   view._ego(view.scene, camera)
-  assert drawn[-1].count((*ber.EGO_BRAKE, 255)) == 2, 'the brake pedal lights them'
+  assert drawn[-1].count((*ber.EGO_BRAKE, 255)) == 3, 'the brake pedal lights the whole bar'
   car.brakePressed, car.aEgo = False, ber.BRAKE_LIGHT_ACCEL - 0.5
   view.ingest(None, None, car)
   assert view.scene.braking, 'so does a firm deceleration without the pedal (openpilot braking)'
@@ -460,7 +460,7 @@ def test_cars_are_true_to_scale_and_the_drawn_gap_is_the_printed_gap():
   renderer.scene.leads = [lead]
   (_, pose), = renderer._lead_poses(renderer.scene, view)
   mesh = ber._car_mesh(ber.LEAD_LENGTH, ber.LEAD_WIDTH)
-  hull = mesh.vertices[:8]
+  hull = mesh.vertices[:12]
   assert pose[0] + hull[:, 0].min() == pytest.approx(front + 30.0), 'the body starts exactly the printed gap ahead'
   _, screens = renderer._cars(view, [pose], mesh, [(((1, 1, 1), 1),) * 3])
   expected = bem.car_to_widget(mesh.vertices + (pose[0], pose[1], 0.0), stream, cfg, view)
@@ -765,9 +765,9 @@ def test_a_turned_car_body_is_rigid_on_the_road():
   world[:, :2] = bem.rotate_offsets(mesh.vertices[:, :2], 40.0, 1.0, heading)
   assert turned == pytest.approx(bem.car_to_widget(world, stream, view=view), abs=1e-3)
   sides = lambda quad: [float(np.linalg.norm(quad[i] - quad[(i + 1) % 4])) for i in range(4)]  # noqa: E731
-  roof = [20, 21, 22, 23]
+  roof = [40, 41, 42, 43]
   assert sides(world[roof]) == pytest.approx(sides(mesh.vertices[roof])), 'same size as when it points straight ahead'
-  nose = world[[0, 7], :2].mean(axis=0) - world[:8, :2].mean(axis=0)
+  nose = world[[0, 11], :2].mean(axis=0) - (40.0, 1.0)
   assert nose == pytest.approx(2.3 * np.array([math.cos(heading), math.sin(heading)])), 'its nose points along the heading'
 
 

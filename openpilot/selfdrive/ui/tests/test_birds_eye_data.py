@@ -354,8 +354,10 @@ def test_road_of_a_stopped_or_earlier_model_is_dropped():
 def test_front_tyres_turn_with_the_steering_wheel():
   view, _ = _renderer_with_scene()
   straight = view._front_tyres(0.0)
-  assert len(straight) == 2
-  left, right = (_op_points(op) for op in straight)
+  assert len(straight) == 4, 'front and rear pairs'
+  left, right = (_op_points(op) for op in straight[:2])
+  rear = _op_points(straight[2])
+  assert np.ptp(_op_points(view._front_tyres(-90.0)[2])[:, 1]) == pytest.approx(np.ptp(rear[:, 1])), 'the rear ones never steer'
   assert left[:, 1].mean() < 0 < right[:, 1].mean(), 'one tyre each side'
   assert np.ptp(left[:, 1]) == pytest.approx(0.26, abs=1e-3), 'straight: the tyre runs along the car'
   turned = _op_points(view._front_tyres(-90.0)[1])  # steeringAngleDeg is left-positive: -90 turns right

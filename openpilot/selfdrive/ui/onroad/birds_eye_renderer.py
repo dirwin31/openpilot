@@ -164,14 +164,17 @@ STOP_RED = (240, 64, 56)
 HARD_BRAKE_HZ = 2.0
 GHOST_OUTLINE = 0.12                  # m, the lane-change ghost's outline width
 SHADOW_ALPHA = 70
-EGO_BODY, EGO_GLASS = (238, 241, 247), (48, 58, 76)
+EGO_BODY, EGO_GLASS = (228, 233, 242), (40, 50, 68)
 EGO_LIGHT, EGO_BRAKE = (150, 34, 34), (255, 56, 44)   # the ego's tail lights: idle, braking
-LEAD_GLASS, LEAD_LIGHT = (64, 72, 88), (176, 44, 44)
+LEAD_GLASS, LEAD_LIGHT = (52, 60, 76), (176, 44, 44)
+TRIM_RGB = (50, 54, 64)                   # the dark sill band along every car's lower body
 BRAKE_LIGHT_ACCEL = -1.2              # m/s^2: the ego's tail lights also light below this measured deceleration
 BLINKER = (255, 168, 28)
 BLINKER_HZ = 1.5
+BLINKER_RADIUS = 0.11     # m, each lamp
 TIRE = (24, 26, 32)
 TIRE_LENGTH, TIRE_WIDTH = 0.68, 0.26
+REAR_AXLE = EGO_FRONT - EGO_LENGTH + 0.95
 FRONT_AXLE = EGO_FRONT - 0.95          # m: the ego's front wheels, behind its front bumper
 
 
@@ -636,8 +639,9 @@ def _end_ground(saved: _CMatrix) -> None:
 
 # ---- car bodies ---------------------------------------------------------------------------------
 
-SKIRT, BELT, ROOF_HEIGHT = 0.22, 0.86, 1.46   # meters above the road: underside, window line, roof
-BODY, GLASS, LIGHT = 0, 1, 2                  # a face's part: which palette entry colours it
+SKIRT, TRIM_TOP, ROOF_HEIGHT = 0.22, 0.42, 1.44  # meters above the road: underside, top of the dark sill trim, roof
+DECK_NOSE, DECK_COWL, DECK_TAIL = 0.7, 0.88, 0.82  # the deck's height at the nose, under the windscreen and at the tail
+BODY, GLASS, LIGHT, TRIM = 0, 1, 2, 3         # a face's part: which palette entry colours it (TRIM is fixed)
 AMBIENT, DIFFUSE = 0.56, 0.5                  # flat shading: a face is AMBIENT + DIFFUSE * max(0, normal . light)
 LIGHT_DIRECTION = np.array([-0.35, -0.3, 0.9]) / np.linalg.norm([-0.35, -0.3, 0.9])  # toward the light: above, behind, left
 
@@ -655,21 +659,39 @@ class CarMesh(NamedTuple):
 
 @lru_cache(maxsize=8)
 def _car_mesh(length: float, width: float) -> CarMesh:
+  """Hull in three rings (sill, trim line, a deck that dips to the nose and the tail), a raked cabin with a glass
+  roof panel, and a tail-light bar."""
   sl, sw = length / 4.6, width / 1.9
-  chamfer = 0.38 * sw
-  hull = bem.car_outline(0.0, 0.0, 0.0, length, width, chamfer=chamfer)
+  hl, hw, cf, cr = length / 2, width / 2, 0.5 * sw, 0.34 * sw
+  cowl, deck_end = 0.95 * sl, -1.55 * sl
+  hull = np.array([(hl, -hw + cf), (hl - cf, -hw), (cowl, -hw), (deck_end, -hw), (-hl + cr, -hw), (-hl, -hw + cr),
+                   (-hl, hw - cr), (-hl + cr, hw), (deck_end, hw), (cowl, hw), (hl - cf, hw), (hl, hw - cf)])
+
+  def deck(x):
+    return np.where(x > cowl, DECK_COWL + (DECK_NOSE - DECK_COWL) * (x - cowl) / (hl - cowl),
+                    np.where(x < deck_end, DECK_COWL + (DECK_TAIL - DECK_COWL) * (deck_end - x) / (deck_end + hl), DECK_COWL))
 
   def ring(points, z):
-    return np.column_stack((points, np.full(len(points), z)))
-  cabin_base = np.array([(0.95 * sl, -0.84 * sw), (0.95 * sl, 0.84 * sw), (-1.6 * sl, 0.84 * sw), (-1.6 * sl, -0.84 * sw)])
-  cabin_roof = np.array([(0.3 * sl, -0.7 * sw), (0.3 * sl, 0.7 * sw), (-1.05 * sl, 0.7 * sw), (-1.05 * sl, -0.7 * sw)])
-  rear, outer = -length / 2 - 0.01, width / 2 - chamfer
-  lights = [(rear, side * y, z) for side in (-1, 1) for y, z in ((outer, 0.54), (outer - 0.4 * sw, 0.54), (outer - 0.4 * sw, 0.76), (outer, 0.76))]
-  vertices = np.vstack((ring(hull, SKIRT), ring(hull, BELT), ring(cabin_base, BELT), ring(cabin_roof, ROOF_HEIGHT), np.array(lights)))
-  walls = [(i, (i + 1) % 8, 8 + (i + 1) % 8, 8 + i) for i in range(8)]
-  cabin = [(16, 17, 21, 20), (17, 18, 22, 21), (18, 19, 23, 22), (19, 16, 20, 23)]
-  faces = [*walls, (24, 25, 26, 27), (28, 29, 30, 31), tuple(range(8, 16)), *cabin, (20, 21, 22, 23)]
-  parts = (BODY,) * 8 + (LIGHT,) * 2 + (BODY,) + (GLASS,) * 4 + (BODY,)
+    return np.column_stack((points, np.broadcast_to(z, len(points))))
+  cabin_base = np.array([(cowl - 0.05, -0.84 * sw), (cowl - 0.05, 0.84 * sw), (deck_end + 0.05, 0.84 * sw), (deck_end + 0.05, -0.84 * sw)])
+  roof = np.array([(0.15 * sl, -0.68 * sw), (0.15 * sl, 0.68 * sw), (-1.0 * sl, 0.68 * sw), (-1.0 * sl, -0.68 * sw)])
+  panel = roof * (0.62, 0.72) + (-0.05 * sl, 0.0)
+  bar_y, end_y, back = hw - cr - 0.04, hw - cr - 0.3 * sw, -hl - 0.01
+  lights = [(back, -bar_y, 0.6), (back, bar_y, 0.6), (back, bar_y, 0.68), (back, -bar_y, 0.68)]
+  for side in (-1, 1):
+    lights += [(back, side * bar_y, 0.56), (back, side * end_y, 0.56), (back, side * end_y, 0.72), (back, side * bar_y, 0.72)]
+  vertices = np.vstack((ring(hull, SKIRT), ring(hull, TRIM_TOP), ring(hull, deck(hull[:, 0])), ring(cabin_base, DECK_COWL),
+                        ring(roof, ROOF_HEIGHT), ring(panel, ROOF_HEIGHT), np.array(lights)))
+  n = len(hull)
+  lower = [(i, (i + 1) % n, n + (i + 1) % n, n + i) for i in range(n)]
+  upper = [(n + i, n + (i + 1) % n, 2 * n + (i + 1) % n, 2 * n + i) for i in range(n)]
+  d = 2 * n
+  trunk, middle, hood = (d + 4, d + 3, d + 8, d + 7, d + 6, d + 5), (d + 3, d + 2, d + 9, d + 8), (d + 2, d + 1, d, d + 11, d + 10, d + 9)
+  c, r, g, li = 3 * n, 3 * n + 4, 3 * n + 8, 3 * n + 12
+  cabin = [(c, c + 1, r + 1, r), (c + 1, c + 2, r + 2, r + 1), (c + 2, c + 3, r + 3, r + 2), (c + 3, c, r, r + 3)]
+  light_faces = [tuple(range(li, li + 4)), tuple(range(li + 4, li + 8)), tuple(range(li + 8, li + 12))]
+  faces = [*lower, *upper, *light_faces, trunk, middle, hood, *cabin, (r, r + 1, r + 2, r + 3), (g, g + 1, g + 2, g + 3)]
+  parts = (TRIM,) * n + (BODY,) * n + (LIGHT,) * 3 + (BODY,) * 3 + (GLASS,) * 4 + (BODY, GLASS)
   normals, centres = [], []
   for face in faces:
     points = vertices[list(face)]
@@ -1495,8 +1517,9 @@ class BirdsEyeRenderer(Widget):
     counts = np.diff(starts).tolist()
     cars = []
     for c in range(count):
-      rgb = np.array([palettes[c][part][0] for part in range(3)], dtype=np.float64)[parts]
-      alpha = np.array([palettes[c][part][1] for part in range(3)], dtype=np.float64)[parts]
+      palette = (*palettes[c][:3], (TRIM_RGB, palettes[c][BODY][1]))
+      rgb = np.array([entry[0] for entry in palette], dtype=np.float64)[parts]
+      alpha = np.array([entry[1] for entry in palette], dtype=np.float64)[parts]
       k = np.where(parts == LIGHT, 1.0, shade[c])
       colours = np.concatenate((np.minimum(255.0, rgb * k[:, None]), alpha[:, None]), axis=1).tolist()
       offset = base + c * per_car * vector2
@@ -1606,14 +1629,14 @@ class BirdsEyeRenderer(Widget):
     _run(self._front_tyres(self.scene.steering_deg))
 
   def _front_tyres(self, steering_deg: float) -> list:
-    """Ground ops: the two front tyres, turned with the steering wheel so they show past the body in a turn."""
+    """Ground ops: the tyres just outboard of the body, the front pair turned with the steering wheel."""
     angle = round(bem.ego_wheel_angle(steering_deg), 2)
     alpha = 255 * self.opacity
 
     def build():
       track = EGO_WIDTH / 2 + 0.02  # a hair outboard of the body, so the tyres show from above
-      return [_fan(bem.segment_quad(FRONT_AXLE, side * track, angle, TIRE_LENGTH, TIRE_WIDTH), _rgba(TIRE, alpha))
-              for side in (-1, 1)]
+      return [_fan(bem.segment_quad(x, side * track, turn, TIRE_LENGTH, TIRE_WIDTH), _rgba(TIRE, alpha))
+              for x, turn in ((FRONT_AXLE, angle), (REAR_AXLE, 0.0)) for side in (-1, 1)]
     return self._cached('tyres', (angle, alpha), build)
 
   def _lane_change_ghost(self, scene) -> list:
@@ -1706,15 +1729,15 @@ class BirdsEyeRenderer(Widget):
     sides = [side for side, on in ((-1, scene.left_blinker), (1, scene.right_blinker)) if on]
     if not sides or (self.clock() * BLINKER_HZ) % 1.0 >= 0.5:
       return
-    y = EGO_WIDTH / 2 - 0.16
-    corners = [(x, side * y, 0.62) for side in sides for x in (EGO_FRONT - 0.12, EGO_FRONT - EGO_LENGTH + 0.12)]
+    front, rear = (EGO_FRONT - 0.2, EGO_WIDTH / 2 - 0.12, DECK_NOSE), (EGO_FRONT - EGO_LENGTH - 0.01, EGO_WIDTH / 2 - 0.2, 0.64)
+    corners = [(x, side * y, z) for side in sides for x, y, z in (front, rear)]
     pixels = bem.car_to_widget(corners, None, view=view)
-    radii = 0.2 / bem.meters_per_pixel(np.array([c[0] for c in corners]), view)
+    radii = BLINKER_RADIUS / bem.meters_per_pixel(np.array([c[0] for c in corners]), view)
     a = self.opacity
     for (px, py), r in zip(pixels, radii, strict=True):
       centre = rl.Vector2(float(px), float(py))
-      rl.draw_circle_v(centre, float(r) * 1.9, _color(BLINKER, 70 * a))
-      rl.draw_circle_v(centre, max(2.0, float(r)), _color(BLINKER, 255 * a))
+      rl.draw_circle_v(centre, float(r) * 1.7, _color(BLINKER, 60 * a))
+      rl.draw_circle_v(centre, max(1.5, float(r)), _color(BLINKER, 255 * a))
 
   # ---- speed limit ------------------------------------------------------------------------------
 
