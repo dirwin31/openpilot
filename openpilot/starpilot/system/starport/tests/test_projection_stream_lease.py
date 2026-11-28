@@ -1,5 +1,7 @@
 """The lease that tells the comma's own screen StarPort's drive view is reaching the car screen."""
 import os
+
+import pytest
 from types import SimpleNamespace as NS
 
 from openpilot.starpilot.system.starport import projection_onroad
@@ -42,13 +44,16 @@ def test_reader_stats_at_most_once_a_second(tmp_path):
   assert reader() is True, 'a clock that went back reads again'
 
 
-def drawing_view(tmp_path, *, started, content='birds_eye', streaming=True):
+class Drawn(Exception):
+  """Stands in for the drive composition; the lease is decided before it draws."""
+
+
+def drawing_view(tmp_path, *, started, streaming=True):
   view = object.__new__(projection_onroad.ProjectionOnroad)
-  view.native = NS(ui_state=NS(started=started))
-  view.content = content
+  view.native = NS(ui_state=NS(started=started), shell_mode=NS(ONROAD='onroad'))
   view._streaming = lambda: streaming
   view._stream_lease = StreamLeaseWriter(str(tmp_path / 'lease'))
-  view._render_birds_eye_only = lambda: None
+  view.adapter = NS(build=lambda *args, **kwargs: (_ for _ in ()).throw(Drawn()))
   view._standby = lambda: None
   view.favorites = view.pip = None
   view.onroad = NS()
@@ -59,15 +64,18 @@ def drawing_view(tmp_path, *, started, content='birds_eye', streaming=True):
 
 def test_view_keeps_the_lease_fresh_only_while_the_car_takes_its_drive(tmp_path):
   driving = drawing_view(tmp_path, started=True)
-  driving.render()
+  with pytest.raises(Drawn):
+    driving.render()
   assert projection_stream_active(driving._stream_lease.path)
   driving._stream_lease.release()
   silent = drawing_view(tmp_path, started=True, streaming=False)
-  silent.render()
+  with pytest.raises(Drawn):
+    silent.render()
   assert not projection_stream_active(silent._stream_lease.path), 'drawn, but the car has accepted no frame'
   parked = drawing_view(tmp_path, started=False)
   parked.render()
   assert not projection_stream_active(parked._stream_lease.path), 'the standby screen is not a drive'
   unset = drawing_view(tmp_path, started=True)
   unset._stream_lease = None
-  unset.render()
+  with pytest.raises(Drawn):
+    unset.render()

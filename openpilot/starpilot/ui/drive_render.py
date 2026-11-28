@@ -1,29 +1,40 @@
-"""The "3D drive render" setting: which screen draws the rendered road view while driving.
+"""The "3D drive render" setting: which screens draw the rendered road view in place of the front camera.
 
-One saved choice with three values, so the car screen (StarPort) and the comma's own screen can never both be
-chosen. It is the ``driveRender`` field of the OnroadCustomizations document; an absent field is the default.
-The comma's own screen only offers it on the large profile (comma 3 / 3X); elsewhere a saved ``device`` acts as off.
+The render is a layer: it takes the camera's place and the layout's widgets, alerts and borders still draw over it.
+It is the ``driveRender`` field of the OnroadCustomizations document; an absent field is the default, off.
+The comma's own screen only offers it on the large profile (comma 3 / 3X); elsewhere ``device`` acts as off and
+``both`` as StarPort.
 """
 
 FIELD = "driveRender"
-OFF, STARPORT, DEVICE = "off", "starport", "device"
-VALUES = (OFF, STARPORT, DEVICE)
-DEFAULT = STARPORT
+OFF, STARPORT, DEVICE, BOTH = "off", "starport", "device", "both"
+VALUES = (OFF, STARPORT, DEVICE, BOTH)
+DEFAULT = OFF
 
 KEY = "DriveRender"
 LABEL = "3D drive render"
-LABELS = {OFF: "Off", STARPORT: "StarPort", DEVICE: "Comma display"}
+LABELS = {OFF: "Off", STARPORT: "StarPort", DEVICE: "Comma display", BOTH: "Both"}
 
 
 def normalize(value) -> str:
-  """A saved value, or the default when it is absent or not one of the three choices."""
+  """A saved value, or the default when it is absent or not one of the choices."""
   return value if type(value) is str and value in VALUES else DEFAULT
 
 
 def effective(value, large_profile: bool) -> str:
-  """The choice this device acts on: ``device`` needs the large profile."""
+  """The choice this device acts on: the comma display needs the large profile."""
   value = normalize(value)
-  return OFF if value == DEVICE and not large_profile else value
+  if large_profile:
+    return value
+  return STARPORT if value == BOTH else OFF if value == DEVICE else value
+
+
+def on_device(value, large_profile: bool = True) -> bool:
+  return effective(value, large_profile) in (DEVICE, BOTH)
+
+
+def on_starport(value) -> bool:
+  return normalize(value) in (STARPORT, BOTH)
 
 
 def choices(large_profile: bool) -> tuple[str, ...]:
@@ -31,16 +42,9 @@ def choices(large_profile: bool) -> tuple[str, ...]:
 
 
 def description(large_profile: bool) -> str:
-  device = " Comma display shows it on the comma 3 or 3X screen and the camera in the car." if large_profile else ""
-  return ("Draws a rendered 3D view of the road, lanes and traffic in place of the front camera. " +
-          "StarPort shows it on the car screen." + device + " Off shows the front camera on both; " +
-          "StarPort's layout can still place a birds-eye panel over it. " +
-          "StarPort uses the choice from its next connection.")
-
-
-def stream_content(value) -> str:
-  """What StarPort's car screen draws for a saved choice: the render only when StarPort is chosen, else the camera."""
-  return "birds_eye" if normalize(value) == STARPORT else "full"
+  screens = "StarPort shows it on the car screen" + (", Comma display on the comma 3 or 3X screen, Both on each" if large_profile else "")
+  return ("Draws a rendered 3D view of the road, lanes and traffic in place of the front camera; the layout's widgets " +
+          "and alerts stay on top. " + screens + ". StarPort uses the choice from its next connection.")
 
 
 def read(params) -> str:

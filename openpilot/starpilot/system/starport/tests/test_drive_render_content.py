@@ -1,4 +1,4 @@
-"""StarPort's car screen follows Galaxy's "3D drive render" choice: the render only for StarPort, else the camera."""
+"""StarPort's car screen follows Galaxy's "3D drive render" choice: the render takes the camera's place for StarPort and Both."""
 import json
 from types import SimpleNamespace
 
@@ -21,19 +21,26 @@ def save(tmp_path, choice):
   (tmp_path / 'OnroadCustomizations').write_text(json.dumps(document))
 
 
-def test_unsaved_setting_keeps_the_render_on_the_car_screen(tmp_path):
-  assert current_car_ui.saved_stream_content(read_only_params(tmp_path)) == 'birds_eye'
+def test_unsaved_setting_keeps_the_camera_on_the_car_screen(tmp_path):
+  assert current_car_ui.saved_render_layer(read_only_params(tmp_path)) is False
 
 
-@pytest.mark.parametrize('choice,content', [(None, 'birds_eye'), ('starport', 'birds_eye'), ('off', 'full'), ('device', 'full')])
-def test_each_choice_selects_the_car_screen_content(tmp_path, choice, content):
+@pytest.mark.parametrize('choice,layer', [(None, False), ('off', False), ('device', False), ('starport', True), ('both', True)])
+def test_each_choice_selects_the_car_screen_layer(tmp_path, choice, layer):
   save(tmp_path, choice)
-  assert current_car_ui.saved_stream_content(read_only_params(tmp_path)) == content
+  assert current_car_ui.saved_render_layer(read_only_params(tmp_path)) is layer
 
 
-def test_unreadable_setting_falls_back_to_the_default(tmp_path):
+def test_unreadable_setting_falls_back_to_the_camera(tmp_path):
   (tmp_path / 'OnroadCustomizations').write_text('{broken')
-  assert current_car_ui.saved_stream_content(read_only_params(tmp_path)) == 'birds_eye'
+  assert current_car_ui.saved_render_layer(read_only_params(tmp_path)) is False
+
+
+def test_renderer_passes_the_choice_to_the_view():
+  from pathlib import Path
+  source = Path(current_car_ui.__file__).read_text()
+  assert 'render_layer = saved_render_layer(ui_state.params)' in source
+  assert 'render_layer=render_layer' in source
 
 
 def test_projection_params_expose_what_the_read_needs():

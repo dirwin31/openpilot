@@ -132,9 +132,11 @@ def test_black_screen_wins_over_the_drive_render():
   document = default_document()
   document.update({streaming_blackout.FIELD: True, drive_render.FIELD: 'device'})
   current = replace(state(), customization=document)
-  assert v.streaming_blackout_active(current) and not v.drive_render_active(current)
+  assert v.streaming_blackout_active(current)
+  v._large = Mock()
   with patch.object(onroad, 'rl'), patch.object(onroad, 'clip'), patch.object(onroad, 'render_live_sidebar'):
     v.render(current)
+  v._large.assert_not_called()
   v.drive_render.render.assert_not_called()
   v.streaming_blackout.return_value = False
   assert v.drive_render_active(current)

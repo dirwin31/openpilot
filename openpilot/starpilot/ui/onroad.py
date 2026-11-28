@@ -143,7 +143,7 @@ class OnroadView:
     self.birds_eye_layer: OverlayLayer | None = None  # Android Auto birds-eye panel, under the HUD widgets
     self.projection_exit_layer: ProjectionControlLayer | None = None
     # The native comma 3 / 3X screen sets this (an onroad_drive_render.DriveRenderLayer): the 3D drive render
-    # replaces the camera composition while Galaxy's "3D drive render" is set to Comma display.
+    # takes the camera's place while Galaxy's "3D drive render" includes the comma display.
     self.drive_render = None
     # The comma's own screen sets this (a projection_stream_lease.StreamLeaseReader): True while StarPort's drive
     # view is reaching the car screen. With "Black screen while StarPort streams" on, this screen then draws black.
@@ -192,10 +192,6 @@ class OnroadView:
       raise ValueError("Camera observation requires a camera renderer")
     if self.streaming_blackout_active(state):
       self._alerts_only(state)
-      if uniden := getattr(self, "uniden", None):
-        uniden.render_border(state, state.viewport_width, 1080)
-    elif self.drive_render_active(state):
-      self._drive_render(state)
       if uniden := getattr(self, "uniden", None):
         uniden.render_border(state, state.viewport_width, 1080)
     elif self.fonts.profile == Profile.LARGE:
@@ -248,44 +244,15 @@ class OnroadView:
       clip.end_scissor_mode()
 
   def drive_render_active(self, state: OnroadState) -> bool:
-    """The comma's own large screen draws the 3D drive render in place of the camera for this frame.
+    """The comma's own large screen draws the 3D drive render in the camera's place for this frame.
 
     Never the projection, a layout or replay preview, or the reverse driver camera; a render that cannot be built
-    leaves the camera composition in place. So does a speed limit waiting for the driver's answer: its prompt and
-    tap targets belong to the camera composition, which returns while the prompt can show (an alert hides the
-    prompt there too, so the render is back under the alert).
+    leaves the camera in place.
     """
     layer = getattr(self, "drive_render", None)
     return bool(layer is not None and self.fonts.profile == Profile.LARGE and self.projection_viewport is None and
                 state.visual_preview is None and not state.reverse_driver_camera and
-                drive_render.effective(state.customization.get(drive_render.FIELD), True) == drive_render.DEVICE and
-                not manual_slc_confirmation(self.fonts.profile, state) and layer.ready() and
-                not self.streaming_blackout_active(state))
-
-  def _drive_render(self, state: OnroadState) -> None:
-    """The 3D drive render over the content area: no camera receive/upload, model overlay, widgets, map or PiP work.
-
-    Alerts, the developer sidebar, the blind-spot and signal borders, the engagement-colour border and the Uniden
-    border stay. The driver-monitoring face, the corner hint, the curve glow, the traffic badge, the status label,
-    the rear-fog indicator and every layout widget are not drawn, and the widgets' places take no taps.
-    """
-    width, height = state.viewport_width, 1080
-    frame = rl.Rectangle(0, 0, width, height)
-    content = rl.Rectangle(30, 30, width - 60, height - 60)
-    rl.draw_rectangle_rec(frame, rl.BLACK)
-    clip.begin_scissor_mode(30, 30, int(content.width), int(content.height))
-    try:
-      self.drive_render.render(content, state)
-      if (quick_select := getattr(self, 'quick_select_layer', None)) is not None:
-        quick_select(content, state)
-      self.alert.render(content, state.alert)
-    finally:
-      clip.end_scissor_mode()
-    if state.appearance.show_developer_sidebar:
-      render_live_sidebar(self.fonts, rl.Rectangle(width, 0, SIDEBAR_WIDTH, height), state.developer_metrics)
-    rl.draw_rectangle_lines_ex(frame, 30, rl.BLACK)
-    rl.draw_rectangle_rounded_lines_ex(content, 0.12, 10, 30, axis_status_color(state))
-    render_large_half_borders(state, state.observed_ns / 1e9 if state.observed_ns else rl.get_time(), content, int(height))
+                drive_render.on_device(state.customization.get(drive_render.FIELD)) and layer.ready())
 
   def _slc_actions(self, state: OnroadState) -> None:
     sign = self.unified_speed.sign if self.fonts.profile == Profile.LARGE else self.compact_hud._speed_limit_widget
@@ -492,7 +459,9 @@ class OnroadView:
     rl.draw_rectangle_rec(content, color)
     clip.begin_scissor_mode(30, 30, int(content.width), int(content.height))
     try:
-      if self.camera_layer is not None and state.camera_available:
+      if self.drive_render_active(state):
+        self.drive_render.render(content, state)
+      elif self.camera_layer is not None and state.camera_available:
         self.camera_layer(content, state)
       elif self.background_layer is not None:
         self.background_layer(content, state)

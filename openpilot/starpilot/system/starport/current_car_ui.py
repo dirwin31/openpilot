@@ -2,8 +2,8 @@
 
 Frames are rendered only while requested. Touch input controls navigation favorites and drive bookmarks.
 Onroad, each new camera frame is drawn exactly once, as soon as it lands (see
-CameraPacer). With stream_content "birds_eye" (Galaxy's "3D drive render" set to StarPort, the default) no camera is drawn,
-so frames follow the encoder interval. When the encoder takes NV12, the frame is converted on the GPU,
+CameraPacer). With Galaxy's "3D drive render" on StarPort the render takes the camera's place, so no camera is drawn
+and frames follow the encoder interval. When the encoder takes NV12, the frame is converted on the GPU,
 and it can be read back without stalling the renderer.
 """
 
@@ -142,10 +142,10 @@ def wait_for_request(producer: FrameProducer) -> FrameRequest:
   raise TimeoutError("Android Auto did not request current UI frames")
 
 
-def saved_stream_content(params) -> str:
-  """The car screen's content for the saved "3D drive render" choice; ``params`` needs only the read interface."""
+def saved_render_layer(params) -> bool:
+  """True when the saved "3D drive render" choice includes StarPort; ``params`` needs only the read interface."""
   from openpilot.starpilot.ui import drive_render
-  return drive_render.stream_content(drive_render.read(params))
+  return drive_render.on_starport(drive_render.read(params))
 
 
 def run(frames_path: str, touch_path: str | None = None, control_path: str | None = None) -> int:
@@ -199,15 +199,14 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
     from openpilot.starpilot.system.starport import reconnect_notice
     from openpilot.starpilot.system.starport.identity import certificate_days_left
     from openpilot.starpilot.system.starport.projection_layout_runtime import ProjectionLayoutWatcher, comma_display_seed
-    # Galaxy's "3D drive render" choice decides for this connection: the render only when StarPort is chosen,
-    # the front camera when it is off or drawn on the comma's own screen.
-    stream_content = saved_stream_content(ui_state.params)
+    # Galaxy's "3D drive render" choice decides for this connection whether the render takes the camera's place.
+    render_layer = saved_render_layer(ui_state.params)
+    stream_content = "render" if render_layer else "camera"
     viewport = (geometry.logical_width, geometry.logical_height)
     watcher = ProjectionLayoutWatcher(viewport, display_seed=comma_display_seed)
     layout = ProjectionOnroad(viewport=viewport, customization=watcher.load(),
-                              certificate_days=certificate_days_left(), layout_watcher=watcher, content=stream_content,
-                              # Only the camera composition shows the notice; the render leaves it for a screen that can.
-                              reconnect_notice=reconnect_notice.take() if stream_content == "full" else "",
+                              certificate_days=certificate_days_left(), layout_watcher=watcher, render_layer=render_layer,
+                              reconnect_notice=reconnect_notice.take(),
                               streaming=producer.recently_sent)
     resources.callback(layout.close)
     watcher.start()
@@ -276,9 +275,7 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
       resources.callback(sampler.close)
     summary = RenderSummary(time.monotonic(), content=stream_content)
     pipeline_summary = RenderPipelineSummary(time.monotonic_ns()) if sampler is not None else None
-    # Operator-requested video optimization: birds-eye-only draws no camera (layout.camera_stream stays None),
-    # so it never subscribes a CameraState; frames follow the encoder interval.
-    camera_pacer = CameraPacer() if stream_content == "full" else None
+    camera_pacer = CameraPacer()
     in_flight_ns = 0
     submitted_ns = 0
     in_flight_camera = None
@@ -359,7 +356,7 @@ def run(frames_path: str, touch_path: str | None = None, control_path: str | Non
           sampler.rendering = False
         time.sleep(min(delay, READBACK_POLL_STEP if readback.pending else 0.05))
         continue
-      camera_paced = layout.camera_stream is not None and camera_pacer is not None
+      camera_paced = layout.camera_stream is not None
       if camera_paced:
         # Within that budget, draw as soon as the camera on screen has a new frame.
         if readback.pending and readback.ready():

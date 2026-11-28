@@ -15,7 +15,7 @@ metadata.widgets.car_exit = { label: "Exit to car", kind: "car_exit", width: 96,
 metadata.widgets.birds_eye = { label: "Birds-eye view", kind: "birds_eye", width: 520, height: 600, colors: {}, layer: "underlay",
   note: "Top-down view.", box: { minWidth: 240, maxWidth: 1800, minHeight: 240, maxHeight: 1020 },
   opacity: { min: 20, max: 100, default: 90 }, displayModes: ["overlay", "full"],
-  default: { x: 1310, y: 290, width: 520, height: 600, enabled: true, opacity: 90, display: "overlay" } }
+  default: { x: 1310, y: 290, width: 520, height: 600, enabled: false, opacity: 90, display: "overlay" } }
 metadata.widgetOrder = ["birds_eye", ...(metadata.widgetOrder || Object.keys(native.metadata.profiles.large.widgets)), "car_exit"]
 const widgets = Object.fromEntries(Object.entries(metadata.widgets).map(([id, widget]) => [id,
   { ...widget.default, ...(widget.resizable ? { size: widget.resizable.default } : {}) }]))

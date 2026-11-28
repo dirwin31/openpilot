@@ -152,7 +152,7 @@ def layout_metadata_for_viewport(viewport):
                                 'minHeight': BIRDS_EYE_MIN_SIZE[1], 'maxHeight': height - 60},
                         'opacity': {'min': BIRDS_EYE_OPACITY[0], 'max': BIRDS_EYE_OPACITY[1], 'default': BIRDS_EYE_OPACITY[2]},
                         'displayModes': list(BIRDS_EYE_DISPLAYS),
-                        'default': {'x': width - 30 - eye_w, 'y': 290, 'width': eye_w, 'height': eye_h, 'enabled': True,
+                        'default': {'x': width - 30 - eye_w, 'y': 290, 'width': eye_w, 'height': eye_h, 'enabled': False,
                                     'opacity': BIRDS_EYE_OPACITY[2], 'display': 'overlay'}}
   exit_w, exit_h = CAR_EXIT_SIZE
   widgets[CAR_EXIT] = {'label': 'Exit to car', 'kind': CAR_EXIT, 'width': exit_w, 'height': exit_h, 'colors': {},

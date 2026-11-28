@@ -36,11 +36,11 @@ class TestProjectionBirdsEye(unittest.TestCase):
 
   def layout(self, **placement):
     document = default_layout_for_viewport(VIEWPORT)
-    document['widgets']['birds_eye'].update(placement)
+    document['widgets']['birds_eye'].update({'enabled': True, **placement})
     return document
 
-  def view(self, native, layout):
-    view = projection.ProjectionOnroad(dependencies=native, viewport=VIEWPORT, customization=layout)
+  def view(self, native, layout, **kwargs):
+    view = projection.ProjectionOnroad(dependencies=native, viewport=VIEWPORT, customization=layout, **kwargs)
     self.addCleanup(view.close)
     return view
 
@@ -69,6 +69,7 @@ class TestProjectionBirdsEye(unittest.TestCase):
     camera_state = self.state()
     camera_state.appearance = SimpleNamespace(camera_view=None, show_lead_indicator=False, lead_info_mode=0, lead_info_metric=None)
     camera_state.reverse_driver_camera = False
+    camera_state.lead_indicator_source_fresh = camera_state.lateral_active = camera_state.force_stop = False
     view.camera.stream_type = 'road'
     view._camera_layer(content, camera_state)
     self.assertIn('camera_render', events, 'the camera still draws under a panel')
@@ -89,6 +90,25 @@ class TestProjectionBirdsEye(unittest.TestCase):
     self.assertEqual(renderer.rendered, [(content, False, 1.0, content)])
     view._birds_eye_layer(content, self.state())
     self.assertEqual(len(renderer.rendered), 1, 'the panel layer stays empty in full mode')
+
+  def test_render_layer_takes_the_camera_place_whatever_the_layout_says(self):
+    native, events = self.native()
+    view = self.view(native, self.layout(enabled=False), render_layer=True)
+    renderer = FakeBirdsEye.instances[0]
+    self.assertEqual(view.birds_eye_display(), 'full')
+    content = (30, 30, 2820, 1020)
+    view._camera_layer(content, self.state())
+    self.assertNotIn('camera_render', events)
+    self.assertIsNone(view.camera_stream)
+    self.assertEqual(renderer.rendered, [(content, False, 1.0, content)])
+    self.assertFalse(renderer.speed_limit_sign, 'the layout\'s speed widget shows the limit')
+    native.ui_state.started = True
+    view.render()
+    self.tap(view, 500, 500)
+    self.assertEqual(view.birds_eye_display(), 'full', 'taps go to the widgets above, never to the layer')
+
+  def test_default_layout_has_the_panel_off(self):
+    self.assertFalse(default_layout_for_viewport(VIEWPORT)['widgets']['birds_eye']['enabled'])
 
   def tap(self, view, x, y, *, dx=0):
     view.handle_touches([SimpleNamespace(kind='down', x=x / VIEWPORT[0], y=y / VIEWPORT[1]),

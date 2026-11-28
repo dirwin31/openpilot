@@ -203,7 +203,7 @@ class StarShellSession(TeslaSpeedActions):
         self.view.onroad.extra_overlays = lambda rect, state: camera_owner.render_model_source_layer(rect, show_long_indicator=None)
       else:
         self.view.onroad.extra_overlays = lambda rect, state: camera_owner.render_model_source_layer(rect)
-        # Galaxy's "3D drive render" set to Comma display; nothing is built until a frame needs it.
+        # Galaxy's "3D drive render" on the comma display; nothing is built until a frame needs it.
         from openpilot.starpilot.ui.onroad_drive_render import DriveRenderLayer
         self.view.onroad.drive_render = DriveRenderLayer(self.fonts, ui_state)
     except Exception:
@@ -266,8 +266,7 @@ class StarShellSession(TeslaSpeedActions):
                             native_panels=NATIVE_SETTINGS_PANELS if profile == Profile.LARGE and settings_layer is not None else ())
     if profile == Profile.LARGE:
       self.view.onroad.pressed_action = lambda: self.input.onroad.pressed_action
-    # The 3D drive render and the black streaming screen draw no layout widgets, so the wheel's and the follow
-    # distance's places take no taps.
+    # The black streaming screen draws no layout widgets, so the wheel's and the follow distance's places take no taps.
     self.input.onroad.widgets_hidden = self._widgets_hidden
     self.selected = Destination.STAR
     self.sidebar_expanded = True
@@ -396,12 +395,7 @@ class StarShellSession(TeslaSpeedActions):
     return active is not None and active(state) is True
 
   def _widgets_hidden(self, state) -> bool:
-    return self._streaming_blackout(state) or self._drive_render_active(state)
-
-  def _drive_render_active(self, state) -> bool:
-    """The onroad view draws the 3D drive render instead of the camera this frame (comma 3 / 3X only)."""
-    active = getattr(getattr(self.view, "onroad", None), "drive_render_active", None)
-    return active is not None and active(state) is True
+    return self._streaming_blackout(state)
 
   def _favorite_actions(self):
     return self._resolve_favorite_actions()
@@ -1559,13 +1553,8 @@ class StarShellSession(TeslaSpeedActions):
       if renderer := getattr(self, "pip_renderer", None):
         renderer.deactivate()
     else:
-      # The 3D drive render replaces the camera composition, so the PiP cameras are released; the side-camera
-      # warnings still colour its borders.
-      render_active = self._drive_render_active(snapshot.onroad)
       self._pip_signals_cache = self._pip_signals()
       snapshot = replace(snapshot, onroad=visual_border_state(snapshot.onroad, self._pip_signals_cache))
-      if render_active and (renderer := getattr(self, "pip_renderer", None)):
-        renderer.deactivate()
     # Scroller and NavWidget place compact pages at changing screen positions.
     with placed_at(rect, parent_clip):
       external = (self.profile == Profile.LARGE and mode == ShellMode.SETTINGS and
@@ -1812,7 +1801,7 @@ class StarShellSession(TeslaSpeedActions):
     self.input.press(x, y, now, self._input_snapshot(mode))
     self._onroad_claimed = mode == ShellMode.ONROAD and self.input.onroad.claimed
     if mode == ShellMode.ONROAD and not self.input.onroad.claimed:
-      # The 3D drive render and the black streaming screen draw no navigation card, so its place takes no taps.
+      # The black streaming screen draws no navigation card, so its place takes no taps.
       if not self._widgets_hidden(snapshot.onroad) and self.view.onroad.navigation.press(x, y, snapshot.onroad):
         self._navigation_claimed = True
         self.input.cancel()

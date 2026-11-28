@@ -567,6 +567,7 @@ class BirdsEyeRenderer(Widget):
     self.road_style: dict = {}
     self.metric = True
     self.long_control = True
+    self.speed_limit_sign = True  # off when the layout's own speed-limit widget draws above the view
     self.parent_clip: rl.Rectangle | None = None
     self.clock = time.monotonic
     self.clock_ns = time.monotonic_ns  # the logMonoTime clock lane-centering freshness is judged against
@@ -1344,26 +1345,14 @@ class BirdsEyeRenderer(Widget):
 
   # ---- speed limit ------------------------------------------------------------------------------
 
-  def _sign_top(self, rect) -> float:
-    """Below the HUD's top-right turn-signal arrow when full-frame; a small margin in the overlay panel."""
-    if self.panel:
-      return rect.y + 12
-    try:
-      from openpilot.starpilot.system.starport import birds_eye_hud as hud
-      reserve = hud.SIGNAL_MARGIN + hud.SIGNAL_HEIGHT
-      frame_rows = 1080
-    except ImportError:
-      reserve, frame_rows = 288, 1080
-    return rect.y + reserve * rect.height / frame_rows
-
   def _speed_limit_sign(self, scene, rect) -> None:
     """A compact speed-limit sign at the top right: a US white rectangle in mph, a red-ringed disc in km/h."""
-    if scene.speed_limit_mps is None:
+    if scene.speed_limit_mps is None or not self.speed_limit_sign:
       return
     a = self.opacity
     value = bem.speed_text(scene.speed_limit_mps, self.metric)
     height = max(56.0, rect.height * 0.12)
-    top = self._sign_top(rect)
+    top = rect.y + 12
     right = rect.x + rect.width - 16
     black = _color((16, 18, 24), 255 * a)
     if self.metric:

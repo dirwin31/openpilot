@@ -34,13 +34,13 @@ def test_default_row_on_a_large_device(tmp_path):
   device, gate = gateway(params, 'tizi')
   with device:
     _, row = developer_row(gate.page('developer', 'session', b'generation'))
-  assert row['value'] == 'StarPort' and row['defaultValue'] == 'StarPort'
-  assert row['choices'] == ['Off', 'StarPort', 'Comma display']
+  assert row['value'] == 'Off' and row['defaultValue'] == 'Off'
+  assert row['choices'] == ['Off', 'StarPort', 'Comma display', 'Both']
   assert row['available'] and 'next connection' in row['reason']
   assert params.get(PARAM_KEY) is None
 
 
-@pytest.mark.parametrize('choice,stored', [('Off', 'off'), ('Comma display', 'device')])
+@pytest.mark.parametrize('choice,stored', [('StarPort', 'starport'), ('Comma display', 'device'), ('Both', 'both')])
 def test_gateway_round_trip_keeps_the_layout(tmp_path, choice, stored):
   params = Params(str(tmp_path))
   document = default_document()
@@ -60,8 +60,8 @@ def test_gateway_round_trip_keeps_the_layout(tmp_path, choice, stored):
   # Choosing the default again removes the field, so the document matches one that never had it.
   owner = AppearanceOwner(params, lambda: True, large_display=True)
   row = owner.developer_snapshot().rows[1]
-  assert owner.apply(FeatureSettingsRequest(row.key, row.source, 'StarPort'))
-  assert saved(params) == document and drive_render.read(params) == 'starport'
+  assert owner.apply(FeatureSettingsRequest(row.key, row.source, 'Off'))
+  assert saved(params) == document and drive_render.read(params) == 'off'
 
 
 def test_compact_device_never_offers_or_saves_the_comma_display(tmp_path):
@@ -81,7 +81,10 @@ def test_compact_device_never_offers_or_saves_the_comma_display(tmp_path):
   params.put(PARAM_KEY, {**default_document(), drive_render.FIELD: 'device'}, block=True)
   row = owner.developer_snapshot().rows[1]
   assert row.value == 'Off' and row.choices == ('Off', 'StarPort')
-  assert owner.apply(FeatureSettingsRequest(row.key, row.source, 'StarPort'))
+  params.put(PARAM_KEY, {**default_document(), drive_render.FIELD: 'both'}, block=True)
+  row = owner.developer_snapshot().rows[1]
+  assert row.value == 'StarPort'
+  assert owner.apply(FeatureSettingsRequest(row.key, row.source, 'Off'))
   assert drive_render.FIELD not in saved(params)
 
 

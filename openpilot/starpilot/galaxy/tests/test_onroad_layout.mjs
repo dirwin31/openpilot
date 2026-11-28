@@ -1438,7 +1438,7 @@ for (const blackWhileStreaming of [null, "", "On", 1]) {
   assert.deepEqual(copy(vm.state.draft), { ...vm.state.data.defaults, ...owned })
   assert.equal(vm.stockChanged, false)
 }
-assert.ok(SETTINGS_SECTIONS.find(section => section.id === "developer").pages.includes("developer"))
+assert.ok(SETTINGS_SECTIONS.find(section => section.id === "device").pages.includes("developer"))
 
 
 // C4 has one locked camera widget covering the road panel.

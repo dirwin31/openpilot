@@ -596,7 +596,7 @@ class TestProjectionBirdsEyeLayout(unittest.TestCase):
         document = default_layout_for_viewport(viewport)
         metadata = layout_metadata_for_viewport(viewport)
         placed = document['widgets'][self.KEY]
-        self.assertEqual(placed, {'x': width - 30 - 520, 'y': 290, 'width': 520, 'height': 600, 'enabled': True,
+        self.assertEqual(placed, {'x': width - 30 - 520, 'y': 290, 'width': 520, 'height': 600, 'enabled': False,
                                   'opacity': 90, 'display': 'overlay'})
         self.assertEqual(validate_layout_for_viewport(copy.deepcopy(document), viewport), document)
         self.assertEqual(placement_size(self.KEY, metadata['widgets'][self.KEY], placed), (520, 600))
@@ -662,9 +662,9 @@ class TestProjectionBirdsEyeLayout(unittest.TestCase):
     source = (Path(__file__).parents[3] / 'galaxy/tests/test_projection_birds_eye.mjs').read_text()
     for fragment in ('box: { minWidth: 240, maxWidth: 1800, minHeight: 240, maxHeight: 1020 }',
                      'opacity: { min: 20, max: 100, default: 90 }', 'displayModes: ["overlay", "full"]',
-                     'default: { x: 1310, y: 290, width: 520, height: 600, enabled: true, opacity: 90, display: "overlay" }'):
+                     'default: { x: 1310, y: 290, width: 520, height: 600, enabled: false, opacity: 90, display: "overlay" }'):
       self.assertIn(fragment, source)
-    self.assertEqual(widget['default'], {'x': 1310, 'y': 290, 'width': 520, 'height': 600, 'enabled': True, 'opacity': 90, 'display': 'overlay'})
+    self.assertEqual(widget['default'], {'x': 1310, 'y': 290, 'width': 520, 'height': 600, 'enabled': False, 'opacity': 90, 'display': 'overlay'})
 
 
 def test_resize_migrates_and_roundtrips_without_touching_native_layout():
