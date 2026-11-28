@@ -108,8 +108,6 @@ LABEL_PAD = 6.0
 LABEL_SMOOTHING = 0.5   # per frame, toward the glyph-attached label position
 LABEL_SNAP_PX = 80.0    # a jump larger than this (side flip, a new lead) is taken directly
 SUBLABEL_SCALE = 0.62   # curve tag, relative to the distance label
-SHOW_CURVE_MARK = False  # the curve-speed bar and tag on the path (scene.curve is still ingested)
-SHOW_LANE_CHANGE_GHOST = False  # the ego outline one lane over during a lane change (the state is still ingested)
 
 LANE_HEADING_PROB = 0.3  # an ego lane line needs this probability to steer the lead glyph's heading
 LAT_ACTIVE_LANE = (52, 216, 104)  # ego lane lines while lateral control is active
@@ -1171,7 +1169,7 @@ class BirdsEyeRenderer(Widget):
     return x, self._lateral_at(scene, x), self._heading_at(scene, x)
 
   def _marks(self, scene, reference: Reference, path: PathDraw) -> list:
-    """Ground ops. action.shouldStop: a red bar at the path's end. Curve speed (only with SHOW_CURVE_MARK): a bar at
+    """Ground ops. action.shouldStop: a red bar at the path's end. Curve speed: a bar at
     the binding distance (its speed tag is _curve_label). Bars are at least a few pixels deep."""
     a = self.opacity
     ops = []
@@ -1180,7 +1178,7 @@ class BirdsEyeRenderer(Widget):
       ops.append(self._bar(x, y, heading, max(0.6, 4.0 * float(bem.meters_per_pixel(x, reference.view))), PATH_WIDTH * 1.5,
                            _rgba(STOP_RED, 235 * a)))
     curve = scene.curve
-    if curve is not None and SHOW_CURVE_MARK:
+    if curve is not None:
       x, y, heading = self._curve_place(scene, reference.view.x_max)
       rgb = CURVE_CONTROLLING if curve.controlling else CURVE_CEILING if curve.ceiling else CURVE_CANDIDATE
       ops.append(self._bar(x, y, heading, max(0.45, 3.0 * float(bem.meters_per_pixel(x, reference.view))), PATH_WIDTH * 1.9,
@@ -1188,9 +1186,9 @@ class BirdsEyeRenderer(Widget):
     return ops
 
   def _curve_label(self, scene, rect, view) -> None:
-    """The curve mark's speed tag, in pixels beside its bar (only with SHOW_CURVE_MARK)."""
+    """The curve mark's speed tag, in pixels beside its bar."""
     curve = scene.curve
-    if curve is None or not SHOW_CURVE_MARK:
+    if curve is None:
       return
     x, y, heading = self._curve_place(scene, view.x_max)
     rgb = CURVE_CONTROLLING if curve.controlling else CURVE_CEILING if curve.ceiling else CURVE_CANDIDATE
@@ -1264,7 +1262,7 @@ class BirdsEyeRenderer(Widget):
     """Ground ops. While the model's lane change is pending or under way, an outline of the ego car one lane over
     on that side: dim before the change starts, green once it does, red when that side's blind spot is set."""
     state, side = scene.lane_change_state, scene.lane_change_direction
-    if not SHOW_LANE_CHANGE_GHOST or state == 0 or side == 0:
+    if state == 0 or side == 0:
       return []
     width = round(bem.lane_width(scene.lanes, scene.grid, EGO_FRONT, side), 1)
     blocked = scene.left_blindspot if side < 0 else scene.right_blindspot

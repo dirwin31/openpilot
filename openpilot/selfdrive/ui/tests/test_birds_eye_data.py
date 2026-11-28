@@ -213,7 +213,6 @@ def test_far_lines_are_widened_to_a_minimum_pixel_width():
 def test_lane_change_ghost_sits_one_lane_over_and_turns_red_on_a_blind_spot(monkeypatch):
   from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
   view, _ = _renderer_with_scene()
-  monkeypatch.setattr(ber, 'SHOW_LANE_CHANGE_GHOST', True)
   assert view._lane_change_ghost(view.scene) == [], 'nothing without a lane change (blinkers alone are the HUD)'
   for state, blind, rgb in (('preLaneChange', False, ber.GHOST_PRE), ('laneChangeStarting', False, ber.GHOST_GO),
                             ('laneChangeStarting', True, ber.GHOST_BLOCKED)):
@@ -296,32 +295,32 @@ def test_lead_labels_show_the_distance_only_and_pulse_on_hard_brake(monkeypatch)
   assert len(shadows) == 2 and all(op[0] is ber._raw.DrawTriangleFan and op[3].a == ber.SHADOW_ALPHA for op in shadows)
 
 
-def test_curve_mark_is_hidden_but_still_ingested(monkeypatch):
+def test_curve_mark_draws_a_bar_and_its_speed_tag(monkeypatch):
   from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
-  assert ber.SHOW_CURVE_MARK is False
   drawn = []
   view, _ = _renderer_with_scene()
-  view.text = SimpleNamespace(measure=lambda text, size: (0.5 * size * len(text), size), draw=lambda text, size, *a: drawn.append(text))
+  view.text = SimpleNamespace(measure=lambda text, size: (0.5 * size * len(text), size),
+                              draw=lambda text, size, x, y, color: drawn.append(text))
   view.ingest(curve=ber.CurveMark(18.0, 40.0, True, True))
-  assert view.scene.curve == ber.CurveMark(18.0, 40.0, True, True)
   view.scene.should_stop = True
   path = SimpleNamespace(end=(20.0, 0.0, 0.0))
   reference = view._reference(RECT.height, view.config.x_max)
   bars = view._marks(view.scene, reference, path)
   view._curve_label(view.scene, RECT, reference.view)
-  assert len(bars) == 1 and drawn == [], 'only the shouldStop bar; no curve bar or tag'
+  assert len(bars) == 2, 'the shouldStop bar and the curve bar'
   stop = _op_points(bars[0])
   assert stop[:, 0].mean() == pytest.approx(20.0) and np.ptp(stop[:, 1]) == pytest.approx(ber.PATH_WIDTH * 1.5), 'across the path end, in meters'
+  assert set(drawn) == {'65 km/h'}, 'the tag reads the curve speed (18 m/s)'
 
 
-def test_the_lane_change_ghost_is_off_by_default():
-  # 2026-11-09: the operator did not want the green outline one lane over; the feature is gated, not deleted.
+def test_the_lane_change_ghost_shows_one_lane_over():
   from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
-  assert ber.SHOW_LANE_CHANGE_GHOST is False
   view, _ = _renderer_with_scene()
   view.ingest(_rich_model(state='laneChangeStarting', direction='right'), None,
               SimpleNamespace(steeringAngleDeg=0.0, leftBlinker=False, rightBlinker=True, leftBlindspot=False, rightBlindspot=False))
-  assert view._lane_change_ghost(view.scene) == []
+  ghost = view._lane_change_ghost(view.scene)
+  assert len(ghost) == 2 and _op_points(ghost[0])[:, 1].mean() > 1.0, 'an outline on the right'
+  assert ber.GHOST_GO
 
 
 def test_radar_lead_without_a_finite_lateral_position_is_not_drawn():
