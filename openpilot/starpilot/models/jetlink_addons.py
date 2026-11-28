@@ -44,16 +44,39 @@ def log_report(name: str, report: dict, now: float | None = None) -> bool:
                    round_trips=int(trips.get("n", 0) or 0), round_trip_ms=trips.get("total_ms"),
                    round_trip_p99_ms=trips.get("total_p99_ms"), jetson_ms=trips.get("jetson_ms"),
                    write_ms=trips.get("write_ms"), write_p99_ms=trips.get("write_p99_ms"), back_ms=trips.get("back_ms"),
-                   back_p99_ms=trips.get("back_p99_ms"), wake_p99_ms=trips.get("wake_p99_ms"))
+                   back_p99_ms=trips.get("back_p99_ms"), wake_p99_ms=trips.get("wake_p99_ms"),
+                   rx_wait_ms=trips.get("rx_wait_ms"), rx_wait_p99_ms=trips.get("rx_wait_p99_ms"),
+                   caller_wait_ms=trips.get("caller_wait_ms"), caller_wait_p99_ms=trips.get("caller_wait_p99_ms"))
   except Exception:
     return False
   return True
+
+
+_LINK_THREADS = ("-jetson-rx", "-jetson-tx")
+_raised: set[int] = set()
+
+
+def raise_link_threads(nice: int = 0) -> None:
+  """The link's reader and writer back to normal priority, out of the niced process they start in."""
+  import os
+  import threading
+  for thread in threading.enumerate():
+    tid = thread.native_id
+    if tid is None or tid in _raised or not thread.name.endswith(_LINK_THREADS):
+      continue
+    try:
+      if os.getpriority(os.PRIO_PROCESS, tid) > nice:
+        os.setpriority(os.PRIO_PROCESS, tid, nice)
+      _raised.add(tid)
+    except OSError:
+      pass
 
 
 class LoggedAddon(Addon):
   """A jetlink Addon whose link reports also go to swaglog (log_report)."""
 
   def write_report(self, report: dict) -> None:
+    raise_link_threads()
     log_report(self.name, report)
     super().write_report(report)
 

@@ -182,15 +182,16 @@ class _AioSender:
 
 class RoundTrips:
   """Answered requests' round trips and their legs: the request onto the bus (write), the Jetson's
-  own share (server_us), the answer back to the reader (back), and the caller waking to it (wake)."""
+  own share (server_us), the answer back to the reader (back), the caller waking to it (wake), and the
+  time the reader and caller threads sat runnable without a CPU over the request (rx_wait, caller_wait)."""
 
   def __init__(self, keep: int = 4096):
     self.total_us: collections.deque = collections.deque(maxlen=keep)
     self.server_us: collections.deque = collections.deque(maxlen=keep)
-    self.legs: collections.deque = collections.deque(maxlen=keep)   # (write, back, wake) ms, None if unknown
+    self.legs: collections.deque = collections.deque(maxlen=keep)   # (write, back, wake, rx_wait, caller_wait) ms, None if unknown
     self._lock = threading.Lock()   # the caller adds, the reader takes
 
-  def add(self, total_us: int, server_us: int, legs: tuple = (None, None, None)):
+  def add(self, total_us: int, server_us: int, legs: tuple = (None, None, None, None, None)):
     with self._lock:
       self.total_us.append(total_us)
       self.server_us.append(server_us)
@@ -208,8 +209,8 @@ class RoundTrips:
       return {"n": 0}
     out = {"n": int(total.size), "total_ms": round(float(np.percentile(total, 50)), 2),
            "total_p99_ms": round(float(np.percentile(total, 99)), 2), "jetson_ms": round(float(np.percentile(server, 50)), 2)}
-    for i, name in enumerate(("write", "back", "wake")):
-      known = np.asarray([leg[i] for leg in legs if leg[i] is not None], np.float64)
+    for i, name in enumerate(("write", "back", "wake", "rx_wait", "caller_wait")):
+      known = np.asarray([leg[i] for leg in legs if len(leg) > i and leg[i] is not None], np.float64)
       if known.size:
         out[f"{name}_ms"] = round(float(np.percentile(known, 50)), 2)
         out[f"{name}_p99_ms"] = round(float(np.percentile(known, 99)), 2)
@@ -218,15 +219,17 @@ class RoundTrips:
 
 class LateReplies:
   """Answers that came after their request timed out: how late, the Jetson's own share, and the
-  write and back legs (as RoundTrips), None where unknown."""
+  write and back legs (as RoundTrips), the reader's and caller's CPU waits, and the 1-minute load, None where unknown."""
 
   def __init__(self, keep: int = 256):
     self.pairs: collections.deque = collections.deque(maxlen=keep)
     self._lock = threading.Lock()
 
-  def add(self, late_ms: float, server_ms: float, write_ms: float | None = None, back_ms: float | None = None):
+  def add(self, late_ms: float, server_ms: float, write_ms: float | None = None, back_ms: float | None = None,
+          rx_wait_ms: float | None = None, caller_wait_ms: float | None = None, load: float | None = None):
     with self._lock:
-      self.pairs.append((round(late_ms, 1), round(server_ms, 1), _ms(write_ms), _ms(back_ms)))
+      self.pairs.append((round(late_ms, 1), round(server_ms, 1), _ms(write_ms), _ms(back_ms), _ms(rx_wait_ms), _ms(caller_wait_ms),
+                         None if load is None else round(load, 1)))
 
   def take(self) -> list:
     with self._lock:
@@ -253,7 +256,8 @@ class AddonLink:
                   "yields": 0, "reopens": 0, "submit_ms": 0.0, "late": 0}
     self.round_trips = RoundTrips()
     self.late_replies = LateReplies()
-    self._expired: dict[int, tuple] = {}   # timed-out requests by seq: (deadline, started, written), so a late answer can say how late
+    self._expired: dict[int, tuple] = {}   # timed-out requests by seq: (deadline, started, written, rx0, caller_wait), so a late answer can say how late
+    self._rx_tid: int | None = None
     self._lock = threading.Lock()
     self._seq = 0
     self._waiting: dict[int, list] = {}
@@ -333,7 +337,8 @@ class AddonLink:
         return None
       sender, endpoint = self._sender, self._tx
       seq = self._seq
-      slot = [threading.Event(), None, 0.0, 0.0, None]   # done, answer, answered at, started, written
+      # done, answer, answered at, started, written, reader and caller CPU wait at start, reader's at the answer
+      slot = [threading.Event(), None, 0.0, 0.0, None, _run_delay_ms(self._rx_tid), _run_delay_ms(), None]
       self._waiting[seq] = slot
     t0 = time.monotonic_ns()
     msg = W.pack_request(seq, model_tag, np.ascontiguousarray(image).tobytes(), image.shape, encoding)
@@ -367,7 +372,7 @@ class AddonLink:
           sender.lock.release()
     self.stats["sent"] += 1
     if not slot[0].wait(max(0, deadline - time.monotonic())) or slot[2] > deadline:
-      self._expire(seq, deadline, slot)
+      self._expire(seq, deadline, slot, _since(slot[6], _run_delay_ms()))
       self.stats["timeouts"] += 1
       self._timed_out()
       return None
@@ -382,7 +387,8 @@ class AddonLink:
         self.hold_until = self.clock() + MISS_HOLD_S
       return None
     write_ms, back_ms = _legs(slot[3], slot[4], slot[2], server_us)
-    self.round_trips.add((time.monotonic_ns() - t0) // 1000, server_us, (write_ms, back_ms, (woke - slot[2]) * 1000))
+    self.round_trips.add((time.monotonic_ns() - t0) // 1000, server_us,
+                         (write_ms, back_ms, (woke - slot[2]) * 1000, _since(slot[5], slot[7]), _since(slot[6], _run_delay_ms())))
     self.stats["answered"] += 1
     return out
 
@@ -421,21 +427,26 @@ class AddonLink:
     with self._lock:
       self._waiting.pop(seq, None)
 
-  def _expire(self, seq: int, deadline: float, slot: list):
+  def _expire(self, seq: int, deadline: float, slot: list, caller_wait: float | None = None):
     with self._lock:
       if self._waiting.pop(seq, None) is not None:
-        self._expired[seq] = (deadline, slot[3], slot[4])
+        self._expired[seq] = (deadline, slot[3], slot[4], slot[5], caller_wait)
         while len(self._expired) > 64:
           self._expired.pop(next(iter(self._expired)))
         return
     # the reader has the answer: it fills the slot just after taking it
     if slot[0].wait(0.01) and slot[1] is not None:
-      self._note_late(slot[2], (deadline, slot[3], slot[4]), slot[1][1])
+      self._note_late(slot[2], (deadline, slot[3], slot[4], slot[5], caller_wait), slot[1][1], slot[7])
 
-  def _note_late(self, answered: float, expired: tuple, server_us: int):
-    deadline, started, written = expired
+  def _note_late(self, answered: float, expired: tuple, server_us: int, rx1: float | None = None):
+    deadline, started, written, rx0, caller_wait = expired
     self.stats["late"] += 1
-    self.late_replies.add((answered - deadline) * 1000, server_us / 1000, *_legs(started, written, answered, server_us))
+    try:
+      load = os.getloadavg()[0]
+    except OSError:
+      load = None
+    self.late_replies.add((answered - deadline) * 1000, server_us / 1000, *_legs(started, written, answered, server_us),
+                          _since(rx0, rx1), caller_wait, load)
 
   def _ensure_open(self):
     if self._rx is not None or self.clock() < self._next_open:
@@ -566,9 +577,11 @@ class AddonLink:
     with self._lock:
       slot = self._waiting.pop(seq, None)
       expired = self._expired.pop(seq, None) if slot is None else None
+    rx1 = _run_delay_ms() if (expired or slot) is not None else None
     if expired is not None:
-      self._note_late(time.monotonic(), expired, server_us)
+      self._note_late(time.monotonic(), expired, server_us, rx1)
     if slot is not None:
+      slot[7] = rx1
       slot[1] = (status, server_us, np.frombuffer(payload, np.float32).copy())
       slot[2] = time.monotonic()
       slot[0].set()
@@ -584,6 +597,7 @@ class AddonLink:
 
   def _read_forever(self):
     _mask_signals()
+    self._rx_tid = threading.get_native_id()
     buf = bytearray(READ_CHUNK)
     message = bytearray()
     while True:
@@ -644,6 +658,21 @@ class AddonLink:
         self._close(endpoint)
 
 
+
+
+def _run_delay_ms(tid: int | None = 0) -> float | None:
+  """A thread's total time runnable but waiting for a CPU (schedstat), this thread's by default."""
+  if tid is None:
+    return None
+  try:
+    with open('/proc/thread-self/schedstat' if tid == 0 else f'/proc/self/task/{tid}/schedstat') as f:
+      return int(f.read().split()[1]) / 1e6
+  except (OSError, ValueError, IndexError):
+    return None
+
+
+def _since(start: float | None, end: float | None) -> float | None:
+  return None if start is None or end is None else end - start
 
 
 def _ms(value: float | None) -> float | None:
