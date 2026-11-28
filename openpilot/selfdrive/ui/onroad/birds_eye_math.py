@@ -436,14 +436,6 @@ def ring_strip(poly: np.ndarray, thickness: float) -> np.ndarray:
   return np.concatenate((out, out[:2]))
 
 
-# Glass panels (the lead label, the HUD's bar tracks, the music card, the overlay card's rim): a smoked tint under
-# a bright hairline rim, both flat colours. The tint is nearly opaque and a step brighter than the road surface, so
-# a panel stands out from both the road and the black background and mutes whatever passes under its text.
-GLASS_FILL = (46, 50, 60, 218)
-GLASS_RIM = (255, 255, 255, 112)
-GLASS_RIM_PX = 1.5
-
-
 def end_fade_length(start: float, end: float, fraction: float = 0.25, low: float = 4.0, high: float = 12.0) -> float:
   """Length of the soft end of a line drawn from start to end: `fraction` of it, clipped to [low, high] metres and
   never longer than the line."""

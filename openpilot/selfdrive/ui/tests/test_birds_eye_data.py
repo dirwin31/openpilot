@@ -265,29 +265,31 @@ def test_poll_reads_curve_and_speed_limit_through_the_qualified_readers():
 
 def test_lead_labels_show_the_distance_only_and_pulse_on_hard_brake(monkeypatch):
   from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
-  drawn, pills = [], []
+  drawn = []
   view, radar = _renderer_with_scene()
-  view.text = SimpleNamespace(measure=lambda text, size: (0.5 * size * len(text), size), draw=lambda text, size, *a: drawn.append(text))
+  view.text = SimpleNamespace(measure=lambda text, size: (0.5 * size * len(text), size),
+                              draw=lambda text, size, x, y, color: drawn.append((text, color)))
   view.metric = False
+  view.clock = lambda: 0.125  # the pulse at its peak
   monkeypatch.setattr(ber, '_run', lambda *a: None)
-  monkeypatch.setattr(ber.rl, 'draw_rectangle_rounded', lambda *a: None)
-  monkeypatch.setattr(ber.rl, 'draw_rectangle_rounded_lines_ex', lambda *a: pills.append(a))
+  monkeypatch.setattr(ber.rl, 'draw_rectangle_rounded', lambda *a: pytest.fail('labels are outlined text, not pills'))
   monkeypatch.setattr(ber.rl, 'draw_circle_v', lambda *a: pytest.fail('no prediction dots ahead of a lead'))
   pv = bem.view_params(RECT, view.config)
   view._leads(view.scene, RECT, pv)
-  assert drawn == ['33 yd'] and len(pills) == 1, 'no closing-speed line under the distance; the one outline is the glass rim'
+  assert [text for text, _ in drawn] == ['33 yd'] * 9, 'no closing-speed line under the distance; eight outline passes and the text'
+  assert all((c.r, c.g, c.b) == (0, 0, 0) for _, c in drawn[:8])
+  calm = drawn[-1][1]
   view.scene.hard_brake = True
   drawn.clear()
-  pills.clear()
   view._leads(view.scene, RECT, pv)
-  assert drawn == ['33 yd'] and len(pills) == 2, 'the pill border pulses over the rim'
+  assert (drawn[-1][1].r, drawn[-1][1].g, drawn[-1][1].b) == ber.STOP_RED != (calm.r, calm.g, calm.b), 'the distance pulses red'
   # A second car ahead of the lead is drawn, but only the closest lead carries a distance.
   cars = []
   monkeypatch.setattr(ber, '_run', lambda ops: cars.append(ops))
   view.scene.leads = [*view.scene.leads, ber.BirdsEyeLead(48.0, 0.0, 0.0, radar=True)]
   drawn.clear()
   view._leads(view.scene, RECT, pv)
-  assert len(cars) == 2 and drawn == ['33 yd']
+  assert len(cars) == 2 and {text for text, _ in drawn} == {'33 yd'}
   assert [pose[0] for _, pose in view._lead_poses(view.scene, pv)] == sorted((pose[0] for _, pose in view._lead_poses(view.scene, pv)), reverse=True), \
     'far to near, so a nearer car covers a farther one'
   shadows = view._shadows([pose for _, pose in view._lead_poses(view.scene, pv)])

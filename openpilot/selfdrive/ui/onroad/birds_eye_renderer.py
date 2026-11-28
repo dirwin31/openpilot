@@ -8,8 +8,8 @@ speed zoom gliding) changes one matrix and rebuilds nothing. Cars are low-poly b
 go through the same matrix on the CPU, drawn as flat-shaded fans in painter's order, so no depth buffer is used.
 Labels and the speed-limit sign are ordinary 2D drawing in pixels.
 
-The look is flat: a solid black background, no gradients, and panels (the lead label, the overlay card) drawn as
-glass: a smoked tint under a bright hairline rim (bem.GLASS_FILL / GLASS_RIM).
+The look is StarPilot's: a solid black background, no gradients, labels as outlined text like the camera's lead info,
+and the overlay card in the StarPilot widget wash.
 
 Drawing cost: a frame issues O(ribbons) C calls, not O(vertices). Each road edge, lane line and the road fill is
 one single-coloured DrawTriangleStrip per valid run (each line ends at its own distance, bem.line_rows) and the
@@ -105,7 +105,6 @@ SOFT_ENDS = False           # lines and the path end with a hard cut: the design
 MIN_DRAW_DISTANCE = 10.0
 MAX_DRAW_DISTANCE = 100.0
 LABEL_PAD = 6.0
-LABEL_ROUNDNESS = 0.35  # the label pill's corner radius over half its height: a rounded rectangle, not a capsule
 LABEL_SMOOTHING = 0.5   # per frame, toward the glyph-attached label position
 LABEL_SNAP_PX = 80.0    # a jump larger than this (side flip, a new lead) is taken directly
 SUBLABEL_SCALE = 0.62   # curve tag, relative to the distance label
@@ -121,7 +120,7 @@ NO_THROTTLE = ((242, 242, 242), (242, 242, 242))
 
 BACKGROUND = (0, 0, 0)                # the full-frame view's background: solid black
 ROAD = (30, 34, 44)                   # the road surface between the edges
-PANEL_FILL = (0, 0, 0, 170)           # the overlay card over the camera: smoked glass, under the glass rim
+PANEL_FILL = (27, 20, 56, 235)        # the overlay card over the camera: the StarPilot widget wash
 PANEL_RADIUS = 28                     # px, the overlay panel's corner radius
 LINE_ALPHA_STEP = 0.1                 # each line's soft end: strips within +/-5 % of a linear fade
 PATH_ALPHA_STEP = 0.04                # the path's stepped fade: each strip within +/-2 % of the smooth alpha
@@ -810,9 +809,6 @@ class BirdsEyeRenderer(Widget):
         clip.begin_scissor_mode(self.parent_clip.x, self.parent_clip.y, self.parent_clip.width, self.parent_clip.height)
       else:
         clip.end_scissor_mode()
-    if self.panel:
-      rl.draw_rectangle_rounded_lines_ex(rect, self._roundness(rect), 12, bem.GLASS_RIM_PX,
-                                         rl.Color(*bem.GLASS_RIM[:3], int(bem.GLASS_RIM[3] * self.opacity)))
 
   def _roundness(self, rect) -> float:
     return min(1.0, 2 * PANEL_RADIUS / max(1.0, min(rect.width, rect.height)))
@@ -823,11 +819,13 @@ class BirdsEyeRenderer(Widget):
     else:
       rl.draw_rectangle(int(rect.x), int(rect.y), int(rect.width), int(rect.height), rl.Color(*BACKGROUND, 255))
 
-  def _glass(self, rect, roundness: float, segments: int = 8) -> None:
-    """A glass panel: a smoked tint under a bright hairline rim."""
-    a = self.opacity
-    rl.draw_rectangle_rounded(rect, roundness, segments, rl.Color(*bem.GLASS_FILL[:3], int(bem.GLASS_FILL[3] * a)))
-    rl.draw_rectangle_rounded_lines_ex(rect, roundness, segments, bem.GLASS_RIM_PX, rl.Color(*bem.GLASS_RIM[:3], int(bem.GLASS_RIM[3] * a)))
+  def _outlined(self, text: str, size: float, x: float, y: float, rgb) -> None:
+    """Text in a black outline that grows with it, as the camera's lead info is drawn, so it holds over the road."""
+    a = 255 * self.opacity
+    o = max(1, round(size / 30))
+    for dx, dy in ((-o, -o), (0, -o), (o, -o), (-o, 0), (o, 0), (-o, o), (0, o), (o, o)):
+      self.text.draw(text, size, x + dx, y + dy, _color((0, 0, 0), a))
+    self.text.draw(text, size, x, y, _color(rgb, a))
 
   @staticmethod
   def _rows(rgb, alpha, n: int) -> np.ndarray:
@@ -1194,7 +1192,6 @@ class BirdsEyeRenderer(Widget):
     curve = scene.curve
     if curve is None or not SHOW_CURVE_MARK:
       return
-    a = self.opacity
     x, y, heading = self._curve_place(scene, view.x_max)
     rgb = CURVE_CONTROLLING if curve.controlling else CURVE_CEILING if curve.ceiling else CURVE_CANDIDATE
     pts = bem.car_to_widget(bem.segment_quad(x, y, heading, 0.5, PATH_WIDTH * 1.9), rect, view=view)
@@ -1206,8 +1203,7 @@ class BirdsEyeRenderer(Widget):
     if tx - LABEL_PAD < rect.x + 4:
       tx = float(pts[:, 0].max()) + 8 + LABEL_PAD
     ty = float(pts[:, 1].mean()) - h / 2
-    self._glass(rl.Rectangle(round(tx) - LABEL_PAD, round(ty) - LABEL_PAD / 2, w + 2 * LABEL_PAD, h + LABEL_PAD), 1.0)
-    self.text.draw(text, size, round(tx), round(ty), _color(rgb, 255 * a))
+    self._outlined(text, size, round(tx), round(ty), rgb)
 
   # ---- cars -------------------------------------------------------------------------------------
 
@@ -1319,13 +1315,10 @@ class BirdsEyeRenderer(Widget):
       x = float(screen[:, 0].min()) - 10 - pad - box_w
     y = min(max(float(screen[:, 1].mean()) - box_h / 2, rect.y + 4 + pad), rect.y + rect.height - box_h - 4 - pad)
     x, y = self._label_position(previous, x, y)
-    pill = rl.Rectangle(x - pad, y - pad, box_w + 2 * pad, box_h + 2 * pad)
-    roundness = LABEL_ROUNDNESS
-    self._glass(pill, roundness)
-    if hard_brake:  # modelV2.meta.hardBrakePredicted: the nearest lead's pill border pulses red
+    if hard_brake:  # modelV2.meta.hardBrakePredicted: the nearest lead's distance pulses red
       pulse = 0.5 + 0.5 * math.sin(2 * math.pi * HARD_BRAKE_HZ * self.clock())
-      rl.draw_rectangle_rounded_lines_ex(pill, roundness, 8, 3.0, _color(STOP_RED, (110 + 145 * pulse) * self.opacity))
-    self.text.draw(text, size, x, y, _color(rgb, 255 * self.opacity))
+      rgb = tuple(round(c + (r - c) * pulse) for c, r in zip(rgb, STOP_RED, strict=True))
+    self._outlined(text, size, x, y, rgb)
 
   def _label_position(self, previous: list[tuple[float, float]], x: float, y: float) -> tuple[float, float]:
     """Follow the car with a light filter, then snap to whole pixels, so a label neither jitters nor slides
