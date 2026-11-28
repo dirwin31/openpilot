@@ -121,3 +121,25 @@ jobs:
             ci-results/flm-offroad.json
             ci-results/flm-producer.xml
           if-no-files-found: warn
+
+  failure_summary:
+    name: failure summary
+    needs: contracts
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+    - name: Summarize failures against the previous run on this branch
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 -m tools.ci.failure_summary --job "failure summary" --output ci-results/failure-summary
+    - name: Save failure summary for the next run
+      uses: actions/upload-artifact@v4
+      with:
+        name: failure-summary
+        path: ci-results/failure-summary/
+        if-no-files-found: error

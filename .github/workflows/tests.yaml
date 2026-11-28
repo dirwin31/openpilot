@@ -753,3 +753,25 @@ jobs:
         with:
           name: ui-report-${{ inputs.run_number || '1' }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && 'master' || github.event.number }}
           path: openpilot/selfdrive/ui/tests/diff/report
+
+  failure_summary:
+    name: failure summary
+    needs: [stable_pr_phone_bridge, source_integrity, build_release, developer_commands, build_mac, static_analysis, build_host, unit_tests, custom_pytest, custom_pytest_complete, aol_lifecycles, aol_lifecycle_complete, map_provider, vehicle_contracts, safety_release_contracts, safety_release_complete, recorded_vehicles, panda_build_variants, process_replay, create_ui_report]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+    - name: Summarize failures against the previous run on this branch
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 -m tools.ci.failure_summary --job "failure summary" --output ci-results/failure-summary
+    - name: Save failure summary for the next run
+      uses: actions/upload-artifact@v4
+      with:
+        name: failure-summary
+        path: ci-results/failure-summary/
+        if-no-files-found: error
