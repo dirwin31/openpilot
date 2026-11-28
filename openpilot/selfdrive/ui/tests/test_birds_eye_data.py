@@ -489,3 +489,55 @@ def test_the_path_ends_at_the_stop_line():
   assert view._path_end(view.scene, 200.0) > 40.0
   view.scene.stop_d = 32.0
   assert view._path_end(view.scene, 200.0) == pytest.approx(32.0)
+
+
+def _nav(distance, modifier='right', maneuver='turn', lanes=(), arrived=False):
+  from openpilot.starpilot.ui.navigation_state import NavigationDisplay
+  return NavigationDisplay(('s', 1), 'Turn', maneuver, modifier, distance, 500.0, 60.0, arrived, lanes=lanes)
+
+
+def _nav_view():
+  view, _ = _renderer_with_scene()
+  view.scene.draw_distance = 120.0
+  return view, view._reference(RECT.height, 120.0)
+
+
+def _fan_points(ops):
+  return np.concatenate([_op_points(op) for op in ops])
+
+
+def test_nav_bend_reads_both_spellings():
+  from openpilot.selfdrive.ui.onroad.birds_eye_renderer import nav_bend
+  assert nav_bend('slight right') == nav_bend('slightRight') > 0 > nav_bend('left')
+  assert nav_bend('straight') == 0.0 and nav_bend('none') is None and nav_bend(None) is None
+
+
+def test_a_turn_arrow_sits_on_the_path_at_the_maneuver_and_points_the_way():
+  from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
+  view, reference = _nav_view()
+  view.navigation = _nav(40.0, 'right')
+  points = _fan_points(view._nav_arrows(view.scene, reference))
+  assert points[:, 0].min() == pytest.approx(40.0 + ber.EGO_FRONT - ber.NAV_ARROW_LENGTH / 2, abs=0.6)
+  assert points[:, 1].max() > 2.0 > -0.5 > points[:, 1].min() - 1.0, 'the head reaches right of the path'
+  view.navigation = _nav(40.0, 'left')
+  assert _fan_points(view._nav_arrows(view.scene, reference))[:, 1].min() < -2.0
+  for nav in (_nav(40.0, 'straight'), _nav(40.0, 'right', 'arrive'), _nav(3.0), _nav(40.0, arrived=True), None):
+    view.navigation = nav
+    assert view._nav_arrows(view.scene, reference) == [], nav
+
+
+def test_lane_arrows_spread_across_the_road_before_the_maneuver():
+  from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
+  view, reference = _nav_view()
+  edge = np.where(np.isfinite(view.scene.grid), 1.0, np.nan)
+  view.scene.edges = [edge * -5.4, edge * 5.4]
+  lanes = ((False, ('left',), ''), (True, ('straight', 'right'), 'right'), (False, ('straight',), ''))
+  view.navigation = _nav(70.0, 'straight', lanes=lanes)
+  ops = view._nav_arrows(view.scene, reference)
+  colours = [op[-1] for op in ops]
+  bright = [c for c in colours if c.a > 200]
+  assert bright and len(bright) < len(colours), 'only the lane to be in is bright'
+  xs = _fan_points(ops)[:, 0]
+  assert xs.max() < 70.0 + ber.EGO_FRONT - ber.NAV_LANES_AHEAD + ber.NAV_LANE_LENGTH, 'lanes come before the turn'
+  view.navigation = _nav(70.0, 'straight', lanes=lanes[:1])
+  assert view._nav_arrows(view.scene, reference) == [], 'one lane is no guidance'

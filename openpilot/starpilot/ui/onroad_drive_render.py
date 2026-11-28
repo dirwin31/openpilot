@@ -44,6 +44,7 @@ class DriveRenderLayer:
       view.speed_limit_sign = False
       view.parent_clip = content
       view.metric = bool(state.metric)
+      view.navigation = getattr(state, 'navigation', None)
       view.road_style = state.customization.get('roadColors', {}).get('large', {})
       view.long_control = bool(getattr(self.ui_state, 'has_longitudinal_control', True))
       view.render(content)

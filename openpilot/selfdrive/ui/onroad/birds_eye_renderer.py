@@ -101,6 +101,15 @@ STOP_LINE = (240, 242, 248)
 PLAN_TINT_MIN = 0.4           # m/s^2: a plan braking less than this leaves the path one colour
 PLAN_TINT_FULL = 2.0          # m/s^2: braking this hard turns the path fully warm
 PLAN_SLOW = np.array((255, 176, 46))
+NAV_ARROW = (250, 251, 255)
+NAV_ARROW_LENGTH = 9.0       # m, the turn arrow painted at the maneuver
+NAV_LANE_LENGTH = 5.5        # m, each lane-guidance arrow
+NAV_ARROW_MIN = 10.0         # m: closer than this the turn is under the car; no arrow
+NAV_LANES_AHEAD = 30.0       # m: lane arrows sit this far before the maneuver
+NAV_LANES_RANGE = (15.0, 55.0)
+NAV_BENDS = {'straight': 0.0, 'slightright': 0.6, 'right': 1.35, 'sharpright': 2.2, 'uturn': -2.8,
+             'slightleft': -0.6, 'left': -1.35, 'sharpleft': -2.2}  # rad, right-positive
+NAV_NO_ARROW = {'arrive', 'depart', 'notification', 'new name', 'continue'}
 PREVIEW_S = 2.0           # s: the lead preview's horizon (leadsV3 points are at t = 0, 2 .. 10 s)
 PREVIEW_MIN = (1.5, 0.5)  # m: the preview is drawn only once the lead moves this far ahead/behind or across
 # Lines narrower than this many pixels are widened to it: what the far end of the view shows. Near the car the
@@ -350,6 +359,40 @@ def plan_accel_on_grid(plan, grid: np.ndarray) -> np.ndarray | None:
     return None
   xs = distances + EGO_FRONT
   return np.where(grid <= xs[-1], np.interp(grid, xs, accels), np.nan)
+
+
+def nav_bend(direction) -> float | None:
+  """A maneuver modifier or lane direction ('slight right', 'slightRight', 'uturn', ...) as a right-positive bend."""
+  if not isinstance(direction, str):
+    return None
+  return NAV_BENDS.get(''.join(c for c in direction.lower() if c.isalpha()))
+
+
+def _arrow(x: float, y: float, heading: float, bend: float, length: float, rgba) -> list:
+  """Fan ops of a painted road arrow starting at (x, y) along heading, its head turned by bend (rad, right-positive)."""
+  w, head = 0.16 * length, 0.42 * length
+
+  def place(points):
+    local = np.asarray(points, dtype=np.float64)
+    if np.sum(local[:, 0] * np.roll(local[:, 1], -1) - np.roll(local[:, 0], -1) * local[:, 1]) < 0:
+      local = local[::-1]  # the winding segment_quad uses
+    return bem.rotate_offsets(local, x, y, heading)
+
+  if abs(bend) < 1e-3:
+    stem = 0.62 * length
+    return [_fan(place([(0, -w / 2), (stem, -w / 2), (stem, w / 2), (0, w / 2)]), rgba),
+            _fan(place([(stem, -head / 2), (length, 0), (stem, head / 2)]), rgba)]
+  stem, arm, tip = 0.5 * length, 0.26 * length, 0.3 * length
+  ux, uy = math.cos(bend), math.sin(bend)
+  ex, ey = stem + ux * arm, uy * arm
+  nx, ny = -uy, ux
+  joint = [(stem + w / 2 * math.cos(t), w / 2 * math.sin(t)) for t in np.linspace(0, 2 * math.pi, 9)[:-1]]
+  return [_fan(place([(0, -w / 2), (stem, -w / 2), (stem, w / 2), (0, w / 2)]), rgba),
+          _fan(place(joint), rgba),
+          _fan(place([(stem + nx * w / 2, ny * w / 2), (ex + nx * w / 2, ey + ny * w / 2),
+                      (ex - nx * w / 2, ey - ny * w / 2), (stem - nx * w / 2, -ny * w / 2)]), rgba),
+          _fan(place([(ex + nx * head / 2, ey + ny * head / 2), (ex + ux * tip, ey + uy * tip),
+                      (ex - nx * head / 2, ey - ny * head / 2)]), rgba)]
 
 
 class _DefaultText:
@@ -611,6 +654,7 @@ class BirdsEyeRenderer(Widget):
     self.metric = True
     self.long_control = True
     self.speed_limit_sign = True  # off when the layout's own speed-limit widget draws above the view
+    self.navigation = None        # the screen's NavigationDisplay, set by the caller each frame
     self.parent_clip: rl.Rectangle | None = None
     self.clock = time.monotonic
     self.clock_ns = time.monotonic_ns  # the logMonoTime clock lane-centering freshness is judged against
@@ -1271,12 +1315,41 @@ class BirdsEyeRenderer(Widget):
       x, y, heading = path.end
       ops.append(self._bar(x, y, heading, max(0.6, 4.0 * float(bem.meters_per_pixel(x, reference.view))), PATH_WIDTH * 1.5,
                            _rgba(STOP_RED, 235 * a)))
+    ops += self._nav_arrows(scene, reference)
     curve = scene.curve
     if curve is not None:
       x, y, heading = self._curve_place(scene, reference.view.x_max)
       rgb = CURVE_CONTROLLING if curve.controlling else CURVE_CEILING if curve.ceiling else CURVE_CANDIDATE
       ops.append(self._bar(x, y, heading, max(0.45, 3.0 * float(bem.meters_per_pixel(x, reference.view))), PATH_WIDTH * 1.9,
                            _rgba(rgb, 225 * a)))
+    return ops
+
+  def _nav_arrows(self, scene, reference: Reference) -> list:
+    """Ground ops from navigation: a turn arrow on the path at the maneuver, and before it one arrow per lane
+    spread across the road, the lanes to be in bright."""
+    nav = self.navigation
+    if nav is None or getattr(nav, 'arrived', False) or not math.isfinite(getattr(nav, 'distance_m', math.nan)):
+      return []
+    a = self.opacity
+    far = min(scene.draw_distance, reference.view.x_max) - NAV_ARROW_LENGTH
+    ops = []
+    x = nav.distance_m + EGO_FRONT
+    bend = nav_bend(nav.modifier)
+    if nav.maneuver_type not in NAV_NO_ARROW and bend is not None and bend != 0.0 and NAV_ARROW_MIN < x < far:
+      ops += _arrow(x - NAV_ARROW_LENGTH / 2, self._lateral_at(scene, x), self._road_heading(scene, x), bend,
+                    NAV_ARROW_LENGTH, _rgba(NAV_ARROW, 215 * a))
+    lanes = list(getattr(nav, 'lanes', ()) or ())
+    lane_x = x - NAV_LANES_AHEAD
+    if 2 <= len(lanes) <= 6 and len(scene.edges) == 2 and NAV_LANES_RANGE[0] < lane_x < min(NAV_LANES_RANGE[1], far):
+      left, right = (bem.lateral_at(scene.grid, edge, lane_x, math.nan) for edge in scene.edges)
+      width = (right - left) / len(lanes) if math.isfinite(left) and math.isfinite(right) else math.nan
+      if 2.5 <= width <= 5.0:
+        heading = self._road_heading(scene, lane_x)
+        for i, (active, directions, active_direction) in enumerate(lanes):
+          names = [active_direction] if active and active_direction else list(directions)
+          lane_bend = next((b for b in map(nav_bend, names) if b is not None), 0.0)
+          ops += _arrow(lane_x - NAV_LANE_LENGTH / 2, left + (i + 0.5) * width, heading, lane_bend,
+                        min(NAV_LANE_LENGTH, 2.2 * width), _rgba(NAV_ARROW, (215 if active else 60) * a))
     return ops
 
   def _stop_line(self, scene, x: float, reference: Reference, rgba) -> tuple:

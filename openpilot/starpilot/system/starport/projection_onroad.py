@@ -346,6 +346,7 @@ class ProjectionOnroad:
     view.speed_limit_sign = panel
     view.parent_clip = parent_clip
     view.metric = bool(getattr(self.native.ui_state, 'is_metric', True))
+    view.navigation = getattr(state, 'navigation', None)
     # The camera's model renderer follows carParams as they arrive; the view follows it every frame.
     model_renderer = getattr(getattr(self, 'camera', None), 'model_renderer', None)
     if model_renderer is not None:
