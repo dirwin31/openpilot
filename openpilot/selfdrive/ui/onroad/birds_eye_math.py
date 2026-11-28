@@ -561,6 +561,24 @@ def model_lead_tracks(leads, min_prob: float) -> list[tuple[np.ndarray, np.ndarr
   return tracks
 
 
+def planned_stop(vx, px, stop_speed: float = 1.0) -> float | None:
+  """Where the model's plan first drops below stop_speed (m, camera frame), or None (path_markers.StopPoint's rule)."""
+  vx, px = np.asarray(list(vx), dtype=np.float64), np.asarray(list(px), dtype=np.float64)
+  stopped = np.flatnonzero(vx < stop_speed)
+  if not stopped.size or vx.size != px.size:
+    return None
+  i = stopped[0]
+  return 0.0 if i == 0 else float(np.interp(stop_speed, vx[[i, i - 1]], px[[i, i - 1]]))
+
+
+def plan_distances(speeds, t_idxs) -> np.ndarray | None:
+  """Distance travelled at each plan time (trapezoid over speeds), or None when the lists do not line up."""
+  v, t = np.asarray(list(speeds), dtype=np.float64), np.asarray(list(t_idxs), dtype=np.float64)
+  if v.size < 2 or v.size != t.size or not np.isfinite(v).all():
+    return None
+  return np.concatenate(([0.0], np.cumsum((v[1:] + v[:-1]) / 2 * np.diff(t))))
+
+
 MPH_PER_MPS = 2.2369362921
 KPH_PER_MPS = 3.6
 

@@ -93,6 +93,14 @@ MODEL_LEAD_PROB = 0.5
 SMOOTHING = 0.55     # blend toward each new model frame
 LEAD_SMOOTHING = 0.5
 LEAD_BRAKE_ACCEL = -1.5   # m/s^2: a radar lead decelerating harder than this lights its brake lights
+STOP_LINE_RANGE = (8.0, 80.0)  # m: a planned stop shows as a road line between these distances
+STOP_LINE_FRAMES = 3          # model frames a planned stop must persist before its line shows
+STOP_LINE_DEPTH = 1.2         # m, the line's depth along the road
+STOP_LINE_PX = 30             # its least depth on screen, so it reads far away
+STOP_LINE = (240, 242, 248)
+PLAN_TINT_MIN = 0.4           # m/s^2: a plan braking less than this leaves the path one colour
+PLAN_TINT_FULL = 2.0          # m/s^2: braking this hard turns the path fully warm
+PLAN_SLOW = np.array((255, 176, 46))
 PREVIEW_S = 2.0           # s: the lead preview's horizon (leadsV3 points are at t = 0, 2 .. 10 s)
 PREVIEW_MIN = (1.5, 0.5)  # m: the preview is drawn only once the lead moves this far ahead/behind or across
 # Lines narrower than this many pixels are widened to it: what the far end of the view shows. Near the car the
@@ -173,6 +181,8 @@ class BirdsEyeScene:
   grid: np.ndarray = field(default_factory=lambda: bem.sample_grid())
   path: np.ndarray | None = None          # lateral offset per grid point, NaN where absent
   path_accel: np.ndarray | None = None
+  plan_accel: np.ndarray | None = None    # longitudinalPlan accels on the grid: what the planner will command
+  stop_d: float | None = None             # where the model plans to stop (camera frame x), once it has persisted
   path_curvature: np.ndarray | None = None  # signed 1/m per grid point (right-positive), NaN where absent
   lanes: list[np.ndarray] = field(default_factory=list)
   lane_probs: np.ndarray = field(default_factory=lambda: np.zeros(4))
@@ -326,6 +336,20 @@ def scene_leads(radar_state, model, tracks=None) -> list[BirdsEyeLead]:
       # leadsV3 speed is absolute; without ego speed here the closing rate is unknown.
       leads.append(BirdsEyeLead(d, y, math.nan, radar=False, ahead=ahead(d, y)))
   return leads
+
+
+def plan_accel_on_grid(plan, grid: np.ndarray) -> np.ndarray | None:
+  """longitudinalPlan accels resampled onto the forward grid by the distance its speeds cover (camera frame x)."""
+  try:
+    from openpilot.selfdrive.modeld.constants import ModelConstants
+    distances = bem.plan_distances(plan.speeds, ModelConstants.T_IDXS)
+    accels = np.asarray(list(plan.accels), dtype=np.float64)
+  except (AttributeError, ImportError, TypeError, ValueError):
+    return None
+  if distances is None or accels.size != distances.size or not np.isfinite(accels).all():
+    return None
+  xs = distances + EGO_FRONT
+  return np.where(grid <= xs[-1], np.interp(grid, xs, accels), np.nan)
 
 
 class _DefaultText:
@@ -601,11 +625,13 @@ class BirdsEyeRenderer(Widget):
     self._zoom_clock: float | None = None
     self._labels: list[tuple[float, float]] = []  # last drawn label positions, for the jitter filter
     self._limit_frame: tuple[tuple, float | None] | None = None
+    self._stop_frames = 0
 
   # ---- data -------------------------------------------------------------------------------------
 
   def ingest(self, model=None, radar_state=None, car_state=None, *, engaged=None, experimental=None,
-             allow_throttle=None, lat_active=None, lane_centering_direction=None, curve=_UNSET, speed_limit=_UNSET) -> None:
+             allow_throttle=None, lat_active=None, lane_centering_direction=None, curve=_UNSET, speed_limit=_UNSET,
+             plan=None) -> None:
     """Accept one observation. model=None keeps the last good road geometry.
 
     lane_centering_direction is lane_feedback.direction(): -1, 0 or +1 (the side whose line turns blue).
@@ -622,6 +648,7 @@ class BirdsEyeRenderer(Widget):
         if scene.valid and len(scene.edges) == len(edges) else edges
       scene.lane_probs, scene.edge_stds = probs, stds
       scene.draw_distance = camera_draw_distance(model)
+      self._ingest_stop(model, radar_state)
       scene.valid = bool(np.isfinite(path).any() or any(np.isfinite(lane).any() for lane in lanes))
       extras = model_extras(model, scene.grid)
       if not np.array_equal(extras.lane_stds, scene.lane_stds):
@@ -660,8 +687,30 @@ class BirdsEyeRenderer(Widget):
       scene.lane_centering_direction = int(np.sign(lane_centering_direction))
     if curve is not _UNSET:
       scene.curve = curve
+    if plan is not None:
+      scene.plan_accel = plan_accel_on_grid(plan, scene.grid)
     if speed_limit is not _UNSET:
       scene.speed_limit_mps = float(speed_limit) if speed_limit is not None and math.isfinite(speed_limit) and speed_limit > 0 else None
+
+  def _ingest_stop(self, model, radar_state) -> None:
+    """A planned stop with no lead to stop behind (a stop sign or red light), shown once it persists."""
+    try:
+      d = bem.planned_stop(model.velocity.x, model.position.x)
+    except AttributeError:
+      d = None
+    if d is not None and radar_state is not None:
+      for lead in (radar_state.leadOne, radar_state.leadTwo):
+        if lead.present and math.isfinite(lead.dRel) and lead.dRel + EGO_FRONT < d + 15.0:
+          d = None  # the lead is what it is stopping for
+          break
+    if d is None or not STOP_LINE_RANGE[0] < d < STOP_LINE_RANGE[1]:
+      self._stop_frames = 0
+      self.scene.stop_d = None
+      return
+    self._stop_frames += 1
+    previous = self.scene.stop_d
+    smoothed = d if previous is None else previous + 0.3 * (d - previous)
+    self.scene.stop_d = smoothed if self._stop_frames >= STOP_LINE_FRAMES else None
 
   @staticmethod
   def _smooth_leads(previous, current):
@@ -701,8 +750,11 @@ class BirdsEyeRenderer(Widget):
     if fresh('selfdriveState'):
       engaged = sm['selfdriveState'].enabled
       experimental = sm['selfdriveState'].experimentalMode
+    plan = None
     if fresh('longitudinalPlan'):
       allow = sm['longitudinalPlan'].allowThrottle or not self.long_control
+      if self.long_control and sm.updated['longitudinalPlan']:
+        plan = sm['longitudinalPlan']
     lat_active = bool(fresh('carControl') and sm['carControl'].latActive)
     # Blue only while the fork's own freshness and consistency rules say the correction applies, on its side.
     lane_dir = self._lane_centering_direction(sm, started_frame) if lat_active else 0
@@ -710,7 +762,8 @@ class BirdsEyeRenderer(Widget):
     # Between modelV2 messages the road keeps its last good frame; leads, wheel and blinkers still follow.
     self.ingest(model, radar, car, engaged=engaged, experimental=experimental, allow_throttle=allow,
                 lat_active=lat_active, lane_centering_direction=lane_dir,
-                curve=read_curve(sm, now_ns, started_frame), speed_limit=self._read_speed_limit(sm, now_ns, started_frame))
+                curve=read_curve(sm, now_ns, started_frame), speed_limit=self._read_speed_limit(sm, now_ns, started_frame),
+                plan=plan)
 
   def _lane_centering_direction(self, sm, started_frame: int) -> int:
     try:
@@ -1001,6 +1054,8 @@ class BirdsEyeRenderer(Widget):
   def _path_end(self, scene, reach: float) -> float:
     """min(camera rule, reach, a lead's rear bumper - 1 m for each lead within LEAD_LATERAL_GATE of the path)."""
     end = min(camera_path_end(scene.lead_one_d, scene.draw_distance), reach)
+    if scene.stop_d is not None:
+      end = min(end, scene.stop_d)
     profile = self._path_profile(scene) if scene.leads else None
     for lead in scene.leads:
       x = lead.d_rel + EGO_FRONT
@@ -1019,7 +1074,7 @@ class BirdsEyeRenderer(Widget):
     build = lambda: self._build_path(scene, reference, end)  # noqa: E731
     if scene.engaged and mode == 'rainbow':  # animated: rebuilt every frame
       return build()
-    arrays = (scene.grid, scene.path, scene.path_accel, scene.path_curvature)
+    arrays = (scene.grid, scene.path, self._accel(scene), scene.path_curvature)
     key = (reference.key, self.opacity, tuple(map(id, arrays)), end, self._throttle_blend, scene.engaged, scene.experimental,
            mode, style.get('path'))
     return self._cached('path', key, build, keep=arrays)
@@ -1032,8 +1087,15 @@ class BirdsEyeRenderer(Widget):
     mode = path_mode(self.road_style)
     if mode in ('rainbow', 'color'):
       return True
-    accel = scene.path_accel
-    return bool(scene.experimental and accel is not None and np.isfinite(accel).any())
+    accel = self._accel(scene)
+    if accel is None or not np.isfinite(accel).any():
+      return False
+    return bool(scene.experimental or np.nanmax(np.abs(accel)) >= PLAN_TINT_MIN)
+
+  @staticmethod
+  def _accel(scene):
+    """Experimental mode tints by the model's acceleration, as the camera path does; otherwise by the planner's."""
+    return scene.path_accel if scene.experimental else scene.plan_accel
 
   def _path_rgb_alpha(self, scene) -> tuple[tuple, float]:
     """(rgb, alpha) of a single-colour path."""
@@ -1072,7 +1134,7 @@ class BirdsEyeRenderer(Widget):
     strips: list = []
     quads: Layer = EMPTY
     if self._per_vertex_path(scene):
-      accel = scene.path_accel
+      accel = self._accel(scene)
       accel_rows = np.interp(xs, grid, np.nan_to_num(accel)) if accel is not None else np.empty(0)
       rows = self._path_rows(scene, (xs - xs[0]) / max(1e-3, xs[-1] - xs[0]), accel_rows)
       rows[:, 3] *= taper
@@ -1134,7 +1196,14 @@ class BirdsEyeRenderer(Widget):
       return self._rows(bem.hls_to_rgb(hue, light, sat) * 255, 215 * a, t.size)
     blend = self._throttle_blend
     rgb = np.array([n + (th - n) * blend for n, th in zip(NO_THROTTLE[0], THROTTLE[0], strict=True)])
-    return self._rows(rgb, 210 * a, t.size)
+    rows = self._rows(rgb, 210 * a, t.size)
+    if accel.size == t.size:
+      acc = np.nan_to_num(accel)[:, None]
+      warm = np.clip(-acc / PLAN_TINT_FULL, 0, 1)
+      brake = np.where(acc < -PLAN_TINT_FULL / 2, 1.0, 0.0)
+      target = PLAN_SLOW + (np.array(STOP_RED) - PLAN_SLOW) * brake * np.clip(-acc / PLAN_TINT_FULL - 0.5, 0, 1)
+      rows[:, :3] = rows[:, :3] + (target - rows[:, :3]) * warm
+    return rows
 
   def _path_profile(self, scene):
     """(distances, offsets, slopes) of the path's finite points, or None: what lateral_at/heading_at derive per call."""
@@ -1196,7 +1265,9 @@ class BirdsEyeRenderer(Widget):
     the binding distance (its speed tag is _curve_label). Bars are at least a few pixels deep."""
     a = self.opacity
     ops = []
-    if scene.should_stop and path.end is not None:
+    if scene.stop_d is not None:
+      ops.append(self._stop_line(scene, scene.stop_d, reference, _rgba(STOP_RED if scene.should_stop else STOP_LINE, 235 * a)))
+    elif scene.should_stop and path.end is not None:
       x, y, heading = path.end
       ops.append(self._bar(x, y, heading, max(0.6, 4.0 * float(bem.meters_per_pixel(x, reference.view))), PATH_WIDTH * 1.5,
                            _rgba(STOP_RED, 235 * a)))
@@ -1207,6 +1278,17 @@ class BirdsEyeRenderer(Widget):
       ops.append(self._bar(x, y, heading, max(0.45, 3.0 * float(bem.meters_per_pixel(x, reference.view))), PATH_WIDTH * 1.9,
                            _rgba(rgb, 225 * a)))
     return ops
+
+  def _stop_line(self, scene, x: float, reference: Reference, rgba) -> tuple:
+    """A painted stop line across the ego lane at x: between the lane lines where the model sees them."""
+    centre = self._lateral_at(scene, x)
+    left = right = None
+    if len(scene.lanes) >= 3 and scene.lane_probs[1] > 0.5 and scene.lane_probs[2] > 0.5:
+      left, right = (bem.lateral_at(scene.grid, scene.lanes[i], x, math.nan) for i in (1, 2))
+    if left is None or not (math.isfinite(left) and math.isfinite(right)) or not 2.0 < right - left < 6.0:
+      left, right = centre - 1.8, centre + 1.8
+    depth = max(STOP_LINE_DEPTH, STOP_LINE_PX * float(bem.meters_per_pixel(x, reference.view)))
+    return self._bar(x, (left + right) / 2, self._heading_at(scene, x), depth, right - left, rgba)
 
   def _curve_label(self, scene, rect, view) -> None:
     """The curve mark's speed tag, in pixels beside its bar."""

@@ -429,3 +429,63 @@ def test_lead_preview_draws_only_when_the_lead_will_move():
   assert outline[:, 0].mean() == pytest.approx(pose[0] - 8.0, abs=0.3) and outline[:, 1].mean() == pytest.approx(1.5, abs=0.2)
   assert view._lead_previews(view.scene, [(still, pose), (unknown, pose)]) == []
   assert view._lead_previews(view.scene, [(passing, (4.0 + ber.EGO_FRONT + 2.3, 0.0, 0.0))]) == [], 'not drawn over your own car'
+
+
+def test_planned_stop_and_plan_distances():
+  from openpilot.selfdrive.ui.onroad import birds_eye_math as bem
+  assert bem.planned_stop([10.0, 6.0, 2.0, 0.5, 0.0], [0.0, 10.0, 20.0, 30.0, 35.0]) == pytest.approx(20.0 + 10.0 * (2.0 - 1.0) / 1.5)
+  assert bem.planned_stop([10.0, 9.0], [0.0, 10.0]) is None
+  assert bem.planned_stop([0.2, 0.0], [0.0, 1.0]) == 0.0
+  assert bem.plan_distances([2.0, 2.0, 4.0], [0.0, 1.0, 2.0]) == pytest.approx([0.0, 2.0, 5.0])
+  assert bem.plan_distances([1.0], [0.0]) is None and bem.plan_distances([1.0, 2.0], [0.0]) is None
+
+
+def _stopping_model(stop_at):
+  xs = [float(x) for x in range(0, 100, 5)]
+  vx = [max(0.0, 10.0 * (1 - x / stop_at)) for x in xs]
+  return SimpleNamespace(velocity=SimpleNamespace(x=vx), position=SimpleNamespace(x=xs))
+
+
+def test_stop_line_shows_only_once_the_planned_stop_persists_and_no_lead_explains_it():
+  from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
+  view, _ = _renderer_with_scene()
+  for frame in range(ber.STOP_LINE_FRAMES):
+    assert view.scene.stop_d is None, frame
+    view._ingest_stop(_stopping_model(40.0), None)
+  assert view.scene.stop_d == pytest.approx(36.0, abs=1.0)
+  idle = SimpleNamespace(present=False, dRel=0.0)
+  lead = SimpleNamespace(leadOne=SimpleNamespace(present=True, dRel=40.0), leadTwo=idle)
+  view._ingest_stop(_stopping_model(40.0), lead)
+  assert view.scene.stop_d is None, 'a lead just past the stop is what it stops for'
+  for _ in range(ber.STOP_LINE_FRAMES):
+    view._ingest_stop(_stopping_model(4.0), None)
+  assert view.scene.stop_d is None, 'too close: the car is already stopping there'
+
+
+def test_plan_accel_lands_on_the_grid_by_distance_and_tints_the_path():
+  from openpilot.selfdrive.modeld.constants import ModelConstants
+  from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
+  t = ModelConstants.T_IDXS
+  plan = SimpleNamespace(speeds=[10.0] * len(t), accels=[-2.0 if ti > 3 else 0.5 for ti in t])
+  grid = np.arange(0.0, 150.0, 1.0)
+  accel = ber.plan_accel_on_grid(plan, grid)
+  assert accel[grid == 10.0][0] == pytest.approx(0.5) and accel[grid == 80.0][0] == pytest.approx(-2.0)
+  assert np.isnan(accel[grid > 102.0]).all(), 'nothing past where the plan reaches'
+  assert ber.plan_accel_on_grid(SimpleNamespace(speeds=[], accels=[]), grid) is None
+  view, _ = _renderer_with_scene()
+  view.scene.engaged, view.scene.experimental = True, False
+  view.scene.plan_accel = np.interp(view.scene.grid, grid, np.nan_to_num(accel))
+  assert view._per_vertex_path(view.scene)
+  rows = view._path_rows(view.scene, np.linspace(0, 1, 3), np.array([-2.0, 0.0, 1.0]))
+  assert rows[0, 0] > rows[0, 1] and rows[2, 1] > rows[2, 0], 'warm where it slows, green elsewhere'
+  assert tuple(rows[1]) == tuple(rows[2]), 'speeding up keeps the normal path colour'
+  view.scene.plan_accel = np.full(view.scene.grid.shape, 0.2)
+  assert not view._per_vertex_path(view.scene), 'a gentle plan leaves the path one colour'
+
+
+def test_the_path_ends_at_the_stop_line():
+  view, _ = _renderer_with_scene()
+  view.scene.leads, view.scene.lead_one_d = [], None
+  assert view._path_end(view.scene, 200.0) > 40.0
+  view.scene.stop_d = 32.0
+  assert view._path_end(view.scene, 200.0) == pytest.approx(32.0)
