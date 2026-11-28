@@ -197,13 +197,29 @@ def depth_scale_at(x, view: ViewParams) -> np.ndarray:
   return view.focal * view.position[2] / depth_at(x, view) ** 2
 
 
+def gradient(y: np.ndarray, x: np.ndarray) -> np.ndarray:
+  """np.gradient(y, x) for 1-D arrays (second order inside, first order at the ends) without its per-call overhead."""
+  y, x = np.asarray(y, dtype=np.float64), np.asarray(x, dtype=np.float64)
+  out = np.empty_like(y)
+  if y.size < 2:
+    out[:] = 0.0
+    return out
+  h = np.diff(x)
+  out[0] = (y[1] - y[0]) / h[0]
+  out[-1] = (y[-1] - y[-2]) / h[-1]
+  if y.size > 2:
+    a, b = h[:-1], h[1:]
+    out[1:-1] = (a * a * y[2:] + (b * b - a * a) * y[1:-1] - b * b * y[:-2]) / (a * b * (a + b))
+  return out
+
+
 def slope_profile(grid: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
   """(distances, dy/dx) of a resampled line's finite points, or None with fewer than two."""
   ok = np.isfinite(ys)
   if np.count_nonzero(ok) < 2:
     return None
   gx, gy = grid[ok], ys[ok]
-  return gx, np.gradient(gy, gx)
+  return gx, gradient(gy, gx)
 
 
 def mean_heading(profiles, x: float) -> float | None:
@@ -321,7 +337,7 @@ def heading_at(grid: np.ndarray, ys: np.ndarray, x: float) -> float:
   if np.count_nonzero(ok) < 2:
     return 0.0
   gx, gy = grid[ok], ys[ok]
-  dy = np.gradient(gy, gx)
+  dy = gradient(gy, gx)
   return float(math.atan(np.interp(x, gx, dy)))
 
 

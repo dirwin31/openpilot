@@ -769,3 +769,10 @@ def test_a_turned_car_body_is_rigid_on_the_road():
   assert sides(world[roof]) == pytest.approx(sides(mesh.vertices[roof])), 'same size as when it points straight ahead'
   nose = world[[0, 7], :2].mean(axis=0) - world[:8, :2].mean(axis=0)
   assert nose == pytest.approx(2.3 * np.array([math.cos(heading), math.sin(heading)])), 'its nose points along the heading'
+
+
+def test_gradient_matches_numpy_on_uneven_spacing():
+  x = np.cumsum(np.linspace(0.3, 3.0, 40))
+  y = np.sin(x / 7) * 3
+  assert bem.gradient(y, x) == pytest.approx(np.gradient(y, x))
+  assert bem.gradient(y[:2], x[:2]) == pytest.approx(np.gradient(y[:2], x[:2]))

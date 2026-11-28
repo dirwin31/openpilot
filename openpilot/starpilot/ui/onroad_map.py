@@ -384,9 +384,10 @@ class MapInput:
 class TileReader:
   """Road tiles from disk, decoded on a worker thread; the render thread only reads the cache."""
 
-  def __init__(self, root: Path | None = None, clock: Callable[[], float] = time.monotonic):
+  def __init__(self, root: Path | None = None, clock: Callable[[], float] = time.monotonic, cache: int = TILE_CACHE):
     from openpilot.starpilot.navigation.offline_roads import TileStore
     self.store = TileStore(root)
+    self.cache = cache
     self.clock = clock
     self._lock = threading.Condition()
     self._tiles: OrderedDict[TileKey, RoadTile] = OrderedDict()
@@ -441,7 +442,7 @@ class TileReader:
             self._missing.pop(key, None)
             self._tiles[key] = tile
             self._tiles.move_to_end(key)
-            while len(self._tiles) > max(TILE_CACHE, len(self._wanted)):
+            while len(self._tiles) > max(self.cache, len(self._wanted)):
               self._tiles.popitem(last=False)
             self.generation += 1
       elif job is not None:

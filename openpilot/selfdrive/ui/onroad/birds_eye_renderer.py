@@ -92,6 +92,7 @@ EDGE_WIDTH = 0.28
 MODEL_LEAD_PROB = 0.5
 SMOOTHING = 0.55     # blend toward each new model frame
 LEAD_SMOOTHING = 0.5
+LEAD_POSE_STEP = 0.04     # m: lead bodies are drawn on this grid (well under a pixel at their distance)
 LEAD_BRAKE_ACCEL = -1.5   # m/s^2: a radar lead decelerating harder than this lights its brake lights
 STOP_LINE_RANGE = (8.0, 80.0)  # m: a planned stop shows as a road line between these distances
 STOP_LINE_FRAMES = 3          # model frames a planned stop must persist before its line shows
@@ -115,6 +116,9 @@ MAP_ALPHA = 80                # the road network underneath is faint: the model'
 MAP_MAX_SHIFT = 8.0           # m and rad: the most the map is moved to sit on the model's road
 MAP_MAX_TURN = math.radians(12.0)
 MAP_ALIGN_RATE = 0.08
+MAP_CELL = 100.0              # m: map lines are drawn in cells this size, only those in front of the car
+MAP_NEAR, MAP_NEAR_STEP = 80.0, 20.0  # m: segments considered when lining the map up, and how often they're re-picked
+MAP_BEHIND = 25.0             # m of map kept behind the camera
 PREVIEW_S = 2.0           # s: the lead preview's horizon (leadsV3 points are at t = 0, 2 .. 10 s)
 PREVIEW_MIN = (1.5, 0.5)  # m: the preview is drawn only once the lead moves this far ahead/behind or across
 # Lines narrower than this many pixels are widened to it: what the far end of the view shows. Near the car the
@@ -400,25 +404,73 @@ def _arrow(x: float, y: float, heading: float, bend: float, length: float, rgba)
                       (ex - nx * head / 2, ey - ny * head / 2)]), rgba)]
 
 
-def _map_ops(anchor, opacity: float) -> list:
-  """Strip ops of every map line as a ribbon of its class's width, minor roads first so major ones lie on top."""
+class MapCells(NamedTuple):
+  centres: np.ndarray       # (K, 2) north/east of each cell's centre
+  radii: np.ndarray         # (K,) reach of each cell's lines from its centre
+  layers: list              # per road class, minor first: (road class, [(cell index, (draw call, vertices, count))])
+  keep: list                # the vertex buffers the ops point into
+
+
+def _map_cells(anchor) -> MapCells:
+  """Every map line as a ribbon of its class's width, cut into MAP_CELL pieces. Each cell's lines of one class are
+  joined by degenerate triangles into one strip, so a cell costs one draw call per class."""
   from openpilot.starpilot.ui.birds_eye_map import WIDTHS
-  ops: list = []
-  for road_class in sorted({c for c, _ in anchor.lines}, reverse=True):
-    lines = [line for c, line in anchor.lines if c == road_class]
-    points = np.concatenate(lines)
-    sizes = np.array([len(line) for line in lines])
-    ends = np.cumsum(sizes)
-    starts = ends - sizes
-    prev, nxt = np.roll(points, 1, axis=0), np.roll(points, -1, axis=0)
-    prev[starts], nxt[ends - 1] = points[starts], points[ends - 1]
-    tangent = nxt - prev
-    tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True), 1e-6)
-    normal = np.stack((-tangent[:, 1], tangent[:, 0]), axis=1) * (WIDTHS.get(road_class, 4.0) / 2)
-    runs = list(zip(starts.tolist(), ends.tolist(), strict=True))
-    rgba = _rgba(MAP_RGB.get(road_class, MAP_RGB[4]), MAP_ALPHA * opacity)
-    ops += _strips(bem.strip_points(points + normal, points - normal), runs, [rgba] * len(runs))
-  return ops
+  pieces: dict[tuple[int, int], dict[int, list]] = {}
+  for road_class, line in anchor.lines:
+    dense = _densify(np.asarray(line, dtype=np.float64), MAP_CELL / 2)
+    # The ribbon is built on the whole line and then cut, so pieces meet edge to edge on curves.
+    left, right = _ribbon(dense, WIDTHS.get(road_class, 4.0) / 2)
+    for lo, hi in _cuts(dense, MAP_CELL):
+      cell = tuple(np.floor(dense[lo:hi].mean(axis=0) / MAP_CELL).astype(int).tolist())
+      pieces.setdefault(cell, {}).setdefault(road_class, []).append((dense[lo:hi], left[lo:hi], right[lo:hi]))
+  cells = sorted(pieces)
+  centres = (np.array(cells, dtype=np.float64).reshape(-1, 2) + 0.5) * MAP_CELL
+  radii = np.array([max(float(np.abs(np.concatenate([p[0] for ps in pieces[c].values() for p in ps]) - centre).max()) * math.sqrt(2), 1.0)
+                    for c, centre in zip(cells, centres, strict=True)]) + max(WIDTHS.values())
+  layers, keep = [], []
+  for road_class in sorted({c for _, c_lines in pieces.items() for c in c_lines}, reverse=True):
+    layer = []
+    for i, cell in enumerate(cells):
+      group = pieces[cell].get(road_class)
+      if not group:
+        continue
+      strips = [bem.strip_points(left, right) for _, left, right in group]
+      joined = [strips[0]]
+      for strip in strips[1:]:
+        joined += [joined[-1][-1:], strip[:1], strip]  # zero-area triangles bridge to the next piece
+      arr = np.ascontiguousarray(np.concatenate(joined), dtype=np.float32)
+      keep.append(arr)
+      layer.append((i, (_raw.DrawTriangleStrip, arr.ctypes.data, arr.shape[0])))
+    layers.append((road_class, layer))
+  return MapCells(centres, radii, layers, keep)
+
+
+def _densify(line: np.ndarray, step: float) -> np.ndarray:
+  """The polyline with segments longer than `step` split evenly."""
+  steps = np.linalg.norm(np.diff(line, axis=0), axis=1)
+  if not steps.size or steps.max() <= step:
+    return line
+  dense = [line[:1]]
+  for a, b, d in zip(line[:-1], line[1:], steps, strict=True):
+    n = max(1, math.ceil(d / step))
+    dense.append(a + np.outer(np.arange(1, n + 1) / n, b - a))
+  return np.concatenate(dense)
+
+
+def _cuts(line: np.ndarray, length: float) -> list[tuple[int, int]]:
+  """Row ranges [lo, hi) of pieces about `length` long, each sharing its last row with the next one's first."""
+  along = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(line, axis=0), axis=1))))
+  bounds = np.searchsorted(along, np.arange(length, along[-1], length))
+  edges = [0, *sorted(set(bounds.tolist()) - {0, line.shape[0] - 1}), line.shape[0] - 1]
+  return [(lo, hi + 1) for lo, hi in zip(edges[:-1], edges[1:], strict=True) if hi > lo]
+
+
+def _ribbon(points: np.ndarray, half: float) -> tuple[np.ndarray, np.ndarray]:
+  prev, nxt = np.vstack((points[:1], points[:-1])), np.vstack((points[1:], points[-1:]))
+  tangent = nxt - prev
+  tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True), 1e-6)
+  normal = np.stack((-tangent[:, 1], tangent[:, 0]), axis=1) * half
+  return points + normal, points - normal
 
 
 class _DefaultText:
@@ -683,6 +735,7 @@ class BirdsEyeRenderer(Widget):
     self.navigation = None        # the screen's NavigationDisplay, set by the caller each frame
     self.map_underlay = None      # starpilot.ui.birds_eye_map.MapUnderlay, from the screen that owns one
     self._map_shift = (0.0, 0.0)  # (lateral m, turn rad) that lays the GPS map on the model's road
+    self._map_near: dict = {}
     self.parent_clip: rl.Rectangle | None = None
     self.clock = time.monotonic
     self.clock_ns = time.monotonic_ns  # the logMonoTime clock lane-centering freshness is judged against
@@ -923,7 +976,7 @@ class BirdsEyeRenderer(Widget):
       leads = self._lead_poses(scene, view)
       saved = _begin_ground(view)
       try:
-        self._map(scene)
+        self._map(scene, view.x_max)
         if scene.valid:
           if scene.path is not None:
             target = 1.0 if scene.allow_throttle else 0.0
@@ -1285,7 +1338,7 @@ class BirdsEyeRenderer(Widget):
       if np.count_nonzero(ok) < 2:
         return None
       gx, gy = scene.grid[ok], scene.path[ok]
-      return gx, gy, np.gradient(gy, gx)
+      return gx, gy, bem.gradient(gy, gx)
     return self._cached('path_profile', (id(scene.path), id(scene.grid)), build, keep=(scene.path, scene.grid))
 
   def _heading_at(self, scene, x: float) -> float:
@@ -1438,19 +1491,17 @@ class BirdsEyeRenderer(Widget):
     shade = AMBIENT + DIFFUSE * np.clip(normals @ LIGHT_DIRECTION, 0.0, None)
     points = np.ascontiguousarray(screen[:, mesh.index], dtype=np.float32)
     base, vector2, per_car = points.ctypes.data, 2 * points.itemsize, mesh.index.size
-    fan, starts, parts = _raw.DrawTriangleFan, mesh.starts, mesh.parts
+    fan, starts, parts = _raw.DrawTriangleFan, mesh.starts, np.asarray(mesh.parts)
+    counts = np.diff(starts).tolist()
     cars = []
     for c in range(count):
-      ops: list = []
-      palette = palettes[c]
-      for f in np.flatnonzero(visible[c]).tolist():
-        part = parts[f]
-        rgb, alpha = palette[part]
-        if alpha <= 0:
-          continue
-        k = 1.0 if part == LIGHT else float(shade[c, f])
-        ops.append((fan, base + (c * per_car + starts[f]) * vector2, starts[f + 1] - starts[f],
-                    _ccolor((min(255.0, rgb[0] * k), min(255.0, rgb[1] * k), min(255.0, rgb[2] * k), alpha))))
+      rgb = np.array([palettes[c][part][0] for part in range(3)], dtype=np.float64)[parts]
+      alpha = np.array([palettes[c][part][1] for part in range(3)], dtype=np.float64)[parts]
+      k = np.where(parts == LIGHT, 1.0, shade[c])
+      colours = np.concatenate((np.minimum(255.0, rgb * k[:, None]), alpha[:, None]), axis=1).tolist()
+      offset = base + c * per_car * vector2
+      ops: list = [(fan, offset + starts[f] * vector2, counts[f], _ccolor(colours[f]))
+                   for f in np.flatnonzero(visible[c] & (alpha > 0)).tolist()]
       ops.append((_keep, points))
       cars.append(ops)
     return cars, screen
@@ -1461,43 +1512,64 @@ class BirdsEyeRenderer(Widget):
     return [_fan(bem.car_outline(x, y, heading, LEAD_LENGTH + 0.5, LEAD_WIDTH + 0.35, chamfer=0.55), (0, 0, 0, alpha))
             for x, y, heading in poses]
 
-  def _map(self, scene) -> None:
+  def _map(self, scene, x_max: float) -> None:
     """The road network from map tiles, under everything, placed by GPS and nudged onto the model's road."""
     underlay = self.map_underlay
     if underlay is None:
       return
     try:
+      if getattr(underlay, 'decorate', None) is None:
+        underlay.decorate = _map_cells
       placed = underlay.update()
     except Exception:
       self.map_underlay = None
       from openpilot.common.swaglog import cloudlog
       cloudlog.exception("3D drive render: map underlay unavailable")
       return
-    if placed is None:
+    if not placed:
       return
-    anchor, pose = placed
-    ops = self._cached('map', (id(anchor), self.opacity), lambda: _map_ops(anchor, self.opacity), keep=(anchor,))
-    if not ops:
-      return
-    from openpilot.starpilot.ui.birds_eye_map import pose_matrix
-    lateral, turn = self._map_alignment(scene, anchor, pose)
+    from openpilot.starpilot.ui.birds_eye_map import pose_matrix, to_car
+    lateral, turn = self._map_alignment(scene, placed)
+    colours = {c: _ccolor(_rgba(rgb, MAP_ALPHA * self.opacity)) for c, rgb in MAP_RGB.items()}
     _raw.rlDrawRenderBatchActive()
     camera = _raw.rlGetMatrixModelview()
-    placed_camera = _matrix_array(camera) @ pose_matrix(*pose, lateral=lateral, turn=turn)
-    _raw.rlSetMatrixModelview(_CMatrix(*placed_camera.astype(np.float32).ravel().tolist()))
+    outer = _matrix_array(camera)
     try:
-      _run(ops)
+      for anchor, pose in placed:
+        cells = anchor.drawn
+        if cells is None or not len(cells.centres):
+          continue
+        x, y = to_car(cells.centres, *pose, lateral, turn).T
+        r = cells.radii
+        shown = (x > -MAP_BEHIND - r) & (x < x_max + r) & (np.abs(y) < MAP_BEHIND + x_max * 0.9 + r)
+        ops = [(func, ptr, n, colours.get(c, colours[4])) for c, layer in cells.layers for i, (func, ptr, n) in layer if shown[i]]
+        if ops:
+          placed_camera = outer @ pose_matrix(*pose, lateral=lateral, turn=turn)
+          _raw.rlSetMatrixModelview(_CMatrix(*placed_camera.astype(np.float32).ravel().tolist()))
+          _run(ops)
+          _raw.rlDrawRenderBatchActive()
     finally:
-      _raw.rlDrawRenderBatchActive()
       _raw.rlSetMatrixModelview(camera)
 
-  def _map_alignment(self, scene, anchor, pose) -> tuple[float, float]:
+  def _near_segments(self, anchor, pose) -> np.ndarray:
+    """A tile's segments within MAP_NEAR of the car, re-selected only after it moves MAP_NEAR_STEP."""
+    held = self._map_near.get(id(anchor))
+    if held is None or held[0] is not anchor or abs(held[1] - pose[0]) + abs(held[2] - pose[1]) > MAP_NEAR_STEP:
+      segments = anchor.segments
+      reach = MAP_NEAR + MAP_NEAR_STEP
+      near = segments[np.abs(segments[:, 0, 0] - pose[0]) + np.abs(segments[:, 0, 1] - pose[1]) < reach]
+      held = self._map_near[id(anchor)] = (anchor, pose[0], pose[1], near)
+    return held[3]
+
+  def _map_alignment(self, scene, placed) -> tuple[float, float]:
     """Ease the map's (lateral, turn) correction toward the one that lines its road up with the model's road edges."""
     from openpilot.starpilot.ui.birds_eye_map import ALIGN_X, road_at, to_car
+    self._map_near = {key: held for key, held in self._map_near.items() if any(held[0] is a for a, _ in placed)}
     target = None
-    if scene.valid and len(scene.edges) == 2 and len(anchor.segments):
-      near = anchor.segments[np.abs(anchor.segments[:, 0, 0] - pose[0]) + np.abs(anchor.segments[:, 0, 1] - pose[1]) < 80.0]
-      road = road_at(to_car(near.reshape(-1, 2), *pose).reshape(-1, 2, 2)) if len(near) else None
+    if scene.valid and len(scene.edges) == 2:
+      parts = [to_car(near.reshape(-1, 2), *pose).reshape(-1, 2, 2)
+               for anchor, pose in placed if len(near := self._near_segments(anchor, pose))]
+      road = road_at(np.concatenate(parts)) if parts else None
       left, right = (bem.lateral_at(scene.grid, edge, ALIGN_X, math.nan) for edge in scene.edges)
       if road is not None and math.isfinite(left) and math.isfinite(right) and 4.0 < right - left < 40.0:
         y, angle = road
@@ -1582,9 +1654,14 @@ class BirdsEyeRenderer(Widget):
       rgb = bem.lead_color(lead.d_rel, lead.v_rel if math.isfinite(lead.v_rel) else 0.0)
       alpha = 255 * (1.0 if lead.radar else 0.7) * self.opacity
       lit = lead.braking or (scene.hard_brake and lead is leads[-1][0])
-      palettes.append(((rgb, alpha), (LEAD_GLASS, alpha), (EGO_BRAKE if lit else LEAD_LIGHT, alpha)))
+      body = tuple(int(round(c)) for c in rgb)
+      palettes.append(((body, round(alpha)), (LEAD_GLASS, round(alpha)), (EGO_BRAKE if lit else LEAD_LIGHT, round(alpha))))
       rgbs.append(rgb)
-    cars, screens = self._cars(view, [pose for _, pose in leads], _car_mesh(LEAD_LENGTH, LEAD_WIDTH), palettes)
+    # Poses snap to LEAD_POSE_STEP, so a lead holding its place reuses last frame's projected body.
+    poses = tuple((round(x / LEAD_POSE_STEP) * LEAD_POSE_STEP, round(y / LEAD_POSE_STEP) * LEAD_POSE_STEP, round(h, 3))
+                  for _, (x, y, h) in leads)
+    cars, screens = self._cached('lead_bodies', (id(view), poses, tuple(palettes)), lambda: self._cars(
+      view, poses, _car_mesh(LEAD_LENGTH, LEAD_WIDTH), palettes), keep=(view,))
     previous, self._labels = self._labels, []
     for (lead, _), rgb, ops, screen in zip(leads, rgbs, cars, screens, strict=True):
       _run(ops)
@@ -1618,8 +1695,10 @@ class BirdsEyeRenderer(Widget):
     """The ego body, its tail lights bright while it brakes, and its corner lamps flashing with the blinkers."""
     alpha = 255 * self.opacity
     palette = ((EGO_BODY, alpha), (EGO_GLASS, alpha), (EGO_BRAKE if scene.braking else EGO_LIGHT, alpha))
-    cars, _ = self._cars(view, [(EGO_FRONT - EGO_LENGTH / 2, 0.0, 0.0)], _car_mesh(EGO_LENGTH, EGO_WIDTH), [palette])
-    _run(cars[0])
+    # The ego never moves on screen: its body is reprojected only when the camera or its lights change.
+    ops = self._cached('ego', (id(view), palette), lambda: self._cars(
+      view, [(EGO_FRONT - EGO_LENGTH / 2, 0.0, 0.0)], _car_mesh(EGO_LENGTH, EGO_WIDTH), [palette])[0][0], keep=(view,))
+    _run(ops)
     self._blinkers(scene, view)
 
   def _blinkers(self, scene, view) -> None:
