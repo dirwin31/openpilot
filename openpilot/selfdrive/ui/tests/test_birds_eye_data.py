@@ -349,3 +349,38 @@ def test_road_of_a_stopped_or_earlier_model_is_dropped():
   renderer.scene.valid = True
   renderer.poll(messages(10, True), 20)
   assert not renderer.scene.valid, 'the model is from before this drive'
+
+
+def test_front_tyres_turn_with_the_steering_wheel():
+  view, _ = _renderer_with_scene()
+  straight = view._front_tyres(0.0)
+  assert len(straight) == 2
+  left, right = (_op_points(op) for op in straight)
+  assert left[:, 1].mean() < 0 < right[:, 1].mean(), 'one tyre each side'
+  assert np.ptp(left[:, 1]) == pytest.approx(0.26, abs=1e-3), 'straight: the tyre runs along the car'
+  turned = _op_points(view._front_tyres(-90.0)[1])  # steeringAngleDeg is left-positive: -90 turns right
+  assert np.ptp(turned[:, 1]) > 0.3, 'turned: the tyre swings across'
+  order = np.argsort(turned[:, 0])
+  assert turned[order[2:], 1].mean() > turned[order[:2], 1].mean(), 'a right turn points the tyre front to the right'
+
+
+def test_blinkers_flash_only_on_the_blinking_side(monkeypatch):
+  from openpilot.selfdrive.ui.onroad import birds_eye_renderer as ber
+  circles = []
+  monkeypatch.setattr(ber.rl, 'draw_circle_v', lambda centre, radius, color: circles.append((centre.x, radius, color.a)))
+  view, _ = _renderer_with_scene()
+  pv = bem.view_params(RECT, view.config)
+  view.scene.left_blinker, view.scene.right_blinker = False, True
+  view.clock = lambda: 0.1
+  view._blinkers(view.scene, pv)
+  assert len(circles) == 4, 'front and rear lamp, each a glow and a core'
+  centre_x = float(bem.car_to_widget([(ber.EGO_FRONT, 0.0, 0.62)], None, view=pv)[0, 0])
+  assert all(x > centre_x for x, _, _ in circles), 'on the right side'
+  circles.clear()
+  view.clock = lambda: 0.1 + 0.5 / ber.BLINKER_HZ
+  view._blinkers(view.scene, pv)
+  assert circles == [], 'dark for the other half of the flash'
+  view.scene.right_blinker = False
+  view.clock = lambda: 0.1
+  view._blinkers(view.scene, pv)
+  assert circles == []

@@ -139,6 +139,11 @@ EGO_BODY, EGO_GLASS = (238, 241, 247), (48, 58, 76)
 EGO_LIGHT, EGO_BRAKE = (150, 34, 34), (255, 56, 44)   # the ego's tail lights: idle, braking
 LEAD_GLASS, LEAD_LIGHT = (64, 72, 88), (176, 44, 44)
 BRAKE_LIGHT_ACCEL = -1.2              # m/s^2: the ego's tail lights also light below this measured deceleration
+BLINKER = (255, 168, 28)
+BLINKER_HZ = 1.5
+TIRE = (24, 26, 32)
+TIRE_LENGTH, TIRE_WIDTH = 0.68, 0.26
+FRONT_AXLE = EGO_FRONT - 0.95          # m: the ego's front wheels, behind its front bumper
 
 
 @dataclass
@@ -1255,8 +1260,20 @@ class BirdsEyeRenderer(Widget):
             for x, y, heading in poses]
 
   def _ego_ground(self) -> None:
-    """The ego's shadow, drawn on the road during the ground pass (meters)."""
+    """The ego's shadow and front tyres, drawn on the road during the ground pass (meters)."""
     _run(self._shadows([(EGO_FRONT - EGO_LENGTH / 2, 0.0, 0.0)]))
+    _run(self._front_tyres(self.scene.steering_deg))
+
+  def _front_tyres(self, steering_deg: float) -> list:
+    """Ground ops: the two front tyres, turned with the steering wheel so they show past the body in a turn."""
+    angle = round(bem.ego_wheel_angle(steering_deg), 2)
+    alpha = 255 * self.opacity
+
+    def build():
+      track = EGO_WIDTH / 2 + 0.02  # a hair outboard of the body, so the tyres show from above
+      return [_fan(bem.segment_quad(FRONT_AXLE, side * track, angle, TIRE_LENGTH, TIRE_WIDTH), _rgba(TIRE, alpha))
+              for side in (-1, 1)]
+    return self._cached('tyres', (angle, alpha), build)
 
   def _lane_change_ghost(self, scene) -> list:
     """Ground ops. While the model's lane change is pending or under way, an outline of the ego car one lane over
@@ -1328,11 +1345,27 @@ class BirdsEyeRenderer(Widget):
     return float(round(x)), float(round(y))
 
   def _ego(self, scene, view) -> None:
-    """The ego body, its tail lights bright while it brakes. Steering is the HUD's wheel, not drawn on the car."""
+    """The ego body, its tail lights bright while it brakes, and its corner lamps flashing with the blinkers."""
     alpha = 255 * self.opacity
     palette = ((EGO_BODY, alpha), (EGO_GLASS, alpha), (EGO_BRAKE if scene.braking else EGO_LIGHT, alpha))
     cars, _ = self._cars(view, [(EGO_FRONT - EGO_LENGTH / 2, 0.0, 0.0)], _car_mesh(EGO_LENGTH, EGO_WIDTH), [palette])
     _run(cars[0])
+    self._blinkers(scene, view)
+
+  def _blinkers(self, scene, view) -> None:
+    """Amber lamps at the front and rear corners of the blinking side, on for half of each flash."""
+    sides = [side for side, on in ((-1, scene.left_blinker), (1, scene.right_blinker)) if on]
+    if not sides or (self.clock() * BLINKER_HZ) % 1.0 >= 0.5:
+      return
+    y = EGO_WIDTH / 2 - 0.16
+    corners = [(x, side * y, 0.62) for side in sides for x in (EGO_FRONT - 0.12, EGO_FRONT - EGO_LENGTH + 0.12)]
+    pixels = bem.car_to_widget(corners, None, view=view)
+    radii = 0.2 / bem.meters_per_pixel(np.array([c[0] for c in corners]), view)
+    a = self.opacity
+    for (px, py), r in zip(pixels, radii, strict=True):
+      centre = rl.Vector2(float(px), float(py))
+      rl.draw_circle_v(centre, float(r) * 1.9, _color(BLINKER, 70 * a))
+      rl.draw_circle_v(centre, max(2.0, float(r)), _color(BLINKER, 255 * a))
 
   # ---- speed limit ------------------------------------------------------------------------------
 

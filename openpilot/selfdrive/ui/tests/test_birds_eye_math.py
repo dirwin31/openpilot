@@ -700,7 +700,7 @@ def test_ego_lane_lines_are_at_least_three_pixels_zoomed_out():
   edges, lanes = styles[:len(view.scene.edges)], styles[len(view.scene.edges):]
   assert all(line[2] == ber.EDGE_MIN_PX == 3.5 for line in edges)
   assert all(line[2] == ber.LANE_MIN_PX == 3.0 for line in lanes)
-  assert not hasattr(view, '_blinkers') and not hasattr(ber, 'TRIANGLE_LAYOUT'), 'the HUD owns the blinker arrow'
+  assert not hasattr(ber, 'TRIANGLE_LAYOUT')
 
 
 def test_radar_lead_lateral_is_radard_yrel_only():
